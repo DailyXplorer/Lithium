@@ -1,0 +1,74 @@
+# Lithium
+
+A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView), no Chromium. Arc-style layout: pinned sites as tiles and tabs in a sidebar. Privacy first, with uBlock Origin's filter lists built in.
+
+## Build and run
+
+```sh
+./scripts/build-app.sh --run        # builds .build/Lithium.app and opens it
+./scripts/build-app.sh --install    # installs it in /Applications
+swift test                          # unit and end-to-end tests
+CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests   # a whole Browser, in a throwaway home
+```
+
+On the first build, `scripts/update-filters.py` downloads the filter lists and converts them (into `Sources/Lithium/Resources/Filters`, not versioned). Run it again to refresh the lists, then rebuild.
+
+`.build` is a symlink to `~/Library/Caches/Lithium/build`: iCloud-synced folders tag build products with extended attributes that break code signing.
+
+## Protections
+
+- **Network and cosmetic blocking.** uBlock Origin (filters, privacy, badware, quick-fixes, unbreak, resource-abuse), EasyList, EasyPrivacy, Peter Lowe and URLhaus, compiled into native WebKit content rules by AdGuard's converter.
+- **Advanced uBO rules.** Scriptlets (anti-adblock defusers, YouTube ad removal, …), procedural cosmetics like `:has()`, and CSS injection. AdGuard's filter engine picks the rules for each page and Lithium injects them at document start, before any page script. uBO's `+js()` filters run uBlock Origin's own scriptlets with uBO's own argument parser (`Privacy/UBOScriptlets.swift`), as they would in uBO: AdGuard's look-alikes take different arguments and lack the newest ones, which YouTube's ads are fought with. `node scripts/update-ubo-scriptlets.mjs [tag]` refreshes them from a uBO release.
+- **Fingerprinting protection.** WebKit's own Advanced Fingerprinting Protection (engine-level canvas noise, window-sized `screen`, link decoration filtering), plus Brave-style farbling (`Resources/Scripts/farbling.js`): deterministic noise per site and session on canvas, OffscreenCanvas, WebGL `readPixels`, audio and `hardwareConcurrency`, a reduced voice list, and the same protection for same-origin iframes. Invisible to `toString` checks.
+- **Filter lists update daily** in the background (Settings, Privacy & Security, Update now to force it).
+- **Also.** Tracking parameters stripped from URLs, fraudulent-site warnings, HTTPS upgrades for known hosts, popups blocked unless user-initiated.
+- The shield in the toolbar turns protections off for a single site.
+
+`Tests/Manual/protections.html` checks blocking and fingerprinting live: open it in Lithium through a `file://` URL.
+
+## Files
+
+Lithium shows up in Finder's Open With menu for Markdown and PDF files, without taking over as their default app.
+
+- **Markdown** (`.md`, `.markdown`, …) renders as a formatted document, locally or when a server sends it as plain text. Rendering happens in the page after the file loads (`Model/MarkdownReader.swift`, `Resources/Scripts/markdown-reader.js`, parsed by the bundled [marked](https://github.com/markedjs/marked)), so the address, reload and history stay the file's own. HTML inside the file displays, but a content security policy stops it from running scripts.
+- **PDF** files render with WebKit's built-in viewer.
+
+A local file gets read access to its own folder, so relative images and links to neighbouring files work.
+
+## DM Sans on every site
+
+Websites render in DM Sans instead of their own fonts (Settings › Appearance, on by default). Elements whose own font is an icon font (Font Awesome, Material Symbols, Glyphicons, or any font drawing Private Use Area glyphs), a monospace font or a math font keep it, along with everything inside them. `Resources/Scripts/page-font.js` finds them by briefly lifting the override on new content and reading the font the site chose, before it paints.
+
+## Screenshots
+
+The camera button in the toolbar captures Lithium's window, the way Arc's Portrait Mode did. Click anywhere to take the whole window, or drag to take an area. For the whole window, the preview shows it with or without the sidebar (closed by default), and sets it on the Mac's wallpaper, a solid color or nothing at all, with an optional "Made with Lithium" badge, then copies it or saves a PNG. Lithium captures its own window through ScreenCaptureKit's current-process content (`Model/ScreenCapture.swift`), so it needs no Screen Recording permission.
+
+## Max
+
+Optional intelligence features, toggled one by one in Settings › Max.
+
+- **Tidy tab titles.** Long page titles become short tab names ("WebKit project" for GitHub's full repository description). Rules strip notification counters and the site's name first, instantly and without any model (`Max/TitleCleaner.swift`). Titles still longer than a sidebar row (22 characters) go to Apple's on-device model through the Foundation Models framework (`Max/ModelTitles.swift`): one request at a time, a fresh session each, greedy decoding, in the title's own language, about half a second on an M4 Pro. Answers are validated before use (one line, 40 characters at most, no links, at least one word shared with the page's title) so a title written to steer the model can't. Names are cached per site and title; names you give tabs always win, and the original title shows on hover. Needs macOS 26 with Apple Intelligence for the model part; FoundationModels is weak-linked, so Lithium still runs on macOS 15 with rule-based tidying.
+
+- **Summarize pages.** The sparkle button in the toolbar sums up the page in one sentence and a few key points, written in your language (or the one picked in Settings › Max). With 30 words or more selected, it summarizes only the selection. Nothing runs until you click. The text comes from the page's article or main content, without menus, sidebars and footers (`Resources/Scripts/page-text.js`). Text longer than one request (about 21,000 characters on macOS 27, 8,700 on macOS 26) is summarized part by part, then the notes are merged (`Max/ModelSummaries.swift`). The model serves one request at a time, so it takes about 0.55 s per 1,000 characters on an M4 Pro: a long Wikipedia article (88,000 characters) takes about a minute. Pages are read up to 200,000 characters. A summary keeps running when its popover closes, and stays with the tab until it leaves the page. It uses the permissive guardrails Apple provides for transforming text, so news about sensitive subjects still gets summarized. Lines with a link are dropped from answers, so a page can't slip one in.
+
+`LITHIUM_MODEL_TESTS=1 swift test` also runs the real model on sample titles and pages.
+
+## SponsorBlock
+
+Sponsors and other interruptions in YouTube videos are skipped as the video plays, using the segments timed by the [SponsorBlock](https://sponsor.ajay.app) community (Settings › SponsorBlock, on by default). Sponsors are skipped automatically, with an Undo; self-promotion and subscribe reminders get a skip button; the other categories are off until you pick them. Segments show as colored marks on the seek bar.
+
+The script (`Resources/Scripts/sponsorblock.js`) runs in its own content world, so YouTube's code can neither see it nor reach the app through it. It follows the player from video to video, since YouTube changes videos without loading a new page. Segments are fetched by the app (`Model/SponsorBlock.swift`) with the first 4 characters of the video's SHA-256, so the server never learns which video is playing. Segments submitted for a different cut of the video (a length more than 3 seconds off) are ignored.
+
+`LITHIUM_LIVE_TESTS=1 swift test --filter SponsorBlockTests` also plays a real sponsor on YouTube and checks it gets skipped.
+
+## Settings and internal pages
+
+Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) are web pages, served from `Resources/Pages`. Websites cannot open `lithium://` pages or load their files, and the page's bridge to the app (`InternalBridge`) only exists while a tab shows one.
+
+## Shortcuts
+
+⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌘, settings
+
+## License
+
+GPL-3.0 (see `LICENSE`). Lithium bundles GPL-3.0 components: AdGuard SafariConverterLib, Scriptlets and ExtendedCss, and uBlock Origin's filter lists and scriptlets. SponsorBlock's segment data is under CC BY-NC-SA 4.0. It also bundles [marked](https://github.com/markedjs/marked) (MIT). Icons are [Phosphor](https://phosphoricons.com) (MIT). The DM Sans font is under the SIL Open Font License.

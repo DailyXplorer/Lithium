@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Lithium · protections test</title>
+<style>
+  body { font: 16px "DM Sans", -apple-system, sans-serif; margin: 40px; }
+  td { padding: 4px 16px 4px 0; }
+  .ok { color: #1a7f37; font-weight: 600; } .ko { color: #cf222e; font-weight: 600; }
+</style>
+<h1>Protections test</h1>
+<table id="results"></table>
+<div class="adsBanner" id="cosmetic" style="height: 50px">ad banner</div>
+<script>
+  const rows = document.getElementById('results');
+  const report = (label, pass, detail) => {
+    const row = rows.insertRow();
+    row.insertCell().textContent = label;
+    const cell = row.insertCell();
+    cell.textContent = (pass ? 'PASS ' : 'FAIL ') + detail;
+    cell.className = pass ? 'ok' : 'ko';
+  };
+  const probe = (label, src, shouldLoad) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = () => report(label, shouldLoad, 'loaded');
+    script.onerror = () => report(label, !shouldLoad, 'blocked');
+    document.head.appendChild(script);
+  };
+  probe('Pub Google (EasyList)', 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', false);
+  probe('Google Analytics (EasyPrivacy)', 'https://www.google-analytics.com/analytics.js', false);
+  probe('DoubleClick', 'https://static.doubleclick.net/instream/ad_status.js', false);
+  probe('Control: jsDelivr (must load)', 'https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js', true);
+
+  setTimeout(() => {
+    const hidden = document.getElementById('cosmetic').offsetHeight === 0;
+    report('Cosmetic hiding .adsBanner', hidden, hidden ? 'hidden' : 'visible');
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 220; canvas.height = 40;
+    const ctx = canvas.getContext('2d');
+    ctx.font = '18px Arial'; ctx.fillStyle = '#f60'; ctx.fillRect(0, 0, 220, 40);
+    ctx.fillStyle = '#069'; ctx.fillText('Lithium fingerprint', 4, 26);
+    const data = canvas.toDataURL();
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) hash = (Math.imul(hash, 31) + data.charCodeAt(i)) | 0;
+    report('Canvas fingerprint (varies per site and session)', true, (hash >>> 0).toString(16));
+    report('Native toString for toDataURL', /\[native code\]/.test(HTMLCanvasElement.prototype.toDataURL.toString()), HTMLCanvasElement.prototype.toDataURL.toString().replace(/\s+/g, ' '));
+    const getter = Object.getOwnPropertyDescriptor(Navigator.prototype, 'hardwareConcurrency').get;
+    report('Native toString for the getter', /\[native code\]/.test(getter.toString()), getter.toString().replace(/\s+/g, ' '));
+    report('toString of toString', /\[native code\]/.test(Function.prototype.toString.toString()), Function.prototype.toString.toString().replace(/\s+/g, ' '));
+    report('hardwareConcurrency', true, String(navigator.hardwareConcurrency));
+  }, 1500);
+</script>

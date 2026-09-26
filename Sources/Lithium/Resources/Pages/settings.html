@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="stylesheet" href="lithium://pages/style.css">
+<style>
+  section { display: none; }
+  section.active { display: block; }
+  .stat { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 28px 0 8px; }
+  .stat .number { font-size: 44px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .stat .label { color: var(--muted); margin-top: 8px; }
+  .sources { color: var(--muted); font-size: 13px; padding: 12px 0 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; padding: 0 0 8px; }
+  td { padding: 12px 0; border-top: 1px solid var(--line); }
+  td.host { font-weight: 550; }
+  .about { display: flex; align-items: center; gap: 18px; padding: 28px 0 8px; }
+  .about img { width: 64px; height: 64px; }
+  .about .name { font-size: 22px; font-weight: 650; }
+  dl { display: grid; grid-template-columns: 140px 1fr; margin: 0; }
+  dt, dd { margin: 0; padding: 14px 0; border-top: 1px solid var(--line); }
+  dt { color: var(--muted); }
+  .category .title { display: flex; align-items: center; gap: 8px; }
+  .category .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><img src="lithium://pages/app-icon" alt=""><h1>Settings</h1></div>
+  <a href="#appearance" data-icon="paint-brush"><span>Appearance</span></a>
+  <a href="#search" data-icon="magnifying-glass"><span>Search</span></a>
+  <a href="#privacy" data-icon="shield-check"><span>Privacy &amp; Security</span></a>
+  <a href="#max" data-icon="sparkle"><span>Max</span></a>
+  <a href="#sponsorblock" data-icon="skip-forward"><span>SponsorBlock</span></a>
+  <a href="#permissions" data-icon="video-camera"><span>Site Permissions</span></a>
+  <a href="lithium://history" data-icon="clock-counter-clockwise"><span>History</span></a>
+  <a href="#about" data-icon="info"><span>About Lithium</span></a>
+</nav>
+
+<main>
+  <section id="appearance" class="page">
+    <h2>Appearance</h2>
+    <p class="lead">How the sidebar, toolbar and websites look.</p>
+    <h3>Sidebar</h3>
+    <div class="row">
+      <div><div class="title">Background</div><div class="hint">A solid color, or the frosted glass of macOS.</div></div>
+      <div class="segmented" id="style"><button data-value="solid">Solid color</button><button data-value="translucent">Translucent</button></div>
+    </div>
+    <div class="row" id="color-row">
+      <div><div class="title">Color</div><div class="hint" id="color-hex"></div></div>
+      <div class="swatches" id="swatches"><input type="color" id="custom-color" title="Custom color"></div>
+    </div>
+    <h3>Websites</h3>
+    <div class="row">
+      <div><div class="title">DM Sans on every site</div><div class="hint">Replaces the fonts websites choose with DM Sans. Icons, code and math keep their own fonts. Applies to pages as they load.</div></div>
+      <label class="switch" for="website-font"><input type="checkbox" id="website-font" role="switch"><span></span></label>
+    </div>
+  </section>
+
+  <section id="search" class="page">
+    <h2>Search</h2>
+    <p class="lead">Used by the address bar and the start page.</p>
+    <h3>Search engine</h3>
+    <div class="rows" id="engines"></div>
+  </section>
+
+  <section id="privacy" class="page">
+    <h2>Privacy &amp; Security</h2>
+    <p class="lead">Ads, trackers and fingerprinting are blocked on every site by default.</p>
+    <div class="stat">
+      <div><div class="number" id="rules">—</div><div class="label" id="updated"></div></div>
+      <button class="button accent" id="update">Update now</button>
+    </div>
+    <div class="sources">uBlock Origin · uBO Privacy · uBO Badware · uBO scriptlets · EasyList · EasyPrivacy · Peter Lowe · URLhaus</div>
+    <h3>Always on</h3>
+    <div class="row"><div><div class="title">Fingerprinting protection</div><div class="hint">WebKit’s Advanced Fingerprinting Protection, plus per-site noise on canvas, audio, WebGL and CPU count.</div></div></div>
+    <div class="row"><div><div class="title">Tracking parameters removed</div><div class="hint">utm_, fbclid, gclid and similar are stripped from links before they load.</div></div></div>
+    <div class="row"><div><div class="title">HTTPS upgrades and fraud warnings</div><div class="hint">Known sites load over HTTPS; deceptive sites show a warning first.</div></div></div>
+    <h3>Protections turned off</h3>
+    <div class="rows" id="exceptions"></div>
+  </section>
+
+  <section id="max" class="page">
+    <h2>Max</h2>
+    <p class="lead">Intelligence features, each one optional. They run on this Mac with Apple Intelligence; nothing about your browsing is sent anywhere.</p>
+    <h3>Apple Intelligence</h3>
+    <div class="row"><div><div class="title status" id="max-status-title">Checking…</div><div class="hint" id="max-status"></div></div></div>
+    <h3>Features</h3>
+    <div class="row">
+      <div><div class="title">Tidy tab titles</div><div class="hint">Shortens long tab titles as pages load, like “WebKit project” instead of the full GitHub description. Hover a tab to see its original title. Names you give tabs always win.</div></div>
+      <label class="switch" for="tidy-titles"><input type="checkbox" id="tidy-titles" role="switch"><span></span></label>
+    </div>
+    <div class="row">
+      <div><div class="title">Summarize pages</div><div class="hint">Adds a sparkle button to the toolbar that sums up the page in a sentence and a few key points, in your language. Select a passage first to summarize only that. Runs only when you click it.</div></div>
+      <label class="switch" for="summaries"><input type="checkbox" id="summaries" role="switch"><span></span></label>
+    </div>
+    <div class="row" id="summary-language-row">
+      <div><div class="title">Summary language</div><div class="hint">Summaries are written in this language, whatever the page’s own.</div></div>
+      <select id="summary-language"></select>
+    </div>
+  </section>
+
+  <section id="sponsorblock" class="page">
+    <h2>SponsorBlock</h2>
+    <p class="lead">Skips sponsors and other interruptions in YouTube videos, timed by the SponsorBlock community.</p>
+    <div class="row">
+      <div><div class="title">Skip segments on YouTube</div><div class="hint">Applies to YouTube pages as they load. Choices below apply from the next video.</div></div>
+      <label class="switch" for="sponsorblock-enabled"><input type="checkbox" id="sponsorblock-enabled" role="switch"><span></span></label>
+    </div>
+    <div id="segment-settings">
+      <h3>Segments</h3>
+      <div class="rows" id="segment-categories"></div>
+      <h3>Privacy</h3>
+      <div class="row"><div><div class="title">Which video you watch stays private</div><div class="hint">Lithium asks for the segments of every video whose SHA-256 hash starts with the same four characters, then keeps only the one playing. SponsorBlock’s server never learns which video it is.</div></div></div>
+    </div>
+    <div class="sources">Segment data from SponsorBlock (sponsor.ajay.app) by its contributors, under CC BY-NC-SA 4.0.</div>
+  </section>
+
+  <section id="permissions" class="page">
+    <h2>Site Permissions</h2>
+    <p class="lead">Sites ask the first time they need your camera, microphone or location. Your answers live here.</p>
+    <div id="permission-list" style="margin-top: 32px"></div>
+  </section>
+
+  <section id="about" class="page">
+    <h2>About Lithium</h2>
+    <p class="lead">A light, private browser built on the WebKit engine of macOS.</p>
+    <div class="about"><img src="lithium://pages/app-icon" alt=""><div><div class="name">Lithium</div><div class="hint" id="version"></div></div></div>
+    <dl>
+      <dt>Engine</dt><dd id="engine"></dd>
+      <dt>System</dt><dd id="system"></dd>
+      <dt>License</dt><dd>GNU General Public License v3.0</dd>
+      <dt>Built with</dt><dd>AdGuard SafariConverterLib, Scriptlets and ExtendedCss (GPL-3.0) · uBlock Origin filter lists (GPL-3.0) · SponsorBlock segment data (CC BY-NC-SA 4.0) · Phosphor Icons (MIT) · DM Sans (SIL OFL)</dd>
+    </dl>
+  </section>
+</main>
+
+<script src="lithium://pages/pages.js"></script>
+<script>
+  const SWATCHES = ['#D5DAF5', '#E6DDF6', '#F6DDE4', '#F7E7D4', '#DDEFE3', '#D8ECF3', '#E4E4E7', '#2B2D42'];
+  let pollTimer = null;
+
+  const showSection = () => {
+    const id = (location.hash || '#appearance').slice(1);
+    document.querySelectorAll('section').forEach((s) => s.classList.toggle('active', s.id === id));
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+  };
+  window.addEventListener('hashchange', showSection);
+
+  const relative = (ms) => {
+    if (!ms) return 'Never updated';
+    const minutes = Math.round((Date.now() - ms) / 60000);
+    if (minutes < 1) return 'Rules active · lists updated just now';
+    if (minutes < 60) return `Rules active · lists updated ${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `Rules active · lists updated ${hours} h ago`;
+    return `Rules active · lists updated ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
+  };
+
+  const render = (state) => {
+    const { appearance, search, protections, permissions, about } = state;
+
+    document.querySelectorAll('#style button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarStyle));
+    $('#color-row').style.display = appearance.sidebarStyle === 'solid' ? '' : 'none';
+    $('#color-hex').textContent = appearance.sidebarColor;
+    $('#website-font').checked = appearance.websiteFont;
+    $('#swatches').querySelectorAll('.swatch').forEach((s) => s.remove());
+    [appearance.defaultColor, ...SWATCHES.filter((c) => c !== appearance.defaultColor)].forEach((color) => {
+      const swatch = el('button', { className: 'swatch' + (color.toUpperCase() === appearance.sidebarColor.toUpperCase() ? ' on' : ''), title: color });
+      swatch.style.background = color;
+      swatch.onclick = () => call('setSidebarColor', color).then(render);
+      $('#swatches').insertBefore(swatch, $('#custom-color'));
+    });
+    $('#custom-color').value = appearance.sidebarColor.toLowerCase();
+
+    $('#engines').replaceChildren(...search.engines.map((engine) => {
+      const row = el('div', { className: 'row choice' + (engine.id === search.engine ? ' on' : '') }, [
+        el('div', {}, [el('div', { className: 'title', textContent: engine.name }), el('div', { className: 'hint', textContent: engine.host })]),
+        el('span', { className: 'radio' }),
+      ]);
+      row.onclick = () => call('setSearchEngine', engine.id).then(render);
+      return row;
+    }));
+
+    $('#rules').textContent = protections.ruleCount.toLocaleString('en');
+    $('#updated').textContent = protections.updating ? 'Downloading the latest lists…' : relative(protections.updated);
+    $('#update').disabled = protections.updating;
+    $('#update').innerHTML = protections.updating ? '<span class="spin"></span>Updating' : 'Update now';
+    clearTimeout(pollTimer);
+    if (protections.updating) pollTimer = setTimeout(() => call('state').then(render), 1000);
+
+    $('#exceptions').replaceChildren(...(protections.disabledHosts.length ? protections.disabledHosts.map((host) => {
+      const button = el('button', { className: 'button', textContent: 'Turn back on' });
+      button.onclick = () => call('enableProtections', host).then(render);
+      return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
+    }) : [el('div', { className: 'empty', textContent: 'None. Turn protections off for one site from the shield in the toolbar.' })]));
+
+    const kinds = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location']];
+    $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
+      el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...kinds.map(([, label]) => el('th', { textContent: label }))])]),
+      el('tbody', {}, permissions.map((entry) => el('tr', {}, [
+        el('td', { className: 'host', textContent: entry.host }),
+        ...kinds.map(([kind]) => {
+          const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
+          select.value = entry[kind] || '';
+          select.onchange = () => call('setPermission', { host: entry.host, kind, decision: select.value }).then(render);
+          return el('td', {}, [select]);
+        }),
+      ]))),
+    ]) : el('div', { className: 'empty', textContent: 'No site has asked yet.' }));
+
+    const { max } = state;
+    $('#tidy-titles').checked = max.tidyTitles;
+    $('#summaries').checked = max.summaries;
+    $('#summary-language-row').hidden = !max.summaries || max.summaryLanguages.length === 0;
+    $('#summary-language').replaceChildren(
+      el('option', { value: '', textContent: `Same as the system (${max.summarySystemLanguage})` }),
+      ...max.summaryLanguages.map((language) => el('option', { value: language.code, textContent: language.name })),
+    );
+    $('#summary-language').value = max.summaryLanguage;
+    $('#max-status-title').textContent = max.modelAvailable ? 'Available' : 'Not available';
+    $('#max-status-title').classList.toggle('ready', max.modelAvailable);
+    $('#max-status').textContent = max.modelMessage;
+
+    const { sponsorBlock } = state;
+    $('#sponsorblock-enabled').checked = sponsorBlock.enabled;
+    $('#segment-settings').hidden = !sponsorBlock.enabled;
+    $('#segment-categories').replaceChildren(...sponsorBlock.categories.map((category) => {
+      const select = el('select', {}, [['skip', 'Skip automatically'], ['button', 'Show a skip button'], ['ignore', 'Don’t skip']]
+        .map(([value, label]) => el('option', { value, textContent: label })));
+      select.value = category.action;
+      select.onchange = () => call('setSegmentAction', { category: category.id, action: select.value }).then(render);
+      const dot = el('span', { className: 'dot' });
+      dot.style.background = category.color;
+      return el('div', { className: 'row category' }, [
+        el('div', {}, [el('div', { className: 'title' }, [dot, category.name]), el('div', { className: 'hint', textContent: category.hint })]),
+        select,
+      ]);
+    }));
+
+    $('#version').textContent = `Version ${about.version}`;
+    $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
+    $('#system').textContent = about.macOS;
+  };
+
+  document.querySelectorAll('#style button').forEach((button) => {
+    button.onclick = () => call('setSidebarStyle', button.dataset.value).then(render);
+  });
+  $('#custom-color').oninput = (event) => call('setSidebarColor', event.target.value).then(render);
+  $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#update').onclick = () => call('updateFilters').then(render);
+  $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
+  $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
+  $('#sponsorblock-enabled').onchange = (event) => call('setSponsorBlock', event.target.checked).then(render);
+  $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state').then(render); });
+
+  showSection();
+  call('state').then(render);
+</script>
+</body>
+</html>

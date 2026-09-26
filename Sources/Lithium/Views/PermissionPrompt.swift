@@ -1,0 +1,35 @@
+import SwiftUI
+
+/// A strip along the top of the page, like Safari's, instead of a floating card.
+struct PermissionPrompt: View {
+    let request: PermissionRequest
+    @Environment(Browser.self) private var browser
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                ForEach(request.kinds) { Icon($0.icon, size: 16) }
+            }
+            .foregroundStyle(Color.accentColor)
+            (Text(request.host).fontWeight(.semibold) + Text(" wants to use your \(Self.list(request.kinds))"))
+                .lineLimit(1)
+            Text("Remembered in Settings")
+                .font(Theme.font(12))
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 12)
+            Button("Don’t Allow") { browser.permissions.answer(request, allow: false) }
+                .keyboardShortcut(.cancelAction)
+            Button("Allow") { browser.permissions.answer(request, allow: true) }
+                .keyboardShortcut(.defaultAction)
+        }
+        .font(Theme.font(13))
+        .padding(.horizontal, 16)
+        .frame(height: 46)
+        .background(Color(nsColor: .textBackgroundColor))
+        .overlay(alignment: .bottom) { Rectangle().fill(.primary.opacity(0.08)).frame(height: 1) }
+    }
+
+    private static func list(_ kinds: [PermissionKind]) -> String {
+        kinds.map { $0.label.lowercased() }.formatted(.list(type: .and))
+    }
+}

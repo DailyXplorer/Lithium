@@ -1,0 +1,77 @@
+import Foundation
+import NaturalLanguage
+
+/// Rule-based tidying of page titles: no model, instant, always available.
+/// Removes notification counters and the site's own name ("Sign in to GitHub · GitHub").
+enum TitleCleaner {
+    /// Titles at most this long fit a 240 pt sidebar row in DM Sans 13 (measured) and are left
+    /// to the rules alone.
+    static let shortEnough = 22
+
+    private static let separators = [" - ", " – ", " — ", " | ", " · ", " • ", " :: "]
+    private static let colons = [" : ", ": "]
+
+    static func clean(_ title: String, host: String) -> String {
+        var text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = text.replacing(/^[\(\[]\d+\+?[\)\]]\s*/, with: "")
+        let site = siteName(host)
+        for separatorSet in [separators, colons] {
+            let segments = split(text, by: separatorSet)
+            guard segments.count > 1, segments.contains(where: { isSiteName($0, site: site) }) else { continue }
+            if let first = segments.first(where: { !isSiteName($0, site: site) }) {
+                text = first
+            }
+        }
+        return text.isEmpty ? title : text
+    }
+
+    /// The label that names the site: "github" for gist.github.com, "lemonde" for www.lemonde.fr.
+    static func siteName(_ host: String) -> String {
+        let domain = SiteInfo.registrable(host)
+        return String(domain.split(separator: ".").first ?? Substring(domain))
+    }
+
+    private static func isSiteName(_ segment: String, site: String) -> Bool {
+        let normalized = segment.lowercased().filter { $0.isLetter || $0.isNumber }
+        guard !site.isEmpty, !normalized.isEmpty else { return false }
+        // "YouTube", "Le Monde.fr", "Amazon.fr" count; "Sign in to GitHub" does not.
+        return normalized == site || (normalized.contains(site) && normalized.count <= site.count + 4)
+    }
+
+    private static func split(_ text: String, by separators: [String]) -> [String] {
+        var parts = [text]
+        for separator in separators {
+            parts = parts.flatMap { $0.components(separatedBy: separator) }
+        }
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// The dominant language of a title, so a French page keeps a French name.
+    static func language(of title: String) -> Locale.Language? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(title)
+        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
+        return Locale.Language(identifier: language.rawValue)
+    }
+
+    /// Guards against page titles written to steer the model: the answer must be a short
+    /// single line that still shares a real word with what the page said about itself.
+    static func acceptable(_ candidate: String, original: String, host: String) -> String? {
+        let trimmed = candidate
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”«».:"))
+            .trimmingCharacters(in: .whitespaces)
+        guard (2...40).contains(trimmed.count),
+              !isSiteName(trimmed, site: siteName(host)),
+              !trimmed.contains(where: \.isNewline),
+              !trimmed.lowercased().contains("http"),
+              !trimmed.contains("://") else { return nil }
+        let source = words(original + " " + host)
+        return words(trimmed).isDisjoint(with: source) ? nil : trimmed
+    }
+
+    private static func words(_ text: String) -> Set<String> {
+        let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        return Set(folded.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
+    }
+}

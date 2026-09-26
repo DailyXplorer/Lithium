@@ -1,0 +1,97 @@
+import Foundation
+
+enum SearchEngine: String, CaseIterable, Identifiable {
+    case brave, duckDuckGo, google, kagi, ecosia, startpage
+
+    var id: Self { self }
+    static let preferenceKey = "searchEngine"
+
+    static var current: SearchEngine {
+        UserDefaults.standard.string(forKey: preferenceKey).flatMap(SearchEngine.init(rawValue:)) ?? .brave
+    }
+
+    var name: String {
+        switch self {
+        case .brave: "Brave Search"
+        case .duckDuckGo: "DuckDuckGo"
+        case .google: "Google"
+        case .kagi: "Kagi"
+        case .ecosia: "Ecosia"
+        case .startpage: "Startpage"
+        }
+    }
+
+    var home: URL {
+        switch self {
+        case .brave: URL(string: "https://search.brave.com/")!
+        case .duckDuckGo: URL(string: "https://duckduckgo.com/")!
+        case .google: URL(string: "https://www.google.com/")!
+        case .kagi: URL(string: "https://kagi.com/")!
+        case .ecosia: URL(string: "https://www.ecosia.org/")!
+        case .startpage: URL(string: "https://www.startpage.com/")!
+        }
+    }
+
+    func url(searching query: String) -> URL {
+        let path = switch self {
+        case .brave: "https://search.brave.com/search"
+        case .duckDuckGo: "https://duckduckgo.com/"
+        case .google: "https://www.google.com/search"
+        case .kagi: "https://kagi.com/search"
+        case .ecosia: "https://www.ecosia.org/search"
+        case .startpage: "https://www.startpage.com/do/search"
+        }
+        var components = URLComponents(string: path)!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        // URLComponents leaves "+" as is, and search engines read it as a space: "c++" would search "c".
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return components.url!
+    }
+}
+
+enum AddressInput {
+    enum Target: Equatable {
+        case address(URL)
+        case search(String)
+    }
+
+    /// Whether typed text is an address to open or words to search for.
+    static func target(for rawInput: String) -> Target? {
+        let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return nil }
+
+        if let url = URL(string: input), let scheme = url.scheme?.lowercased() {
+            if ["http", "https"].contains(scheme), url.host() != nil { return .address(url) }
+            if ["about", "file", "data", Internal.scheme].contains(scheme) { return .address(url) }
+        }
+
+        if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host() {
+            if host == "localhost" || isIPAddress(host) || url.port != nil {
+                return .address(url)
+            }
+            if looksLikeDomain(host), let secure = URL(string: "https://" + input) {
+                return .address(secure)
+            }
+        }
+        return .search(input)
+    }
+
+    static func url(for rawInput: String, engine: SearchEngine = .current) -> URL? {
+        switch target(for: rawInput) {
+        case .address(let url): url
+        case .search(let query): engine.url(searching: query)
+        case nil: nil
+        }
+    }
+
+    private static func looksLikeDomain(_ host: String) -> Bool {
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }), let tld = labels.last else { return false }
+        return tld.count >= 2 && tld.allSatisfy(\.isLetter)
+    }
+
+    private static func isIPAddress(_ host: String) -> Bool {
+        let parts = host.split(separator: ".")
+        return parts.count == 4 && parts.allSatisfy { UInt8($0) != nil }
+    }
+}

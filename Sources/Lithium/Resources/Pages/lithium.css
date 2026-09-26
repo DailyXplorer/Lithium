@@ -1,0 +1,97 @@
+/* Shared look of Lithium's internal pages: text sits on the page itself, groups are set apart
+   by hairlines and space, never by floating cards or drop shadows. */
+@font-face { font-family: "DM Sans"; src: url(lithium://pages/font/DMSans.ttf) format("truetype"); font-weight: 100 1000; }
+
+:root {
+  --bg: #FFFFFF; --ink: #15161F; --muted: #6A6C7E; --faint: #A0A2B3; --line: rgba(21, 22, 31, .08);
+  --hover: rgba(21, 22, 31, .04); --switch-off: rgba(21, 22, 31, .22); --accent: #5B6CF0; --accent-soft: rgba(91, 108, 240, .10); --danger: #D33A4A;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171F; --ink: #ECECF4; --muted: #9C9EB3; --faint: #686A80; --line: rgba(236, 236, 244, .09);
+    --hover: rgba(236, 236, 244, .05); --switch-off: rgba(236, 236, 244, .28); --accent: #8C99FF; --accent-soft: rgba(140, 153, 255, .14); --danger: #FF6B78;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 14px/1.5 "DM Sans", -apple-system, sans-serif; font-optical-sizing: auto;
+  background: var(--bg); color: var(--ink); display: flex; -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+a { color: inherit; text-decoration: none; }
+
+.icon { width: 18px; height: 18px; flex: none; background: currentColor;
+  -webkit-mask: var(--src) center / contain no-repeat; mask: var(--src) center / contain no-repeat; }
+
+/* Navigation */
+nav { width: 244px; flex: none; padding: 32px 16px; position: sticky; top: 0; height: 100vh; border-right: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 10px 26px; }
+.brand img { width: 34px; height: 34px; }
+.brand h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+nav a { display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin: 1px 0; border-radius: 9px;
+  color: var(--muted); font-weight: 500; transition: background .12s, color .12s; }
+nav a:hover { background: var(--hover); color: var(--ink); }
+nav a.active { background: var(--accent-soft); color: var(--accent); }
+
+/* Content */
+main { flex: 1; min-width: 0; padding: 48px 56px 80px; overflow-y: auto; height: 100vh; }
+.page { max-width: 660px; animation: enter .2s ease-out; }
+@keyframes enter { from { opacity: 0; transform: translateY(3px); } }
+h2 { font-size: 30px; font-weight: 650; letter-spacing: -.02em; margin: 0 0 6px; }
+.lead { color: var(--muted); margin: 0 0 8px; font-size: 15px; }
+h3 { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin: 44px 0 6px; }
+
+.row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 16px 0; border-top: 1px solid var(--line); }
+h3 + .row, .rows > .row:first-child { border-top: 0; }
+.row .title { font-weight: 550; }
+.hint { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.row.choice { cursor: pointer; }
+.row.choice:hover .title { color: var(--accent); }
+.radio { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--faint); flex: none; transition: border .12s; }
+.on .radio { border: 5.5px solid var(--accent); }
+
+/* Controls */
+.segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--line); }
+.segmented button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; }
+.segmented button.on { background: var(--accent-soft); color: var(--accent); }
+
+.button { border: 1px solid var(--line); background: none; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-weight: 550; white-space: nowrap; transition: background .12s; }
+.button:hover { background: var(--hover); }
+.button.accent { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
+.button.danger { color: var(--danger); }
+.button:disabled { opacity: .5; cursor: default; }
+
+.swatches { display: flex; gap: 10px; align-items: center; }
+.swatch { width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px var(--line); }
+.swatch.on { outline: 2px solid var(--accent); outline-offset: 3px; }
+input[type=color] { width: 28px; height: 28px; border: 0; padding: 0; background: none; cursor: pointer; }
+
+/* On/off switch */
+.switch { position: relative; width: 38px; height: 22px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--switch-off); transition: background .15s; pointer-events: none; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(16px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.status { display: inline-flex; align-items: center; gap: 8px; }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.status.ready::before { background: #2FA36B; }
+
+select { border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; background: none; }
+input[type=search] { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 12px 0 12px 30px; font-size: 16px; outline: none; transition: border .12s; }
+input[type=search]:focus { border-color: var(--accent); }
+
+.empty { color: var(--muted); padding: 16px 0; }
+.spin { width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(1turn); } }
+
+@media (max-width: 760px) {
+  nav { width: 68px; padding: 28px 10px; }
+  nav a span, .brand h1 { display: none; }
+  nav a { justify-content: center; }
+  main { padding: 32px 24px; }
+}

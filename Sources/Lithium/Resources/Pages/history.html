@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>History</title>
+<link rel="stylesheet" href="lithium://pages/style.css">
+<style>
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+  .search { position: relative; margin: 28px 0 8px; }
+  .search .icon { position: absolute; left: 0; top: 14px; color: var(--faint); }
+  .day { margin-top: 36px; }
+  .visit { display: flex; align-items: center; gap: 14px; padding: 10px 8px; margin: 0 -8px; border-radius: 9px; transition: background .12s; }
+  .visit:hover { background: var(--hover); }
+  .visit .favicon { width: 18px; height: 18px; border-radius: 4px; flex: none; display: grid; place-items: center;
+    font-size: 11px; font-weight: 650; color: var(--muted); background: var(--hover); overflow: hidden; }
+  .visit .favicon img { width: 100%; height: 100%; }
+  .visit .text { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 10px; }
+  .visit .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .visit .host { color: var(--faint); font-size: 13px; white-space: nowrap; }
+  .visit time { color: var(--faint); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .visit .remove { opacity: 0; border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px; border-radius: 6px; }
+  .visit:hover .remove { opacity: 1; }
+  .visit .remove:hover { color: var(--danger); }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><img src="lithium://pages/app-icon" alt=""><h1>Settings</h1></div>
+  <a href="lithium://settings#appearance" data-icon="paint-brush"><span>Appearance</span></a>
+  <a href="lithium://settings#search" data-icon="magnifying-glass"><span>Search</span></a>
+  <a href="lithium://settings#privacy" data-icon="shield-check"><span>Privacy &amp; Security</span></a>
+  <a href="lithium://settings#max" data-icon="sparkle"><span>Max</span></a>
+  <a href="lithium://settings#permissions" data-icon="video-camera"><span>Site Permissions</span></a>
+  <a href="lithium://history" class="active" data-icon="clock-counter-clockwise"><span>History</span></a>
+  <a href="lithium://settings#about" data-icon="info"><span>About Lithium</span></a>
+</nav>
+
+<main>
+  <div class="page">
+    <div class="header">
+      <div><h2>History</h2><p class="lead">Stays on this Mac. Nothing is synced or sent anywhere.</p></div>
+      <button class="button danger" id="clear">Clear history…</button>
+    </div>
+    <div class="search">
+      <div class="icon" style="--src: url(lithium://pages/icon/magnifying-glass)"></div>
+      <input type="search" id="query" placeholder="Search history" autofocus>
+    </div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<script src="lithium://pages/pages.js"></script>
+<script>
+  const dayLabel = (date) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(date); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 86400000);
+    if (diff === 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return day.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  const favicon = (host) => {
+    const box = el('span', { className: 'favicon', textContent: (host.replace(/^www\./, '')[0] || '?').toUpperCase() });
+    const image = el('img', { alt: '', src: `lithium://pages/favicon/${encodeURIComponent(host)}` });
+    image.onload = () => box.replaceChildren(image);
+    return box;
+  };
+
+  const render = (visits) => {
+    const query = $('#query').value.trim();
+    if (!visits.length) {
+      $('#list').replaceChildren(el('div', { className: 'empty', style: 'margin-top: 24px', textContent: query ? 'No results.' : 'No history yet.' }));
+      return;
+    }
+    const groups = new Map();
+    for (const visit of visits) {
+      const label = dayLabel(visit.time);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(visit);
+    }
+    $('#list').replaceChildren(...[...groups].map(([label, items]) => el('div', { className: 'day' }, [
+      el('h3', { textContent: label, style: 'margin-top: 0' }),
+      ...items.map((visit) => {
+        const host = new URL(visit.url).hostname;
+        const remove = el('button', { className: 'remove', title: 'Remove from history' }, [
+          Object.assign(el('div', { className: 'icon' }), { style: '--src: url(lithium://pages/icon/x); width: 14px; height: 14px' }),
+        ]);
+        remove.onclick = (event) => { event.preventDefault(); call('deleteVisit', visit.id).then(load); };
+        return el('a', { className: 'visit', href: visit.url, title: visit.url }, [
+          favicon(host),
+          el('span', { className: 'text' }, [
+            el('span', { className: 'title', textContent: visit.title || visit.url }),
+            el('span', { className: 'host', textContent: host.replace(/^www\./, '') }),
+          ]),
+          el('time', { textContent: new Date(visit.time).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }) }),
+          remove,
+        ]);
+      }),
+    ])));
+  };
+
+  const load = () => call('history', $('#query').value.trim()).then(render);
+  let timer = null;
+  $('#query').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
+  $('#clear').onclick = () => {
+    if (confirm('Clear all browsing history? Every visit Lithium has recorded on this Mac will be deleted.')) call('clearHistory').then(load);
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  load();
+</script>
+</body>
+</html>

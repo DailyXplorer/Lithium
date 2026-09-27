@@ -73,7 +73,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
+	<string>15.4</string>
 	<key>NSCameraUsageDescription</key>
 	<string>A website wants to use your camera.</string>
 	<key>NSHighResolutionCapable</key>

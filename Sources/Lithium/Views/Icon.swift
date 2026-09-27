@@ -30,6 +30,7 @@ enum Phosphor: String {
     case retry = "arrow-counter-clockwise"
     case settings = "gear-six"
     case sparkle
+    case puzzle = "puzzle-piece"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

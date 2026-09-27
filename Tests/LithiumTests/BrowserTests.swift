@@ -69,6 +69,112 @@ struct BrowserTests {
         }
     }
 
+    /// The real Chrome Web Store, YouTube and SponsorBlock:
+    /// `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension`.
+    /// Adds SponsorBlock with the store's own button and Lithium's confirmation, then watches it skip a sponsor.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_LIVE_TESTS"] == "1"))
+    func addsAnExtensionFromTheChromeWebStoreAndRunsIt() async throws {
+        let id = "mnjggcdmjocbbbhaepdhchncahnbgone"
+        let (video, sponsor) = try await videoWithASponsor()
+        let browser = Browser()
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1280, height: 860), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        func show(_ tab: Tab) {
+            // A test runner's window never counts as visible to WebKit, so pages would stay hidden.
+            let occlusion = Selector(("_setWindowOcclusionDetectionEnabled:"))
+            if tab.webView.responds(to: occlusion) {
+                typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+                unsafeBitCast(tab.webView.method(for: occlusion), to: Setter.self)(tab.webView, occlusion, false)
+            }
+            window.contentView = tab.webView
+            window.orderFrontRegardless()
+        }
+        let pastConsent = """
+            const reject = [...document.querySelectorAll('button, input[type=submit]')].find((b) => /^(Reject all|Tout refuser)$/.test((b.innerText || b.value || '').trim()));
+            if (reject) reject.click();
+            const button = (label) => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === label);
+            """
+
+        let store = browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/detail/\(id)")!)
+        show(store)
+        #expect(await poll(90) { await self.run(store, pastConsent + "const add = button('Add to Chrome'); return !!add && !add.disabled;") as? Bool == true })
+        await run(store, pastConsent + "button('Add to Chrome').click();")
+        let sheet = try #require(await pollValue(30) { window.attachedSheet })
+        let add = try #require(buttons(in: sheet.contentView).first { $0.title == "Add Extension" })
+        add.performClick(nil)
+        #expect(await poll(60) { browser.extensions.contexts[id] != nil })
+        #expect(browser.extensions.installed.map(\.id) == [id])
+        #expect(await poll(30) { await self.run(store, pastConsent + "return !!button('Remove from Chrome');") as? Bool == true })
+
+        // Once added, SponsorBlock opens its welcome page in a tab of its own, as it does in Chrome.
+        let welcome = try #require(await pollValue(30) { browser.tabs.first { $0.url?.scheme == Extensions.scheme } })
+        #expect(welcome.url?.host() == id)
+        #expect(await poll(30) { !welcome.title.isEmpty })
+        browser.close(welcome)
+
+        let youtube = browser.newTab(url: URL(string: "https://www.youtube.com/watch?v=\(video)")!)
+        show(youtube)
+        #expect(await poll(90) {
+            await self.run(youtube, pastConsent + """
+                return !!document.querySelector('#sponsorblock-document-script') && document.querySelectorAll('#previewbar li').length > 0;
+                """) as? Bool == true
+        }, "SponsorBlock drew its segments on the seek bar")
+        // Muted through YouTube's own player: WebKit lets a page start playback by itself only without sound.
+        // YouTube's cookie dialog can come up late and pause the video, so each check dismisses it first.
+        await run(youtube, "const player = document.querySelector('#movie_player'); player.mute(); player.seekTo(\(sponsor.start - 3), true);")
+        #expect(await poll(30) {
+            let time = await self.run(youtube, pastConsent + """
+                const player = document.querySelector('#movie_player');
+                if (player.getPlayerState() !== 1) player.playVideo();
+                return player.getCurrentTime();
+                """) as? Double ?? 0
+            return time > sponsor.end - 1
+        }, "SponsorBlock skipped the sponsor at \(sponsor.start)–\(sponsor.end)")
+
+        await browser.extensions.remove(id: id)
+        #expect(browser.extensions.installed.isEmpty)
+        #expect(browser.extensions.contexts.isEmpty)
+    }
+
+    /// A video whose sponsor SponsorBlock's server knows, far enough in to seek before it.
+    private func videoWithASponsor() async throws -> (id: String, segment: (start: Double, end: Double)) {
+        let url = URL(string: #"https://sponsor.ajay.app/api/skipSegments/5f6b?categories=["sponsor"]"#.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!)!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let entries = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        for entry in entries {
+            for segment in entry["segments"] as? [[String: Any]] ?? [] {
+                guard let times = segment["segment"] as? [Double], times.count == 2, let id = entry["videoID"] as? String,
+                      times[0] > 10, times[1] - times[0] > 8, (segment["videoDuration"] as? Double ?? 0) > 60 else { continue }
+                return (id, (times[0], times[1]))
+            }
+        }
+        throw CancellationError()
+    }
+
+    @discardableResult
+    private func run(_ tab: Tab, _ body: String) async -> Any? {
+        try? await tab.webView.callAsyncJavaScript(body, contentWorld: .page)
+    }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        await pollValue(seconds) { await condition() ? true : nil } ?? false
+    }
+
+    private func pollValue<Value>(_ seconds: Double, _ value: () async -> Value?) async -> Value? {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if let value = await value() { return value }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return await value()
+    }
+
+    private func buttons(in view: NSView?) -> [NSButton] {
+        guard let view else { return [] }
+        return ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(buttons(in:))
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

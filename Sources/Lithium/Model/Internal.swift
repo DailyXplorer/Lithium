@@ -146,14 +146,16 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             let code = value as? String ?? ""
             let known = browser.summaries.languageChoices.languages.contains { $0.code == code }
             browser.summaries.language = known ? code : nil
-        case "setSponsorBlock":
-            browser.sponsorBlock.isEnabled = value as? Bool ?? true
-        case "setSegmentAction":
-            if let entry = value as? [String: String],
-               let category = entry["category"].flatMap(SegmentCategory.init(rawValue:)),
-               let action = entry["action"].flatMap(SegmentAction.init(rawValue:)) {
-                browser.sponsorBlock.setAction(action, for: category)
+        case "setExtensionEnabled":
+            if let entry = value as? [String: Any], let id = entry["id"] as? String {
+                await browser.extensions.setEnabled(entry["enabled"] as? Bool ?? true, id: id)
             }
+        case "removeExtension":
+            if let id = value as? String { await browser.extensions.remove(id: id) }
+        case "openExtensionOptions":
+            if let id = value as? String { browser.extensions.openOptions(id: id) }
+        case "openWebStore":
+            browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/category/extensions")!)
         case "clearHistory":
             browser.history.clear()
             return (visits(browser, matching: ""), nil)
@@ -166,6 +168,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             return (nil, "Unknown action")
         }
         return (state(browser), nil)
+    }
+
+    private static func dataURL(_ image: NSImage) -> String? {
+        guard let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
+        return "data:image/png;base64," + png.base64EncodedString()
     }
 
     private func visits(_ browser: Browser, matching query: String) -> [[String: Any]] {
@@ -209,12 +217,14 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "modelAvailable": browser.tidyTitles.modelStatus.available,
                 "modelMessage": browser.tidyTitles.modelStatus.message,
             ],
-            "sponsorBlock": [
-                "enabled": browser.sponsorBlock.isEnabled,
-                "categories": SegmentCategory.allCases.map {
-                    ["id": $0.rawValue, "name": $0.label, "hint": $0.hint, "color": $0.color, "action": browser.sponsorBlock.actions[$0]?.rawValue ?? ""]
-                },
-            ],
+            "extensions": browser.extensions.installed.map { entry in
+                let context = browser.extensions.contexts[entry.id]
+                return [
+                    "id": entry.id, "name": entry.name, "version": entry.version, "enabled": entry.isEnabled,
+                    "hasOptions": context?.optionsPageURL != nil,
+                    "icon": context?.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? "",
+                ] as [String: Any]
+            },
             "about": [
                 "version": info["CFBundleShortVersionString"] as? String ?? "dev",
                 "safari": safari?["CFBundleShortVersionString"] as? String ?? "",

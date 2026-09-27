@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Lithium",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS("15.4")],
     dependencies: [
         .package(url: "https://github.com/AdguardTeam/SafariConverterLib.git", exact: "4.3.0"),
         .package(url: "https://github.com/ameshkov/swift-psl", "1.1.0"..<"2.0.0"),

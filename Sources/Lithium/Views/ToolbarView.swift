@@ -26,6 +26,7 @@ struct ToolbarView: View {
             AddressBar(tab: tab)
                 .frame(maxWidth: 560)
             Spacer(minLength: 16)
+            ExtensionsButton(tab: tab)
             DownloadsButton()
             SummaryButton(tab: tab)
             ShieldButton(tab: tab)
@@ -184,6 +185,7 @@ private struct PageMenu: View {
             .disabled(tab?.url == nil)
             Divider()
             Button("Show All History") { browser.openHistory() }
+            Button("Extensions") { browser.openSettings(section: "extensions") }
             Divider()
             Button("Settings…") { browser.openSettings() }
         } label: {

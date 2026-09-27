@@ -1,0 +1,156 @@
+import Foundation
+import Testing
+import WebKit
+@testable import Lithium
+
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ChromeWebStoreTests {
+    /// A CRX3 package: magic, version, header length, a header with a developer key proof (field 2)
+    /// and the signed data naming the extension (field 10000), then the archive.
+    private func package(crxID: [UInt8], archive: [UInt8] = Array("PK\u{3}\u{4}zip".utf8)) -> Data {
+        let signedData: [UInt8] = [0x0A, UInt8(crxID.count)] + crxID
+        let proof: [UInt8] = [0x0A, 0x03, 1, 2, 3, 0x12, 0x02, 4, 5]
+        var header: [UInt8] = [0x12, UInt8(proof.count)] + proof
+        header += varint(10000 << 3 | 2) + varint(UInt64(signedData.count)) + signedData
+        var bytes = Array("Cr24".utf8) + [3, 0, 0, 0]
+        bytes += withUnsafeBytes(of: UInt32(header.count).littleEndian, Array.init)
+        return Data(bytes + header + archive)
+    }
+
+    private func varint(_ value: UInt64) -> [UInt8] {
+        var value = value, bytes: [UInt8] = []
+        repeat {
+            bytes.append(UInt8(value & 0x7F) | (value >= 0x80 ? 0x80 : 0))
+            value >>= 7
+        } while value > 0
+        return bytes
+    }
+
+    private let crxID: [UInt8] = (0..<16).map { UInt8($0 * 0x11) }
+
+    @Test func spellsIDsWithTheLettersAToP() {
+        #expect(ChromeWebStore.extensionID(crxID) == "aabbccddeeffgghhiijjkkllmmnnoopp")
+        #expect(ChromeWebStore.isExtensionID("mnjggcdmjocbbbhaepdhchncahnbgone"))
+        #expect(!ChromeWebStore.isExtensionID("mnjggcdmjocbbbhaepdhchncahnbgonz"))
+        #expect(!ChromeWebStore.isExtensionID("../../etc"))
+    }
+
+    @Test func takesTheArchiveOfTheRequestedExtensionOnly() throws {
+        let data = package(crxID: crxID)
+        #expect(try ChromeWebStore.archive(fromPackage: data, id: "aabbccddeeffgghhiijjkkllmmnnoopp") == Data("PK\u{3}\u{4}zip".utf8))
+        #expect(throws: ChromeWebStore.PackageError.otherExtension) {
+            try ChromeWebStore.archive(fromPackage: data, id: "mnjggcdmjocbbbhaepdhchncahnbgone")
+        }
+        #expect(throws: ChromeWebStore.PackageError.notAPackage) {
+            try ChromeWebStore.archive(fromPackage: Data("PK\u{3}\u{4}zip".utf8), id: "aabbccddeeffgghhiijjkkllmmnnoopp")
+        }
+        #expect(throws: ChromeWebStore.PackageError.notAPackage) {
+            try ChromeWebStore.archive(fromPackage: package(crxID: crxID, archive: Array("<html>".utf8)), id: "aabbccddeeffgghhiijjkkllmmnnoopp")
+        }
+        var truncated = data
+        truncated.removeLast(data.count - 20)
+        #expect(throws: ChromeWebStore.PackageError.notAPackage) {
+            try ChromeWebStore.archive(fromPackage: truncated, id: "aabbccddeeffgghhiijjkkllmmnnoopp")
+        }
+    }
+
+    @Test func downloadsFromGooglesUpdateServer() throws {
+        let url = ChromeWebStore.downloadURL(for: "mnjggcdmjocbbbhaepdhchncahnbgone")
+        #expect(url.host() == "clients2.google.com")
+        let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.first { $0.name == "x" }?.value == "id=mnjggcdmjocbbbhaepdhchncahnbgone&uc")
+        #expect(items.first { $0.name == "prodversion" }?.value == ChromeWebStore.chromeVersion)
+    }
+
+    @Test func recognizesTheStore() {
+        #expect(ChromeWebStore.isStore(URL(string: "https://chromewebstore.google.com/detail/x/mnjggcdmjocbbbhaepdhchncahnbgone")))
+        #expect(!ChromeWebStore.isStore(URL(string: "http://chromewebstore.google.com/")))
+        #expect(!ChromeWebStore.isStore(URL(string: "https://chromewebstore.google.com.example.com/")))
+    }
+
+    @Test func warnsLikeChrome() {
+        let sponsorBlock: [String: Any] = [
+            "permissions": ["storage", "scripting", "unlimitedStorage"],
+            "host_permissions": ["https://*.youtube.com/*", "https://sponsor.ajay.app/*"],
+            "content_scripts": [["matches": ["https://*.youtube.com/*", "https://www.youtube-nocookie.com/embed/*"]]],
+        ]
+        #expect(ChromeWebStore.warnings(for: sponsorBlock) == ["Read and change your data on sponsor.ajay.app, youtube-nocookie.com, and youtube.com"])
+
+        let everything: [String: Any] = ["permissions": ["tabs", "webNavigation", "<all_urls>", "downloads"]]
+        #expect(ChromeWebStore.warnings(for: everything) == [
+            "Read and change all your data on all websites", "Read your browsing history", "Manage your downloads",
+        ])
+        #expect(ChromeWebStore.warnings(for: ["permissions": ["storage"]]).isEmpty)
+    }
+
+    /// The store page gets Chrome's user agent and `chrome.webstorePrivate`, answered by Lithium;
+    /// installing needs the user's approval first, and no other site can reach the bridge.
+    @Test func storePageTalksToLithiumAndNoOtherSiteDoes() async throws {
+        let extensions = Extensions(folder: .temporaryDirectory.appending(path: "extensions-\(UUID())"), configuration: .nonPersistent())
+        let store = try await page(at: "https://chromewebstore.google.com/detail/x/mnjggcdmjocbbbhaepdhchncahnbgone", extensions)
+        let answers = try #require(try await store.callAsyncJavaScript("""
+            const id = 'mnjggcdmjocbbbhaepdhchncahnbgone';
+            const status = await new Promise((resolve) => chrome.webstorePrivate.getExtensionStatus(id, '{}', resolve));
+            const version = await chrome.webstorePrivate.getFullChromeVersion();
+            const all = await new Promise((resolve) => chrome.management.getAll(resolve));
+            const error = await new Promise((resolve) => chrome.webstorePrivate.completeInstall(id, () => resolve(chrome.runtime.lastError?.message)));
+            return { status, version: version.version_number, all: all.length, error, userAgent: navigator.userAgent };
+            """, contentWorld: .page) as? [String: Any])
+        #expect(answers["status"] as? String == "installable")
+        #expect(answers["version"] as? String == ChromeWebStore.chromeVersion)
+        #expect(answers["all"] as? Int == 0)
+        #expect((answers["error"] as? String)?.hasSuffix("does not match a previous call to beginInstallWithManifest3") == true)
+        #expect((answers["userAgent"] as? String)?.contains("Chrome/141.0.0.0") == true)
+        #expect(extensions.installed.isEmpty)
+
+        let other = try await page(at: "https://example.com/", extensions)
+        let denied = try await other.callAsyncJavaScript("""
+            return await window.webkit.messageHandlers.lithiumWebstore.postMessage({ member: 'management.getAll', args: [] })
+              .then(() => 'answered', (error) => error.message);
+            """, contentWorld: .page) as? String
+        #expect(denied == "Not allowed")
+    }
+
+    private func page(at address: String, _ extensions: Extensions) async throws -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(ChromeWebStore.script)
+        configuration.userContentController.addScriptMessageHandler(extensions.webstoreBridge, contentWorld: .page, name: WebstoreBridge.name)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let navigation = Navigation()
+        webView.navigationDelegate = navigation
+        webView.loadHTMLString("<title>Page</title>", baseURL: URL(string: address))
+        await navigation.wait()
+        return webView
+    }
+
+    /// Real Chrome Web Store and SponsorBlock: `LITHIUM_LIVE_TESTS=1 swift test --filter ChromeWebStoreTests`.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_LIVE_TESTS"] == "1"))
+    func downloadsARealExtension() async throws {
+        let id = "mnjggcdmjocbbbhaepdhchncahnbgone"
+        let archive = try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id)
+        let file = URL.temporaryDirectory.appending(path: "\(UUID()).zip")
+        try archive.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let webExtension = try await WKWebExtension(resourceBaseURL: file)
+        #expect(webExtension.displayName?.contains("SponsorBlock") == true)
+        #expect(webExtension.manifestVersion == 3)
+        #expect(webExtension.errors.isEmpty)
+    }
+}
+
+@MainActor
+private final class Navigation: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var done = false
+
+    func wait() async {
+        if !done { await withCheckedContinuation { continuation = $0 } }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        done = true
+        continuation?.resume()
+        continuation = nil
+    }
+}

@@ -35,8 +35,9 @@ final class Tab: NSObject, Identifiable {
     /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
     @ObservationIgnored private var hasInternalBridge = false
+    @ObservationIgnored private var hasWebstoreBridge = false
 
-    private static let webSchemes: Set<String> = ["http", "https", "about", "blob", "data", "file", Internal.scheme]
+    private static let webSchemes: Set<String> = ["http", "https", "about", "blob", "data", "file", Internal.scheme, Extensions.scheme]
 
     /// A name the user gave the tab; it wins over the page's own title until cleared.
     var customTitle: String?
@@ -111,6 +112,7 @@ final class Tab: NSObject, Identifiable {
         guard !isAsleep else { return }
         tearDown()
         hasInternalBridge = false
+        hasWebstoreBridge = false
         isAsleep = true
         appliedProtections = nil
         canGoBack = false
@@ -138,6 +140,7 @@ final class Tab: NSObject, Identifiable {
                     self.tidyTitle = nil
                     self.browser?.tidyTitles.update(self)
                     if let url = self.url, !self.isHome { self.browser?.history.updateTitle(self.title, for: url) }
+                    self.tellExtensions(.title)
                 }
             },
             webView.observe(\.url) { [weak self] webView, _ in
@@ -147,10 +150,14 @@ final class Tab: NSObject, Identifiable {
                     self.url = url
                     // Same-document navigations (pushState) never reach didFinish.
                     if !webView.isLoading, !self.isHome { self.browser?.history.record(url, title: self.title) }
+                    self.tellExtensions(.URL)
                 }
             },
             webView.observe(\.isLoading) { [weak self] webView, _ in
-                MainActor.assumeIsolated { self?.isLoading = webView.isLoading }
+                MainActor.assumeIsolated {
+                    self?.isLoading = webView.isLoading
+                    self?.tellExtensions(.loading)
+                }
             },
             webView.observe(\.estimatedProgress) { [weak self] webView, _ in
                 MainActor.assumeIsolated { self?.progress = webView.estimatedProgress }
@@ -164,9 +171,15 @@ final class Tab: NSObject, Identifiable {
         ]
     }
 
+    private func tellExtensions(_ properties: WKWebExtension.TabChangedProperties) {
+        guard !isHome, !isAsleep, let browser, browser.tabs.contains(self) else { return }
+        browser.extensions.didChange(properties, of: self)
+    }
+
     private func applyProtections(for url: URL) async {
         guard let privacy = browser?.privacy else { return }
         await privacy.waitUntilReady()
+        await browser?.extensions.waitUntilLoaded()
         let enabled = privacy.isEnabled(for: url)
         let controller = webView.configuration.userContentController
         if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
@@ -178,7 +191,7 @@ final class Tab: NSObject, Identifiable {
         controller.removeAllUserScripts()
         PageStyle.scripts(for: url).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
-        if let script = browser?.sponsorBlock.script(for: url) { controller.addUserScript(script) }
+        if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         privacy.addScripts(enabled, for: url, to: controller)
     }
 
@@ -203,6 +216,18 @@ final class Tab: NSObject, Identifiable {
             controller.removeScriptMessageHandler(forName: InternalBridge.name, contentWorld: .page)
         }
         hasInternalBridge = installed
+    }
+
+    /// The Chrome Web Store's install button talks to Lithium only while the tab shows the store.
+    private func setWebstoreBridge(_ installed: Bool) {
+        guard installed != hasWebstoreBridge, let browser else { return }
+        let controller = webView.configuration.userContentController
+        if installed {
+            controller.addScriptMessageHandler(browser.extensions.webstoreBridge, contentWorld: .page, name: WebstoreBridge.name)
+        } else {
+            controller.removeScriptMessageHandler(forName: WebstoreBridge.name, contentWorld: .page)
+        }
+        hasWebstoreBridge = installed
     }
 
     private func refreshFavicon() async {
@@ -258,11 +283,14 @@ extension Tab: WKNavigationDelegate {
             guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else { return (.cancel, preferences) }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
+            setWebstoreBridge(false)
             setInternalBridge(true)
             return (.allow, preferences)
         }
-        guard isMainFrame else { return (.allow, preferences) }
+        // An extension's own pages run in its configuration, which Lithium leaves alone.
+        guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
         setInternalBridge(false)
+        setWebstoreBridge(ChromeWebStore.isStore(url))
 
         if isHome, !Browser.isHomeURL(url) {
             browser?.newTab(url: url)
@@ -333,7 +361,7 @@ extension Tab: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let browser else { return }
         guard isHome || browser.selectedTabID == id else {
-            sleep(configuration: browser.makeConfiguration())
+            sleep(configuration: browser.makeConfiguration(for: url))
             return
         }
         if let last = lastCrashReload, Date().timeIntervalSince(last) < 10 {
@@ -450,5 +478,64 @@ extension Tab: WKUIDelegate {
     private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
         guard let window = webView.window else { return alert.runModal() }
         return await alert.beginSheetModal(for: window)
+    }
+}
+
+/// Tabs as extensions see them (`chrome.tabs`).
+extension Tab: WKWebExtensionTab {
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
+        isHome ? nil : browser?.extensions.window
+    }
+
+    func indexInWindow(for context: WKWebExtensionContext) -> Int {
+        browser?.navigationOrder.firstIndex(of: self) ?? NSNotFound
+    }
+
+    func webView(for context: WKWebExtensionContext) -> WKWebView? {
+        isAsleep ? nil : webView
+    }
+
+    func title(for context: WKWebExtensionContext) -> String? {
+        displayTitle
+    }
+
+    func url(for context: WKWebExtensionContext) -> URL? {
+        url
+    }
+
+    func isPinned(for context: WKWebExtensionContext) -> Bool {
+        pinID != nil
+    }
+
+    func isSelected(for context: WKWebExtensionContext) -> Bool {
+        browser?.selectedTabID == id
+    }
+
+    func isLoadingComplete(for context: WKWebExtensionContext) -> Bool {
+        !isLoading
+    }
+
+    func activate(for context: WKWebExtensionContext) async throws {
+        browser?.select(self)
+    }
+
+    func close(for context: WKWebExtensionContext) async throws {
+        browser?.close(self)
+    }
+
+    func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
+        load(url)
+    }
+
+    func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
+        reload()
+    }
+
+    func goBack(for context: WKWebExtensionContext) async throws {
+        webView.goBack()
+    }
+
+    func goForward(for context: WKWebExtensionContext) async throws {
+        webView.goForward()
     }
 }

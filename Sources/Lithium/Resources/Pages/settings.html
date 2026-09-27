@@ -21,22 +21,13 @@
   dl { display: grid; grid-template-columns: 140px 1fr; margin: 0; }
   dt, dd { margin: 0; padding: 14px 0; border-top: 1px solid var(--line); }
   dt { color: var(--muted); }
-  .category .title { display: flex; align-items: center; gap: 8px; }
-  .category .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
+  .extension .title { display: flex; align-items: center; gap: 10px; }
+  .extension img { width: 24px; height: 24px; flex: none; }
+  .extension .actions { display: flex; align-items: center; gap: 10px; }
 </style>
 </head>
 <body>
-<nav>
-  <div class="brand"><img src="lithium://pages/app-icon" alt=""><h1>Settings</h1></div>
-  <a href="#appearance" data-icon="paint-brush"><span>Appearance</span></a>
-  <a href="#search" data-icon="magnifying-glass"><span>Search</span></a>
-  <a href="#privacy" data-icon="shield-check"><span>Privacy &amp; Security</span></a>
-  <a href="#max" data-icon="sparkle"><span>Max</span></a>
-  <a href="#sponsorblock" data-icon="skip-forward"><span>SponsorBlock</span></a>
-  <a href="#permissions" data-icon="video-camera"><span>Site Permissions</span></a>
-  <a href="lithium://history" data-icon="clock-counter-clockwise"><span>History</span></a>
-  <a href="#about" data-icon="info"><span>About Lithium</span></a>
-</nav>
+<nav></nav>
 
 <main>
   <section id="appearance" class="page">
@@ -81,6 +72,17 @@
     <div class="rows" id="exceptions"></div>
   </section>
 
+  <section id="extensions" class="page">
+    <h2>Extensions</h2>
+    <p class="lead">Extensions from the Chrome Web Store, run by the WebKit engine itself. Click Add to Chrome on an extension’s page in the store: Lithium asks first, then adds it.</p>
+    <div class="stat">
+      <div><div class="label">Most extensions work. Some rely on parts of Chrome that WebKit doesn’t have.</div></div>
+      <button class="button accent" id="web-store">Open the Chrome Web Store</button>
+    </div>
+    <h3>Added</h3>
+    <div class="rows" id="extension-list"></div>
+  </section>
+
   <section id="max" class="page">
     <h2>Max</h2>
     <p class="lead">Intelligence features, each one optional. They run on this Mac with Apple Intelligence; nothing about your browsing is sent anywhere.</p>
@@ -101,22 +103,6 @@
     </div>
   </section>
 
-  <section id="sponsorblock" class="page">
-    <h2>SponsorBlock</h2>
-    <p class="lead">Skips sponsors and other interruptions in YouTube videos, timed by the SponsorBlock community.</p>
-    <div class="row">
-      <div><div class="title">Skip segments on YouTube</div><div class="hint">Applies to YouTube pages as they load. Choices below apply from the next video.</div></div>
-      <label class="switch" for="sponsorblock-enabled"><input type="checkbox" id="sponsorblock-enabled" role="switch"><span></span></label>
-    </div>
-    <div id="segment-settings">
-      <h3>Segments</h3>
-      <div class="rows" id="segment-categories"></div>
-      <h3>Privacy</h3>
-      <div class="row"><div><div class="title">Which video you watch stays private</div><div class="hint">Lithium asks for the segments of every video whose SHA-256 hash starts with the same four characters, then keeps only the one playing. SponsorBlock’s server never learns which video it is.</div></div></div>
-    </div>
-    <div class="sources">Segment data from SponsorBlock (sponsor.ajay.app) by its contributors, under CC BY-NC-SA 4.0.</div>
-  </section>
-
   <section id="permissions" class="page">
     <h2>Site Permissions</h2>
     <p class="lead">Sites ask the first time they need your camera, microphone or location. Your answers live here.</p>
@@ -131,7 +117,7 @@
       <dt>Engine</dt><dd id="engine"></dd>
       <dt>System</dt><dd id="system"></dd>
       <dt>License</dt><dd>GNU General Public License v3.0</dd>
-      <dt>Built with</dt><dd>AdGuard SafariConverterLib, Scriptlets and ExtendedCss (GPL-3.0) · uBlock Origin filter lists (GPL-3.0) · SponsorBlock segment data (CC BY-NC-SA 4.0) · Phosphor Icons (MIT) · DM Sans (SIL OFL)</dd>
+      <dt>Built with</dt><dd>AdGuard SafariConverterLib, Scriptlets and ExtendedCss (GPL-3.0) · uBlock Origin filter lists (GPL-3.0) · Phosphor Icons (MIT) · DM Sans (SIL OFL)</dd>
     </dl>
   </section>
 </main>
@@ -223,21 +209,27 @@
     $('#max-status-title').classList.toggle('ready', max.modelAvailable);
     $('#max-status').textContent = max.modelMessage;
 
-    const { sponsorBlock } = state;
-    $('#sponsorblock-enabled').checked = sponsorBlock.enabled;
-    $('#segment-settings').hidden = !sponsorBlock.enabled;
-    $('#segment-categories').replaceChildren(...sponsorBlock.categories.map((category) => {
-      const select = el('select', {}, [['skip', 'Skip automatically'], ['button', 'Show a skip button'], ['ignore', 'Don’t skip']]
-        .map(([value, label]) => el('option', { value, textContent: label })));
-      select.value = category.action;
-      select.onchange = () => call('setSegmentAction', { category: category.id, action: select.value }).then(render);
-      const dot = el('span', { className: 'dot' });
-      dot.style.background = category.color;
-      return el('div', { className: 'row category' }, [
-        el('div', {}, [el('div', { className: 'title' }, [dot, category.name]), el('div', { className: 'hint', textContent: category.hint })]),
-        select,
+    $('#extension-list').replaceChildren(...(state.extensions.length ? state.extensions.map((extension) => {
+      const toggle = el('input', { type: 'checkbox', role: 'switch', checked: extension.enabled });
+      toggle.onchange = () => call('setExtensionEnabled', { id: extension.id, enabled: toggle.checked }).then(render);
+      const remove = el('button', { className: 'button', textContent: 'Remove' });
+      remove.onclick = () => {
+        if (confirm(`Remove “${extension.name}”? Its settings and data are removed with it.`)) call('removeExtension', extension.id).then(render);
+      };
+      const actions = [remove, el('label', { className: 'switch' }, [toggle, el('span')])];
+      if (extension.hasOptions) {
+        const options = el('button', { className: 'button', textContent: 'Options' });
+        options.onclick = () => call('openExtensionOptions', extension.id);
+        actions.unshift(options);
+      }
+      return el('div', { className: 'row extension' }, [
+        el('div', {}, [
+          el('div', { className: 'title' }, [extension.icon ? el('img', { src: extension.icon, alt: '' }) : '', extension.name]),
+          el('div', { className: 'hint', textContent: `Version ${extension.version}` + (extension.enabled ? '' : ' · Off') }),
+        ]),
+        el('div', { className: 'actions' }, actions),
       ]);
-    }));
+    }) : [el('div', { className: 'empty', textContent: 'None yet.' })]));
 
     $('#version').textContent = `Version ${about.version}`;
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
@@ -250,9 +242,9 @@
   $('#custom-color').oninput = (event) => call('setSidebarColor', event.target.value).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
   $('#update').onclick = () => call('updateFilters').then(render);
+  $('#web-store').onclick = () => call('openWebStore');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
-  $('#sponsorblock-enabled').onchange = (event) => call('setSponsorBlock', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state').then(render); });
 

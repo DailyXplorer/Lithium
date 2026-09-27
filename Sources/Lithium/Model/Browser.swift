@@ -25,7 +25,7 @@ final class Browser {
     let permissions = SitePermissions()
     let tidyTitles = TidyTitles()
     let summaries = PageSummaries()
-    let sponsorBlock = SponsorBlock()
+    let extensions = Extensions()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
     @ObservationIgnored private(set) lazy var home: Tab = {
@@ -67,6 +67,8 @@ final class Browser {
     init() {
         pins = PinStore.load()
         privacy.start()
+        extensions.browser = self
+        extensions.start()
         restore(SessionStore.load())
         saveSession()
         Task { [tidyTitles] in
@@ -86,22 +88,27 @@ final class Browser {
         for tab in tabs where tab.id != selectedTabID {
             // The check waits on the page's process, and the tab may be selected or closed meanwhile.
             guard await tab.canSleep(idleFor: Self.tabIdleInterval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
-            tab.sleep(configuration: makeConfiguration())
+            tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
 
-    func makeConfiguration() -> WKWebViewConfiguration {
+    /// Pages of an extension get that extension's configuration; everything else Lithium's own.
+    func makeConfiguration(for url: URL? = nil) -> WKWebViewConfiguration {
+        if let configuration = extensions.configuration(for: url) { return configuration }
         let configuration = privacy.makeConfiguration()
-        InternalSchemeHandler.shared.install(on: configuration)
-        sponsorBlock.install(on: configuration)
+        prepare(configuration)
         return configuration
     }
 
     /// Popups arrive with a configuration WebKit copied from their opener.
     func prepare(popup configuration: WKWebViewConfiguration) {
         privacy.harden(configuration)
+        prepare(configuration)
+    }
+
+    private func prepare(_ configuration: WKWebViewConfiguration) {
         InternalSchemeHandler.shared.install(on: configuration)
-        sponsorBlock.install(on: configuration)
+        configuration.webExtensionController = extensions.controller
     }
 
     func openSettings(section: String? = nil) {
@@ -195,8 +202,9 @@ final class Browser {
 
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration())
+        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(for: url))
         tabs.insert(tab, at: 0)
+        extensions.didOpen(tab)
         if let url { tab.load(url) }
         if selecting { select(tab) }
         return tab
@@ -250,12 +258,14 @@ final class Browser {
 
     func select(_ tab: Tab) {
         if selectedTabID == nil { resetHome() }
+        let previous = selectedTab
         if tab.id != selectedTabID {
             find.hide()
-            selectedTab?.markActive()
+            previous?.markActive()
         }
         selectedTabID = tab.id
         tab.markActive()
+        if previous !== tab { extensions.didActivate(tab, previous: previous) }
     }
 
     func close(_ tab: Tab) {
@@ -274,6 +284,7 @@ final class Browser {
         summaries.discard(tab)
         tab.tearDown()
         tabs.remove(at: index)
+        extensions.didClose(tab)
     }
 
     func closeSelectedTab() {
@@ -303,7 +314,7 @@ final class Browser {
     }
 
     /// Live favorites first (in grid order), then the tab list, which is how the sidebar reads top to bottom.
-    private var navigationOrder: [Tab] {
+    var navigationOrder: [Tab] {
         pins.compactMap(liveTab(for:)) + regularTabs
     }
 
@@ -339,15 +350,21 @@ final class Browser {
     /// finishes loading before its web view is in a window stays blank.
     private func restore(_ session: Session) {
         let pinIDs = Set(pins.map(\.id))
-        tabs = session.tabs.map { saved in
-            let tab = Tab(browser: self, configuration: makeConfiguration())
+        var selected: Tab?
+        for (index, saved) in session.tabs.enumerated() {
+            // An extension's own page needs its extension, which loads after the session comes back.
+            guard saved.url.scheme != Extensions.scheme else { continue }
+            let tab = Tab(browser: self, configuration: makeConfiguration(for: saved.url))
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { pinIDs.contains($0) ? $0 : nil }
-            return tab
+            tabs.append(tab)
+            extensions.didOpen(tab)
+            if index == session.selectedIndex { selected = tab }
         }
-        if let index = session.selectedIndex, tabs.indices.contains(index) {
-            selectedTabID = tabs[index].id
+        if let selected {
+            selectedTabID = selected.id
+            extensions.didActivate(selected, previous: nil)
         }
     }
 

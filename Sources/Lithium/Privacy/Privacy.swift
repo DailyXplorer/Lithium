@@ -22,6 +22,9 @@ final class Privacy {
     @ObservationIgnored private let userAgentSuffix: String
 
     private static let disabledHostsKey = "disabledProtectionHosts"
+    /// Part of each compiled list's name: bumped when `prepared(_:)` changes, so lists compiled
+    /// the old way are rebuilt once instead of waiting for the next filter update.
+    private static let preparation = 4
     private static let updateInterval: TimeInterval = 24 * 60 * 60
     private static let downloadedFilters = URL.applicationSupportDirectory.appending(path: "Lithium/Filters")
 
@@ -137,11 +140,14 @@ final class Privacy {
 
     /// Adds the protection scripts for `url`; the caller has already reset the controller's scripts.
     func addScripts(_ enabled: Bool, for url: URL, to controller: WKUserContentController) {
-        guard enabled else { return }
-        controller.addUserScript(farbling)
-        if let source = advanced.script(for: url) {
-            controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
-        }
+        scripts(enabled, for: url).forEach(controller.addUserScript)
+    }
+
+    /// The protection scripts for `url`.
+    func scripts(_ enabled: Bool, for url: URL) -> [WKUserScript] {
+        guard enabled else { return [] }
+        guard let source = advanced.script(for: url) else { return [farbling] }
+        return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }
 
     /// WebKit's Advanced Tracking and Fingerprinting Protection (Safari's private-browsing
@@ -157,6 +163,43 @@ final class Privacy {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
+    /// The list as WebKit gets it, with two changes to element hiding that keep what it hides:
+    /// - WebKit checks every load against each rule whose url-filter matches its URL, and AdGuard's
+    ///   converter gives the element hiding rules of particular sites the url-filter ".*". Thousands
+    ///   of them went through every image, script and request of every page, which made
+    ///   Speedometer's news sites 2.3 times slower. WebKit takes their selectors from the document
+    ///   load, so that is the only load they now match.
+    /// - "#x ~ *" makes WebKit walk the earlier siblings of every element at each style change:
+    ///   one such filter of uBO's badware list cost 44 ms per restyle of a page with 2,000 sibling
+    ///   elements, and 8 ms per run of Speedometer's SVG chart. It becomes "#x + *, #x + * + *,
+    ///   #x + * + * + *", which hides the three elements that follow #x (what these scam pages put
+    ///   after it) with one sibling check each. ":has(> #x) > *" was cheap for the chart but made
+    ///   list updates slower.
+    nonisolated static func prepared(_ file: URL) -> String? {
+        guard let data = try? Data(contentsOf: file),
+              var rules = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        for index in rules.indices {
+            guard var trigger = rules[index]["trigger"] as? [String: Any],
+                  var action = rules[index]["action"] as? [String: Any],
+                  action["type"] as? String == "css-display-none" else { continue }
+            if trigger["url-filter"] as? String == ".*", trigger["resource-type"] == nil,
+               trigger.keys.contains(where: { $0.hasPrefix("if-") || $0.hasPrefix("unless-") }) {
+                trigger["resource-type"] = ["document"]
+                rules[index]["trigger"] = trigger
+            }
+            if let selector = action["selector"] as? String, selector.contains("~") {
+                action["selector"] = selector.split(separator: ",").map { part in
+                    let selector = part.trimmingCharacters(in: .whitespaces)
+                    guard let match = selector.wholeMatch(of: /(#[\w-]+)\s*~\s*\*/) else { return selector }
+                    return "\(match.1) + *, \(match.1) + * + *, \(match.1) + * + * + *"
+                }.joined(separator: ", ")
+                rules[index]["action"] = action
+            }
+        }
+        guard let prepared = try? JSONSerialization.data(withJSONObject: rules) else { return nil }
+        return String(decoding: prepared, as: UTF8.self)
+    }
+
     private func loadRuleLists() async {
         guard let (folder, manifest) = Self.currentFilters(),
               let store = WKContentRuleListStore.default() else { return }
@@ -165,13 +208,15 @@ final class Privacy {
         var lists: [WKContentRuleList] = []
         var current: Set<String> = []
         for group in manifest.groups.keys.sorted() {
-            let identifier = "lithium-\(group)-\(stamp)"
+            let identifier = "lithium-\(group)-\(stamp)-p\(Self.preparation)"
             current.insert(identifier)
             if let cached = try? await store.contentRuleList(forIdentifier: identifier) {
                 lists.append(cached)
                 continue
             }
-            guard let json = try? String(contentsOf: folder.appending(path: "\(group).json"), encoding: .utf8) else { continue }
+            // Reading and rewriting ten megabytes of JSON happens off the main thread.
+            let file = folder.appending(path: "\(group).json")
+            guard let json = await Task.detached(priority: .utility, operation: { Self.prepared(file) }).value else { continue }
             do {
                 if let compiled = try await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) {
                     lists.append(compiled)

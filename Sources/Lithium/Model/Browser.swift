@@ -48,7 +48,11 @@ final class Browser {
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private var eventMonitors: [Any] = []
     @ObservationIgnored private var closedTabs: [ClosedTab] = []
-    @ObservationIgnored private var sleepLoop: Task<Void, Never>?
+    // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
+    @ObservationIgnored nonisolated(unsafe) private var sleepLoop: Task<Void, Never>?
+    @ObservationIgnored nonisolated(unsafe) private var memoryPressure: DispatchSourceMemoryPressure?
+    /// As macOS last reported it: the source only speaks when the level changes.
+    @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
 
     struct ClosedTab {
@@ -57,10 +61,18 @@ final class Browser {
         let customTitle: String?
     }
 
-    /// 30 minutes; `defaults write app.lithium.browser tabIdleSeconds N` overrides it.
+    /// 30 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot), as in
+    /// Orion. `defaults write app.lithium.browser tabIdleSeconds N` overrides both.
     static var tabIdleInterval: TimeInterval {
         let custom = UserDefaults.standard.double(forKey: "tabIdleSeconds")
-        return custom > 0 ? custom : 30 * 60
+        if custom > 0 { return custom }
+        return isSavingEnergy ? shortIdleInterval : 30 * 60
+    }
+    static let shortIdleInterval: TimeInterval = 5 * 60
+
+    private static var isSavingEnergy: Bool {
+        let info = ProcessInfo.processInfo
+        return info.isLowPowerModeEnabled || info.thermalState == .serious || info.thermalState == .critical
     }
     private static let closedTabsLimit = 25
 
@@ -79,17 +91,69 @@ final class Browser {
         sleepLoop = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(min(60, Self.tabIdleInterval / 2)))
-                await self?.sleepIdleTabs()
+                self?.sleepTabs()
             }
+        }
+        watchMemoryPressure()
+    }
+
+    deinit {
+        sleepLoop?.cancel()
+        memoryPressure?.cancel()
+    }
+
+    /// A pass runs in one go on the main actor: nothing can change a tab between its check
+    /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
+    /// window) and the page that opened it talk to each other, so neither sleeps while both
+    /// are open, unless memory is critical.
+    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool) {
+        tabs.forEach { $0.noteSound() }
+        var paired: Set<ObjectIdentifier> = []
+        if sparingPopups {
+            let open = Set(tabs.map { ObjectIdentifier($0) })
+            for tab in tabs {
+                guard let opener = tab.opener, open.contains(ObjectIdentifier(opener)) else { continue }
+                paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)])
+            }
+        }
+        for tab in tabs where tab.id != selectedTabID && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
+            tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
 
-    private func sleepIdleTabs() async {
-        for tab in tabs where tab.id != selectedTabID {
-            // The check waits on the page's process, and the tab may be selected or closed meanwhile.
-            guard await tab.canSleep(idleFor: Self.tabIdleInterval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
-            tab.sleep(configuration: makeConfiguration(for: tab.url))
+    /// When macOS runs short of memory, Lithium gives some back before the system starts
+    /// compressing and swapping.
+    private func watchMemoryPressure() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let event = self.memoryPressure?.data else { return }
+                self.memoryLevel = event
+                if event != .normal { self.sleepTabs() }
+            }
         }
+        source.activate()
+        memoryPressure = source
+    }
+
+    /// For as long as memory is short, background tabs left alone for 5 minutes (or less, if
+    /// `tabIdleSeconds` says so) sleep when memory runs low, and every one that can (not playing
+    /// sound, recording or loading) when it is critical, like Firefox's tab unloading.
+    private func sleepTabs() {
+        if memoryLevel.contains(.critical) {
+            sleepIdleTabs(idleFor: 0, sparingPopups: false)
+        } else if memoryLevel.contains(.warning) {
+            sleepIdleTabs(idleFor: min(Self.tabIdleInterval, Self.shortIdleInterval), sparingPopups: true)
+        } else {
+            sleepIdleTabs(idleFor: Self.tabIdleInterval, sparingPopups: true)
+        }
+    }
+
+    /// What a memory pressure event does, for tests.
+    func relieveMemoryPressure(critical: Bool) {
+        memoryLevel = critical ? .critical : .warning
+        sleepTabs()
+        memoryLevel = .normal
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.
@@ -212,6 +276,8 @@ final class Browser {
 
     func newTabFocusingAddress() {
         find.hide()
+        // Left for the address bar: it counts as used until now.
+        selectedTab?.markActive()
         if selectedTabID == nil { resetHome() }
         selectedTabID = nil
         requestAddressFocus()
@@ -279,7 +345,10 @@ final class Browser {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             selectedTabID = remaining.isEmpty ? nil : remaining[min(position, remaining.count - 1)].id
+            // The tab shown next may be asleep.
+            selectedTab?.markActive()
         }
+        tab.unpair()
         permissions.cancel(tabID: tab.id)
         summaries.discard(tab)
         tab.tearDown()

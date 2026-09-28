@@ -49,7 +49,7 @@ struct BrowserTests {
         #expect(background.webView.title == "Background")
     }
 
-    /// Putting a tab to sleep waits on its page's process; a tab selected meanwhile stays awake.
+    /// Switching tabs quickly while tabs fall asleep every few milliseconds never puts the selected one to sleep.
     @Test func selectedTabNeverFallsAsleep() async throws {
         UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")
         defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
@@ -67,6 +67,57 @@ struct BrowserTests {
             #expect(!second.isAsleep, "the selected tab was put to sleep")
             if second.isAsleep { break }
         }
+    }
+
+    /// A tab that slept wakes on the page it showed, with its back history.
+    @Test func sleepingTabKeepsItsHistory() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first")!)
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+
+        browser.newTab(url: URL(string: "data:text/html,other")!)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        #expect(tab.isAsleep)
+        browser.select(tab)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+        #expect(await waitUntil(5) { tab.canGoBack })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "First" })
+    }
+
+    /// A local file's read access comes from `load`, not history: a tab with one in its history
+    /// wakes on its page afresh, without a Back that would fail.
+    @Test func sleepingTabDropsAHistoryWithALocalFile() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "lithium-\(UUID().uuidString).html")
+        try "<title>File</title>file".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let browser = Browser()
+        let tab = browser.newTab(url: file)
+        #expect(await waitUntil(120) { loaded(tab) && tab.webView.title == "File" })
+        tab.load(URL(string: "data:text/html,<title>Web</title>web")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Web" && tab.canGoBack })
+
+        browser.newTab(url: URL(string: "data:text/html,other")!)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        browser.select(tab)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Web" })
+        #expect(!tab.canGoBack)
+    }
+
+    /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
+    @Test func memoryPressureSleepsBackgroundTabs() async throws {
+        let browser = Browser()
+        let background = browser.newTab(url: URL(string: "data:text/html,background")!, selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        #expect(await waitUntil(120) { loaded(background) && loaded(visible) })
+
+        browser.relieveMemoryPressure(critical: false)
+        #expect(!background.isAsleep, "a tab used a moment ago stays awake while memory is only low")
+        browser.relieveMemoryPressure(critical: true)
+        #expect(background.isAsleep)
+        #expect(!visible.isAsleep)
     }
 
     /// The real Chrome Web Store, YouTube and SponsorBlock:

@@ -23,6 +23,18 @@ final class Tab: NSObject, Identifiable {
     let isHome: Bool
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
+    /// The page's back and forward history (and scroll position) while the tab sleeps, so it
+    /// wakes where it was left.
+    @ObservationIgnored private var sleepingState: Any?
+    /// The tab whose page opened this one as a popup window, as sign-in windows are.
+    @ObservationIgnored weak var opener: Tab?
+    /// When the page was last heard, so a pause between tracks or while buffering isn't taken
+    /// for silence.
+    @ObservationIgnored private var lastHeard: Date?
+    @ObservationIgnored private var isAskingPlayback = false
+    /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
+    /// fall back on if the form isn't sent again.
+    @ObservationIgnored private var hasShownPage = false
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -77,6 +89,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func attach(_ webView: WKWebView) {
+        hasShownPage = false
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsMagnification = true
@@ -86,6 +99,9 @@ final class Tab: NSObject, Identifiable {
     func load(_ url: URL) {
         self.url = url
         isAsleep = false
+        sleepingState = nil
+        // A page the user sends elsewhere is no longer what its popup was talking to.
+        unpair()
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -159,21 +175,99 @@ final class Tab: NSObject, Identifiable {
     }
 
     func markActive() {
+        noteSound()
         lastActive = Date()
-        if isAsleep, let url { load(url) }
+        wakeIfAsleep()
+    }
+
+    private func wakeIfAsleep() {
+        guard isAsleep, let url else { return }
+        if let sleepingState { wake(from: sleepingState, at: url) } else { load(url) }
+    }
+
+    /// The history a sleeping tab wakes with, if every page in it can come back that way. Local
+    /// files and Lithium's own pages can't: their read access and trust are granted by `load`.
+    /// Nor can a page whose process died in the middle of a navigation: the history doesn't
+    /// have the page the tab was going to yet.
+    private func restorableState(of webView: WKWebView) -> Any? {
+        let list = webView.backForwardList
+        // A PDF shown when the tab sleeps loads afresh: Lithium's viewer needs the document's
+        // bytes, which a page brought back from history may not come with.
+        guard pdf == nil, let current = list.currentItem, current.url == url,
+              (list.backList + [current] + list.forwardList).allSatisfy({ Self.wakesWithHistory($0.url) }) else { return nil }
+        return webView.interactionState
+    }
+
+    /// A blob: address dies with the process that made it.
+    private static func wakesWithHistory(_ url: URL) -> Bool {
+        !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme && url.scheme != "blob"
+    }
+
+    private func wake(from state: Any, at url: URL) {
+        sleepingState = nil
+        isAsleep = false
+        webView.interactionState = state
+        // A state WebKit could not read leaves an empty page.
+        if webView.backForwardList.currentItem == nil { load(url) }
     }
 
     /// A tab that has been left alone for a while and is not busy (loading, playing sound,
-    /// using the camera or microphone) can release its page. It reloads when selected.
-    func canSleep(idleFor interval: TimeInterval) async -> Bool {
-        guard !isAsleep, !isHome, url != nil, !webView.isLoading,
-              Date().timeIntervalSince(lastActive) > interval,
-              webView.cameraCaptureState == .none, webView.microphoneCaptureState == .none else { return false }
-        return await webView.requestMediaPlaybackState() != .playing
+    /// using the camera or microphone) can release its page. It loads again when selected,
+    /// with its history. It is decided in the app, without waiting on the page's process,
+    /// which may be stuck, or slow to answer when memory is short: sound is as last noted,
+    /// which every sleep pass does for every tab first.
+    func canSleep(idleFor interval: TimeInterval) -> Bool {
+        guard !isAsleep, !isHome, url != nil else { return false }
+        return !webView.isLoading
+            && Date().timeIntervalSince(lastActive) > interval
+            && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
+            && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
+            && !isSharingScreen
+    }
+
+    private static let silenceBeforeSleep: TimeInterval = 5 * 60
+
+    /// Notes whether the page plays sound: what Safari's speaker icon shows (private
+    /// `_isPlayingAudio`, known in the app). WebKit's public media state is no substitute: it
+    /// calls a page holding a video or sound it never started "playing", which would keep
+    /// most news pages awake. It is used only by a WebKit without the private property, as
+    /// Lithium did before, and counts from the next pass, since the page's process answers it.
+    func noteSound() {
+        guard let webView = loadedWebView, !isAsleep else { return }
+        if webView.responds(to: Selector(("_isPlayingAudio"))) {
+            if webView.value(forKey: "_isPlayingAudio") as? Bool == true { lastHeard = Date() }
+            return
+        }
+        // One question at a time: a stuck process doesn't pile them up.
+        guard !isAskingPlayback else { return }
+        isAskingPlayback = true
+        Task { [weak self] in
+            let state = await webView.requestMediaPlaybackState()
+            guard let self else { return }
+            self.isAskingPlayback = false
+            if state == .playing { self.lastHeard = Date() }
+        }
+    }
+
+    /// Sharing the screen or a window in a call. Private API, absent from older WebKits.
+    private var isSharingScreen: Bool {
+        guard webView.responds(to: Selector(("_displayCaptureState"))) else { return false }
+        return (webView.value(forKey: "_displayCaptureState") as? Int ?? 0) != 0
+    }
+
+    /// Ends the link between a popup window and the page that opened it, both ways.
+    func unpair() {
+        opener = nil
+        browser?.tabs.forEach { if $0.opener === self { $0.opener = nil } }
     }
 
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
+        sleepingState = loadedWebView.flatMap(restorableState(of:))
+        // Its page and its popup's no longer know each other once it wakes in a new web view.
+        unpair()
+        // The next web view asks afresh, even if this one's question never gets an answer.
+        isAskingPlayback = false
         tearDown()
         pdf = nil
         pdfHistory = [:]
@@ -344,6 +438,18 @@ extension Tab: WKNavigationDelegate {
         }
 
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
+
+        // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
+        // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
+        // front only. Refused, a web view with nothing shown yet (a tab waking on that page)
+        // loads the address instead, without the form.
+        if action.navigationType == .formResubmitted {
+            guard isMainFrame, await confirmResubmission(of: url) else {
+                if isMainFrame, !hasShownPage { Task { self.load(url) } }
+                return (.cancel, preferences)
+            }
+        }
+
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
             // Websites may not open Lithium's pages; only the app or another Lithium page can.
@@ -408,6 +514,7 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        hasShownPage = true
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }
@@ -496,7 +603,14 @@ extension Tab: WKUIDelegate {
     ) -> WKWebView? {
         guard let browser else { return nil }
         browser.prepare(popup: configuration)
-        return browser.newTab(configuration: configuration).webView
+        let popup = browser.newTab(configuration: configuration)
+        // A popup window gives a size or a position, as sign-in and payment windows do. A link
+        // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
+        // window.open with no features at all, which can't be told apart from one.
+        let geometry = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y]
+        // The home page never sleeps, so it has no link to keep.
+        if !isHome, geometry.contains(where: { $0 != nil }) { popup.opener = self }
+        return popup.webView
     }
 
     func webView(
@@ -584,6 +698,17 @@ extension Tab: WKUIDelegate {
         return alert
     }
 
+    /// A tab out of sight never sends a form again by itself.
+    private func confirmResubmission(of url: URL) async -> Bool {
+        guard browser?.selectedTabID == id, let window = webView.window else { return false }
+        let alert = NSAlert()
+        alert.messageText = "Send the form again?"
+        alert.informativeText = "This page on \(url.host() ?? "this site") was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+        alert.addButton(withTitle: "Send Again")
+        alert.addButton(withTitle: "Cancel")
+        return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
+    }
+
     private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
         guard let window = webView.window else { return alert.runModal() }
         return await alert.beginSheetModal(for: window)
@@ -636,15 +761,18 @@ extension Tab: WKWebExtensionTab {
         load(url)
     }
 
+    /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.
     func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
-        reload()
+        if isAsleep { wakeIfAsleep() } else { reload() }
     }
 
     func goBack(for context: WKWebExtensionContext) async throws {
+        wakeIfAsleep()
         webView.goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
+        wakeIfAsleep()
         webView.goForward()
     }
 }

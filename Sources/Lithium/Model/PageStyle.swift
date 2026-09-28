@@ -12,14 +12,16 @@ enum PageStyle {
 
     private static let baseScript = script(css: baseCSS)
 
-    /// DM Sans travels inline, since web pages cannot reach the app bundle.
-    private static let fontBase64 = Resources.bundle.url(forResource: "DMSans", withExtension: "ttf")
+    /// DM Sans travels inline, since web pages cannot reach the app bundle. Every page decodes
+    /// it again, so it goes as WOFF2: the same font as DMSans.ttf, compressed to about a third
+    /// (`scripts/make-web-font.py`).
+    private static let fontBase64 = Resources.bundle.url(forResource: "DMSans", withExtension: "woff2")
         .flatMap { try? Data(contentsOf: $0) }?.base64EncodedString() ?? ""
 
     /// Declares "Lithium DM Sans" for pages Lithium renders itself.
     static let fontFace = """
         @font-face { font-family: "Lithium DM Sans"; font-weight: 100 1000; font-style: normal;
-          src: local("DM Sans"), url(data:font/ttf;base64,\(fontBase64)) format("truetype"); }
+          src: local("DM Sans"), url(data:font/woff2;base64,\(fontBase64)) format("woff2"); }
         """
 
     static let fontScript: WKUserScript = {

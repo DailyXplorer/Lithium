@@ -1,6 +1,6 @@
 /* Shared look of Lithium's internal pages: text sits on the page itself, groups are set apart
    by hairlines and space, never by floating cards or drop shadows. */
-@font-face { font-family: "DM Sans"; src: url(lithium://pages/font/DMSans.ttf) format("truetype"); font-weight: 100 1000; }
+@font-face { font-family: "DM Sans"; src: url(lithium://pages/font/DMSans.woff2) format("woff2"); font-weight: 100 1000; }
 
 :root {
   --bg: #FFFFFF; --ink: #15161F; --muted: #6A6C7E; --faint: #A0A2B3; --line: rgba(21, 22, 31, .08);

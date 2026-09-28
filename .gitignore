@@ -3,3 +3,4 @@
 .swiftpm/
 .tools/
 Sources/Lithium/Resources/Filters/
+__pycache__/

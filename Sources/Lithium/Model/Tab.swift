@@ -23,6 +23,9 @@ final class Tab: NSObject, Identifiable {
     let isHome: Bool
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
+    /// The page's back and forward history (and scroll position) while the tab sleeps, so it
+    /// wakes where it was left.
+    @ObservationIgnored private var sleepingState: Any?
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -81,6 +84,7 @@ final class Tab: NSObject, Identifiable {
     func load(_ url: URL) {
         self.url = url
         isAsleep = false
+        sleepingState = nil
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -105,11 +109,27 @@ final class Tab: NSObject, Identifiable {
 
     func markActive() {
         lastActive = Date()
-        if isAsleep, let url { load(url) }
+        guard isAsleep, let url else { return }
+        if let sleepingState, Self.wakesWithHistory(url) { wake(from: sleepingState, at: url) } else { load(url) }
+    }
+
+    /// Local files and Lithium's own pages load again from scratch: their read access and
+    /// trust are granted by `load`, not by history.
+    private static func wakesWithHistory(_ url: URL) -> Bool {
+        !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme
+    }
+
+    private func wake(from state: Any, at url: URL) {
+        sleepingState = nil
+        isAsleep = false
+        webView.interactionState = state
+        // A state WebKit could not read leaves an empty page.
+        if webView.backForwardList.currentItem == nil { load(url) }
     }
 
     /// A tab that has been left alone for a while and is not busy (loading, playing sound,
-    /// using the camera or microphone) can release its page. It reloads when selected.
+    /// using the camera or microphone) can release its page. It loads again when selected,
+    /// with its history.
     func canSleep(idleFor interval: TimeInterval) async -> Bool {
         guard !isAsleep, !isHome, url != nil, !webView.isLoading,
               Date().timeIntervalSince(lastActive) > interval,
@@ -119,6 +139,7 @@ final class Tab: NSObject, Identifiable {
 
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
+        sleepingState = loadedWebView?.interactionState
         tearDown()
         hasInternalBridge = false
         hasWebstoreBridge = false

@@ -183,6 +183,8 @@ private struct PageMenu: View {
                 browser.togglePinForSelectedTab()
             }
             .disabled(tab?.url == nil)
+            Button("Pop Out Video") { browser.videoPopout.showSelected() }
+                .disabled(!browser.videoPopout.canShowSelected)
             Divider()
             Button("Show All History") { browser.openHistory() }
             Button("Extensions") { browser.openSettings(section: "extensions") }

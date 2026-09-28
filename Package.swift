@@ -25,6 +25,6 @@ let package = Package(
                 .process("Resources/Scripts"),
             ]
         ),
-        .testTarget(name: "LithiumTests", dependencies: ["Lithium"]),
+        .testTarget(name: "LithiumTests", dependencies: ["Lithium"], resources: [.copy("Fixtures")]),
     ]
 )

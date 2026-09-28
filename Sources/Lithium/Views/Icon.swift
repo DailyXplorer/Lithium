@@ -37,6 +37,12 @@ enum Phosphor: String {
     case outline = "list-bullets"
     case fitWidth = "arrows-out-line-horizontal"
     case fitPage = "frame-corners"
+    case play = "play-fill"
+    case pause = "pause-fill"
+    case speaker = "speaker-high"
+    case speakerOff = "speaker-slash"
+    case returnToTab = "arrow-square-in"
+    case popout = "picture-in-picture"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

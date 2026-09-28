@@ -84,21 +84,34 @@ struct ContentCard: View {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            PageContainer(view: tab.webView)
-                .overlay {
-                    if let pdf = tab.pdf {
-                        PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
-                    }
+            Group {
+                if browser.videoPopout.tab === tab {
+                    PoppedOutPlaceholder(popout: browser.videoPopout)
+                } else {
+                    PageContainer(view: tab.webView)
+                        .overlay {
+                            if let pdf = tab.pdf {
+                                PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                            }
+                        }
                 }
-                // Floats in the top right corner, like Chrome's, below the PDF viewer's controls.
-                .overlay(alignment: .topTrailing) {
-                    if browser.find.isVisible {
-                        FindBar(tab: tab)
-                            .padding(.top, tab.pdf == nil ? 10 : 50)
-                            .padding(.horizontal, 10)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
+            }
+            // Only the player animates: a page fading out would hold on to its web view, which
+            // the player (or the page, on the way back) has just taken.
+            .overlay {
+                VideoPopoutLayer()
+                    .animation(.snappy(duration: 0.25), value: browser.videoPopout.tab?.id)
+            }
+            // Floats in the top right corner, like Chrome's, below the PDF viewer's controls
+            // and above the player.
+            .overlay(alignment: .topTrailing) {
+                if browser.find.isVisible {
+                    FindBar(tab: tab)
+                        .padding(.top, tab.pdf == nil ? 10 : 50)
+                        .padding(.horizontal, 10)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
+            }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)

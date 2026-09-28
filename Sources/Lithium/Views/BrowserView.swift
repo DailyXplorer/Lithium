@@ -100,7 +100,7 @@ struct WebContainer: NSViewRepresentable {
     let webView: WKWebView
 
     func makeNSView(context: Context) -> NSView {
-        NSView()
+        WebContainerView()
     }
 
     func updateNSView(_ container: NSView, context: Context) {
@@ -110,6 +110,13 @@ struct WebContainer: NSViewRepresentable {
         webView.autoresizingMask = [.width, .height]
         container.addSubview(webView)
     }
+}
+
+/// Keys a page reacts to without calling preventDefault (YouTube's ← and → seek) come back
+/// from WebKit as unhandled; past this view they would reach the window, which beeps.
+/// Lithium's shortcuts are menu key equivalents, so nothing above needs them.
+final class WebContainerView: NSView {
+    override func keyDown(with event: NSEvent) {}
 }
 
 private struct SidebarBackground: View {

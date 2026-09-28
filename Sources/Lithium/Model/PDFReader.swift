@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import PDFKit
+import Synchronization
 import UniformTypeIdentifiers
 import WebKit
 
@@ -36,6 +37,9 @@ final class PDFReader: NSObject {
     @ObservationIgnored let view = ReaderView()
     @ObservationIgnored var onOpenLink: ((URL, _ inNewTab: Bool) -> Void)?
     @ObservationIgnored private var data: Data?
+    /// A copy of the document for search and thumbnails, which would stall the main thread.
+    @ObservationIgnored private var worker: PDFWorker?
+    @ObservationIgnored private var password: String?
     @ObservationIgnored private var matches: [PDFSelection] = []
     @ObservationIgnored private var fittedScale: CGFloat = 0
     /// Where to open once the view has a size: before that, PDFKit scrolls to the wrong place.
@@ -77,7 +81,27 @@ final class PDFReader: NSObject {
         typealias Getter = @convention(c) (AnyObject, Selector, @escaping @convention(block) (NSData?, NSError?) -> Void) -> Void
         let getter = unsafeBitCast(webView.method(for: selector), to: Getter.self)
         return await withCheckedContinuation { continuation in
-            getter(webView, selector) { data, _ in continuation.resume(returning: data as Data?) }
+            let answer = Answer(continuation)
+            getter(webView, selector) { data, _ in answer.resume(data as Data?) }
+        }
+    }
+
+    /// Resumes once; with nothing if WebKit drops the callback unanswered (a web view torn down),
+    /// so the waiting task never hangs.
+    private final class Answer: @unchecked Sendable {
+        private var continuation: CheckedContinuation<Data?, Never>?
+
+        init(_ continuation: CheckedContinuation<Data?, Never>) {
+            self.continuation = continuation
+        }
+
+        func resume(_ data: Data?) {
+            continuation?.resume(returning: data)
+            continuation = nil
+        }
+
+        deinit {
+            continuation?.resume(returning: nil)
         }
     }
 
@@ -86,6 +110,7 @@ final class PDFReader: NSObject {
         guard let document = PDFDocument(data: data) else { return false }
         self.data = data
         self.document = document
+        worker = PDFWorker(data: data)
         isLocked = document.isLocked
         if !isLocked { show(document) }
         return true
@@ -93,6 +118,7 @@ final class PDFReader: NSObject {
 
     func unlock(with password: String) -> Bool {
         guard let document, document.unlock(withPassword: password) else { return false }
+        self.password = password
         isLocked = false
         show(document)
         return true
@@ -152,7 +178,7 @@ final class PDFReader: NSObject {
 
     func setFit(_ fit: Fit) {
         self.fit = fit
-        refit()
+        refitShowingCurrentPage()
     }
 
     func setScale(_ scale: CGFloat) {
@@ -184,7 +210,14 @@ final class PDFReader: NSObject {
     func toggleTwoUp() {
         isTwoUp.toggle()
         view.displayMode = isTwoUp ? .twoUpContinuous : .singlePageContinuous
+        refitShowingCurrentPage()
+    }
+
+    /// A change of fit the user asked for starts the current page at the top; a resize keeps the place.
+    private func refitShowingCurrentPage() {
+        let page = view.currentPage
         refit()
+        if let page { view.go(to: page) }
     }
 
     private func goToOpeningPage() {
@@ -208,13 +241,17 @@ final class PDFReader: NSObject {
             let box = page.bounds(for: view.displayBox).size
             let size = page.rotation % 180 == 0 ? box : CGSize(width: box.height, height: box.width)
             let columns: CGFloat = isTwoUp ? 2 : 1
-            let margin: CGFloat = 16
-            let available = CGSize(width: view.bounds.width - margin * (columns + 1), height: view.bounds.height - margin * 2)
+            // PDFView pads every page with its break margins; a little more keeps scroll bars away.
+            let margins = view.pageBreakMargins
+            let slack: CGFloat = 4
+            let available = CGSize(
+                width: view.bounds.width - columns * (margins.left + margins.right) - slack,
+                height: view.bounds.height - margins.top - margins.bottom - slack
+            )
             guard available.width > 0, available.height > 0 else { return }
             view.autoScales = false
             fittedScale = min(available.width / (size.width * columns), available.height / size.height)
             view.scaleFactor = fittedScale
-            view.go(to: page)
         case nil:
             break
         }
@@ -237,37 +274,16 @@ final class PDFReader: NSObject {
 
     // MARK: Find
 
-    /// Highlights every match and returns how many there are.
-    func find(_ query: String) -> Int {
-        guard let document, !isLocked else { return 0 }
-        matches = document.findString(query, withOptions: [.caseInsensitive, .diacriticInsensitive])
-        for match in matches { match.color = Self.matchColor }
-        view.highlightedSelections = matches
-        return matches.count
-    }
-
     private static let matchColor = NSColor.findHighlightColor.withAlphaComponent(0.5)
     private static let currentMatchColor = NSColor.systemOrange.withAlphaComponent(0.8)
 
-    /// The current match stands out from the others, as in Chrome.
-    func showMatch(_ index: Int) {
-        guard matches.indices.contains(index) else { return }
-        for (position, match) in matches.enumerated() {
-            match.color = position == index ? Self.currentMatchColor : Self.matchColor
-        }
-        // PDFView only redraws highlights for a new list.
-        view.highlightedSelections = nil
-        view.highlightedSelections = matches
-        view.go(to: matches[index])
-    }
-
-    func clearFind() {
-        matches = []
-        view.highlightedSelections = nil
-    }
-
-    var selectedText: String? {
-        view.currentSelection?.string
+    /// The page's thumbnail, drawn off the main thread.
+    func thumbnail(of index: Int, size: CGSize) async -> NSImage? {
+        guard let worker, let page = document?.page(at: index) else { return nil }
+        let rotation = page.rotation
+        let password = password
+        guard let image = await worker.thumbnail(of: index, rotation: rotation, size: size, password: password) else { return nil }
+        return NSImage(cgImage: image, size: size)
     }
 
     // MARK: Files
@@ -314,11 +330,96 @@ final class PDFReader: NSObject {
     }
 }
 
+/// The PDF searched through a copy of the document, so a long document never stalls typing.
+extension PDFReader: FindTarget {
+    func countMatches(of query: String) async -> Int {
+        guard let document, !isLocked, let worker else { return 0 }
+        let search = worker.startSearch()
+        guard let found = await worker.find(query, search: search, password: password), worker.isLatest(search) else { return 0 }
+        matches = found.compactMap { document.page(at: $0.page)?.selection(for: $0.range) }
+        for match in matches { match.color = Self.matchColor }
+        view.highlightedSelections = matches
+        return matches.count
+    }
+
+    /// The current match stands out from the others, as in Chrome.
+    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool {
+        guard matches.indices.contains(index) else { return false }
+        for (position, match) in matches.enumerated() {
+            match.color = position == index ? Self.currentMatchColor : Self.matchColor
+        }
+        // PDFView only redraws highlights for a new list.
+        view.highlightedSelections = nil
+        view.highlightedSelections = matches
+        view.go(to: matches[index])
+        return true
+    }
+
+    func selectedText() async -> String? {
+        view.currentSelection?.string
+    }
+
+    func clearMatches() {
+        _ = worker?.startSearch()
+        matches = []
+        view.highlightedSelections = nil
+    }
+}
+
 extension PDFReader: @preconcurrency PDFViewDelegate {
     /// PDFKit would hand web links to the default browser; they open in Lithium instead.
     func pdfViewWillClick(onLink sender: PDFView, with url: URL) {
         let inNewTab = NSApp.currentEvent?.modifierFlags.contains(.command) == true
         onOpenLink?(url, inNewTab)
+    }
+}
+
+/// Search and thumbnails on a second copy of the document, away from the main thread. PDFKit
+/// objects are not shared across threads, so the copy never leaves this actor.
+actor PDFWorker {
+    struct Match: Sendable {
+        let page: Int
+        let range: NSRange
+    }
+
+    private let document: PDFDocument?
+    /// The newest search; older ones still waiting are skipped.
+    private nonisolated let latestSearch = Mutex(0)
+
+    init(data: Data) {
+        document = PDFDocument(data: data)
+    }
+
+    nonisolated func startSearch() -> Int {
+        latestSearch.withLock { latest in
+            latest += 1
+            return latest
+        }
+    }
+
+    nonisolated func isLatest(_ search: Int) -> Bool {
+        latestSearch.withLock { $0 == search }
+    }
+
+    func find(_ query: String, search: Int, password: String?) -> [Match]? {
+        guard isLatest(search), let document = unlocked(password) else { return nil }
+        return document.findString(query, withOptions: [.caseInsensitive, .diacriticInsensitive]).flatMap { selection in
+            selection.pages.compactMap { page in
+                Match(page: document.index(for: page), range: selection.range(at: 0, on: page))
+            }
+        }
+    }
+
+    func thumbnail(of index: Int, rotation: Int, size: CGSize, password: String?) -> CGImage? {
+        guard let page = unlocked(password)?.page(at: index) else { return nil }
+        page.rotation = rotation
+        return page.thumbnail(of: size, for: .cropBox).cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+
+    private func unlocked(_ password: String?) -> PDFDocument? {
+        guard let document else { return nil }
+        if document.isLocked, let password { document.unlock(withPassword: password) }
+        return document.isLocked ? nil : document
     }
 }
 

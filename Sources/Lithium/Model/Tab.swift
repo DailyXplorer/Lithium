@@ -114,6 +114,10 @@ final class Tab: NSObject, Identifiable {
         pdf?.view ?? webView
     }
 
+    var findTarget: FindTarget {
+        pdf ?? webView
+    }
+
     func print() {
         if let pdf {
             pdf.print()
@@ -135,6 +139,11 @@ final class Tab: NSObject, Identifiable {
             pdf = nil
             return
         }
+        adopt(reader)
+    }
+
+    /// The document's title and an icon for the tab, also when the reader comes back from the history.
+    private func adopt(_ reader: PDFReader) {
         if favicon == nil { favicon = PDFReader.icon }
         if title.isEmpty {
             title = reader.title
@@ -412,11 +421,15 @@ extension Tab: WKNavigationDelegate {
             return
         }
         let reader = PDFReader(url: url)
-        // Like a website's links: never Lithium's own pages, and other apps' schemes (mailto:) go to those apps.
+        // Like a website's links: never Lithium's own pages, local files only from a local PDF
+        // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
+        let isLocal = url.isFileURL
         reader.onOpenLink = { [weak self] url, inNewTab in
             guard let self else { return }
-            switch url.scheme?.lowercased() {
+            let scheme = url.scheme?.lowercased()
+            switch scheme {
             case "http", "https", "file":
+                guard scheme != "file" || isLocal else { return }
                 if inNewTab { self.browser?.newTab(url: url, selecting: false) } else { self.load(url) }
             case Internal.scheme, Extensions.scheme:
                 break
@@ -429,7 +442,9 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let pdf, pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } }
+        if let pdf {
+            if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
+        }
         guard failedURL == nil, !isHome else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)

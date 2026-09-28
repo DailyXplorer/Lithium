@@ -19,7 +19,7 @@ struct PDFReaderView: View {
                     Hairline(vertical: true)
                 }
                 ZStack {
-                    PDFCanvas(view: reader.view)
+                    PageContainer(view: reader.view)
                     if reader.isLocked {
                         PasswordPrompt(reader: reader)
                     }
@@ -293,7 +293,7 @@ private struct Thumbnail: View {
         }
         .contentShape(Rectangle())
         .task(id: reader.revision) {
-            image = page?.thumbnail(of: CGSize(width: size.width * 2, height: size.height * 2), for: .cropBox)
+            image = await reader.thumbnail(of: index, size: CGSize(width: size.width * 2, height: size.height * 2))
         }
     }
 
@@ -377,22 +377,5 @@ private struct PasswordPrompt: View {
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         )
         .onAppear { claimFocus($isFocused) }
-    }
-}
-
-/// Hosts the reader's PDFView, which lives as long as the tab shows the document.
-private struct PDFCanvas: NSViewRepresentable {
-    let view: PDFView
-
-    func makeNSView(context: Context) -> NSView {
-        NSView()
-    }
-
-    func updateNSView(_ container: NSView, context: Context) {
-        guard view.superview !== container else { return }
-        container.subviews.forEach { $0.removeFromSuperview() }
-        view.frame = container.bounds
-        view.autoresizingMask = [.width, .height]
-        container.addSubview(view)
     }
 }

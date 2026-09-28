@@ -1,8 +1,18 @@
 import Observation
 import WebKit
 
+/// What find-in-page searches: a web page, or a PDF in Lithium's viewer.
+@MainActor
+protocol FindTarget: AnyObject {
+    func countMatches(of query: String) async -> Int
+    /// A web page steps through its own matches; a PDF shows the one at `index`. False when none shows.
+    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool
+    func selectedText() async -> String?
+    func clearMatches()
+}
+
 /// Find-in-page state. WKWebView's own find panel needs private container APIs, so Lithium
-/// drives `WKWebView.find` itself and counts matches in the page text. A PDF is searched by its viewer.
+/// drives `WKWebView.find` itself and counts matches in the page text.
 @MainActor
 @Observable
 final class FindInPage {
@@ -11,14 +21,8 @@ final class FindInPage {
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
     private(set) var focusToken = 0
-
-    private static let countScript = """
-        const text = (document.body && document.body.innerText || '').toLocaleLowerCase();
-        const needle = query.toLocaleLowerCase();
-        let count = 0;
-        for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length)) count++;
-        return count;
-        """
+    /// What the last search highlighted, cleared when the search moves elsewhere or the bar closes.
+    @ObservationIgnored private weak var target: FindTarget?
 
     func show() {
         isVisible = true
@@ -27,45 +31,36 @@ final class FindInPage {
 
     func hide() {
         isVisible = false
+        target?.clearMatches()
+        target = nil
     }
 
     func update(query newQuery: String, in tab: Tab) async {
+        let target = tab.findTarget
+        if self.target !== target { self.target?.clearMatches() }
+        self.target = target
         query = newQuery
         currentMatch = 0
         guard !newQuery.isEmpty else {
             matchCount = 0
-            tab.pdf?.clearFind()
+            target.clearMatches()
             return
         }
-        if let pdf = tab.pdf {
-            matchCount = pdf.find(newQuery)
-            await step(forward: true, in: tab)
-            return
-        }
-        let webView = tab.webView
-        let count = try? await webView.callAsyncJavaScript(Self.countScript, arguments: ["query": newQuery], contentWorld: .defaultClient)
+        let count = await target.countMatches(of: newQuery)
         guard newQuery == query else { return }
-        matchCount = (count as? Int) ?? 0
+        matchCount = count
         await step(forward: true, in: tab)
     }
 
     func step(forward: Bool, in tab: Tab) async {
         guard !query.isEmpty else { return }
-        if let pdf = tab.pdf {
-            guard matchCount > 0 else { return }
-            currentMatch = next(forward)
-            pdf.showMatch(currentMatch - 1)
-            return
-        }
-        let configuration = WKFindConfiguration()
-        configuration.backwards = !forward
-        configuration.wraps = true
-        guard let result = try? await tab.webView.find(query, configuration: configuration), result.matchFound else {
+        let index = matchCount > 0 ? next(forward) : 1
+        guard await tab.findTarget.showMatch(query, at: index - 1, forward: forward) else {
             currentMatch = 0
             return
         }
         if matchCount == 0 { matchCount = 1 }
-        currentMatch = next(forward)
+        currentMatch = index
     }
 
     private func next(_ forward: Bool) -> Int {
@@ -73,13 +68,37 @@ final class FindInPage {
     }
 
     func useSelection(in tab: Tab) async {
-        let selection = if let pdf = tab.pdf {
-            pdf.selectedText
-        } else {
-            try? await tab.webView.callAsyncJavaScript("return String(getSelection());", contentWorld: .defaultClient) as? String
-        }
-        guard let text = selection, !text.isEmpty else { return }
+        guard let text = await tab.findTarget.selectedText(), !text.isEmpty else { return }
         show()
         await update(query: text, in: tab)
     }
+}
+
+extension WKWebView: FindTarget {
+    private static let countScript = """
+        const text = (document.body && document.body.innerText || '').toLocaleLowerCase();
+        const needle = query.toLocaleLowerCase();
+        let count = 0;
+        for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length)) count++;
+        return count;
+        """
+
+    func countMatches(of query: String) async -> Int {
+        let count = try? await callAsyncJavaScript(Self.countScript, arguments: ["query": query], contentWorld: .defaultClient)
+        return (count as? Int) ?? 0
+    }
+
+    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool {
+        let configuration = WKFindConfiguration()
+        configuration.backwards = !forward
+        configuration.wraps = true
+        return (try? await find(query, configuration: configuration))?.matchFound == true
+    }
+
+    func selectedText() async -> String? {
+        try? await callAsyncJavaScript("return String(getSelection());", contentWorld: .defaultClient) as? String
+    }
+
+    /// WebKit clears its own highlight on the next search or click.
+    func clearMatches() {}
 }

@@ -47,7 +47,8 @@ struct FindBar: View {
             guard text != find.query else { return }
             Task { await find.update(query: text, in: tab) }
         }
-        .onDisappear { tab.pdf?.clearFind() }
+        // Switching tabs with the bar open searches the new page and clears the old one.
+        .onChange(of: tab.id) { Task { await find.update(query: text, in: tab) } }
     }
 
     private func status(_ find: FindInPage) -> String {

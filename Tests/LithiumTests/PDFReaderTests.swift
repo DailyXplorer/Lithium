@@ -20,8 +20,54 @@ extension BrowserTests {
         #expect(browser.find.matchCount == 2)
         await browser.find.step(forward: true, in: tab)
         #expect(browser.find.currentMatch == 2)
+        #expect(tab.pdf?.view.highlightedSelections?.count == 2)
         await browser.find.update(query: "", in: tab)
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
+
+        await browser.find.update(query: "costs", in: tab)
+        #expect(tab.pdf?.view.highlightedSelections?.count == 1)
+        browser.find.hide()
+        #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
+    }
+
+    /// Fitted whole, two pages side by side fit the view's width, margins included.
+    @Test func fitToPageFitsTheView() async throws {
+        let file = try makePDF(title: "Wide", pages: ["One", "Two"])
+        let browser = Browser()
+        let tab = browser.newTab(url: file)
+        defer { browser.close(tab) }
+        #expect(await waitForPDF(30) { tab.pdf?.pageCount == 2 })
+        let reader = try #require(tab.pdf)
+        reader.view.frame = NSRect(x: 0, y: 0, width: 700, height: 2000)
+        reader.toggleTwoUp()
+        reader.setFit(.page)
+        reader.view.layoutDocumentView()
+        let document = try #require(reader.view.documentView)
+        let shown = reader.view.convert(document.bounds, from: document).width
+        #expect(shown <= reader.view.bounds.width)
+        #expect(shown > reader.view.bounds.width * 0.9)
+    }
+
+    /// A PDF from the web can't open local files; a local PDF can open its neighbours.
+    @Test func onlyLocalPDFsFollowLinksToFiles() async throws {
+        let file = try makePDF(title: "Links", pages: ["Here"])
+        let neighbour = file.deletingLastPathComponent().appending(path: "neighbour.html")
+        try Data("<title>Neighbour</title>".utf8).write(to: neighbour)
+        let browser = Browser()
+
+        let remote = URL(string: "data:application/pdf;base64,\(try Data(contentsOf: file).base64EncodedString())")!
+        let web = browser.newTab(url: remote)
+        defer { browser.close(web) }
+        #expect(await waitForPDF(30) { web.pdf?.pageCount == 1 })
+        web.pdf?.onOpenLink?(neighbour, false)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(web.url == remote)
+
+        let local = browser.newTab(url: file)
+        defer { browser.close(local) }
+        #expect(await waitForPDF(30) { local.pdf?.pageCount == 1 })
+        local.pdf?.onOpenLink?(neighbour, false)
+        #expect(await waitForPDF(30) { local.webView.title == "Neighbour" })
     }
 
     /// A page restored from the back-forward cache never gets a navigation response; it still shows in the viewer.
@@ -38,6 +84,8 @@ extension BrowserTests {
         tab.webView.goBack()
         #expect(await waitForPDF(30) { tab.pdf?.pageCount == 1 })
         #expect(tab.url == file)
+        #expect(await waitForPDF(5) { tab.title == "Menu" })
+        #expect(tab.favicon === PDFReader.icon)
     }
 
     @Test func downloadSavesTheBytesThePageReceived() async throws {
@@ -69,6 +117,8 @@ extension BrowserTests {
         #expect(tab.pdf?.unlock(with: "wrong") == false)
         #expect(tab.pdf?.unlock(with: "open sesame") == true)
         #expect(tab.pdf?.pageCount == 1)
+        await browser.find.update(query: "hidden", in: tab)
+        #expect(browser.find.matchCount == 1)
     }
 
     /// A text PDF with one outline entry per page, written by hand: PDFKit drops outlines it is given.

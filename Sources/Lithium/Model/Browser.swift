@@ -95,11 +95,21 @@ final class Browser {
         watchMemoryPressure()
     }
 
+    /// Every page is asked at once whether it is playing: one process after another would free
+    /// memory late when macOS is short of it, and those processes are slow to answer then.
     private func sleepIdleTabs(idleFor interval: TimeInterval) async {
-        for tab in tabs where tab.id != selectedTabID {
-            guard !Task.isCancelled else { return }
-            // The check waits on the page's process, and the tab may be selected or closed meanwhile.
-            guard await tab.canSleep(idleFor: interval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
+        let candidates = tabs.filter { $0.id != selectedTabID }
+        let idle = await withTaskGroup(of: Tab?.self) { group in
+            for tab in candidates {
+                group.addTask { await tab.canSleep(idleFor: interval) ? tab : nil }
+            }
+            var idle: [Tab] = []
+            for await tab in group { if let tab { idle.append(tab) } }
+            return idle
+        }
+        // The pages took a while to answer: meanwhile a tab may have been selected, used or
+        // closed, or a newer pass may have taken over.
+        for tab in idle where !Task.isCancelled && tab.id != selectedTabID && tabs.contains(tab) && tab.isIdle(for: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }

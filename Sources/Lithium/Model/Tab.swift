@@ -144,10 +144,13 @@ final class Tab: NSObject, Identifiable {
     /// using the camera or microphone) can release its page. It loads again when selected,
     /// with its history.
     func canSleep(idleFor interval: TimeInterval) async -> Bool {
-        guard !isAsleep, !isHome, url != nil, !webView.isLoading,
-              Date().timeIntervalSince(lastActive) > interval,
+        guard !isAsleep, !isHome, url != nil, !webView.isLoading, isIdle(for: interval),
               webView.cameraCaptureState == .none, webView.microphoneCaptureState == .none else { return false }
         return await webView.requestMediaPlaybackState() != .playing
+    }
+
+    func isIdle(for interval: TimeInterval) -> Bool {
+        Date().timeIntervalSince(lastActive) > interval
     }
 
     func sleep(configuration: WKWebViewConfiguration) {
@@ -287,11 +290,14 @@ final class Tab: NSObject, Identifiable {
 
     private func showError(_ error: Error, for url: URL?) {
         let error = error as NSError
+        // Whatever ended the wake (even a cancellation, like Back pressed meanwhile), it is over:
+        // a later failure is not its to answer.
+        let waking = wakingURL
+        wakingURL = nil
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
-        if let wakingURL {
-            self.wakingURL = nil
-            load(wakingURL)
+        if let waking {
+            load(waking)
             return
         }
         failedURL = url

@@ -54,9 +54,11 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         respond(task, url: url, data: data, fileExtension: fileExtension)
     }
 
+    /// Types the system doesn't name.
+    private static let mimeTypes = ["woff2": "font/woff2"]
+
     private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, fileExtension: String) {
-        let type = UTType(filenameExtension: fileExtension)?.preferredMIMEType
-            ?? (fileExtension == "woff2" ? "font/woff2" : "application/octet-stream")
+        let type = Self.mimeTypes[fileExtension] ?? UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "application/octet-stream"
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
             "Content-Type": type,
             // Pages share files across lithium:// hosts; masks and fonts are fetched with CORS.

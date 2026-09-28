@@ -84,10 +84,6 @@ struct ContentCard: View {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if browser.find.isVisible {
-                FindBar(tab: tab)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             Group {
                 if browser.videoPopout.tab === tab {
                     PoppedOutPlaceholder(popout: browser.videoPopout)
@@ -105,6 +101,16 @@ struct ContentCard: View {
             .overlay {
                 VideoPopoutLayer()
                     .animation(.snappy(duration: 0.25), value: browser.videoPopout.tab?.id)
+            }
+            // Floats in the top right corner, like Chrome's, below the PDF viewer's controls
+            // and above the player.
+            .overlay(alignment: .topTrailing) {
+                if browser.find.isVisible {
+                    FindBar(tab: tab)
+                        .padding(.top, tab.pdf == nil ? 10 : 50)
+                        .padding(.horizontal, 10)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)

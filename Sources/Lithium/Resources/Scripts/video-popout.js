@@ -58,17 +58,20 @@ const show = () => {
   video.setAttribute(mark, '');
   store.style ??= Object.assign(document.createElement('style'), { textContent: css });
   (document.head || document.documentElement).append(store.style);
-  if (!video.hasAttribute('popover')) {
-    video.popover = 'manual';
-    store.addedPopover = true;
-  }
   raise(video);
   keepRaised(video);
   return state(video);
 };
 
+// Never throws: on the regular state check, an error would close the mini player.
 const raise = (video) => {
-  if (video.isConnected && !video.matches(':popover-open')) video.showPopover();
+  if (!video.isConnected || video.matches(':popover-open')) return;
+  // The page may drop the attribute when it redraws its player.
+  if (!video.hasAttribute('popover')) {
+    video.popover = 'manual';
+    store.addedPopover = true;
+  }
+  try { video.showPopover(); } catch {}
 };
 
 // A page that moves its player leaves the top layer: removing an element closes its popover.
@@ -78,8 +81,8 @@ const keepRaised = (video) => {
   cancelAnimationFrame(store.frame);
   const check = () => {
     if (store.video !== video) return;
-    raise(video);
     store.frame = requestAnimationFrame(check);
+    raise(video);
   };
   store.frame = requestAnimationFrame(check);
 };

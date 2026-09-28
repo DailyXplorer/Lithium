@@ -29,6 +29,8 @@ final class Tab: NSObject, Identifiable {
     /// The address of a tab waking from its history, until its page commits. A page that can't
     /// come back that way (a form's result, not in the cache) loads its address instead.
     @ObservationIgnored private var wakingURL: URL?
+    /// The tab whose page opened this one as a popup.
+    @ObservationIgnored weak var opener: Tab?
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -128,8 +130,9 @@ final class Tab: NSObject, Identifiable {
         return webView.interactionState
     }
 
+    /// A blob: address dies with the process that made it.
     private static func wakesWithHistory(_ url: URL) -> Bool {
-        !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme
+        !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme && url.scheme != "blob"
     }
 
     private func wake(from state: Any, at url: URL) {
@@ -144,13 +147,15 @@ final class Tab: NSObject, Identifiable {
     /// using the camera or microphone) can release its page. It loads again when selected,
     /// with its history.
     func canSleep(idleFor interval: TimeInterval) async -> Bool {
-        guard !isAsleep, !isHome, url != nil, !webView.isLoading, isIdle(for: interval),
-              webView.cameraCaptureState == .none, webView.microphoneCaptureState == .none else { return false }
+        guard isQuiet(idleFor: interval) else { return false }
         return await webView.requestMediaPlaybackState() != .playing
     }
 
-    func isIdle(for interval: TimeInterval) -> Bool {
-        Date().timeIntervalSince(lastActive) > interval
+    /// All of `canSleep` but the sound, which takes a round trip to the page's process.
+    func isQuiet(idleFor interval: TimeInterval) -> Bool {
+        !isAsleep && !isHome && url != nil && !webView.isLoading
+            && Date().timeIntervalSince(lastActive) > interval
+            && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
     }
 
     func sleep(configuration: WKWebViewConfiguration) {
@@ -296,7 +301,9 @@ final class Tab: NSObject, Identifiable {
         wakingURL = nil
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
-        if let waking {
+        // Offline, loading the address would only fail the same way a second time.
+        let isOffline = error.domain == NSURLErrorDomain && Self.connectionErrors.contains(error.code)
+        if let waking, !isOffline {
             load(waking)
             return
         }
@@ -419,6 +426,8 @@ extension Tab: WKNavigationDelegate {
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let browser else { return }
+        // A crash is not a page that can't come back from history: the guard below handles it.
+        wakingURL = nil
         guard isHome || browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
             return
@@ -431,6 +440,12 @@ extension Tab: WKNavigationDelegate {
             webView.reload()
         }
     }
+
+    private static let connectionErrors: Set<Int> = [
+        NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+        NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
+        NSURLErrorInternationalRoamingOff, NSURLErrorDataNotAllowed,
+    ]
 
     private static let crashedAgain = NSError(domain: "Lithium", code: 1, userInfo: [
         NSLocalizedDescriptionKey: "The page stopped working twice in a row. Reload to try again.",
@@ -446,7 +461,9 @@ extension Tab: WKUIDelegate {
     ) -> WKWebView? {
         guard let browser else { return nil }
         browser.prepare(popup: configuration)
-        return browser.newTab(configuration: configuration).webView
+        let popup = browser.newTab(configuration: configuration)
+        popup.opener = self
+        return popup.webView
     }
 
     func webView(

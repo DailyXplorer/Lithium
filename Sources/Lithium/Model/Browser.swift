@@ -50,7 +50,9 @@ final class Browser {
     @ObservationIgnored private var closedTabs: [ClosedTab] = []
     @ObservationIgnored private var sleepLoop: Task<Void, Never>?
     @ObservationIgnored private var memoryPressure: DispatchSourceMemoryPressure?
-    @ObservationIgnored private var relief: (task: Task<Void, Never>, critical: Bool)?
+    @ObservationIgnored private var isRelieving = false
+    /// Whether another memory relief pass must follow the one running, and how severe.
+    @ObservationIgnored private var pendingRelief: Bool?
     @ObservationIgnored private var savedSession: Session?
 
     struct ClosedTab {
@@ -95,21 +97,14 @@ final class Browser {
         watchMemoryPressure()
     }
 
-    /// Every page is asked at once whether it is playing: one process after another would free
-    /// memory late when macOS is short of it, and those processes are slow to answer then.
+    /// Each tab sleeps right after its own check, so what was checked still holds. A page whose
+    /// popup is in use (a sign-in or payment window) keeps its page for the popup to answer.
     private func sleepIdleTabs(idleFor interval: TimeInterval) async {
-        let candidates = tabs.filter { $0.id != selectedTabID }
-        let idle = await withTaskGroup(of: Tab?.self) { group in
-            for tab in candidates {
-                group.addTask { await tab.canSleep(idleFor: interval) ? tab : nil }
-            }
-            var idle: [Tab] = []
-            for await tab in group { if let tab { idle.append(tab) } }
-            return idle
-        }
-        // The pages took a while to answer: meanwhile a tab may have been selected, used or
-        // closed, or a newer pass may have taken over.
-        for tab in idle where !Task.isCancelled && tab.id != selectedTabID && tabs.contains(tab) && tab.isIdle(for: interval) {
+        for tab in tabs where tab.id != selectedTabID && selectedTab?.opener !== tab {
+            // The check waits on the page's process: meanwhile the tab may have been selected,
+            // closed or used, or have started loading or recording.
+            guard await tab.canSleep(idleFor: interval), tab.id != selectedTabID, tabs.contains(tab),
+                  tab.isQuiet(idleFor: interval), selectedTab?.opener !== tab else { continue }
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
@@ -128,16 +123,25 @@ final class Browser {
         memoryPressure = source
     }
 
-    /// A new event replaces a pass still under way rather than running beside it, and never
-    /// turns a critical pass into a milder one.
+    /// Events arriving while a pass runs neither start another beside it (asking the same pages
+    /// again) nor cancel it (losing what it has done): one more pass follows, as severe as the
+    /// worst of them.
     private func startRelief(critical: Bool) {
-        let critical = critical || relief?.critical == true
-        relief?.task.cancel()
-        let task = Task {
-            await self.relieveMemoryPressure(critical: critical)
-            if !Task.isCancelled { self.relief = nil }
+        guard !isRelieving else {
+            pendingRelief = critical || pendingRelief == true
+            return
         }
-        relief = (task, critical)
+        isRelieving = true
+        Task {
+            var critical = critical
+            while true {
+                await self.relieveMemoryPressure(critical: critical)
+                guard let next = self.pendingRelief else { break }
+                self.pendingRelief = nil
+                critical = next
+            }
+            self.isRelieving = false
+        }
     }
 
     /// Background tabs left alone for 5 minutes sleep when memory runs low, whatever

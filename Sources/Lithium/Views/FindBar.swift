@@ -1,8 +1,7 @@
 import SwiftUI
-import WebKit
 
 struct FindBar: View {
-    let webView: WKWebView
+    let tab: Tab
     @Environment(Browser.self) private var browser
     @State private var text = ""
     @FocusState private var isFocused: Bool
@@ -31,6 +30,8 @@ struct FindBar: View {
             FindButton(icon: .close, help: "Done (Esc)") { find.hide() }
         }
         .font(Theme.font(13))
+        // On the page's background, not the sidebar color the window's ink is chosen for.
+        .foregroundStyle(Color.primary)
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .frame(height: 40)
@@ -44,8 +45,12 @@ struct FindBar: View {
         .onChange(of: find.query) { text = find.query }
         .onChange(of: text) {
             guard text != find.query else { return }
-            Task { await find.update(query: text, in: webView) }
+            Task { await find.update(query: text, in: tab.findTarget) }
         }
+        // A new page to search (another tab, this tab going to or from a PDF, or a PDF whose
+        // pages just arrived or unlocked) is searched again, and the old one cleared.
+        .onChange(of: ObjectIdentifier(tab.findTarget)) { searchAgain() }
+        .onChange(of: tab.pdf?.pageCount) { searchAgain() }
     }
 
     private func status(_ find: FindInPage) -> String {
@@ -54,8 +59,12 @@ struct FindBar: View {
         return "\(find.currentMatch)/\(find.matchCount)"
     }
 
+    private func searchAgain() {
+        Task { await browser.find.update(query: text, in: tab.findTarget) }
+    }
+
     private func step(forward: Bool) {
-        Task { await browser.find.step(forward: forward, in: webView) }
+        Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 }
 

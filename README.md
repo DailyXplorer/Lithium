@@ -31,7 +31,7 @@ On the first build, `scripts/update-filters.py` downloads the filter lists and c
 Lithium shows up in Finder's Open With menu for Markdown and PDF files, without taking over as their default app.
 
 - **Markdown** (`.md`, `.markdown`, …) renders as a formatted document, locally or when a server sends it as plain text. Rendering happens in the page after the file loads (`Model/MarkdownReader.swift`, `Resources/Scripts/markdown-reader.js`, parsed by the bundled [marked](https://github.com/markedjs/marked)), so the address, reload and history stay the file's own. HTML inside the file displays, but a content security policy stops it from running scripts.
-- **PDF** files render with WebKit's built-in viewer.
+- **PDF** files, local or from the web, open in Lithium's own viewer (`Model/PDFReader.swift`, `Views/PDFReaderView.swift`): page thumbnails or the outline on the side, a page field, zoom and fit to width or page, rotation, a two-page view, find (⌘F), print (⌘P), download (it saves the bytes the page received, so an expired link still works), and Open in Preview for signing or annotating. WebKit still loads the file, so the address, reload and history stay the file's own; Lithium reads the bytes WebKit received and draws the document with PDFKit over WebKit's viewer. That relies on two private WebKit calls (`_isDisplayingPDF`, `_getMainResourceDataWithCompletionHandler:`); without them, WebKit's viewer shows instead.
 
 A local file gets read access to its own folder, so relative images and links to neighbouring files work.
 
@@ -41,7 +41,7 @@ Websites render in DM Sans instead of their own fonts (Settings › Appearance, 
 
 ## Sleeping tabs
 
-A background tab left alone for 30 minutes releases its page, unless it is playing sound or was a few minutes ago (so a pause between tracks doesn't count), using the camera or microphone, sharing the screen, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). Like any Back, the page may come from WebKit's cache rather than the network (⌘R fetches it again), and showing again a form's result WebKit no longer has asks before sending the form a second time, as Safari does (on Back and Reload too); a tab out of sight never sends one by itself, and a tab waking on one shows its address instead. A history with local files, `blob:` pages or Lithium's own pages in it isn't kept: the tab loads its page afresh. In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes (`defaults write app.lithium.browser tabIdleSeconds N` sets your own delay, which Low Power Mode leaves alone). For as long as macOS reports memory short, tabs idle for 5 minutes (or your own delay, if shorter) sleep, and every background tab that can when memory is critical, whatever the delay. A popup window with a size or position (a sign-in or payment window, say) and the page that opened it stay awake while both are open, so they can still talk to each other, unless memory is critical.
+A background tab left alone for 30 minutes releases its page, unless it is playing sound or was a few minutes ago (so a pause between tracks doesn't count), using the camera or microphone, sharing the screen, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). Like any Back, the page may come from WebKit's cache rather than the network (⌘R fetches it again), and showing again a form's result WebKit no longer has asks before sending the form a second time, as Safari does (on Back and Reload too); a tab out of sight never sends one by itself, and a tab waking on one shows its address instead. A history with local files, `blob:` pages or Lithium's own pages in it isn't kept, nor is one whose tab shows a PDF: the tab loads its page afresh. In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes (`defaults write app.lithium.browser tabIdleSeconds N` sets your own delay, which Low Power Mode leaves alone). For as long as macOS reports memory short, tabs idle for 5 minutes (or your own delay, if shorter) sleep, and every background tab that can when memory is critical, whatever the delay. A popup window with a size or position (a sign-in or payment window, say) and the page that opened it stay awake while both are open, so they can still talk to each other, unless memory is critical.
 
 ## Screenshots
 
@@ -71,7 +71,7 @@ Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) ar
 
 ## Shortcuts
 
-⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌘, settings
+⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌘, settings
 
 ## License
 

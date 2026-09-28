@@ -116,7 +116,7 @@ private struct DownloadRow: View {
             }
             Spacer(minLength: 4)
             if item.state == .downloading {
-                RowButton(icon: .close, help: "Cancel") { item.cancel() }
+                if item.canCancel { RowButton(icon: .close, help: "Cancel") { item.cancel() } }
             } else if item.state == .finished, let destination = item.destination {
                 RowButton(icon: .search, help: "Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([destination])

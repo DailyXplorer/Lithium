@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 import WebKit
 
-/// The corner of the page the mini player sits in. Dropped anywhere, it glides to the nearest one.
+/// The corner of the page nearest the mini player. The player keeps its distance from it, so
+/// it stays in place when the window changes size, and that corner stays put as it resizes.
 enum PopoutCorner: String {
     case topLeading, topTrailing, bottomLeading, bottomTrailing
 
@@ -35,11 +36,29 @@ struct PopoutLayout {
         return CGSize(width: width, height: width / aspectRatio)
     }
 
-    func origin(of size: CGSize, in corner: PopoutCorner) -> CGPoint {
+    /// `inset` is the distance from the corner's two edges. The player always stays whole in the page.
+    func origin(of size: CGSize, in corner: PopoutCorner, inset: CGSize) -> CGPoint {
+        clamped(CGPoint(
+            x: corner.isTrailing ? container.width - inset.width - size.width : inset.width,
+            y: corner.isBottom ? container.height - inset.height - size.height : inset.height
+        ), size: size)
+    }
+
+    func clamped(_ origin: CGPoint, size: CGSize) -> CGPoint {
         CGPoint(
-            x: corner.isTrailing ? container.width - Self.inset - size.width : Self.inset,
-            y: corner.isBottom ? container.height - Self.inset - size.height : Self.inset
+            x: min(max(origin.x, 0), max(container.width - size.width, 0)),
+            y: min(max(origin.y, 0), max(container.height - size.height, 0))
         )
+    }
+
+    /// Where a player dropped at `origin` sits: its nearest corner, and its distance from it.
+    func placement(of origin: CGPoint, size: CGSize) -> (corner: PopoutCorner, inset: CGSize) {
+        let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        let corner = PopoutCorner.nearest(to: center, in: container)
+        return (corner, CGSize(
+            width: corner.isTrailing ? container.width - origin.x - size.width : origin.x,
+            height: corner.isBottom ? container.height - origin.y - size.height : origin.y
+        ))
     }
 }
 
@@ -65,6 +84,8 @@ private struct VideoPopoutPlayer: View {
 
     @AppStorage(Preference.videoPopoutCorner) private var corner = PopoutCorner.bottomTrailing
     @AppStorage(Preference.videoPopoutWidth) private var storedWidth = Double(PopoutLayout.defaultWidth)
+    @AppStorage(Preference.videoPopoutInsetX) private var insetX = Double(PopoutLayout.inset)
+    @AppStorage(Preference.videoPopoutInsetY) private var insetY = Double(PopoutLayout.inset)
     @State private var dragOffset: CGSize = .zero
     @State private var resizeStart: CGFloat?
     @State private var isHovered = false
@@ -72,7 +93,8 @@ private struct VideoPopoutPlayer: View {
     var body: some View {
         let layout = PopoutLayout(container: container, aspectRatio: playback.aspectRatio)
         let size = layout.size(width: storedWidth)
-        let origin = layout.origin(of: size, in: corner)
+        let origin = layout.origin(of: size, in: corner, inset: CGSize(width: insetX, height: insetY))
+        let shown = layout.clamped(CGPoint(x: origin.x + dragOffset.width, y: origin.y + dragOffset.height), size: size)
 
         ZStack {
             Color.black
@@ -99,30 +121,22 @@ private struct VideoPopoutPlayer: View {
                 .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
         }
         .transition(.opacity.combined(with: .scale(scale: 0.92)))
-        .offset(x: origin.x + dragOffset.width, y: origin.y + dragOffset.height)
+        .offset(x: shown.x, y: shown.y)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    /// The player goes wherever it is dropped. The drag is measured in the window, not in the
+    /// player, which moves under the pointer: measured there, it fed back on itself and shook.
     private func move(size: CGSize, origin: CGPoint, layout: PopoutLayout) -> some Gesture {
-        DragGesture(minimumDistance: 3)
+        DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .onChanged { dragOffset = $0.translation }
             .onEnded { value in
-                // A flick carries on the way it was thrown.
-                let center = CGPoint(
-                    x: origin.x + size.width / 2 + value.predictedEndTranslation.width,
-                    y: origin.y + size.height / 2 + value.predictedEndTranslation.height
-                )
-                let target = PopoutCorner.nearest(to: center, in: container)
-                let landing = layout.origin(of: size, in: target)
-                // The offset is relative to the new corner, so the player doesn't jump before it glides.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    corner = target
-                    dragOffset = CGSize(width: origin.x + value.translation.width - landing.x,
-                                        height: origin.y + value.translation.height - landing.y)
-                }
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { dragOffset = .zero }
+                let dropped = layout.clamped(CGPoint(x: origin.x + value.translation.width, y: origin.y + value.translation.height), size: size)
+                let placement = layout.placement(of: dropped, size: size)
+                corner = placement.corner
+                insetX = placement.inset.width
+                insetY = placement.inset.height
+                dragOffset = .zero
             }
     }
 
@@ -199,7 +213,10 @@ private struct PopoutControls: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [.black.opacity(0.55), .clear, .clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
+            // Dark enough for white controls over a white video (a slide, a web page shown in a stream).
+            Color.black.opacity(0.3)
+                .allowsHitTesting(false)
+            LinearGradient(colors: [.black.opacity(0.45), .clear, .clear, .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
                 .allowsHitTesting(false)
             VStack(spacing: 0) {
                 HStack {
@@ -239,6 +256,7 @@ private struct PopoutControls: View {
                 }
             }
             .padding(6)
+            .shadow(color: .black.opacity(0.45), radius: 2, y: 0.5)
         }
         .foregroundStyle(.white)
     }

@@ -57,6 +57,38 @@ struct VideoPopoutTests {
         #expect(leftovers == "src loop playsinline style 0", "the page is left as it was")
     }
 
+    /// YouTube moves its player elsewhere in the page when its window narrows, which takes the
+    /// video out of the top layer; the whole page then showed, shrunk, instead of the video.
+    @Test func videoStaysUpWhenThePageMovesIt() async throws {
+        let (webView, window) = try await playingPage()
+        defer { window.orderOut(nil) }
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await webView.callAsyncJavaScript(
+            "const box = document.createElement('div'); box.style.transform = 'scale(0.5)'; document.body.prepend(box); box.append(document.querySelector('video'));",
+            contentWorld: .page
+        )
+        try await Task.sleep(for: .milliseconds(200))
+        let open = try await webView.callAsyncJavaScript("return document.querySelector('video').matches(':popover-open')", contentWorld: .page)
+        #expect(open as? Bool == true)
+        let snapshot = try #require(await snapshot(of: webView))
+        #expect(isRed(snapshot.colorAt(x: 400, y: 300)), "the video fills the view again")
+    }
+
+    /// The player stays where it is dropped, and keeps its distance from the nearest corner when
+    /// the page changes size. Dropped past an edge, it stays whole in the page.
+    @Test func playerStaysWhereItIsDropped() {
+        let size = CGSize(width: 400, height: 225)
+        let page = PopoutLayout(container: CGSize(width: 1000, height: 700), aspectRatio: 16 / 9)
+        let dropped = CGPoint(x: 90, y: 400)
+        let placement = page.placement(of: dropped, size: size)
+        #expect(placement.corner == .bottomLeading)
+        #expect(page.origin(of: size, in: placement.corner, inset: placement.inset) == dropped)
+
+        let wider = PopoutLayout(container: CGSize(width: 1400, height: 900), aspectRatio: 16 / 9)
+        #expect(wider.origin(of: size, in: placement.corner, inset: placement.inset) == CGPoint(x: 90, y: 600))
+        #expect(page.clamped(CGPoint(x: 900, y: -50), size: size) == CGPoint(x: 600, y: 0))
+    }
+
     /// A muted video, or none playing, stays with its tab.
     @Test func onlyAVideoPlayingWithSoundPopsOut() async throws {
         let (webView, window) = try await playingPage()

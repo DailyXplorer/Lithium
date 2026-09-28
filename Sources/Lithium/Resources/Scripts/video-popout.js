@@ -62,13 +62,32 @@ const show = () => {
     video.popover = 'manual';
     store.addedPopover = true;
   }
-  if (!video.matches(':popover-open')) video.showPopover();
+  raise(video);
+  keepRaised(video);
   return state(video);
+};
+
+const raise = (video) => {
+  if (video.isConnected && !video.matches(':popover-open')) video.showPopover();
+};
+
+// A page that moves its player leaves the top layer: removing an element closes its popover.
+// YouTube does it when its window narrows to the player's size, which shows its whole page
+// shrunk instead of the video. Every frame, the video goes back up.
+const keepRaised = (video) => {
+  cancelAnimationFrame(store.frame);
+  const check = () => {
+    if (store.video !== video) return;
+    raise(video);
+    store.frame = requestAnimationFrame(check);
+  };
+  store.frame = requestAnimationFrame(check);
 };
 
 const hide = () => {
   const video = store.video;
   store.video = null;
+  cancelAnimationFrame(store.frame);
   store.style?.remove();
   if (!video) return;
   if (video.matches(':popover-open')) video.hidePopover();
@@ -86,7 +105,9 @@ switch (command) {
   }
   case 'show': return show();
   case 'hide': hide(); return null;
-  case 'state': return state(store.video);
+  case 'state':
+    if (store.video) raise(store.video);
+    return state(store.video);
 }
 
 const video = store.video;

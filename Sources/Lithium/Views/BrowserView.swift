@@ -159,26 +159,30 @@ private struct SidebarPeek: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        // Moving from the edge onto the panel may report the exit before the entry.
-        .onChange(of: wantsShown) { _, wanted in
-            pendingHide?.cancel()
-            if wanted {
-                setShown(true)
-            } else {
-                pendingHide = Task {
-                    try? await Task.sleep(for: .milliseconds(200))
-                    if !Task.isCancelled { setShown(false) }
-                }
-            }
+        // Each event, not a combined flag: a rename left pending would otherwise hold the flag
+        // true, and pointing at the edge would no longer open the panel.
+        .onChange(of: isEdgeHovered) { update() }
+        .onChange(of: isPanelHovered) { update() }
+        .onChange(of: browser.renamingTabID) { update() }
+        .onChange(of: browser.selectedTabID) {
+            if browser.renamingTabID == nil { setShown(false) }
         }
-        .onChange(of: browser.selectedTabID) { setShown(false) }
         .onDisappear { pendingHide?.cancel() }
     }
 
     /// A double click that renames a background tab selects it first, which hides the panel;
     /// the rename brings it back and keeps it until the name is in.
-    private var wantsShown: Bool {
-        isEdgeHovered || isPanelHovered || browser.renamingTabID != nil
+    private func update() {
+        pendingHide?.cancel()
+        if isEdgeHovered || isPanelHovered || browser.renamingTabID != nil {
+            setShown(true)
+        } else {
+            // Moving from the edge onto the panel may report the exit before the entry.
+            pendingHide = Task {
+                try? await Task.sleep(for: .milliseconds(200))
+                if !Task.isCancelled { setShown(false) }
+            }
+        }
     }
 
     private func setShown(_ shown: Bool) {

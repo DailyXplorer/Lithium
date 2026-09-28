@@ -80,10 +80,15 @@ struct ContentCard: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             if browser.find.isVisible {
-                FindBar(webView: tab.webView)
+                FindBar(tab: tab)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             WebContainer(webView: tab.webView)
+                .overlay {
+                    if let pdf = tab.pdf {
+                        PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                    }
+                }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)

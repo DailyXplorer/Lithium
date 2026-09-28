@@ -31,6 +31,12 @@ enum Phosphor: String {
     case settings = "gear-six"
     case sparkle
     case puzzle = "puzzle-piece"
+    case minus
+    case printer
+    case thumbnails = "squares-four"
+    case outline = "list-bullets"
+    case fitWidth = "arrows-out-line-horizontal"
+    case fitPage = "frame-corners"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

@@ -36,6 +36,11 @@ final class DownloadItem: Identifiable {
         }
     }
 
+    /// A file Lithium already holds, written at once.
+    fileprivate init(filename: String) {
+        self.filename = filename
+    }
+
     var fraction: Double? {
         totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil
     }
@@ -90,7 +95,29 @@ final class Downloads: NSObject, WKDownloadDelegate {
         items.removeAll { $0.state != .downloading }
     }
 
+    /// Bytes Lithium already has (a PDF it shows), saved like a download.
+    func save(_ data: Data, suggestedFilename: String) {
+        let destination = Self.destination(for: suggestedFilename)
+        let item = DownloadItem(filename: destination.lastPathComponent)
+        item.setDestination(destination)
+        items.insert(item, at: 0)
+        do {
+            try data.write(to: destination, options: .withoutOverwriting)
+            item.finish(.finished)
+            didFinish(item)
+        } catch {
+            item.finish(.failed(error.localizedDescription))
+        }
+    }
+
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
+        let destination = Self.destination(for: suggestedFilename)
+        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
+        return destination
+    }
+
+    /// In ~/Downloads, numbered when the name is taken.
+    private static func destination(for suggestedFilename: String) -> URL {
         let folder = URL.downloadsDirectory
         let name = (suggestedFilename as NSString).deletingPathExtension
         let ext = (suggestedFilename as NSString).pathExtension
@@ -100,13 +127,16 @@ final class Downloads: NSObject, WKDownloadDelegate {
             counter += 1
             destination = folder.appending(path: ext.isEmpty ? "\(name) \(counter)" : "\(name) \(counter).\(ext)")
         }
-        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
         return destination
     }
 
     func downloadDidFinish(_ download: WKDownload) {
         guard let item = byDownload.removeValue(forKey: ObjectIdentifier(download)) else { return }
         item.finish(.finished)
+        didFinish(item)
+    }
+
+    private func didFinish(_ item: DownloadItem) {
         hasUnseen = true
         if let destination = item.destination {
             // Makes the Downloads stack bounce in the Dock, like Safari.

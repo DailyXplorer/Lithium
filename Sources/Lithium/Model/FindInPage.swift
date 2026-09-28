@@ -2,7 +2,7 @@ import Observation
 import WebKit
 
 /// Find-in-page state. WKWebView's own find panel needs private container APIs, so Lithium
-/// drives `WKWebView.find` itself and counts matches in the page text.
+/// drives `WKWebView.find` itself and counts matches in the page text. A PDF is searched by its viewer.
 @MainActor
 @Observable
 final class FindInPage {
@@ -29,36 +29,57 @@ final class FindInPage {
         isVisible = false
     }
 
-    func update(query newQuery: String, in webView: WKWebView) async {
+    func update(query newQuery: String, in tab: Tab) async {
         query = newQuery
         currentMatch = 0
         guard !newQuery.isEmpty else {
             matchCount = 0
+            tab.pdf?.clearFind()
             return
         }
+        if let pdf = tab.pdf {
+            matchCount = pdf.find(newQuery)
+            await step(forward: true, in: tab)
+            return
+        }
+        let webView = tab.webView
         let count = try? await webView.callAsyncJavaScript(Self.countScript, arguments: ["query": newQuery], contentWorld: .defaultClient)
         guard newQuery == query else { return }
         matchCount = (count as? Int) ?? 0
-        await step(forward: true, in: webView)
+        await step(forward: true, in: tab)
     }
 
-    func step(forward: Bool, in webView: WKWebView) async {
+    func step(forward: Bool, in tab: Tab) async {
         guard !query.isEmpty else { return }
+        if let pdf = tab.pdf {
+            guard matchCount > 0 else { return }
+            currentMatch = next(forward)
+            pdf.showMatch(currentMatch - 1)
+            return
+        }
         let configuration = WKFindConfiguration()
         configuration.backwards = !forward
         configuration.wraps = true
-        guard let result = try? await webView.find(query, configuration: configuration), result.matchFound else {
+        guard let result = try? await tab.webView.find(query, configuration: configuration), result.matchFound else {
             currentMatch = 0
             return
         }
         if matchCount == 0 { matchCount = 1 }
-        currentMatch = forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
+        currentMatch = next(forward)
     }
 
-    func useSelection(in webView: WKWebView) async {
-        let selection = try? await webView.callAsyncJavaScript("return String(getSelection());", contentWorld: .defaultClient)
-        guard let text = selection as? String, !text.isEmpty else { return }
+    private func next(_ forward: Bool) -> Int {
+        forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
+    }
+
+    func useSelection(in tab: Tab) async {
+        let selection = if let pdf = tab.pdf {
+            pdf.selectedText
+        } else {
+            try? await tab.webView.callAsyncJavaScript("return String(getSelection());", contentWorld: .defaultClient) as? String
+        }
+        guard let text = selection, !text.isEmpty else { return }
         show()
-        await update(query: text, in: webView)
+        await update(query: text, in: tab)
     }
 }

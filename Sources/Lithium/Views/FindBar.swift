@@ -1,8 +1,7 @@
 import SwiftUI
-import WebKit
 
 struct FindBar: View {
-    let webView: WKWebView
+    let tab: Tab
     @Environment(Browser.self) private var browser
     @State private var text = ""
     @FocusState private var isFocused: Bool
@@ -46,8 +45,9 @@ struct FindBar: View {
         .onChange(of: find.query) { text = find.query }
         .onChange(of: text) {
             guard text != find.query else { return }
-            Task { await find.update(query: text, in: webView) }
+            Task { await find.update(query: text, in: tab) }
         }
+        .onDisappear { tab.pdf?.clearFind() }
     }
 
     private func status(_ find: FindInPage) -> String {
@@ -57,7 +57,7 @@ struct FindBar: View {
     }
 
     private func step(forward: Bool) {
-        Task { await browser.find.step(forward: forward, in: webView) }
+        Task { await browser.find.step(forward: forward, in: tab) }
     }
 }
 

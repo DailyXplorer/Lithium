@@ -52,6 +52,7 @@ enum Preference {
     static let sidebarStyle = "sidebarStyle"
     static let sidebarColor = "sidebarColor"
     static let websiteFont = "dmSansOnWebsites"
+    static let pdfSidebar = "pdfSidebar"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

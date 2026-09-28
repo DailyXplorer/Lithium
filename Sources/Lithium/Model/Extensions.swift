@@ -11,8 +11,8 @@ struct InstalledExtension: Codable, Equatable, Identifiable {
 }
 
 /// Web extensions, run by WebKit's own extension support (`WKWebExtensionController`). Each one is
-/// kept as the ZIP archive of its Chrome Web Store package and loaded at launch. Lithium shows
-/// WebKit its window and tabs (`ExtensionWindow`, `Tab`), and one toolbar button lists them.
+/// kept as the ZIP archive of its Chrome Web Store package, with an unpacked copy loaded at launch.
+/// Lithium shows WebKit its window and tabs (`ExtensionWindow`, `Tab`), and one toolbar button lists them.
 @MainActor
 @Observable
 final class Extensions: NSObject {
@@ -60,8 +60,40 @@ final class Extensions: NSObject {
         await loadTask?.value
     }
 
+    /// WebKit unpacks a ZIP archive again at every launch, which took 190 ms and froze the window
+    /// for 250 ms with 1Password's. Unpacked files open in 2 ms.
+    private func files(_ id: String) -> URL {
+        folder.appending(path: id, directoryHint: .isDirectory)
+    }
+
+    /// Kept next to the files, so a build of Lithium from before they were unpacked still finds it.
     private func archive(_ id: String) -> URL {
         folder.appending(path: "\(id).zip")
+    }
+
+    /// Unpacks the archive when there are no files yet, or when a build that only writes the
+    /// archive replaced it since.
+    private func unpackIfNeeded(_ id: String) async throws {
+        let modified = { (url: URL) in try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+        guard let archived = modified(archive(id)) else { return }
+        if let unpacked = modified(files(id)), unpacked >= archived { return }
+        try await Self.unpack(archive(id), into: files(id))
+    }
+
+    /// Unpacks with the system's `ditto` into a staging folder, moved into place once complete.
+    nonisolated private static func unpack(_ archive: URL, into destination: URL) async throws {
+        let staging = destination.deletingLastPathComponent().appending(path: ".unpacking-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-x", "-k", archive.path, staging.path]
+        let status = try await withCheckedThrowingContinuation { continuation in
+            ditto.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+            do { try ditto.run() } catch { continuation.resume(throwing: error) }
+        }
+        guard status == 0 else { throw CocoaError(.fileReadCorruptFile) }
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: staging, to: destination)
     }
 
     private func save() {
@@ -72,7 +104,8 @@ final class Extensions: NSObject {
     private func load(_ entry: InstalledExtension) async {
         guard contexts[entry.id] == nil else { return }
         do {
-            try activate(try await WKWebExtension(resourceBaseURL: archive(entry.id)), id: entry.id)
+            try await unpackIfNeeded(entry.id)
+            try activate(try await WKWebExtension(resourceBaseURL: files(entry.id)), id: entry.id)
         } catch {
             NSLog("Lithium: couldn’t load extension %@: %@", entry.id, error.localizedDescription)
         }
@@ -96,17 +129,28 @@ final class Extensions: NSObject {
 
     /// Downloads extension `id` from the Chrome Web Store and runs it, replacing an older version.
     func install(id: String) async throws {
-        let archive = try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id)
+        try await install(archive: try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id), id: id)
+    }
+
+    /// Runs the extension in `archive` (a ZIP) as `id`, replacing an older version.
+    func install(archive: Data, id: String) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let staging = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
-        try archive.write(to: staging)
+        let package = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
+        try archive.write(to: package)
+        defer { try? FileManager.default.removeItem(at: package) }
+        let staging = folder.appending(path: ".\(id)-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try await Self.unpack(package, into: staging)
         defer { try? FileManager.default.removeItem(at: staging) }
-        // WebKit unpacks the archive here, so a broken one is refused before anything changes.
-        let webExtension = try await WKWebExtension(resourceBaseURL: staging)
+        // A broken package is refused here, before anything changes.
+        _ = try await WKWebExtension(resourceBaseURL: staging)
 
         if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }
+        try? FileManager.default.removeItem(at: files(id))
         try? FileManager.default.removeItem(at: self.archive(id))
-        try FileManager.default.moveItem(at: staging, to: self.archive(id))
+        try FileManager.default.moveItem(at: package, to: self.archive(id))
+        try FileManager.default.moveItem(at: staging, to: files(id))
+        // WebKit reads an extension's files from where it opened them, so it opens the final folder.
+        let webExtension = try await WKWebExtension(resourceBaseURL: files(id))
         try activate(webExtension, id: id)
 
         let entry = InstalledExtension(id: id, name: webExtension.displayName ?? id, version: webExtension.version ?? "", isEnabled: true)
@@ -117,6 +161,7 @@ final class Extensions: NSObject {
     func remove(id: String) async {
         if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
         installed.removeAll { $0.id == id }
+        try? FileManager.default.removeItem(at: files(id))
         try? FileManager.default.removeItem(at: archive(id))
         let types: Set<WKWebExtension.DataType> = [.local, .session, .synchronized]
         let records = await controller.dataRecords(ofTypes: types).filter { $0.uniqueIdentifier == id }

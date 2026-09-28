@@ -99,9 +99,13 @@ struct ContentCard: View {
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .shadow(color: .black.opacity(0.14), radius: 1.5, y: 0.5)
+        .clipShape(card)
+        // Cast by a shape behind the page, not by the page. On the web view's own layers the
+        // shadow has no path, and a playing video flashed black whenever the pointer moved.
+        .background { card.fill(Color(nsColor: .textBackgroundColor)).shadow(color: .black.opacity(0.14), radius: 1.5, y: 0.5) }
     }
+
+    private var card: RoundedRectangle { RoundedRectangle(cornerRadius: 9, style: .continuous) }
 }
 
 /// Hosts a view the tab owns: its WKWebView or its PDF viewer. Swapping the subview (instead of

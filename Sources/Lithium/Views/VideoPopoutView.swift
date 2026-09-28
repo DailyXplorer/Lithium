@@ -91,7 +91,13 @@ private struct VideoPopoutPlayer: View {
         .onTapGesture(count: 2) { popout.returnToTab() }
         .gesture(move(size: size, origin: origin, layout: layout))
         .overlay { resizeHandles(layout: layout, size: size) }
-        .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
+        // Cast by a shape behind the player: a shadow on the web view's own layers made a
+        // playing video flash black whenever the pointer moved (see `ContentCard`).
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.black)
+                .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
+        }
         .transition(.opacity.combined(with: .scale(scale: 0.92)))
         .offset(x: origin.x + dragOffset.width, y: origin.y + dragOffset.height)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

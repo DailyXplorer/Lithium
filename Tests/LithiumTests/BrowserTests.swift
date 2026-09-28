@@ -279,6 +279,12 @@ struct BrowserTests {
             return abs(frame.maxX - corner.x) < 0.5 && abs(frame.minY - corner.y) < 0.5
         }, "\(tab.webView.convert(tab.webView.bounds, to: nil))")
         #expect(other.webView.window === window)
+        // A shadow on a layer holding a web view makes its playing video flash black.
+        var layer = tab.webView.layer
+        while let current = layer {
+            #expect(current.shadowOpacity == 0, "\(String(describing: current.delegate.map { type(of: $0) })) casts a shadow over the player")
+            layer = current.superlayer
+        }
         let time = browser.videoPopout.playback?.time ?? 0
         #expect(await waitUntil(5) { (browser.videoPopout.playback?.time ?? 0) > time + 0.5 }, "the video goes on playing")
 

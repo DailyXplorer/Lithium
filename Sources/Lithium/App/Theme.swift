@@ -55,6 +55,8 @@ enum Preference {
     static let pdfSidebar = "pdfSidebar"
     static let videoPopoutCorner = "videoPopoutCorner"
     static let videoPopoutWidth = "videoPopoutWidth"
+    static let videoPopoutInsetX = "videoPopoutInsetX"
+    static let videoPopoutInsetY = "videoPopoutInsetY"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

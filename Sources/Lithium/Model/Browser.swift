@@ -103,12 +103,12 @@ final class Browser {
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
     /// and its sleep, and two passes can't overlap.
     private func sleepIdleTabs(idleFor interval: TimeInterval) {
-        for tab in tabs where tab.id != selectedTabID && !isInPopupPair(tab) && tab.canSleep(idleFor: interval) {
+        for tab in tabs where tab.id != selectedTabID && tab.canSleep(idleFor: interval) && !isInPopupPair(tab) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
 
-    /// A window a page opened with script (a sign-in or payment popup) and that page talk to
+    /// A popup window (a sign-in or payment window) and the page that opened it talk to
     /// each other: while both are open and awake, neither sleeps, or messages between them
     /// would go nowhere.
     private func isInPopupPair(_ tab: Tab) -> Bool {

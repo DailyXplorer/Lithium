@@ -26,8 +26,11 @@ final class Tab: NSObject, Identifiable {
     /// The page's back and forward history (and scroll position) while the tab sleeps, so it
     /// wakes where it was left.
     @ObservationIgnored private var sleepingState: Any?
-    /// The tab whose page opened this one with script (`window.open`), as sign-in popups are.
+    /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
+    /// When the page was last heard, so a pause between tracks or while buffering isn't taken
+    /// for silence.
+    @ObservationIgnored private var lastHeard: Date?
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -143,12 +146,17 @@ final class Tab: NSObject, Identifiable {
     /// using the camera or microphone) can release its page. It loads again when selected,
     /// with its history. All of it is known in the app, without asking the page's process,
     /// which may be stuck, or slow to answer when memory is short.
+    /// Passes come at least once a minute, so a page that plays sound is heard at every one.
     func canSleep(idleFor interval: TimeInterval) -> Bool {
-        !isAsleep && !isHome && url != nil && !webView.isLoading
+        guard !isAsleep, !isHome, url != nil else { return false }
+        if isPlayingAudio { lastHeard = Date() }
+        return !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
+            && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
             && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
-            && !isPlayingAudio
     }
+
+    private static let silenceBeforeSleep: TimeInterval = 5 * 60
 
     /// What the speaker icon of Safari's tabs shows. Private API: a WebKit without it counts
     /// every page as playing, so none is cut off.
@@ -160,6 +168,9 @@ final class Tab: NSObject, Identifiable {
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
         sleepingState = loadedWebView.flatMap(restorableState(of:))
+        // Its page and its popup's no longer know each other once it wakes in a new web view.
+        opener = nil
+        browser?.tabs.forEach { if $0.opener === self { $0.opener = nil } }
         tearDown()
         hasInternalBridge = false
         hasWebstoreBridge = false
@@ -353,6 +364,13 @@ extension Tab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
+        // A form's result WebKit no longer has, gone back to or woken on, would send the form
+        // again (an order, a payment) without asking: its address loads instead.
+        if action.navigationType == .formResubmitted {
+            Task { webView.load(URLRequest(url: url)) }
+            return (.cancel, preferences)
+        }
+
         if action.request.httpMethod == "GET", let clean = TrackingParameters.stripped(url) {
             Task { webView.load(URLRequest(url: clean)) }
             return (.cancel, preferences)
@@ -439,8 +457,9 @@ extension Tab: WKUIDelegate {
         guard let browser else { return nil }
         browser.prepare(popup: configuration)
         let popup = browser.newTab(configuration: configuration)
-        // A link opening a tab (target=_blank) leaves no page waiting on it.
-        if action.navigationType != .linkActivated { popup.opener = self }
+        // A popup window has a size (sign-in and payment windows do). A link or script opening a
+        // plain tab (target=_blank, window.open with no size) leaves no page waiting on it.
+        if windowFeatures.width != nil || windowFeatures.height != nil { popup.opener = self }
         return popup.webView
     }
 

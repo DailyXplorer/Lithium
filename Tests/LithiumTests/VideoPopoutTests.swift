@@ -74,6 +74,25 @@ struct VideoPopoutTests {
         #expect(isRed(snapshot.colorAt(x: 400, y: 300)), "the video fills the view again")
     }
 
+    /// A page redrawing its player may drop the popover attribute. Showing the video again then
+    /// threw, and the failed state check closed the mini player.
+    @Test func videoStaysUpWhenThePageDropsItsPopover() async throws {
+        let (webView, window) = try await playingPage()
+        defer { window.orderOut(nil) }
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await webView.callAsyncJavaScript(
+            "const video = document.querySelector('video'); video.hidePopover(); video.removeAttribute('popover');",
+            contentWorld: .page
+        )
+        #expect(try await state(of: webView)["paused"] as? Bool == false, "the state check still answers")
+        try await Task.sleep(for: .milliseconds(200))
+        let open = try await webView.callAsyncJavaScript("return document.querySelector('video').matches(':popover-open')", contentWorld: .page)
+        #expect(open as? Bool == true)
+        _ = try await VideoPopout.run("hide", in: webView)
+        let popover = try await webView.callAsyncJavaScript("return document.querySelector('video').hasAttribute('popover')", contentWorld: .page)
+        #expect(popover as? Bool == false, "the page is left as it was")
+    }
+
     /// The player stays where it is dropped, and keeps its distance from the nearest corner when
     /// the page changes size. Dropped past an edge, it stays whole in the page.
     @Test func playerStaysWhereItIsDropped() {

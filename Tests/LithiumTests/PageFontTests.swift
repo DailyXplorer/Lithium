@@ -67,6 +67,77 @@ struct PageFontTests {
         #expect(fonts["shadowText"] == "Lithium DM Sans")
         #expect(fonts["shadowIcon"] == "Font Awesome 6 Free")
     }
+
+    /// Large containers don't rescan their whole subtree when their class changes, yet a switch to
+    /// a code font still reaches everything inside them, and so does a font rule for one descendant.
+    @Test func largeContainerFollowsItsClassChanges() async throws {
+        let page = """
+            <style>
+              .mono { font-family: Menlo, monospace; } .fa { font-family: "Font Awesome 6 Free"; }
+              .special .icon { font-family: Menlo, monospace; }
+              .serif { font-family: Georgia; } .special .serif { font-family: Menlo, monospace; }
+            </style>
+            <div id="big"><section><span class="icon">x</span><span class="serif">y</span></section></div>
+            <div id="late-host"></div>
+            <script>
+              const big = document.getElementById('big');
+              for (let i = 0; i < 200; i++) { const p = document.createElement('p'); p.textContent = 'row ' + i; big.append(p); }
+            </script>
+            """
+        let probe = """
+            const first = (element) => getComputedStyle(element).fontFamily.split(',')[0].replace(/"/g, '').trim();
+            const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
+            const big = document.getElementById('big');
+            const row = big.querySelector('p');
+            const fonts = {};
+            await settle();
+            big.className = 'mono';
+            await settle();
+            fonts.monoRow = first(row);
+            big.className = '';
+            await settle();
+            fonts.plainRow = first(row);
+            const nested = big.querySelector('.icon');
+            const serif = big.querySelector('.serif');
+            big.className = 'special';
+            await settle();
+            fonts.nestedSpecial = first(nested);
+            fonts.serifSpecial = first(serif);
+            big.className = '';
+            await settle();
+            fonts.nestedPlain = first(nested);
+            fonts.serifPlain = first(serif);
+            const icon = document.createElement('i');
+            big.append(icon);
+            await settle();
+            icon.className = 'fa';
+            await settle();
+            fonts.icon = first(icon);
+            const host = document.getElementById('late-host');
+            host.attachShadow({ mode: 'open' }).innerHTML = '<p>shadow</p>';
+            dispatchEvent(new Event('load'));
+            await settle();
+            fonts.lateShadow = first(host.shadowRoot.querySelector('p'));
+            return fonts;
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = Loaded()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        await loaded.wait()
+
+        let fonts = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: String])
+        #expect(fonts["monoRow"] == "Menlo")
+        #expect(fonts["plainRow"] == "Lithium DM Sans")
+        #expect(fonts["nestedSpecial"] == "Menlo")
+        #expect(fonts["nestedPlain"] == "Lithium DM Sans")
+        #expect(fonts["serifSpecial"] == "Menlo")
+        #expect(fonts["serifPlain"] == "Lithium DM Sans")
+        #expect(fonts["icon"] == "Font Awesome 6 Free")
+        #expect(fonts["lateShadow"] == "Lithium DM Sans")
+    }
 }
 
 @MainActor

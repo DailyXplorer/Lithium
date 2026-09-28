@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +43,17 @@ manifest = {str(f.relative_to(root)): hashlib.sha256(f.read_bytes()).hexdigest()
 (output/'source-sha256.json').write_text(json.dumps(manifest, indent=2))
 (output/'head.txt').write_bytes(subprocess.check_output(['git','rev-parse','HEAD'], cwd=root))
 (output/'working.patch').write_bytes(subprocess.check_output(['git','diff','--binary'], cwd=root))
+def read_head_font():
+    """HEAD's own web font: the WOFF2 since there is one, the TTF before."""
+    for font in ['DMSans.woff2', 'DMSans.ttf']:
+        try:
+            return subprocess.check_output(['git','show',f'HEAD:Sources/Lithium/Resources/Fonts/{font}'], cwd=root, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            continue
+    sys.exit('HEAD has neither Fonts/DMSans.woff2 nor Fonts/DMSans.ttf')
+
+head_font = read_head_font()
+
 try:
     with tempfile.TemporaryDirectory(prefix='lithium-perf-home-') as home:
         env = dict(os.environ, CFFIXED_USER_HOME=home, LITHIUM_PERF_ROOT=str(root), LITHIUM_PERF_SERVER=f'http://127.0.0.1:{server.server_port}')
@@ -52,13 +64,7 @@ try:
             env['LITHIUM_PERF_VARIANTS'] = 'webkit,previous,current' if round_index % 2 == 0 else 'current,previous,webkit'
             for name in ['page-font','farbling']:
                 (folder/(name+'-head.js')).write_bytes(subprocess.check_output(['git','show',f'HEAD:Sources/Lithium/Resources/Scripts/{name}.js'], cwd=root))
-            # HEAD's own web font: WOFF2 since it has one, the TTF before.
-            for font in ['DMSans.woff2', 'DMSans.ttf']:
-                try:
-                    (folder/'font-head.bin').write_bytes(subprocess.check_output(['git','show',f'HEAD:Sources/Lithium/Resources/Fonts/{font}'], cwd=root, stderr=subprocess.DEVNULL))
-                    break
-                except subprocess.CalledProcessError:
-                    continue
+            (folder/'font-head.bin').write_bytes(head_font)
             command = ['nice','-n','15','swift','test','-c','release','-j','2','--no-parallel']
             if args.skip_build or round_index > 0:
                 command.append('--skip-build')

@@ -101,13 +101,16 @@ final class Browser {
     }
 
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
-    /// and its sleep, and two passes can't overlap. A page waiting on its popup window (a
-    /// sign-in or payment window) keeps its page for the popup to answer, unless memory is
-    /// critical. The popup itself sleeps like any tab once left alone, which ends the wait.
-    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingOpeners: Bool = true) {
+    /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
+    /// window) and the page that opened it talk to each other, so neither sleeps while both
+    /// are open, unless memory is critical.
+    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool = true) {
         tabs.forEach { $0.noteSound() }
-        let openers: Set<ObjectIdentifier> = sparingOpeners ? Set(tabs.compactMap { $0.opener.map { ObjectIdentifier($0) } }) : []
-        for tab in tabs where tab.id != selectedTabID && tab.canSleep(idleFor: interval) && !openers.contains(ObjectIdentifier(tab)) {
+        var paired: Set<ObjectIdentifier> = []
+        if sparingPopups {
+            for tab in tabs { if let opener = tab.opener { paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)]) } }
+        }
+        for tab in tabs where tab.id != selectedTabID && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
@@ -130,7 +133,7 @@ final class Browser {
     /// memory runs low, and every one that can (not playing sound, recording or loading) when it
     /// is critical, like Firefox's tab unloading.
     func relieveMemoryPressure(critical: Bool) {
-        sleepIdleTabs(idleFor: critical ? 0 : min(Self.tabIdleInterval, Self.shortIdleInterval), sparingOpeners: !critical)
+        sleepIdleTabs(idleFor: critical ? 0 : min(Self.tabIdleInterval, Self.shortIdleInterval), sparingPopups: !critical)
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.

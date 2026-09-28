@@ -31,10 +31,6 @@ final class Tab: NSObject, Identifiable {
     /// When the page was last heard, so a pause between tracks or while buffering isn't taken
     /// for silence.
     @ObservationIgnored private var lastHeard: Date?
-    /// Set from a wake until its page has loaded (or failed): a form's result WebKit no longer
-    /// has would otherwise be sent again without asking. Left set by mistake, it only makes a
-    /// later resubmission load its address instead, which is the safe side.
-    @ObservationIgnored private var isWaking = false
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -142,7 +138,6 @@ final class Tab: NSObject, Identifiable {
     private func wake(from state: Any, at url: URL) {
         sleepingState = nil
         isAsleep = false
-        isWaking = true
         webView.interactionState = state
         // A state WebKit could not read leaves an empty page.
         if webView.backForwardList.currentItem == nil { load(url) }
@@ -154,6 +149,7 @@ final class Tab: NSObject, Identifiable {
     /// which may be stuck, or slow to answer when memory is short.
     func canSleep(idleFor interval: TimeInterval) -> Bool {
         guard !isAsleep, !isHome, url != nil else { return false }
+        noteSound()
         return !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
             && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
@@ -162,7 +158,8 @@ final class Tab: NSObject, Identifiable {
 
     private static let silenceBeforeSleep: TimeInterval = 5 * 60
 
-    /// Called for every awake tab at each pass (at least once a minute) and when it is left.
+    /// Called for every awake tab at each pass (at least once a minute), when it is left, and
+    /// by `canSleep` itself.
     func noteSound() {
         guard loadedWebView != nil, !isAsleep, isPlayingAudio else { return }
         lastHeard = Date()
@@ -348,6 +345,12 @@ extension Tab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
+        // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
+        // the form again: an order, a payment. Like Safari, Lithium asks first.
+        if action.navigationType == .formResubmitted, await !confirmResubmission(of: url) {
+            return (.cancel, preferences)
+        }
+
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
@@ -359,9 +362,6 @@ extension Tab: WKNavigationDelegate {
             setInternalBridge(true)
             return (.allow, preferences)
         }
-        // A form's result WebKit no longer has, woken on, would be sent again (an order, a
-        // payment) without asking: a page loads its address instead, a frame stays empty.
-        if isWaking, !isMainFrame, action.navigationType == .formResubmitted { return (.cancel, preferences) }
         // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
         setInternalBridge(false)
@@ -374,11 +374,6 @@ extension Tab: WKNavigationDelegate {
 
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) {
             browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
-            return (.cancel, preferences)
-        }
-
-        if isWaking, action.navigationType == .formResubmitted {
-            Task { self.load(url) }
             return (.cancel, preferences)
         }
 
@@ -421,7 +416,6 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        isWaking = false
         guard failedURL == nil, !isHome else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
@@ -429,13 +423,10 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        // A cache miss on a form's result is when WebKit tries sending the form again.
-        if (error as NSError).code != NSURLErrorCannotLoadFromNetwork { isWaking = false }
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        isWaking = false
         showError(error, for: url)
     }
 
@@ -443,7 +434,6 @@ extension Tab: WKNavigationDelegate {
     /// have been dropped to free memory. A page that takes its process down again right after
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        isWaking = false
         guard let browser else { return }
         guard isHome || browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
@@ -473,13 +463,11 @@ extension Tab: WKUIDelegate {
         guard let browser else { return nil }
         browser.prepare(popup: configuration)
         let popup = browser.newTab(configuration: configuration)
-        // A popup window asks for something of its own (a size, a position, no toolbar: sign-in
-        // and payment windows do). A link or script opening a plain tab (target=_blank,
-        // window.open with no features, noopener) leaves no page waiting on it.
-        let features: [NSNumber?] = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y,
-                                     windowFeatures.toolbarsVisibility, windowFeatures.menuBarVisibility,
-                                     windowFeatures.statusBarVisibility, windowFeatures.allowsResizing]
-        if features.contains(where: { $0 != nil }) { popup.opener = self }
+        // A popup window gives a size or a position, as sign-in and payment windows do. A link
+        // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
+        // window.open with no features at all, which can't be told apart from one.
+        let geometry = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y]
+        if geometry.contains(where: { $0 != nil }) { popup.opener = self }
         return popup.webView
     }
 
@@ -566,6 +554,15 @@ extension Tab: WKUIDelegate {
         alert.informativeText = message
         buttons.forEach { alert.addButton(withTitle: $0) }
         return alert
+    }
+
+    private func confirmResubmission(of url: URL) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Send the form again?"
+        alert.informativeText = "This page on \(url.host() ?? "this site") was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+        alert.addButton(withTitle: "Send Again")
+        alert.addButton(withTitle: "Cancel")
+        return await present(alert) == .alertFirstButtonReturn
     }
 
     private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {

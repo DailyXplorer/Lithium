@@ -170,12 +170,17 @@ final class Tab: NSObject, Identifiable {
 
     private static let silenceBeforeSleep: TimeInterval = 5 * 60
 
-    /// Notes whether the page plays: the sound Safari's speaker icon shows (private, read at
-    /// once), and WebKit's public media state, which also covers muted video but takes a round
-    /// trip to the page's process, so its answer counts from the next pass.
+    /// Notes whether the page plays sound: what Safari's speaker icon shows (private
+    /// `_isPlayingAudio`, known in the app). WebKit's public media state is no substitute: it
+    /// calls a page holding a video or sound it never started "playing", which would keep
+    /// most news pages awake. It is used only by a WebKit without the private property, as
+    /// Lithium did before, and counts from the next pass, since the page's process answers it.
     func noteSound() {
         guard let webView = loadedWebView, !isAsleep else { return }
-        if Self.isPlayingAudio(webView) { lastHeard = Date() }
+        if webView.responds(to: Selector(("_isPlayingAudio"))) {
+            if webView.value(forKey: "_isPlayingAudio") as? Bool == true { lastHeard = Date() }
+            return
+        }
         // One question at a time: a stuck process doesn't pile them up.
         guard !isAskingPlayback else { return }
         isAskingPlayback = true
@@ -185,11 +190,6 @@ final class Tab: NSObject, Identifiable {
             self.isAskingPlayback = false
             if state == .playing { self.lastHeard = Date() }
         }
-    }
-
-    private static func isPlayingAudio(_ webView: WKWebView) -> Bool {
-        guard webView.responds(to: Selector(("_isPlayingAudio"))) else { return false }
-        return webView.value(forKey: "_isPlayingAudio") as? Bool ?? false
     }
 
     /// Sharing the screen or a window in a call. Private API, absent from older WebKits.

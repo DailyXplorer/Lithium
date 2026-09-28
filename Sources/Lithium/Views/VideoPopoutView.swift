@@ -121,31 +121,39 @@ private struct VideoPopoutPlayer: View {
     }
 
     /// The two edges facing the page, and the corner between them, resize; the corner the
-    /// player is tucked into stays put.
+    /// player is tucked into stays put. The handles mostly sit outside the player, so they never
+    /// cover its buttons.
     private func resizeHandles(layout: PopoutLayout, size: CGSize) -> some View {
         let horizontal: HorizontalEdge = corner.isTrailing ? .leading : .trailing
         let vertical: VerticalEdge = corner.isBottom ? .top : .bottom
-        let thickness: CGFloat = 8
+        let outward = CGSize(width: horizontal == .leading ? -1 : 1, height: vertical == .top ? -1 : 1)
+        let thickness: CGFloat = 10
+        let inset: CGFloat = 4
+        let outset = thickness - inset
         return ZStack(alignment: Alignment(horizontal: horizontal == .leading ? .leading : .trailing,
                                            vertical: vertical == .top ? .top : .bottom)) {
             Color.clear
+                .allowsHitTesting(false)
             Color.clear
                 .frame(width: thickness)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .pointerStyle(.frameResize(position: horizontal == .leading ? .leading : .trailing))
                 .gesture(resize(layout: layout, size: size, axis: .horizontal))
+                .offset(x: outward.width * outset)
             Color.clear
                 .frame(height: thickness)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
                 .pointerStyle(.frameResize(position: vertical == .top ? .top : .bottom))
                 .gesture(resize(layout: layout, size: size, axis: .vertical))
+                .offset(y: outward.height * outset)
             Color.clear
-                .frame(width: 16, height: 16)
+                .frame(width: 14, height: 14)
                 .contentShape(Rectangle())
                 .pointerStyle(.frameResize(position: innerCorner))
                 .gesture(resize(layout: layout, size: size, axis: nil))
+                .offset(x: outward.width * 10, y: outward.height * 10)
         }
     }
 

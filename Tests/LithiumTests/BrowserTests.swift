@@ -287,6 +287,14 @@ struct BrowserTests {
         #expect(await poll(5) { await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false })
         #expect(await run(tab, "return document.querySelector('video').paused") as? Bool == false)
 
+        // Popped out, then left and back before the page answers: the video stays in the page.
+        browser.videoPopout.showSelected()
+        browser.select(other)
+        browser.select(tab)
+        try await Task.sleep(for: .seconds(1))
+        #expect(browser.videoPopout.tab == nil)
+        #expect(await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false, "a late answer leaves only the video in the page")
+
         await run(tab, "document.querySelector('video').muted = true")
         browser.select(other)
         try await Task.sleep(for: .seconds(1))

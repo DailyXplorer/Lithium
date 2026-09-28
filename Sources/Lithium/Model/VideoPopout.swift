@@ -26,6 +26,9 @@ final class VideoPopout {
     /// Only the newest request shows the player: the page answers asynchronously, and the user
     /// may have switched tabs again, or come back, in between.
     @ObservationIgnored private var request = 0
+    /// The page last asked to show its video, until its answer comes. The page acts on the
+    /// request even when the answer comes too late, so a late answer puts the video back.
+    @ObservationIgnored private var pending: (tab: Tab, request: Int)?
     @ObservationIgnored private var polling: Task<Void, Never>?
 
     private static let script = Resources.bundle.url(forResource: "video-popout", withExtension: "js")
@@ -35,7 +38,12 @@ final class VideoPopout {
     /// The selected tab changed: the one left behind pops its video out if it plays one with
     /// sound, and the one shown takes its video back.
     func selectionChanged(from previous: Tab?, to selected: Tab?) {
-        if let selected, selected === tab { hide() }
+        if let selected, selected === tab {
+            hide()
+        } else if let selected, selected === pending?.tab {
+            request += 1
+            pending = nil
+        }
         guard let previous, previous !== tab, !previous.isAsleep, !previous.isHome, previous.pdf == nil else { return }
         request += 1
         let current = request
@@ -108,8 +116,18 @@ final class VideoPopout {
     }
 
     private func show(_ tab: Tab, request current: Int) async {
-        let state = try? await Self.run("show", in: tab.webView)
-        guard current == request, let playback = Self.playback(from: state) else { return }
+        pending = (tab, current)
+        let webView = tab.webView
+        let state = try? await Self.run("show", in: webView)
+        let newer = pending.map { $0.tab === tab && $0.request != current } ?? false
+        if pending?.request == current { pending = nil }
+        guard current == request else {
+            // Unless the player has this video or a newer request shows it, the page would be
+            // left showing only its video.
+            if self.tab !== tab, !newer { await Self.putBack(webView, pausing: false) }
+            return
+        }
+        guard let playback = Self.playback(from: state) else { return }
         // A newer video takes the player; the one it replaces stops and goes back to its page.
         if let previous = self.tab, previous !== tab {
             let webView = previous.webView

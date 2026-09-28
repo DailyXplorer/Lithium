@@ -7,8 +7,19 @@ import WebKit
 final class Tab: NSObject, Identifiable {
     let id = UUID()
     var pinID: Pin.ID?
-    /// Replaced by a blank view while the tab sleeps, which frees the page's memory.
-    private(set) var webView: WKWebView
+    /// Made on first use and dropped while the tab sleeps, which frees the page's memory. A tab
+    /// restored asleep at launch holds no web view at all until it is selected.
+    var webView: WKWebView {
+        access(keyPath: \.webView)
+        if let loadedWebView { return loadedWebView }
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        loadedWebView = webView
+        attach(webView)
+        return webView
+    }
+    @ObservationIgnored private var loadedWebView: WKWebView?
+    /// What the next web view is made with.
+    @ObservationIgnored private var configuration: WKWebViewConfiguration
     let isHome: Bool
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
@@ -56,9 +67,8 @@ final class Tab: NSObject, Identifiable {
     init(browser: Browser, configuration: WKWebViewConfiguration, isHome: Bool = false) {
         self.browser = browser
         self.isHome = isHome
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        self.configuration = configuration
         super.init()
-        attach(webView)
     }
 
     private func attach(_ webView: WKWebView) {
@@ -118,17 +128,17 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
-        // A WKWebView that never loads anything does not start a web process.
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        attach(webView)
+        self.configuration = configuration
+        withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
 
     func tearDown() {
         observations.removeAll()
-        webView.stopLoading()
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        webView.removeFromSuperview()
+        guard let loadedWebView else { return }
+        loadedWebView.stopLoading()
+        loadedWebView.navigationDelegate = nil
+        loadedWebView.uiDelegate = nil
+        loadedWebView.removeFromSuperview()
     }
 
     private func observeWebView() {

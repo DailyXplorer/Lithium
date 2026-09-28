@@ -74,7 +74,6 @@ final class Tab: NSObject, Identifiable {
     private func attach(_ webView: WKWebView) {
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = true
         observeWebView()
     }

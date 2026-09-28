@@ -444,8 +444,11 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let pdf {
-            if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
+        // After the visit is recorded below, so the PDF's title lands on this visit's row.
+        defer {
+            if let pdf {
+                if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
+            }
         }
         guard failedURL == nil, !isHome else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }

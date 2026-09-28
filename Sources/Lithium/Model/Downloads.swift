@@ -37,9 +37,14 @@ final class DownloadItem: Identifiable {
     }
 
     /// A file Lithium already holds, written at once.
-    fileprivate init(filename: String) {
+    fileprivate init(filename: String, size: Int) {
         self.filename = filename
+        completedBytes = Int64(size)
+        totalBytes = Int64(size)
     }
+
+    /// Only a transfer can be cancelled; a file Lithium writes itself takes an instant.
+    var canCancel: Bool { download != nil }
 
     var fraction: Double? {
         totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil
@@ -101,7 +106,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
     func save(_ data: Data, suggestedFilename: String) {
         let destination = destination(for: suggestedFilename)
         reserved.insert(destination)
-        let item = DownloadItem(filename: destination.lastPathComponent)
+        let item = DownloadItem(filename: destination.lastPathComponent, size: data.count)
         item.setDestination(destination)
         items.insert(item, at: 0)
         // Off the main thread: a large file on a slow disk would freeze the window.

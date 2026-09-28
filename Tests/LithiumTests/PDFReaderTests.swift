@@ -106,7 +106,10 @@ extension BrowserTests {
         tab.pdf?.download()
         tab.pdf?.download()
         let items = Array(Downloads.shared.items.prefix(2))
+        #expect(!items.contains { $0.canCancel })
         #expect(await waitForPDF(5) { items.allSatisfy { $0.state == .finished } })
+        let size = try Int64(Data(contentsOf: file).count)
+        #expect(items.allSatisfy { $0.completedBytes == size && $0.totalBytes == size })
         let saved = items.compactMap(\.destination)
         #expect(Set(saved.map(\.lastPathComponent)) == ["Invoice.pdf", "Invoice 2.pdf"])
         for file in saved { #expect(file.deletingLastPathComponent() == URL.downloadsDirectory) }

@@ -47,15 +47,20 @@ struct FindBar: View {
             guard text != find.query else { return }
             Task { await find.update(query: text, in: tab.findTarget) }
         }
-        // A new page to search (another tab, or this tab going to or from a PDF) is searched
-        // again, and the old one cleared.
-        .onChange(of: ObjectIdentifier(tab.findTarget)) { Task { await find.update(query: text, in: tab.findTarget) } }
+        // A new page to search (another tab, this tab going to or from a PDF, or a PDF whose
+        // pages just arrived or unlocked) is searched again, and the old one cleared.
+        .onChange(of: ObjectIdentifier(tab.findTarget)) { searchAgain() }
+        .onChange(of: tab.pdf?.pageCount) { searchAgain() }
     }
 
     private func status(_ find: FindInPage) -> String {
         if find.query.isEmpty { return "" }
         if find.matchCount == 0 { return "No matches" }
         return "\(find.currentMatch)/\(find.matchCount)"
+    }
+
+    private func searchAgain() {
+        Task { await browser.find.update(query: text, in: tab.findTarget) }
     }
 
     private func step(forward: Bool) {

@@ -121,6 +121,8 @@ private struct PageField: View {
             if !isFocused { text = reader.pageCount > 0 ? "\(reader.pageIndex + 1)" : "" }
         }
         .onChange(of: reader.pageCount) { text = reader.pageCount > 0 ? "\(reader.pageIndex + 1)" : "" }
+        // A number typed and left without Return goes back to the current page.
+        .onChange(of: isFocused) { if !isFocused { text = reader.pageCount > 0 ? "\(reader.pageIndex + 1)" : "" } }
     }
 }
 

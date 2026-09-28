@@ -45,7 +45,7 @@ struct HeadlessPerformanceTests {
                 privacy.scripts(true, for: URL(string: "http://127.0.0.1/")!).forEach(configuration.userContentController.addUserScript)
                 Privacy.setEngineProtections(true, on: configuration.defaultWebpagePreferences)
             } else if variant == "previous" {
-                let font = try Data(contentsOf: root.appending(path: "Sources/Lithium/Resources/Fonts/DMSans.ttf")).base64EncodedString()
+                let font = try Data(contentsOf: root.appending(path: "Sources/Lithium/Resources/Fonts/DMSans.woff2")).base64EncodedString()
                 for (name, world) in [("page-font", WKContentWorld.defaultClient), ("farbling", .page)] {
                     let raw = try String(contentsOf: output.appending(path: name + "-head.js"), encoding: .utf8)
                     let source = raw.replacingOccurrences(of: "__LITHIUM_FONT__", with: font).replacingOccurrences(of: "__LITHIUM_SESSION_KEY__", with: "1234567890abcdef1234567890abcdef")
@@ -91,7 +91,7 @@ struct HeadlessPerformanceTests {
             configuration.userContentController.addUserScript(WKUserScript(source: instrument, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
             if variant == "current" { configuration.userContentController.addUserScript(PageStyle.fontScript) }
             else {
-                let font = try Data(contentsOf: root.appending(path: "Sources/Lithium/Resources/Fonts/DMSans.ttf")).base64EncodedString()
+                let font = try Data(contentsOf: root.appending(path: "Sources/Lithium/Resources/Fonts/DMSans.woff2")).base64EncodedString()
                 let raw = try String(contentsOf: output.appending(path: "page-font-head.js"), encoding: .utf8)
                 configuration.userContentController.addUserScript(WKUserScript(source: raw.replacingOccurrences(of: "__LITHIUM_FONT__", with: font), injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
             }

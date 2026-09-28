@@ -50,8 +50,8 @@ final class Browser {
     @ObservationIgnored private var closedTabs: [ClosedTab] = []
     @ObservationIgnored private var sleepLoop: Task<Void, Never>?
     @ObservationIgnored private var memoryPressure: DispatchSourceMemoryPressure?
-    @ObservationIgnored private var isRelieving = false
-    /// Whether another memory relief pass must follow the one running, and how severe.
+    @ObservationIgnored private var isSleepingTabs = false
+    /// Whether a memory relief pass must follow the pass running, and how severe.
     @ObservationIgnored private var pendingRelief: Bool?
     @ObservationIgnored private var savedSession: Session?
 
@@ -91,22 +91,43 @@ final class Browser {
         sleepLoop = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(min(60, Self.tabIdleInterval / 2)))
-                await self?.sleepIdleTabs(idleFor: Self.tabIdleInterval)
+                await self?.sleepTabs(idleFor: Self.tabIdleInterval)
             }
         }
         watchMemoryPressure()
     }
 
-    /// Each tab sleeps right after its own check, so what was checked still holds. A page whose
-    /// popup is in use (a sign-in or payment window) keeps its page for the popup to answer.
+    /// One pass at a time, so no page is asked twice: a timer tick during a pass is skipped (the
+    /// next comes soon), and memory events queue one relief pass after it, as severe as the worst.
+    private func sleepTabs(idleFor interval: TimeInterval?) async {
+        guard !isSleepingTabs else { return }
+        isSleepingTabs = true
+        var interval = interval
+        while true {
+            if let interval { await sleepIdleTabs(idleFor: interval) }
+            guard let critical = pendingRelief else { break }
+            pendingRelief = nil
+            interval = Self.reliefInterval(critical: critical)
+        }
+        isSleepingTabs = false
+    }
+
+    /// Each tab sleeps right after its own check, so what was checked still holds.
     private func sleepIdleTabs(idleFor interval: TimeInterval) async {
-        for tab in tabs where tab.id != selectedTabID && selectedTab?.opener !== tab {
+        for tab in tabs where tab.id != selectedTabID && !isInUsePopupPair(tab) {
             // The check waits on the page's process: meanwhile the tab may have been selected,
             // closed or used, or have started loading or recording.
             guard await tab.canSleep(idleFor: interval), tab.id != selectedTabID, tabs.contains(tab),
-                  tab.isQuiet(idleFor: interval), selectedTab?.opener !== tab else { continue }
+                  tab.isQuiet(idleFor: interval), !isInUsePopupPair(tab) else { continue }
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
+    }
+
+    /// A window a page opened with script (a sign-in or payment popup) and that page talk to
+    /// each other: while both are open, neither sleeps, or the popup's answer would go nowhere.
+    private func isInUsePopupPair(_ tab: Tab) -> Bool {
+        if let opener = tab.opener, !opener.isAsleep, tabs.contains(opener) { return true }
+        return !tab.isAsleep && tabs.contains { $0.opener === tab }
     }
 
     /// When macOS runs short of memory, Lithium gives some back before the system starts
@@ -123,32 +144,21 @@ final class Browser {
         memoryPressure = source
     }
 
-    /// Events arriving while a pass runs neither start another beside it (asking the same pages
-    /// again) nor cancel it (losing what it has done): one more pass follows, as severe as the
-    /// worst of them.
+    /// A pass already running picks the event up when it is done; otherwise one starts now.
     private func startRelief(critical: Bool) {
-        guard !isRelieving else {
-            pendingRelief = critical || pendingRelief == true
-            return
-        }
-        isRelieving = true
-        Task {
-            var critical = critical
-            while true {
-                await self.relieveMemoryPressure(critical: critical)
-                guard let next = self.pendingRelief else { break }
-                self.pendingRelief = nil
-                critical = next
-            }
-            self.isRelieving = false
-        }
+        pendingRelief = critical || pendingRelief == true
+        Task { await self.sleepTabs(idleFor: nil) }
     }
 
-    /// Background tabs left alone for 5 minutes sleep when memory runs low, whatever
-    /// `tabIdleSeconds` says, and every one that can (not playing, recording or loading) when
-    /// it is critical, like Firefox's tab unloading.
     func relieveMemoryPressure(critical: Bool) async {
-        await sleepIdleTabs(idleFor: critical ? 0 : Self.shortIdleInterval)
+        await sleepIdleTabs(idleFor: Self.reliefInterval(critical: critical))
+    }
+
+    /// Background tabs left alone for 5 minutes (or less, if `tabIdleSeconds` says so) sleep when
+    /// memory runs low, and every one that can (not playing, recording or loading) when it is
+    /// critical, like Firefox's tab unloading.
+    private static func reliefInterval(critical: Bool) -> TimeInterval {
+        critical ? 0 : min(tabIdleInterval, shortIdleInterval)
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.

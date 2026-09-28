@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 @preconcurrency import ScreenCaptureKit
+import WebKit
 
 /// Screenshots of Lithium's own window, whole or a dragged area, dressed up on the wallpaper
 /// or a solid color. The window is captured through ScreenCaptureKit's current-process content,
@@ -73,10 +74,44 @@ final class ScreenCapture {
         defer { browser.isSidebarVisible = original }
         var images: [Bool: CGImage] = [:]
         for visible in [original, !original] {
-            browser.isSidebarVisible = visible
+            if visible != original {
+                browser.isSidebarVisible = visible
+                await Self.settle(window)
+            }
             images[visible] = try await Self.snapshot(window)
         }
         return .window(sidebarOpen: images[true]!, sidebarClosed: images[false]!)
+    }
+
+    /// Toggling the sidebar resizes the page, and a page like X lays itself out again in script
+    /// over several frames: shot too early, its menu and columns come out overlapping. Waits
+    /// until no page in the window has changed for a moment, or a second has passed.
+    private static func settle(_ window: NSWindow) async {
+        window.contentView?.layoutSubtreeIfNeeded()
+        for page in webViews(in: window.contentView) {
+            _ = try? await page.callAsyncJavaScript("""
+                await new Promise(resolve => {
+                  const start = performance.now();
+                  let changed = start;
+                  const observer = new MutationObserver(() => { changed = performance.now(); });
+                  observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+                  const check = () => {
+                    const now = performance.now();
+                    if (now - changed < 200 && now - start < 1000) return setTimeout(check, 50);
+                    observer.disconnect();
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                    setTimeout(resolve, 100);
+                  };
+                  setTimeout(check, 50);
+                });
+                """, contentWorld: .defaultClient)
+        }
+    }
+
+    private static func webViews(in view: NSView?) -> [WKWebView] {
+        guard let view else { return [] }
+        if let page = view as? WKWebView { return [page] }
+        return view.subviews.flatMap(webViews)
     }
 
     private static func snapshot(_ window: NSWindow) async throws -> CGImage {

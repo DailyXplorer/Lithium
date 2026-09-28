@@ -36,6 +36,16 @@ final class DownloadItem: Identifiable {
         }
     }
 
+    /// A file Lithium already holds, written at once.
+    fileprivate init(filename: String, size: Int) {
+        self.filename = filename
+        completedBytes = Int64(size)
+        totalBytes = Int64(size)
+    }
+
+    /// Only a transfer can be cancelled; a file Lithium writes itself takes an instant.
+    var canCancel: Bool { download != nil }
+
     var fraction: Double? {
         totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil
     }
@@ -68,6 +78,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
     var hasUnseen = false
 
     @ObservationIgnored private var byDownload: [ObjectIdentifier: DownloadItem] = [:]
+    /// Names taken by files still being written, which don't exist on disk yet.
+    @ObservationIgnored private var reserved: Set<URL> = []
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
@@ -90,23 +102,56 @@ final class Downloads: NSObject, WKDownloadDelegate {
         items.removeAll { $0.state != .downloading }
     }
 
+    /// Bytes Lithium already has (a PDF it shows), saved like a download.
+    func save(_ data: Data, suggestedFilename: String) {
+        let destination = destination(for: suggestedFilename)
+        reserved.insert(destination)
+        let item = DownloadItem(filename: destination.lastPathComponent, size: data.count)
+        item.setDestination(destination)
+        items.insert(item, at: 0)
+        // Off the main thread: a large file on a slow disk would freeze the window.
+        Task {
+            let written = await Task.detached {
+                Result { try data.write(to: destination, options: .withoutOverwriting) }
+            }.value
+            reserved.remove(destination)
+            switch written {
+            case .success:
+                item.finish(.finished)
+                didFinish(item)
+            case .failure(let error):
+                item.finish(.failed(error.localizedDescription))
+            }
+        }
+    }
+
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
+        let destination = destination(for: suggestedFilename)
+        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
+        return destination
+    }
+
+    /// In ~/Downloads, numbered when the name is taken.
+    private func destination(for suggestedFilename: String) -> URL {
         let folder = URL.downloadsDirectory
         let name = (suggestedFilename as NSString).deletingPathExtension
         let ext = (suggestedFilename as NSString).pathExtension
         var destination = folder.appending(path: suggestedFilename)
         var counter = 1
-        while FileManager.default.fileExists(atPath: destination.path) {
+        while FileManager.default.fileExists(atPath: destination.path) || reserved.contains(destination) {
             counter += 1
             destination = folder.appending(path: ext.isEmpty ? "\(name) \(counter)" : "\(name) \(counter).\(ext)")
         }
-        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
         return destination
     }
 
     func downloadDidFinish(_ download: WKDownload) {
         guard let item = byDownload.removeValue(forKey: ObjectIdentifier(download)) else { return }
         item.finish(.finished)
+        didFinish(item)
+    }
+
+    private func didFinish(_ item: DownloadItem) {
         hasUnseen = true
         if let destination = item.destination {
             // Makes the Downloads stack bounce in the Dock, like Safari.

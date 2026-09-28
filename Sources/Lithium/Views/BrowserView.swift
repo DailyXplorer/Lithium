@@ -80,10 +80,15 @@ struct ContentCard: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             if browser.find.isVisible {
-                FindBar(webView: tab.webView)
+                FindBar(tab: tab)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            WebContainer(webView: tab.webView)
+            PageContainer(view: tab.webView)
+                .overlay {
+                    if let pdf = tab.pdf {
+                        PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                    }
+                }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
@@ -94,21 +99,21 @@ struct ContentCard: View {
     }
 }
 
-/// Hosts the selected tab's WKWebView. Swapping the subview (instead of rebuilding) keeps
-/// every tab's page alive, and detached web views get throttled by WebKit.
-struct WebContainer: NSViewRepresentable {
-    let webView: WKWebView
+/// Hosts a view the tab owns: its WKWebView or its PDF viewer. Swapping the subview (instead of
+/// rebuilding) keeps every tab's page alive, and detached web views get throttled by WebKit.
+struct PageContainer: NSViewRepresentable {
+    let view: NSView
 
     func makeNSView(context: Context) -> NSView {
         WebContainerView()
     }
 
     func updateNSView(_ container: NSView, context: Context) {
-        guard webView.superview !== container else { return }
+        guard view.superview !== container else { return }
         container.subviews.forEach { $0.removeFromSuperview() }
-        webView.frame = container.bounds
-        webView.autoresizingMask = [.width, .height]
-        container.addSubview(webView)
+        view.frame = container.bounds
+        view.autoresizingMask = [.width, .height]
+        container.addSubview(view)
     }
 }
 

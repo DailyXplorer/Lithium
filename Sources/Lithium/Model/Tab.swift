@@ -36,6 +36,11 @@ final class Tab: NSObject, Identifiable {
     private(set) var progress = 0.0
     private(set) var canGoBack = false
     private(set) var canGoForward = false
+    /// Set while the page is a PDF, which Lithium draws with its own viewer.
+    private(set) var pdf: PDFReader?
+    /// The PDFs of this tab's history. WebKit brings such a page back from its cache without
+    /// its bytes; the kept reader also comes back where it was left.
+    @ObservationIgnored private var pdfHistory: [WKBackForwardListItem: PDFReader] = [:]
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
@@ -100,7 +105,57 @@ final class Tab: NSObject, Identifiable {
     }
 
     func reload() {
+        if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
         if let failedURL { load(failedURL) } else { webView.reload() }
+    }
+
+    /// What shows the page: the PDF viewer or the web view. Keyboard focus goes back to it.
+    var contentView: NSView {
+        pdf?.view ?? webView
+    }
+
+    var findTarget: FindTarget {
+        pdf ?? webView
+    }
+
+    func print() {
+        if let pdf {
+            pdf.print()
+            return
+        }
+        let operation = webView.printOperation(with: .shared)
+        // WebKit's operation draws nothing until its view has a size.
+        operation.view?.frame = webView.bounds
+        if let window = webView.window {
+            operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            operation.run()
+        }
+    }
+
+    private func openPDF(from webView: WKWebView, reader: PDFReader) async {
+        guard let data = await PDFReader.mainResourceData(of: webView), pdf === reader else { return }
+        guard reader.open(data) else {
+            pdf = nil
+            return
+        }
+        adopt(reader)
+    }
+
+    /// The document's title and an icon for the tab, also when the reader comes back from the history.
+    private func adopt(_ reader: PDFReader) {
+        if favicon == nil { favicon = PDFReader.icon }
+        if title.isEmpty {
+            title = reader.title
+            if let url, !isHome { browser?.history.updateTitle(title, for: url) }
+            browser?.tidyTitles.update(self)
+            tellExtensions(.title)
+        }
+        // The page had the keyboard; the viewer takes it, so arrows and space scroll the document.
+        if let window = reader.view.window,
+           (window.firstResponder as? NSView)?.isDescendant(of: webView) == true {
+            window.makeFirstResponder(reader.view)
+        }
     }
 
     func markActive() {
@@ -120,6 +175,8 @@ final class Tab: NSObject, Identifiable {
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
         tearDown()
+        pdf = nil
+        pdfHistory = [:]
         hasInternalBridge = false
         hasWebstoreBridge = false
         isAsleep = true
@@ -350,7 +407,49 @@ extension Tab: WKNavigationDelegate {
         if navigation !== errorNavigation { failedURL = nil }
     }
 
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        let list = webView.backForwardList
+        let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
+        pdfHistory = pdfHistory.filter { live.contains($0.key) }
+        let previous = pdf
+        defer { if let previous, previous !== pdf { previous.putAway() } }
+        guard PDFReader.isShowingPDF(webView), let url = webView.url else {
+            pdf = nil
+            if favicon === PDFReader.icon { favicon = nil }
+            return
+        }
+        if let item = list.currentItem, let kept = pdfHistory[item], kept.url == url {
+            pdf = kept
+            return
+        }
+        let reader = PDFReader(url: url)
+        // Like a website's links: never Lithium's own pages, local files only from a local PDF
+        // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
+        let isLocal = url.isFileURL
+        reader.onOpenLink = { [weak self] url, inNewTab in
+            guard let self else { return }
+            let scheme = url.scheme?.lowercased()
+            switch scheme {
+            case "http", "https", "file":
+                guard scheme != "file" || isLocal else { return }
+                if inNewTab { self.browser?.newTab(url: url, selecting: false) } else { self.load(url) }
+            case Internal.scheme, Extensions.scheme:
+                break
+            default:
+                NSWorkspace.shared.open(url)
+            }
+        }
+        pdf = reader
+        if let item = list.currentItem { pdfHistory[item] = reader }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // After the visit is recorded below, so the PDF's title lands on this visit's row.
+        defer {
+            if let pdf {
+                if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
+            }
+        }
         guard failedURL == nil, !isHome else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)

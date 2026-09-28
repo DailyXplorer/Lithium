@@ -51,6 +51,8 @@ final class Browser {
     // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
     @ObservationIgnored nonisolated(unsafe) private var sleepLoop: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var memoryPressure: DispatchSourceMemoryPressure?
+    /// As macOS last reported it: the source only speaks when the level changes.
+    @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
 
     struct ClosedTab {
@@ -89,7 +91,7 @@ final class Browser {
         sleepLoop = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(min(60, Self.tabIdleInterval / 2)))
-                self?.sleepIdleTabs(idleFor: Self.tabIdleInterval)
+                self?.sleepTabs()
             }
         }
         watchMemoryPressure()
@@ -104,11 +106,15 @@ final class Browser {
     /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
     /// window) and the page that opened it talk to each other, so neither sleeps while both
     /// are open, unless memory is critical.
-    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool = true) {
+    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool) {
         tabs.forEach { $0.noteSound() }
         var paired: Set<ObjectIdentifier> = []
         if sparingPopups {
-            for tab in tabs { if let opener = tab.opener { paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)]) } }
+            let open = Set(tabs.map { ObjectIdentifier($0) })
+            for tab in tabs {
+                guard let opener = tab.opener, open.contains(ObjectIdentifier(opener)) else { continue }
+                paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)])
+            }
         }
         for tab in tabs where tab.id != selectedTabID && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
@@ -118,22 +124,36 @@ final class Browser {
     /// When macOS runs short of memory, Lithium gives some back before the system starts
     /// compressing and swapping.
     private func watchMemoryPressure() {
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let event = self.memoryPressure?.data else { return }
-                self.relieveMemoryPressure(critical: event.contains(.critical))
+                self.memoryLevel = event
+                if event != .normal { self.sleepTabs() }
             }
         }
         source.activate()
         memoryPressure = source
     }
 
-    /// Background tabs left alone for 5 minutes (or less, if `tabIdleSeconds` says so) sleep when
-    /// memory runs low, and every one that can (not playing sound, recording or loading) when it
-    /// is critical, like Firefox's tab unloading.
+    /// For as long as memory is short, background tabs left alone for 5 minutes (or less, if
+    /// `tabIdleSeconds` says so) sleep when memory runs low, and every one that can (not playing
+    /// sound, recording or loading) when it is critical, like Firefox's tab unloading.
+    private func sleepTabs() {
+        if memoryLevel.contains(.critical) {
+            sleepIdleTabs(idleFor: 0, sparingPopups: false)
+        } else if memoryLevel.contains(.warning) {
+            sleepIdleTabs(idleFor: min(Self.tabIdleInterval, Self.shortIdleInterval), sparingPopups: true)
+        } else {
+            sleepIdleTabs(idleFor: Self.tabIdleInterval, sparingPopups: true)
+        }
+    }
+
+    /// What a memory pressure event does, for tests.
     func relieveMemoryPressure(critical: Bool) {
-        sleepIdleTabs(idleFor: critical ? 0 : min(Self.tabIdleInterval, Self.shortIdleInterval), sparingPopups: !critical)
+        memoryLevel = critical ? .critical : .warning
+        sleepTabs()
+        memoryLevel = .normal
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.
@@ -256,6 +276,8 @@ final class Browser {
 
     func newTabFocusingAddress() {
         find.hide()
+        // Left for the address bar: it counts as used until now.
+        selectedTab?.markActive()
         if selectedTabID == nil { resetHome() }
         selectedTabID = nil
         requestAddressFocus()
@@ -323,7 +345,10 @@ final class Browser {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             selectedTabID = remaining.isEmpty ? nil : remaining[min(position, remaining.count - 1)].id
+            // The tab shown next may be asleep.
+            selectedTab?.markActive()
         }
+        tab.unpair()
         permissions.cancel(tabID: tab.id)
         summaries.discard(tab)
         tab.tearDown()

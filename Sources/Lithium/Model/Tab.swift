@@ -411,6 +411,8 @@ extension Tab: WKNavigationDelegate {
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }
+        let previous = pdf
+        defer { if let previous, previous !== pdf { previous.putAway() } }
         guard PDFReader.isShowingPDF(webView), let url = webView.url else {
             pdf = nil
             if favicon === PDFReader.icon { favicon = nil }

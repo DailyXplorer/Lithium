@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Observation
 import PDFKit
 import Synchronization
@@ -37,10 +38,12 @@ final class PDFReader: NSObject {
     @ObservationIgnored let view = ReaderView()
     @ObservationIgnored var onOpenLink: ((URL, _ inNewTab: Bool) -> Void)?
     @ObservationIgnored private var data: Data?
-    /// A copy of the document for search and thumbnails, which would stall the main thread.
-    @ObservationIgnored private var worker: PDFWorker?
+    /// Search and thumbnails, which would stall the main thread. Made on first use and dropped
+    /// while the reader is out of sight, so a PDF in the history holds one parsed copy, not two.
+    @ObservationIgnored private var loadedWorker: PDFWorker?
     @ObservationIgnored private var password: String?
     @ObservationIgnored private var matches: [PDFSelection] = []
+    @ObservationIgnored private var currentMatch: Int?
     @ObservationIgnored private var fittedScale: CGFloat = 0
     /// Where to open once the view has a size: before that, PDFKit scrolls to the wrong place.
     @ObservationIgnored private var openingPage: Int?
@@ -88,20 +91,19 @@ final class PDFReader: NSObject {
 
     /// Resumes once; with nothing if WebKit drops the callback unanswered (a web view torn down),
     /// so the waiting task never hangs.
-    private final class Answer: @unchecked Sendable {
-        private var continuation: CheckedContinuation<Data?, Never>?
+    private final class Answer: Sendable {
+        private let continuation: Mutex<CheckedContinuation<Data?, Never>?>
 
         init(_ continuation: CheckedContinuation<Data?, Never>) {
-            self.continuation = continuation
+            self.continuation = Mutex(continuation)
         }
 
         func resume(_ data: Data?) {
-            continuation?.resume(returning: data)
-            continuation = nil
+            continuation.withLock { $0.take() }?.resume(returning: data)
         }
 
         deinit {
-            continuation?.resume(returning: nil)
+            resume(nil)
         }
     }
 
@@ -110,7 +112,6 @@ final class PDFReader: NSObject {
         guard let document = PDFDocument(data: data) else { return false }
         self.data = data
         self.document = document
-        worker = PDFWorker(data: data)
         isLocked = document.isLocked
         if !isLocked { show(document) }
         return true
@@ -122,6 +123,20 @@ final class PDFReader: NSObject {
         isLocked = false
         show(document)
         return true
+    }
+
+    private var worker: PDFWorker? {
+        guard let data else { return nil }
+        if let loadedWorker { return loadedWorker }
+        let worker = PDFWorker(data: data)
+        loadedWorker = worker
+        return worker
+    }
+
+    /// The tab moved on to another page; the reader stays in its history.
+    func putAway() {
+        clearMatches()
+        loadedWorker = nil
     }
 
     private func show(_ document: PDFDocument) {
@@ -197,13 +212,11 @@ final class PDFReader: NSObject {
 
     func rotate() {
         guard let document else { return }
-        let page = view.currentPage
         for index in 0..<document.pageCount {
             document.page(at: index)?.rotation += 90
         }
         view.layoutDocumentView()
-        refit()
-        if let page { view.go(to: page) }
+        refitShowingCurrentPage()
         revision += 1
     }
 
@@ -306,13 +319,17 @@ final class PDFReader: NSObject {
         var file = url
         if !isLocalFile {
             guard let data else { return }
-            let folder = FileManager.default.temporaryDirectory.appending(path: "Lithium PDFs/\(UUID().uuidString)")
+            // Named by content, so opening the same PDF again reuses its copy.
+            let digest = SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
+            let folder = FileManager.default.temporaryDirectory.appending(path: "Lithium PDFs/\(digest)")
             file = folder.appending(path: filename)
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                try data.write(to: file)
-            } catch {
-                return
+            if !FileManager.default.fileExists(atPath: file.path) {
+                do {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try data.write(to: file)
+                } catch {
+                    return
+                }
             }
         }
         NSWorkspace.shared.open([file], withApplicationAt: preview, configuration: NSWorkspace.OpenConfiguration())
@@ -337,14 +354,20 @@ extension PDFReader: FindTarget {
         let search = worker.startSearch()
         guard let found = await worker.find(query, search: search, password: password), worker.isLatest(search) else { return 0 }
         matches = found.compactMap { document.page(at: $0.page)?.selection(for: $0.range) }
+        currentMatch = nil
         for match in matches { match.color = Self.matchColor }
         view.highlightedSelections = matches
         return matches.count
     }
 
     /// The current match stands out from the others, as in Chrome.
-    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool {
-        guard matches.indices.contains(index) else { return false }
+    func showNextMatch(of query: String, forward: Bool) async -> Bool {
+        guard !matches.isEmpty else { return false }
+        let index = switch currentMatch {
+        case nil: forward ? 0 : matches.count - 1
+        case let current?: (current + (forward ? 1 : -1) + matches.count) % matches.count
+        }
+        currentMatch = index
         for (position, match) in matches.enumerated() {
             match.color = position == index ? Self.currentMatchColor : Self.matchColor
         }
@@ -360,8 +383,9 @@ extension PDFReader: FindTarget {
     }
 
     func clearMatches() {
-        _ = worker?.startSearch()
+        _ = loadedWorker?.startSearch()
         matches = []
+        currentMatch = nil
         view.highlightedSelections = nil
     }
 }
@@ -382,12 +406,14 @@ actor PDFWorker {
         let range: NSRange
     }
 
-    private let document: PDFDocument?
-    /// The newest search; older ones still waiting are skipped.
+    private let data: Data
+    /// Parsed here on first use, never on the caller's thread.
+    private var parsed: PDFDocument?
+    /// The newest search; older ones stop at their next match.
     private nonisolated let latestSearch = Mutex(0)
 
     init(data: Data) {
-        document = PDFDocument(data: data)
+        self.data = data
     }
 
     nonisolated func startSearch() -> Int {
@@ -401,13 +427,24 @@ actor PDFWorker {
         latestSearch.withLock { $0 == search }
     }
 
-    func find(_ query: String, search: Int, password: String?) -> [Match]? {
-        guard isLatest(search), let document = unlocked(password) else { return nil }
-        return document.findString(query, withOptions: [.caseInsensitive, .diacriticInsensitive]).flatMap { selection in
-            selection.pages.compactMap { page in
-                Match(page: document.index(for: page), range: selection.range(at: 0, on: page))
-            }
+    /// Match by match, yielding in between: a thumbnail asked for meanwhile is drawn without waiting
+    /// for the whole document, and a newer search stops this one. A match across two pages counts once.
+    func find(_ query: String, search: Int, password: String?) async -> [Match]? {
+        guard let document = unlocked(password) else { return nil }
+        var found: [Match] = []
+        var selection: PDFSelection?
+        while isLatest(search) {
+            guard let next = document.findString(query, fromSelection: selection, withOptions: [.caseInsensitive, .diacriticInsensitive]),
+                  let page = next.pages.first else { return found }
+            let match = Match(page: document.index(for: page), range: next.range(at: 0, on: page))
+            // PDFKit wraps around to the first match once it reaches the end.
+            let seen = [found.first, found.last].contains { $0?.page == match.page && $0?.range == match.range }
+            if seen { return found }
+            found.append(match)
+            selection = next
+            await Task.yield()
         }
+        return nil
     }
 
     func thumbnail(of index: Int, rotation: Int, size: CGSize, password: String?) -> CGImage? {
@@ -417,7 +454,8 @@ actor PDFWorker {
     }
 
     private func unlocked(_ password: String?) -> PDFDocument? {
-        guard let document else { return nil }
+        if parsed == nil { parsed = PDFDocument(data: data) }
+        guard let document = parsed else { return nil }
         if document.isLocked, let password { document.unlock(withPassword: password) }
         return document.isLocked ? nil : document
     }

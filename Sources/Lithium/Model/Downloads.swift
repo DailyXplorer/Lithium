@@ -101,12 +101,18 @@ final class Downloads: NSObject, WKDownloadDelegate {
         let item = DownloadItem(filename: destination.lastPathComponent)
         item.setDestination(destination)
         items.insert(item, at: 0)
-        do {
-            try data.write(to: destination, options: .withoutOverwriting)
-            item.finish(.finished)
-            didFinish(item)
-        } catch {
-            item.finish(.failed(error.localizedDescription))
+        // Off the main thread: a large file on a slow disk would freeze the window.
+        Task {
+            let written = await Task.detached {
+                Result { try data.write(to: destination, options: .withoutOverwriting) }
+            }.value
+            switch written {
+            case .success:
+                item.finish(.finished)
+                didFinish(item)
+            case .failure(let error):
+                item.finish(.failed(error.localizedDescription))
+            }
         }
     }
 

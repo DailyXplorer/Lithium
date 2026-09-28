@@ -101,7 +101,7 @@ extension BrowserTests {
 
         tab.pdf?.download()
         let item = try #require(Downloads.shared.items.first)
-        #expect(item.state == .finished)
+        #expect(await waitForPDF(5) { item.state == .finished })
         let saved = try #require(item.destination)
         #expect(saved.deletingLastPathComponent() == URL.downloadsDirectory)
         #expect(try Data(contentsOf: saved) == Data(contentsOf: file))

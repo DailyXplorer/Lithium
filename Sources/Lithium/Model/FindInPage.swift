@@ -5,8 +5,8 @@ import WebKit
 @MainActor
 protocol FindTarget: AnyObject {
     func countMatches(of query: String) async -> Int
-    /// A web page steps through its own matches; a PDF shows the one at `index`. False when none shows.
-    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool
+    /// Shows the next or previous match, wrapping around. False when there is none.
+    func showNextMatch(of query: String, forward: Bool) async -> Bool
     func selectedText() async -> String?
     func clearMatches()
 }
@@ -23,6 +23,8 @@ final class FindInPage {
     private(set) var focusToken = 0
     /// What the last search highlighted, cleared when the search moves elsewhere or the bar closes.
     @ObservationIgnored private weak var target: FindTarget?
+    /// Only the newest search sets the count: an older one may finish later, even for the same text.
+    @ObservationIgnored private var search = 0
 
     func show() {
         isVisible = true
@@ -39,6 +41,8 @@ final class FindInPage {
         let target = tab.findTarget
         if self.target !== target { self.target?.clearMatches() }
         self.target = target
+        search += 1
+        let current = search
         query = newQuery
         currentMatch = 0
         guard !newQuery.isEmpty else {
@@ -47,20 +51,19 @@ final class FindInPage {
             return
         }
         let count = await target.countMatches(of: newQuery)
-        guard newQuery == query else { return }
+        guard current == search else { return }
         matchCount = count
         await step(forward: true, in: tab)
     }
 
     func step(forward: Bool, in tab: Tab) async {
         guard !query.isEmpty else { return }
-        let index = matchCount > 0 ? next(forward) : 1
-        guard await tab.findTarget.showMatch(query, at: index - 1, forward: forward) else {
+        guard await tab.findTarget.showNextMatch(of: query, forward: forward) else {
             currentMatch = 0
             return
         }
         if matchCount == 0 { matchCount = 1 }
-        currentMatch = index
+        currentMatch = next(forward)
     }
 
     private func next(_ forward: Bool) -> Int {
@@ -88,7 +91,7 @@ extension WKWebView: FindTarget {
         return (count as? Int) ?? 0
     }
 
-    func showMatch(_ query: String, at index: Int, forward: Bool) async -> Bool {
+    func showNextMatch(of query: String, forward: Bool) async -> Bool {
         let configuration = WKFindConfiguration()
         configuration.backwards = !forward
         configuration.wraps = true

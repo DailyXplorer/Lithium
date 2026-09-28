@@ -68,7 +68,7 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("Use Selection for Find") {
                 let tab = currentTab
-                Task { await browser.find.useSelection(in: tab) }
+                Task { await browser.find.useSelection(in: tab.findTarget) }
             }
             .keyboardShortcut("e")
         }
@@ -143,7 +143,7 @@ struct BrowserCommands: Commands {
     private func findStep(forward: Bool) {
         let tab = currentTab
         browser.find.show()
-        Task { await browser.find.step(forward: forward, in: tab) }
+        Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 
     private func zoom(by delta: Double) {

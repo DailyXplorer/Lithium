@@ -5,10 +5,16 @@ import WebKit
 @MainActor
 protocol FindTarget: AnyObject {
     func countMatches(of query: String) async -> Int
-    /// Shows the next or previous match, wrapping around. False when there is none.
-    func showNextMatch(of query: String, forward: Bool) async -> Bool
+    /// Shows the next or previous match, wrapping around.
+    func showNextMatch(of query: String, forward: Bool) async -> FindStep
     func selectedText() async -> String?
     func clearMatches()
+}
+
+enum FindStep: Equatable {
+    case none
+    /// The match's place among them, from 1, when the target knows it (a web page doesn't).
+    case shown(position: Int?)
 }
 
 /// Find-in-page state. WKWebView's own find panel needs private container APIs, so Lithium
@@ -33,12 +39,13 @@ final class FindInPage {
 
     func hide() {
         isVisible = false
+        // A search still running must not show a match once the bar is closed.
+        search += 1
         target?.clearMatches()
         target = nil
     }
 
-    func update(query newQuery: String, in tab: Tab) async {
-        let target = tab.findTarget
+    func update(query newQuery: String, in target: FindTarget) async {
         if self.target !== target { self.target?.clearMatches() }
         self.target = target
         search += 1
@@ -53,27 +60,32 @@ final class FindInPage {
         let count = await target.countMatches(of: newQuery)
         guard current == search else { return }
         matchCount = count
-        await step(forward: true, in: tab)
+        await step(forward: true, in: target)
     }
 
-    func step(forward: Bool, in tab: Tab) async {
+    func step(forward: Bool, in target: FindTarget) async {
         guard !query.isEmpty else { return }
-        guard await tab.findTarget.showNextMatch(of: query, forward: forward) else {
+        let current = search
+        let step = await target.showNextMatch(of: query, forward: forward)
+        guard current == search else { return }
+        guard case .shown(let position) = step else {
             currentMatch = 0
             return
         }
         if matchCount == 0 { matchCount = 1 }
-        currentMatch = next(forward)
+        currentMatch = position ?? next(forward)
     }
 
+    /// For a target that doesn't say which match it showed, counted here.
     private func next(_ forward: Bool) -> Int {
-        forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
+        guard currentMatch > 0 else { return forward ? 1 : matchCount }
+        return forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
     }
 
-    func useSelection(in tab: Tab) async {
-        guard let text = await tab.findTarget.selectedText(), !text.isEmpty else { return }
+    func useSelection(in target: FindTarget) async {
+        guard let text = await target.selectedText(), !text.isEmpty else { return }
         show()
-        await update(query: text, in: tab)
+        await update(query: text, in: target)
     }
 }
 
@@ -91,11 +103,12 @@ extension WKWebView: FindTarget {
         return (count as? Int) ?? 0
     }
 
-    func showNextMatch(of query: String, forward: Bool) async -> Bool {
+    func showNextMatch(of query: String, forward: Bool) async -> FindStep {
         let configuration = WKFindConfiguration()
         configuration.backwards = !forward
         configuration.wraps = true
-        return (try? await find(query, configuration: configuration))?.matchFound == true
+        let found = (try? await find(query, configuration: configuration))?.matchFound == true
+        return found ? .shown(position: nil) : .none
     }
 
     func selectedText() async -> String? {

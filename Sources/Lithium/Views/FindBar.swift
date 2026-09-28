@@ -45,10 +45,11 @@ struct FindBar: View {
         .onChange(of: find.query) { text = find.query }
         .onChange(of: text) {
             guard text != find.query else { return }
-            Task { await find.update(query: text, in: tab) }
+            Task { await find.update(query: text, in: tab.findTarget) }
         }
-        // Switching tabs with the bar open searches the new page and clears the old one.
-        .onChange(of: tab.id) { Task { await find.update(query: text, in: tab) } }
+        // A new page to search (another tab, or this tab going to or from a PDF) is searched
+        // again, and the old one cleared.
+        .onChange(of: ObjectIdentifier(tab.findTarget)) { Task { await find.update(query: text, in: tab.findTarget) } }
     }
 
     private func status(_ find: FindInPage) -> String {
@@ -58,7 +59,7 @@ struct FindBar: View {
     }
 
     private func step(forward: Bool) {
-        Task { await browser.find.step(forward: forward, in: tab) }
+        Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 }
 

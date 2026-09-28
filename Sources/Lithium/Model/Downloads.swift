@@ -73,6 +73,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
     var hasUnseen = false
 
     @ObservationIgnored private var byDownload: [ObjectIdentifier: DownloadItem] = [:]
+    /// Names taken by files still being written, which don't exist on disk yet.
+    @ObservationIgnored private var reserved: Set<URL> = []
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
@@ -97,7 +99,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     /// Bytes Lithium already has (a PDF it shows), saved like a download.
     func save(_ data: Data, suggestedFilename: String) {
-        let destination = Self.destination(for: suggestedFilename)
+        let destination = destination(for: suggestedFilename)
+        reserved.insert(destination)
         let item = DownloadItem(filename: destination.lastPathComponent)
         item.setDestination(destination)
         items.insert(item, at: 0)
@@ -106,6 +109,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
             let written = await Task.detached {
                 Result { try data.write(to: destination, options: .withoutOverwriting) }
             }.value
+            reserved.remove(destination)
             switch written {
             case .success:
                 item.finish(.finished)
@@ -117,19 +121,19 @@ final class Downloads: NSObject, WKDownloadDelegate {
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
-        let destination = Self.destination(for: suggestedFilename)
+        let destination = destination(for: suggestedFilename)
         byDownload[ObjectIdentifier(download)]?.setDestination(destination)
         return destination
     }
 
     /// In ~/Downloads, numbered when the name is taken.
-    private static func destination(for suggestedFilename: String) -> URL {
+    private func destination(for suggestedFilename: String) -> URL {
         let folder = URL.downloadsDirectory
         let name = (suggestedFilename as NSString).deletingPathExtension
         let ext = (suggestedFilename as NSString).pathExtension
         var destination = folder.appending(path: suggestedFilename)
         var counter = 1
-        while FileManager.default.fileExists(atPath: destination.path) {
+        while FileManager.default.fileExists(atPath: destination.path) || reserved.contains(destination) {
             counter += 1
             destination = folder.appending(path: ext.isEmpty ? "\(name) \(counter)" : "\(name) \(counter).\(ext)")
         }

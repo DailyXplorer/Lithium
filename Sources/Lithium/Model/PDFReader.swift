@@ -42,7 +42,10 @@ final class PDFReader: NSObject {
     /// while the reader is out of sight, so a PDF in the history holds one parsed copy, not two.
     @ObservationIgnored private var loadedWorker: PDFWorker?
     @ObservationIgnored private var password: String?
-    @ObservationIgnored private var matches: [PDFSelection] = []
+    @ObservationIgnored private var matches: [PDFWorker.Match] = []
+    /// Selections for the first matches only: a query found tens of thousands of times would
+    /// otherwise stall the main thread building them.
+    @ObservationIgnored private var highlighted: [PDFSelection] = []
     @ObservationIgnored private var currentMatch: Int?
     @ObservationIgnored private var fittedScale: CGFloat = 0
     /// Where to open once the view has a size: before that, PDFKit scrolls to the wrong place.
@@ -319,8 +322,9 @@ final class PDFReader: NSObject {
         var file = url
         if !isLocalFile {
             guard let data else { return }
-            // Named by content, so opening the same PDF again reuses its copy.
-            let digest = SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
+            // Named by address and size, so opening the same PDF again reuses its copy.
+            let key = Data("\(url.absoluteString) \(data.count)".utf8)
+            let digest = SHA256.hash(data: key).prefix(8).map { String(format: "%02x", $0) }.joined()
             let folder = FileManager.default.temporaryDirectory.appending(path: "Lithium PDFs/\(digest)")
             file = folder.appending(path: filename)
             if !FileManager.default.fileExists(atPath: file.path) {
@@ -350,32 +354,45 @@ final class PDFReader: NSObject {
 /// The PDF searched through a copy of the document, so a long document never stalls typing.
 extension PDFReader: FindTarget {
     func countMatches(of query: String) async -> Int {
-        guard let document, !isLocked, let worker else { return 0 }
+        guard !isLocked, let worker else { return 0 }
         let search = worker.startSearch()
         guard let found = await worker.find(query, search: search, password: password), worker.isLatest(search) else { return 0 }
-        matches = found.compactMap { document.page(at: $0.page)?.selection(for: $0.range) }
+        matches = found
         currentMatch = nil
-        for match in matches { match.color = Self.matchColor }
-        view.highlightedSelections = matches
+        highlighted = found.prefix(Self.highlightLimit).compactMap(selection(for:))
+        for selection in highlighted { selection.color = Self.matchColor }
+        highlight(current: nil)
         return matches.count
     }
 
     /// The current match stands out from the others, as in Chrome.
-    func showNextMatch(of query: String, forward: Bool) async -> Bool {
-        guard !matches.isEmpty else { return false }
+    func showNextMatch(of query: String, forward: Bool) async -> FindStep {
+        guard !matches.isEmpty else { return .none }
         let index = switch currentMatch {
         case nil: forward ? 0 : matches.count - 1
         case let current?: (current + (forward ? 1 : -1) + matches.count) % matches.count
         }
         currentMatch = index
-        for (position, match) in matches.enumerated() {
-            match.color = position == index ? Self.currentMatchColor : Self.matchColor
-        }
+        guard let selection = highlight(current: index) else { return .none }
+        view.go(to: selection)
+        return .shown(position: index + 1)
+    }
+
+    /// The current match is drawn on top of the others.
+    @discardableResult
+    private func highlight(current: Int?) -> PDFSelection? {
+        let currentSelection = current.flatMap { matches.indices.contains($0) ? selection(for: matches[$0]) : nil }
+        currentSelection?.color = Self.currentMatchColor
         // PDFView only redraws highlights for a new list.
         view.highlightedSelections = nil
-        view.highlightedSelections = matches
-        view.go(to: matches[index])
-        return true
+        view.highlightedSelections = highlighted + [currentSelection].compactMap { $0 }
+        return currentSelection
+    }
+
+    private static let highlightLimit = 1_000
+
+    private func selection(for match: PDFWorker.Match) -> PDFSelection? {
+        document?.page(at: match.page)?.selection(for: match.range)
     }
 
     func selectedText() async -> String? {
@@ -385,6 +402,7 @@ extension PDFReader: FindTarget {
     func clearMatches() {
         _ = loadedWorker?.startSearch()
         matches = []
+        highlighted = []
         currentMatch = nil
         view.highlightedSelections = nil
     }

@@ -16,16 +16,19 @@ extension BrowserTests {
         #expect(tab.pdf?.outline.map(\.label) == ["Page 1", "Page 2", "Page 3"])
         #expect(tab.pdf?.outline.map(\.pageIndex) == [0, 1, 2])
 
-        await browser.find.update(query: "revenue", in: tab)
+        await browser.find.update(query: "revenue", in: tab.findTarget)
         #expect(browser.find.matchCount == 2)
-        await browser.find.step(forward: true, in: tab)
+        await browser.find.step(forward: true, in: tab.findTarget)
         #expect(browser.find.currentMatch == 2)
-        #expect(tab.pdf?.view.highlightedSelections?.count == 2)
-        await browser.find.update(query: "", in: tab)
+        // Both matches, and the current one again on top in its own color.
+        #expect(tab.pdf?.view.highlightedSelections?.count == 3)
+        await browser.find.step(forward: false, in: tab.findTarget)
+        #expect(browser.find.currentMatch == 1)
+        await browser.find.update(query: "", in: tab.findTarget)
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
 
-        await browser.find.update(query: "costs", in: tab)
-        #expect(tab.pdf?.view.highlightedSelections?.count == 1)
+        await browser.find.update(query: "costs", in: tab.findTarget)
+        #expect(tab.pdf?.view.highlightedSelections?.count == 2)
         browser.find.hide()
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
     }
@@ -99,12 +102,15 @@ extension BrowserTests {
         defer { browser.close(tab) }
         #expect(await waitForPDF(30) { tab.pdf?.pageCount == 1 })
 
+        // Twice in a row, before the first file is written: each gets its own name.
         tab.pdf?.download()
-        let item = try #require(Downloads.shared.items.first)
-        #expect(await waitForPDF(5) { item.state == .finished })
-        let saved = try #require(item.destination)
-        #expect(saved.deletingLastPathComponent() == URL.downloadsDirectory)
-        #expect(try Data(contentsOf: saved) == Data(contentsOf: file))
+        tab.pdf?.download()
+        let items = Array(Downloads.shared.items.prefix(2))
+        #expect(await waitForPDF(5) { items.allSatisfy { $0.state == .finished } })
+        let saved = items.compactMap(\.destination)
+        #expect(Set(saved.map(\.lastPathComponent)) == ["Invoice.pdf", "Invoice 2.pdf"])
+        for file in saved { #expect(file.deletingLastPathComponent() == URL.downloadsDirectory) }
+        #expect(try saved.allSatisfy { try Data(contentsOf: $0) == Data(contentsOf: file) })
     }
 
     @Test func locksAPasswordProtectedPDFUntilUnlocked() async throws {
@@ -117,7 +123,7 @@ extension BrowserTests {
         #expect(tab.pdf?.unlock(with: "wrong") == false)
         #expect(tab.pdf?.unlock(with: "open sesame") == true)
         #expect(tab.pdf?.pageCount == 1)
-        await browser.find.update(query: "hidden", in: tab)
+        await browser.find.update(query: "hidden", in: tab.findTarget)
         #expect(browser.find.matchCount == 1)
     }
 

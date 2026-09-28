@@ -26,6 +26,9 @@ final class Tab: NSObject, Identifiable {
     /// The page's back and forward history (and scroll position) while the tab sleeps, so it
     /// wakes where it was left.
     @ObservationIgnored private var sleepingState: Any?
+    /// The address of a tab waking from its history, until its page commits. A page that can't
+    /// come back that way (a form's result, not in the cache) loads its address instead.
+    @ObservationIgnored private var wakingURL: URL?
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -85,6 +88,7 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         isAsleep = false
         sleepingState = nil
+        wakingURL = nil
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -110,11 +114,20 @@ final class Tab: NSObject, Identifiable {
     func markActive() {
         lastActive = Date()
         guard isAsleep, let url else { return }
-        if let sleepingState, Self.wakesWithHistory(url) { wake(from: sleepingState, at: url) } else { load(url) }
+        if let sleepingState { wake(from: sleepingState, at: url) } else { load(url) }
     }
 
-    /// Local files and Lithium's own pages load again from scratch: their read access and
-    /// trust are granted by `load`, not by history.
+    /// The history a sleeping tab wakes with, if every page in it can come back that way. Local
+    /// files and Lithium's own pages can't: their read access and trust are granted by `load`.
+    /// Nor can a page whose process died in the middle of a navigation: the history doesn't
+    /// have the page the tab was going to yet.
+    private func restorableState(of webView: WKWebView) -> Any? {
+        let list = webView.backForwardList
+        guard let current = list.currentItem, current.url == url,
+              (list.backList + [current] + list.forwardList).allSatisfy({ Self.wakesWithHistory($0.url) }) else { return nil }
+        return webView.interactionState
+    }
+
     private static func wakesWithHistory(_ url: URL) -> Bool {
         !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme
     }
@@ -124,7 +137,7 @@ final class Tab: NSObject, Identifiable {
         isAsleep = false
         webView.interactionState = state
         // A state WebKit could not read leaves an empty page.
-        if webView.backForwardList.currentItem == nil { load(url) }
+        if webView.backForwardList.currentItem == nil { load(url) } else { wakingURL = url }
     }
 
     /// A tab that has been left alone for a while and is not busy (loading, playing sound,
@@ -139,7 +152,7 @@ final class Tab: NSObject, Identifiable {
 
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
-        sleepingState = loadedWebView?.interactionState
+        sleepingState = loadedWebView.flatMap(restorableState(of:))
         tearDown()
         hasInternalBridge = false
         hasWebstoreBridge = false
@@ -276,6 +289,11 @@ final class Tab: NSObject, Identifiable {
         let error = error as NSError
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
+        if let wakingURL {
+            self.wakingURL = nil
+            load(wakingURL)
+            return
+        }
         failedURL = url
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
@@ -369,6 +387,10 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        wakingURL = nil
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

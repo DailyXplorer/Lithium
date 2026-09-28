@@ -41,7 +41,7 @@ Websites render in DM Sans instead of their own fonts (Settings › Appearance, 
 
 ## Sleeping tabs
 
-A background tab left alone for 30 minutes releases its page, unless it is playing sound, using the camera or microphone, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes. When macOS runs short of memory, tabs idle for 5 minutes sleep at once, and every background tab that can when memory is critical, least recently used first.
+A background tab left alone for 30 minutes releases its page, unless it is playing sound, using the camera or microphone, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). A history with local files or Lithium's own pages in it isn't kept: the tab loads its page afresh, as does a page that can't come back from history (a form's result). In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes (`defaults write app.lithium.browser tabIdleSeconds N` sets your own delay, which then always applies). When macOS runs short of memory, tabs idle for 5 minutes sleep at once, and every background tab that can when memory is critical.
 
 ## Screenshots
 

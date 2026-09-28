@@ -50,6 +50,7 @@ final class Browser {
     @ObservationIgnored private var closedTabs: [ClosedTab] = []
     @ObservationIgnored private var sleepLoop: Task<Void, Never>?
     @ObservationIgnored private var memoryPressure: DispatchSourceMemoryPressure?
+    @ObservationIgnored private var relief: (task: Task<Void, Never>, critical: Bool)?
     @ObservationIgnored private var savedSession: Session?
 
     struct ClosedTab {
@@ -58,12 +59,12 @@ final class Browser {
         let customTitle: String?
     }
 
-    /// 30 minutes; `defaults write app.lithium.browser tabIdleSeconds N` overrides it. While the
-    /// Mac saves energy (Low Power Mode, or running hot), 5 minutes at most, as in Orion.
+    /// 30 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot), as in
+    /// Orion. `defaults write app.lithium.browser tabIdleSeconds N` overrides both.
     static var tabIdleInterval: TimeInterval {
         let custom = UserDefaults.standard.double(forKey: "tabIdleSeconds")
-        let interval = custom > 0 ? custom : 30 * 60
-        return isSavingEnergy ? min(interval, shortIdleInterval) : interval
+        if custom > 0 { return custom }
+        return isSavingEnergy ? shortIdleInterval : 30 * 60
     }
     static let shortIdleInterval: TimeInterval = 5 * 60
 
@@ -94,9 +95,9 @@ final class Browser {
         watchMemoryPressure()
     }
 
-    /// Least recently used first, so the pages most likely to be wanted again are the last to go.
     private func sleepIdleTabs(idleFor interval: TimeInterval) async {
-        for tab in tabs.sorted(by: { $0.lastActive < $1.lastActive }) where tab.id != selectedTabID {
+        for tab in tabs where tab.id != selectedTabID {
+            guard !Task.isCancelled else { return }
             // The check waits on the page's process, and the tab may be selected or closed meanwhile.
             guard await tab.canSleep(idleFor: interval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
             tab.sleep(configuration: makeConfiguration(for: tab.url))
@@ -110,15 +111,28 @@ final class Browser {
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let event = self.memoryPressure?.data else { return }
-                Task { await self.relieveMemoryPressure(critical: event.contains(.critical)) }
+                self.startRelief(critical: event.contains(.critical))
             }
         }
         source.activate()
         memoryPressure = source
     }
 
-    /// Background tabs left alone for 5 minutes sleep when memory runs low, and every one
-    /// that can (not playing, recording or loading) when it is critical, like Firefox's tab unloading.
+    /// A new event replaces a pass still under way rather than running beside it, and never
+    /// turns a critical pass into a milder one.
+    private func startRelief(critical: Bool) {
+        let critical = critical || relief?.critical == true
+        relief?.task.cancel()
+        let task = Task {
+            await self.relieveMemoryPressure(critical: critical)
+            if !Task.isCancelled { self.relief = nil }
+        }
+        relief = (task, critical)
+    }
+
+    /// Background tabs left alone for 5 minutes sleep when memory runs low, whatever
+    /// `tabIdleSeconds` says, and every one that can (not playing, recording or loading) when
+    /// it is critical, like Firefox's tab unloading.
     func relieveMemoryPressure(critical: Bool) async {
         await sleepIdleTabs(idleFor: critical ? 0 : Self.shortIdleInterval)
     }

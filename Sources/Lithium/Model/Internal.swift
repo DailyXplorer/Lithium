@@ -55,7 +55,8 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, fileExtension: String) {
-        let type = UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let type = UTType(filenameExtension: fileExtension)?.preferredMIMEType
+            ?? (fileExtension == "woff2" ? "font/woff2" : "application/octet-stream")
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
             "Content-Type": type,
             // Pages share files across lithium:// hosts; masks and fonts are fetched with CORS.
@@ -80,7 +81,7 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         case ("history", nil): bundle.url(forResource: "history", withExtension: "html", subdirectory: "Pages")
         case (_, "style.css"): bundle.url(forResource: "lithium", withExtension: "css", subdirectory: "Pages")
         case (_, "pages.js"): bundle.url(forResource: "pages", withExtension: "js", subdirectory: "Pages")
-        case (_, "font"): bundle.url(forResource: "DMSans", withExtension: "ttf")
+        case (_, "font"): bundle.url(forResource: "DMSans", withExtension: "woff2")
         case (_, "icon"): parts.count == 2 ? bundle.url(forResource: parts[1], withExtension: "svg") : nil
         case (_, "app-icon"): bundle.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Pages")
         default: nil

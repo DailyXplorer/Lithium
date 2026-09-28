@@ -87,6 +87,25 @@ struct BrowserTests {
         #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "First" })
     }
 
+    /// A local file's read access comes from `load`, not history: a tab with one in its history
+    /// wakes on its page afresh, without a Back that would fail.
+    @Test func sleepingTabDropsAHistoryWithALocalFile() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "lithium-\(UUID().uuidString).html")
+        try "<title>File</title>file".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let browser = Browser()
+        let tab = browser.newTab(url: file)
+        #expect(await waitUntil(120) { loaded(tab) && tab.webView.title == "File" })
+        tab.load(URL(string: "data:text/html,<title>Web</title>web")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Web" && tab.canGoBack })
+
+        browser.newTab(url: URL(string: "data:text/html,other")!)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        browser.select(tab)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Web" })
+        #expect(!tab.canGoBack)
+    }
+
     /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
     @Test func memoryPressureSleepsBackgroundTabs() async throws {
         let browser = Browser()

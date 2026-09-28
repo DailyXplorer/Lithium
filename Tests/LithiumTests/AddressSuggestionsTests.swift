@@ -15,7 +15,7 @@ struct AddressSuggestionsTests {
         return store
     }
 
-    @Test func typedTextFirstThenHistoryRankedByPrefixAndFrequency() {
+    @Test func typedTextFirstThenHistoryRankedByPrefixAndFrequency() async {
         let store = history([
             ("https://www.github.com/", "GitHub", 1),
             ("https://news.ycombinator.com/item?id=1", "Show HN: git tools", 5),
@@ -23,6 +23,8 @@ struct AddressSuggestionsTests {
         ])
         let suggestions = AddressSuggestions()
         suggestions.update(query: "git", tabs: [], pins: [], history: store)
+        #expect(suggestions.items.map(\.id) == ["search:git"])
+        await suggestions.historyQuery?.value
 
         #expect(suggestions.items.map(\.id) == [
             "search:git",
@@ -30,6 +32,17 @@ struct AddressSuggestionsTests {
             "history:https://www.github.com/",
             "history:https://news.ycombinator.com/item?id=1",
         ])
+    }
+
+    /// Typing faster than the history answers only ever shows the pages for the latest text.
+    @Test func historyForReplacedTextNeverShows() async {
+        let store = history([("https://swift.org/", "Swift", 1), ("https://github.com/", "GitHub", 1)])
+        let suggestions = AddressSuggestions()
+        suggestions.update(query: "swift", tabs: [], pins: [], history: store)
+        suggestions.update(query: "git", tabs: [], pins: [], history: store)
+        await suggestions.historyQuery?.value
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(suggestions.items.map(\.id) == ["search:git", "history:https://github.com/"])
     }
 
     @Test func domainsBecomeAnAddressAndArrowsWrap() {

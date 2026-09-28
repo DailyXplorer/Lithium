@@ -33,6 +33,8 @@ enum Suggestion: Hashable, Identifiable {
 final class AddressSuggestions {
     private(set) var items: [Suggestion] = []
     private(set) var selectedIndex = 0
+    /// Visited pages arrive a moment after the rest, from a query that runs off the main thread.
+    @ObservationIgnored private(set) var historyQuery: Task<Void, Never>?
 
     private static let perSource = 3
     private static let limit = 8
@@ -64,13 +66,16 @@ final class AddressSuggestions {
             guard matches(pin.title, pin.url), fresh(pin.url) else { return nil }
             return .pin(pin.id, title: pin.title, url: pin.url)
         }.prefix(Self.perSource)
-        let visited = history.topSites(matching: query, limit: Self.limit).compactMap { site -> Suggestion? in
-            guard fresh(site.url) else { return nil }
-            return .history(title: site.title, url: site.url)
-        }
 
-        items = Array(([first] + openTabs + pinned + visited).prefix(Self.limit))
+        items = Array(([first] + openTabs + pinned).prefix(Self.limit))
         selectedIndex = 0
+        historyQuery?.cancel()
+        historyQuery = Task { [weak self] in
+            guard let sites = await history.topSitesInBackground(matching: query, limit: Self.limit),
+                  !Task.isCancelled, let self else { return }
+            let visited = sites.filter { seen.insert($0.url.absoluteString).inserted }.map { Suggestion.history(title: $0.title, url: $0.url) }
+            items = Array((items + visited).prefix(Self.limit))
+        }
     }
 
     func move(by offset: Int) {
@@ -83,6 +88,7 @@ final class AddressSuggestions {
     }
 
     func clear() {
+        historyQuery?.cancel()
         items = []
         selectedIndex = 0
     }

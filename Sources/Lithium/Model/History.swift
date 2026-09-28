@@ -13,10 +13,14 @@ struct Visit: Identifiable, Hashable {
 final class HistoryStore {
     private var db: OpaquePointer?
     private var lastRecorded: (url: URL, date: Date)?
+    /// The address bar's query reads every visit (70 ms at 200,000), so it runs on a connection
+    /// of its own, off the main thread.
+    private let search: HistorySearch
 
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    nonisolated(unsafe) private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init(fileURL: URL = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")) {
+        search = HistorySearch(fileURL: fileURL)
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open(fileURL.path, &db) == SQLITE_OK else {
             NSLog("Lithium: cannot open history database")
@@ -76,6 +80,15 @@ final class HistoryStore {
 
     /// Distinct pages matching `query`, best first: addresses that start with it, then the most visited.
     func topSites(matching query: String, limit: Int) -> [(url: URL, title: String)] {
+        Self.topSites(in: db, matching: query, limit: limit)
+    }
+
+    /// `topSites` off the main thread; nil when a newer query replaced this one before it ran.
+    func topSitesInBackground(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
+        await search.topSites(matching: query, limit: limit)
+    }
+
+    nonisolated fileprivate static func topSites(in db: OpaquePointer?, matching query: String, limit: Int) -> [(url: URL, title: String)] {
         let text = query.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return [] }
         var statement: OpaquePointer?
@@ -135,5 +148,33 @@ final class HistoryStore {
             }
         }
         sqlite3_step(statement)
+    }
+}
+
+/// A read-only connection to the history file, used on a queue of its own. Only the newest
+/// query runs: the ones typing made obsolete while it was busy are skipped.
+private final class HistorySearch: @unchecked Sendable {
+    private let fileURL: URL
+    private let queue = DispatchQueue(label: "app.lithium.history-search", qos: .userInitiated)
+    private let lock = NSLock()
+    private var newest = 0
+    private var db: OpaquePointer?
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func topSites(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
+        let ticket = lock.withLock { newest += 1; return newest }
+        return await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                guard lock.withLock({ ticket == newest }) else { return continuation.resume(returning: nil) }
+                if db == nil, sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+                    sqlite3_close(db)
+                    db = nil
+                }
+                continuation.resume(returning: HistoryStore.topSites(in: db, matching: query, limit: limit))
+            }
+        }
     }
 }

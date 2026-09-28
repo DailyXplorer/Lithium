@@ -84,14 +84,19 @@ struct ContentCard: View {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if browser.find.isVisible {
-                FindBar(tab: tab)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             PageContainer(view: tab.webView)
                 .overlay {
                     if let pdf = tab.pdf {
                         PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                    }
+                }
+                // Floats in the top right corner, like Chrome's, below the PDF viewer's controls.
+                .overlay(alignment: .topTrailing) {
+                    if browser.find.isVisible {
+                        FindBar(tab: tab)
+                            .padding(.top, tab.pdf == nil ? 10 : 50)
+                            .padding(.horizontal, 10)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
         }

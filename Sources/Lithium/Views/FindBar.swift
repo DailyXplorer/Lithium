@@ -32,11 +32,14 @@ struct FindBar: View {
         .font(Theme.font(13))
         // On the page's background, not the sidebar color the window's ink is chosen for.
         .foregroundStyle(Color.primary)
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .frame(maxWidth: 360)
         .frame(height: 40)
-        .background(Color(nsColor: .textBackgroundColor))
-        .overlay(alignment: .bottom) { Rectangle().fill(.primary.opacity(0.08)).frame(height: 1) }
+        // The address suggestions' surface, since it floats over the page the same way.
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.primary.opacity(0.08)))
+        .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
         .onAppear {
             text = find.query
             claimFocus($isFocused)

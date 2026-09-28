@@ -240,12 +240,13 @@ final class Tab: NSObject, Identifiable {
         hasWebstoreBridge = installed
     }
 
+    /// Runs after every page load; an unchanged icon is left alone, so the sidebar doesn't redraw it.
     private func refreshFavicon() async {
         if Internal.isInternal(url) {
-            favicon = NSApp.applicationIconImage
+            if favicon !== NSApp.applicationIconImage { favicon = NSApp.applicationIconImage }
             return
         }
-        guard let data = await Favicons.shared.favicon(for: webView) else { return }
+        guard let data = await Favicons.shared.favicon(for: webView), data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
         browser?.didLoadFavicon(data, in: self)

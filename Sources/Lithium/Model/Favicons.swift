@@ -56,7 +56,7 @@ final class Favicons {
             func fetchIcon(_ url: URL) async -> Data? {
                 guard let (data, response) = try? await session.data(from: url),
                       (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
-                return Self.normalized(data)
+                return await Self.normalizedInBackground(data)
             }
             for path in ["/apple-touch-icon.png", "/favicon.ico", "/favicon.png"] {
                 if let url = URL(string: path, relativeTo: site), let png = await fetchIcon(url) { return png }
@@ -116,7 +116,7 @@ final class Favicons {
         for candidate in candidates.sorted(by: Candidate.preferred) {
             guard let (data, response) = try? await session.data(from: candidate.url),
                   (response as? HTTPURLResponse)?.statusCode ?? 200 < 400,
-                  let png = Self.normalized(data) else { continue }
+                  let png = await Self.normalizedInBackground(data) else { continue }
             store(png, for: host)
             return png
         }
@@ -128,11 +128,17 @@ final class Favicons {
             guard let dataURL = result as? String,
                   let encoded = dataURL.split(separator: ",").last,
                   let data = Data(base64Encoded: String(encoded)),
-                  let png = Self.normalized(data) else { continue }
+                  let png = await Self.normalizedInBackground(data) else { continue }
             store(png, for: host)
             return png
         }
         return nil
+    }
+
+    /// Decoding, redrawing and encoding a large ICO or touch icon takes a few milliseconds, so it
+    /// runs off the main thread.
+    nonisolated private static func normalizedInBackground(_ data: Data) async -> Data? {
+        await Task.detached(priority: .utility) { normalized(data) }.value
     }
 
     /// Redraws the icon at 64 px and rejects it when nothing visible was drawn.

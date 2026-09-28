@@ -37,7 +37,11 @@ A local file gets read access to its own folder, so relative images and links to
 
 ## DM Sans on every site
 
-Websites render in DM Sans instead of their own fonts (Settings › Appearance, on by default). Elements whose own font is an icon font (Font Awesome, Material Symbols, Glyphicons, or any font drawing Private Use Area glyphs), a monospace font or a math font keep it, along with everything inside them. `Resources/Scripts/page-font.js` finds them by briefly lifting the override on new content and reading the font the site chose, before it paints.
+Websites render in DM Sans instead of their own fonts (Settings › Appearance, on by default). Elements whose own font is an icon font (Font Awesome, Material Symbols, Glyphicons, or any font drawing Private Use Area glyphs), a monospace font or a math font keep it, along with everything inside them. `Resources/Scripts/page-font.js` finds them by briefly lifting the override on new content and reading the font the site chose, before it paints. Pages get the font as WOFF2 (89 KB instead of the TTF's 240 KB), since each one decodes it again; `scripts/make-web-font.py` makes it from `DMSans.ttf`.
+
+## Sleeping tabs
+
+A background tab left alone for 30 minutes releases its page, unless it is playing sound, using the camera or microphone, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes. When macOS runs short of memory, tabs idle for 5 minutes sleep at once, and every background tab that can when memory is critical, least recently used first.
 
 ## Screenshots
 

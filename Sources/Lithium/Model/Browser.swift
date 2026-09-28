@@ -49,6 +49,7 @@ final class Browser {
     @ObservationIgnored private var eventMonitors: [Any] = []
     @ObservationIgnored private var closedTabs: [ClosedTab] = []
     @ObservationIgnored private var sleepLoop: Task<Void, Never>?
+    @ObservationIgnored private var memoryPressure: DispatchSourceMemoryPressure?
     @ObservationIgnored private var savedSession: Session?
 
     struct ClosedTab {
@@ -57,10 +58,18 @@ final class Browser {
         let customTitle: String?
     }
 
-    /// 30 minutes; `defaults write app.lithium.browser tabIdleSeconds N` overrides it.
+    /// 30 minutes; `defaults write app.lithium.browser tabIdleSeconds N` overrides it. While the
+    /// Mac saves energy (Low Power Mode, or running hot), 5 minutes at most, as in Orion.
     static var tabIdleInterval: TimeInterval {
         let custom = UserDefaults.standard.double(forKey: "tabIdleSeconds")
-        return custom > 0 ? custom : 30 * 60
+        let interval = custom > 0 ? custom : 30 * 60
+        return isSavingEnergy ? min(interval, shortIdleInterval) : interval
+    }
+    static let shortIdleInterval: TimeInterval = 5 * 60
+
+    private static var isSavingEnergy: Bool {
+        let info = ProcessInfo.processInfo
+        return info.isLowPowerModeEnabled || info.thermalState == .serious || info.thermalState == .critical
     }
     private static let closedTabsLimit = 25
 
@@ -79,17 +88,39 @@ final class Browser {
         sleepLoop = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(min(60, Self.tabIdleInterval / 2)))
-                await self?.sleepIdleTabs()
+                await self?.sleepIdleTabs(idleFor: Self.tabIdleInterval)
             }
+        }
+        watchMemoryPressure()
+    }
+
+    /// Least recently used first, so the pages most likely to be wanted again are the last to go.
+    private func sleepIdleTabs(idleFor interval: TimeInterval) async {
+        for tab in tabs.sorted(by: { $0.lastActive < $1.lastActive }) where tab.id != selectedTabID {
+            // The check waits on the page's process, and the tab may be selected or closed meanwhile.
+            guard await tab.canSleep(idleFor: interval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
+            tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
 
-    private func sleepIdleTabs() async {
-        for tab in tabs where tab.id != selectedTabID {
-            // The check waits on the page's process, and the tab may be selected or closed meanwhile.
-            guard await tab.canSleep(idleFor: Self.tabIdleInterval), tab.id != selectedTabID, tabs.contains(tab) else { continue }
-            tab.sleep(configuration: makeConfiguration(for: tab.url))
+    /// When macOS runs short of memory, Lithium gives some back before the system starts
+    /// compressing and swapping.
+    private func watchMemoryPressure() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let event = self.memoryPressure?.data else { return }
+                Task { await self.relieveMemoryPressure(critical: event.contains(.critical)) }
+            }
         }
+        source.activate()
+        memoryPressure = source
+    }
+
+    /// Background tabs left alone for 5 minutes sleep when memory runs low, and every one
+    /// that can (not playing, recording or loading) when it is critical, like Firefox's tab unloading.
+    func relieveMemoryPressure(critical: Bool) async {
+        await sleepIdleTabs(idleFor: critical ? 0 : Self.shortIdleInterval)
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.

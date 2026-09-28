@@ -69,6 +69,38 @@ struct BrowserTests {
         }
     }
 
+    /// A tab that slept wakes on the page it showed, with its back history.
+    @Test func sleepingTabKeepsItsHistory() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first")!)
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+
+        browser.newTab(url: URL(string: "data:text/html,other")!)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        #expect(tab.isAsleep)
+        browser.select(tab)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+        #expect(await waitUntil(5) { tab.canGoBack })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "First" })
+    }
+
+    /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
+    @Test func memoryPressureSleepsBackgroundTabs() async throws {
+        let browser = Browser()
+        let background = browser.newTab(url: URL(string: "data:text/html,background")!, selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        #expect(await waitUntil(120) { loaded(background) && loaded(visible) })
+
+        await browser.relieveMemoryPressure(critical: false)
+        #expect(!background.isAsleep, "a tab used a moment ago stays awake while memory is only low")
+        await browser.relieveMemoryPressure(critical: true)
+        #expect(background.isAsleep)
+        #expect(!visible.isAsleep)
+    }
+
     /// The real Chrome Web Store, YouTube and SponsorBlock:
     /// `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension`.
     /// Adds SponsorBlock with the store's own button and Lithium's confirmation, then watches it skip a sponsor.

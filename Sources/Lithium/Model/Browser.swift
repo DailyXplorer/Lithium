@@ -13,7 +13,12 @@ final class Browser {
         didSet { PinStore.save(pins) }
     }
     private(set) var tabs: [Tab] = []
-    private(set) var selectedTabID: Tab.ID?
+    private(set) var selectedTabID: Tab.ID? {
+        didSet {
+            guard oldValue != selectedTabID else { return }
+            videoPopout.selectionChanged(from: tabs.first { $0.id == oldValue }, to: selectedTab)
+        }
+    }
     private(set) var addressFocusToken = 0
     var isSidebarVisible = true
     var renamingTabID: Tab.ID?
@@ -26,6 +31,7 @@ final class Browser {
     let tidyTitles = TidyTitles()
     let summaries = PageSummaries()
     let extensions = Extensions()
+    let videoPopout = VideoPopout()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
     @ObservationIgnored private(set) lazy var home: Tab = {
@@ -80,6 +86,7 @@ final class Browser {
         pins = PinStore.load()
         privacy.start()
         extensions.browser = self
+        videoPopout.browser = self
         extensions.start()
         restore(SessionStore.load())
         saveSession()
@@ -116,7 +123,8 @@ final class Browser {
                 paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)])
             }
         }
-        for tab in tabs where tab.id != selectedTabID && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
+        for tab in tabs where tab.id != selectedTabID && tab !== videoPopout.tab
+            && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
@@ -342,6 +350,7 @@ final class Browser {
     func close(_ tab: Tab) {
         let order = navigationOrder
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        videoPopout.discard(tab)
         if let url = tab.url {
             closedTabs.append(ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle))
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }

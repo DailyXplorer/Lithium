@@ -88,12 +88,24 @@ struct ContentCard: View {
                 FindBar(tab: tab)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            PageContainer(view: tab.webView)
-                .overlay {
-                    if let pdf = tab.pdf {
-                        PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
-                    }
+            Group {
+                if browser.videoPopout.tab === tab {
+                    PoppedOutPlaceholder(popout: browser.videoPopout)
+                } else {
+                    PageContainer(view: tab.webView)
+                        .overlay {
+                            if let pdf = tab.pdf {
+                                PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                            }
+                        }
                 }
+            }
+            // Only the player animates: a page fading out would hold on to its web view, which
+            // the player (or the page, on the way back) has just taken.
+            .overlay {
+                VideoPopoutLayer()
+                    .animation(.snappy(duration: 0.25), value: browser.videoPopout.tab?.id)
+            }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)

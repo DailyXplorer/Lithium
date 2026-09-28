@@ -43,6 +43,10 @@ Websites render in DM Sans instead of their own fonts (Settings › Appearance, 
 
 A background tab left alone for 30 minutes releases its page, unless it is playing sound or was a few minutes ago (so a pause between tracks doesn't count), using the camera or microphone, sharing the screen, or loading. It wakes when selected, on the same page with its back and forward history (WebKit's `interactionState`, which also brings back the scroll position when the page allows). Like any Back, the page may come from WebKit's cache rather than the network (⌘R fetches it again), and showing again a form's result WebKit no longer has asks before sending the form a second time, as Safari does (on Back and Reload too); a tab out of sight never sends one by itself, and a tab waking on one shows its address instead. A history with local files, `blob:` pages or Lithium's own pages in it isn't kept, nor is one whose tab shows a PDF: the tab loads its page afresh. In Low Power Mode or when the Mac runs hot, tabs sleep after 5 minutes (`defaults write app.lithium.browser tabIdleSeconds N` sets your own delay, which Low Power Mode leaves alone). For as long as macOS reports memory short, tabs idle for 5 minutes (or your own delay, if shorter) sleep, and every background tab that can when memory is critical, whatever the delay. A popup window with a size or position (a sign-in or payment window, say) and the page that opened it stay awake while both are open, so they can still talk to each other, unless memory is critical.
 
+## Mini player
+
+Leave a tab while its video plays with sound, and the video goes on playing in a small player in the page's bottom right corner, like Arc's. Coming back to the tab puts it back in the page. A muted video (an autoplaying loop, a preview) stays where it is. Pop Out Video in the page menu (⌥⌘P) does it for the tab in front, whose page then says where its video went. The player takes the tab's own web view, and `Resources/Scripts/video-popout.js` puts the video in the top layer (a manual popover) filling it: the site's own player keeps running, nothing is reloaded, and the page is left as it was when the video comes back. Hovering shows play and pause, 10 seconds back or forward, the time bar, sound, back to the tab and close (which pauses the video); a double click also goes back to the tab. Dragged anywhere, the player glides to the nearest corner; its edges facing the page resize it, keeping the video's shape. It remembers its corner and size. A tab whose video plays in it never sleeps.
+
 ## Screenshots
 
 The camera button in the toolbar captures Lithium's window, the way Arc's Portrait Mode did. Click anywhere to take the whole window, or drag to take an area. For the whole window, the preview shows it with or without the sidebar (closed by default), and sets it on the Mac's wallpaper, a solid color or nothing at all, with an optional "Made with Lithium" badge, then copies it or saves a PNG. Lithium captures its own window through ScreenCaptureKit's current-process content (`Model/ScreenCapture.swift`), so it needs no Screen Recording permission.
@@ -71,7 +75,7 @@ Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) ar
 
 ## Shortcuts
 
-⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌘, settings
+⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌥⌘P pop out the video · ⌘, settings
 
 ## License
 

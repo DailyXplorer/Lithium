@@ -268,6 +268,7 @@ final class Tab: NSObject, Identifiable {
 
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
+        browser?.videoPopout.discard(self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         // Its page and its popup's no longer know each other once it wakes in a new web view.
         unpair()

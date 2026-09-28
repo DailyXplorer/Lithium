@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Network
+import class SwiftUI.NSHostingView
 import Testing
 import WebKit
 @testable import Lithium
@@ -238,6 +239,81 @@ struct BrowserTests {
         throw CancellationError()
     }
 
+    /// Leaving a tab whose video plays with sound pops it out into the mini player, where it goes
+    /// on playing; coming back puts it back in the page. A muted one stays, and closing the tab
+    /// closes the player.
+    @Test func leavingAPlayingVideoPopsItOut() async throws {
+        let video = try #require(Bundle.module.url(forResource: "Fixtures/red", withExtension: "mp4"))
+        let folder = FileManager.default.temporaryDirectory.appending(path: "popout-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.copyItem(at: video, to: folder.appending(path: "red.mp4"))
+        let page = folder.appending(path: "video.html")
+        try #"<video src="red.mp4" loop style="width: 640px; height: 360px"></video>"#.write(to: page, atomically: true, encoding: .utf8)
+
+        let browser = Browser()
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!)
+        let tab = browser.newTab(url: page)
+        // Drawn in a window far off screen: WebKit plays video only in a window it takes for visible.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        [tab, other].forEach { disableOcclusionDetection($0.webView) }
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        #expect(await waitUntil(120) { loaded(tab) && loaded(other) })
+        let started = await run(tab, """
+            const v = document.querySelector('video');
+            await v.play();
+            for (let i = 0; i < 100 && v.currentTime === 0; i++) await new Promise((r) => setTimeout(r, 50));
+            return v.currentTime > 0;
+            """)
+        try #require(started as? Bool == true, "the video plays")
+
+        browser.select(other)
+        #expect(await waitUntil(5) { browser.videoPopout.tab === tab && browser.videoPopout.playback?.aspectRatio == 16 / 9 })
+        // In the player, in the page's bottom right corner, at its default size.
+        #expect(await waitUntil(5) { tab.webView.window === window && tab.webView.bounds.size == CGSize(width: 400, height: 225) })
+        let corner = CGPoint(x: 1280 - Layout.margin - PopoutLayout.inset, y: Layout.margin + PopoutLayout.inset)
+        #expect(await waitUntil(2) {
+            let frame = tab.webView.convert(tab.webView.bounds, to: nil)
+            return abs(frame.maxX - corner.x) < 0.5 && abs(frame.minY - corner.y) < 0.5
+        }, "\(tab.webView.convert(tab.webView.bounds, to: nil))")
+        #expect(other.webView.window === window)
+        // A shadow on a layer holding a web view makes its playing video flash black.
+        var layer = tab.webView.layer
+        while let current = layer {
+            #expect(current.shadowOpacity == 0, "\(String(describing: current.delegate.map { type(of: $0) })) casts a shadow over the player")
+            layer = current.superlayer
+        }
+        let time = browser.videoPopout.playback?.time ?? 0
+        #expect(await waitUntil(5) { (browser.videoPopout.playback?.time ?? 0) > time + 0.5 }, "the video goes on playing")
+
+        browser.select(tab)
+        #expect(browser.videoPopout.tab == nil)
+        #expect(await poll(5) { await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false })
+        #expect(await run(tab, "return document.querySelector('video').paused") as? Bool == false)
+
+        // Popped out, then left and back before the page answers: the video stays in the page.
+        browser.videoPopout.showSelected()
+        browser.select(other)
+        browser.select(tab)
+        try await Task.sleep(for: .seconds(1))
+        #expect(browser.videoPopout.tab == nil)
+        #expect(await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false, "a late answer leaves only the video in the page")
+
+        await run(tab, "document.querySelector('video').muted = true")
+        browser.select(other)
+        try await Task.sleep(for: .seconds(1))
+        #expect(browser.videoPopout.tab == nil, "a muted video stays with its tab")
+
+        browser.select(tab)
+        await run(tab, "document.querySelector('video').muted = false")
+        browser.select(other)
+        #expect(await waitUntil(5) { browser.videoPopout.tab === tab })
+        browser.close(tab)
+        #expect(browser.videoPopout.tab == nil)
+    }
+
     @discardableResult
     private func run(_ tab: Tab, _ body: String) async -> Any? {
         try? await tab.webView.callAsyncJavaScript(body, contentWorld: .page)
@@ -268,6 +344,14 @@ struct BrowserTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
+    }
+
+    /// Off screen, WebKit takes the window for hidden and pauses its media.
+    private func disableOcclusionDetection(_ webView: WKWebView) {
+        let selector = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        guard webView.responds(to: selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(webView.method(for: selector), to: Setter.self)(webView, selector, false)
     }
 
     private func pid(_ tab: Tab) -> pid_t {

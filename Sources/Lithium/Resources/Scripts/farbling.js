@@ -8,6 +8,8 @@
   const KEY = '__LITHIUM_SESSION_KEY__';
   const MAX_PIXELS = 500000;
   const MAX_SAMPLES = 500000;
+  // Taken once: the page shares this world and could replace Reflect.apply later.
+  const apply = Reflect.apply;
 
   // A blank frame (about:blank, srcdoc) belongs to the site that created it.
   const hostname = location.hostname || (() => { try { return parent.location.hostname; } catch (_) { return ''; } })();
@@ -36,10 +38,15 @@
 
   // Setting (not toggling) low bits keeps the noise idempotent: a window reached both by
   // WebKit's per-frame injection and by the iframe hook below gets the same result.
+  // One pixel in twenty gets noise. The gaps between them are drawn directly (geometric
+  // distribution), so the cost follows the noisy pixels rather than the size of the image.
+  const LOG_CLEAN = Math.log(0.95);
   const noisePixels = (data) => {
     const next = prng(seed);
-    for (let i = 0; i < data.length; i += 4) {
-      if (next() < 0.05) data[i + Math.floor(next() * 3)] |= 1;
+    const gap = () => Math.floor(Math.log(1 - next()) / LOG_CLEAN);
+    const pixels = data.length >> 2;
+    for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
+      data[(pixel << 2) + Math.floor(next() * 3)] |= 1;
     }
   };
 
@@ -64,7 +71,7 @@
       disguises.set(replacement, original);
       return replacement;
     };
-    const toString = disguise({ toString() { return Reflect.apply(nativeToString, disguises.get(this) || this, []); } }.toString, nativeToString);
+    const toString = disguise({ toString() { return apply(nativeToString, disguises.get(this) || this, []); } }.toString, nativeToString);
     Object.defineProperty(win.Function.prototype, 'toString', { ...Object.getOwnPropertyDescriptor(win.Function.prototype, 'toString'), value: toString });
 
     const patch = (proto, name, handler) => {
@@ -86,7 +93,7 @@
 
     try {
       const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
-        const image = Reflect.apply(target, self, args);
+        const image = apply(target, self, args);
         if (image.width * image.height <= MAX_PIXELS) noisePixels(image.data);
         return image;
       });
@@ -98,39 +105,39 @@
         copy.height = height;
         const context = copy.getContext('2d');
         context.drawImage(canvas, 0, 0);
-        const image = Reflect.apply(getImageData, context, [0, 0, width, height]);
+        const image = apply(getImageData, context, [0, 0, width, height]);
         noisePixels(image.data);
         context.putImageData(image, 0, 0);
         return copy;
       };
       for (const name of ['toDataURL', 'toBlob']) {
-        patch(win.HTMLCanvasElement.prototype, name, (target, self, args) => Reflect.apply(target, farbledCopy(self), args));
+        patch(win.HTMLCanvasElement.prototype, name, (target, self, args) => apply(target, farbledCopy(self), args));
       }
     } catch (_) {}
 
     try {
       const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
-        const image = Reflect.apply(target, self, args);
+        const image = apply(target, self, args);
         if (image.width * image.height <= MAX_PIXELS) noisePixels(image.data);
         return image;
       });
       patch(win.OffscreenCanvas.prototype, 'convertToBlob', (target, self, args) => {
         const { width, height } = self;
-        if (!width || !height || width * height > MAX_PIXELS) return Reflect.apply(target, self, args);
+        if (!width || !height || width * height > MAX_PIXELS) return apply(target, self, args);
         const copy = new win.OffscreenCanvas(width, height);
         const context = copy.getContext('2d');
         context.drawImage(self, 0, 0);
-        const image = Reflect.apply(offscreenGetImageData, context, [0, 0, width, height]);
+        const image = apply(offscreenGetImageData, context, [0, 0, width, height]);
         noisePixels(image.data);
         context.putImageData(image, 0, 0);
-        return Reflect.apply(target, copy, args);
+        return apply(target, copy, args);
       });
     } catch (_) {}
 
     try {
       for (const context of [win.WebGLRenderingContext, win.WebGL2RenderingContext]) {
         patch(context && context.prototype, 'readPixels', (target, self, args) => {
-          const result = Reflect.apply(target, self, args);
+          const result = apply(target, self, args);
           const pixels = args[6];
           if (pixels && pixels.BYTES_PER_ELEMENT === 1 && pixels.length <= MAX_PIXELS * 4) noisePixels(pixels);
           return result;
@@ -141,7 +148,7 @@
     try {
       const farbled = new WeakSet();
       patch(win.AudioBuffer.prototype, 'getChannelData', (target, self, args) => {
-        const samples = Reflect.apply(target, self, args);
+        const samples = apply(target, self, args);
         if (!farbled.has(samples)) {
           farbled.add(samples);
           noiseSamples(samples);
@@ -149,19 +156,19 @@
         return samples;
       });
       patch(win.AudioBuffer.prototype, 'copyFromChannel', (target, self, args) => {
-        const result = Reflect.apply(target, self, args);
+        const result = apply(target, self, args);
         noiseSamples(args[0]);
         return result;
       });
       patch(win.AnalyserNode.prototype, 'getFloatFrequencyData', (target, self, args) => {
-        const result = Reflect.apply(target, self, args);
+        const result = apply(target, self, args);
         noiseSamples(args[0]);
         return result;
       });
     } catch (_) {}
 
     try {
-      patchGetter(win.Navigator.prototype, 'hardwareConcurrency', (target, self) => cores(Reflect.apply(target, self, [])));
+      patchGetter(win.Navigator.prototype, 'hardwareConcurrency', (target, self) => cores(apply(target, self, [])));
     } catch (_) {}
 
     // Installed voices differ from Mac to Mac; expose only the default voice and those
@@ -169,7 +176,7 @@
     try {
       patch(win.SpeechSynthesis.prototype, 'getVoices', (target, self, args) => {
         const language = (win.navigator.language || 'en').split('-')[0].toLowerCase();
-        return Reflect.apply(target, self, args).filter((voice) =>
+        return apply(target, self, args).filter((voice) =>
           voice.default || (voice.localService && voice.lang.toLowerCase().startsWith(language)));
       });
     } catch (_) {}
@@ -178,37 +185,49 @@
     const protectFrame = (frame) => {
       try { protect(frame.contentWindow); } catch (_) {}
     };
+    // Runs on every DOM insertion of the page, so it does as little as it can: most nodes
+    // are elements without children, which cannot hold a frame.
     const protectInserted = (node) => {
-      if (!node || node.nodeType !== 1) return;
-      if (node.tagName === 'IFRAME' || node.tagName === 'FRAME') protectFrame(node);
-      else if (node.querySelectorAll) node.querySelectorAll('iframe, frame').forEach(protectFrame);
+      if (node === null || typeof node !== 'object' || node.nodeType !== 1) return;
+      const name = node.localName;
+      if (name === 'iframe' || name === 'frame') protectFrame(node);
+      else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) {
+        node.querySelectorAll('iframe, frame').forEach(protectFrame);
+      }
+    };
+    // Insertion methods are among the hottest DOM calls: their replacements forward
+    // `arguments` instead of collecting them in an array and calling through a handler.
+    const hookInsertion = (proto, name, variadic) => {
+      const descriptor = proto && Object.getOwnPropertyDescriptor(proto, name);
+      if (!descriptor || typeof descriptor.value !== 'function') return;
+      const original = descriptor.value;
+      const replacement = variadic
+        ? { [name]() {
+            const result = apply(original, this, arguments);
+            for (let i = 0; i < arguments.length; i++) protectInserted(arguments[i]);
+            return result;
+          } }[name]
+        : { [name](node) {
+            const result = apply(original, this, arguments);
+            protectInserted(node);
+            return result;
+          } }[name];
+      Object.defineProperty(proto, name, { ...descriptor, value: disguise(replacement, original) });
     };
     try {
       for (const proto of [win.HTMLIFrameElement.prototype, win.HTMLFrameElement.prototype]) {
         patchGetter(proto, 'contentWindow', (target, self) => {
-          const child = Reflect.apply(target, self, []);
+          const child = apply(target, self, []);
           try { protect(child); } catch (_) {}
           return child;
         });
         patchGetter(proto, 'contentDocument', (target, self) => {
           protectFrame(self);
-          return Reflect.apply(target, self, []);
+          return apply(target, self, []);
         });
       }
-      for (const name of ['appendChild', 'insertBefore', 'replaceChild']) {
-        patch(win.Node.prototype, name, (target, self, args) => {
-          const result = Reflect.apply(target, self, args);
-          protectInserted(args[0]);
-          return result;
-        });
-      }
-      for (const name of ['append', 'prepend', 'after', 'before', 'replaceWith']) {
-        patch(win.Element.prototype, name, (target, self, args) => {
-          const result = Reflect.apply(target, self, args);
-          args.forEach(protectInserted);
-          return result;
-        });
-      }
+      for (const name of ['appendChild', 'insertBefore', 'replaceChild']) hookInsertion(win.Node.prototype, name, false);
+      for (const name of ['append', 'prepend', 'after', 'before', 'replaceWith']) hookInsertion(win.Element.prototype, name, true);
     } catch (_) {}
   };
 

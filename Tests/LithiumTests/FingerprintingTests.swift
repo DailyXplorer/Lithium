@@ -21,7 +21,24 @@ struct FingerprintingTests {
         })()
         """
 
-    private func run(withFarbling: Bool) async throws -> [String: AnyHashable] {
+    /// A frame that is still navigating to its srcdoc shows a blank window WebKit injects nothing into;
+    /// only the insertion hooks protect it when the page reaches it through `frames`.
+    private static let srcdocProbe = """
+        (() => {
+          const hash = (win) => {
+            const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+            const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+            let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+            return (h >>> 0).toString(16);
+          };
+          const frame = document.createElement('iframe');
+          frame.srcdoc = '<p>frame</p>';
+          document.body.appendChild(frame);
+          return JSON.stringify({ page: hash(window), frame: hash(frames[frames.length - 1]) });
+        })()
+        """
+
+    private func run(withFarbling: Bool, probe: String = Self.probe) async throws -> [String: AnyHashable] {
         let configuration = WKWebViewConfiguration()
         if withFarbling {
             let url = try #require(Resources.bundle.url(forResource: "farbling", withExtension: "js"))
@@ -33,7 +50,7 @@ struct FingerprintingTests {
         webView.navigationDelegate = loaded
         webView.loadHTMLString("<body></body>", baseURL: URL(string: "https://example.com/")!)
         await loaded.wait()
-        let json = try #require(try await webView.evaluateJavaScript(Self.probe) as? String)
+        let json = try #require(try await webView.evaluateJavaScript(probe) as? String)
         return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: AnyHashable])
     }
 
@@ -45,6 +62,15 @@ struct FingerprintingTests {
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
         #expect(protected["native"] == AnyHashable(true))
+    }
+
+    @Test func frameStillNavigatingToItsSrcdocIsProtected() async throws {
+        let bare = try await run(withFarbling: false, probe: Self.srcdocProbe)
+        let protected = try await run(withFarbling: true, probe: Self.srcdocProbe)
+
+        #expect(bare["page"] == bare["frame"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["frame"] == protected["page"])
     }
 }
 

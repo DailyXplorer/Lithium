@@ -85,27 +85,38 @@ final class ScreenCapture {
 
     /// Toggling the sidebar resizes the page, and a page like X lays itself out again in script
     /// over several frames: shot too early, its menu and columns come out overlapping. Waits
-    /// until no page in the window has changed for a moment, or a second has passed.
+    /// until no page in the window has changed for a moment, or a second has passed. A page stuck
+    /// in a script never answers, so the capture goes ahead after 1.5 s regardless.
     private static func settle(_ window: NSWindow) async {
         window.contentView?.layoutSubtreeIfNeeded()
-        for page in webViews(in: window.contentView) {
-            _ = try? await page.callAsyncJavaScript("""
-                await new Promise(resolve => {
-                  const start = performance.now();
-                  let changed = start;
-                  const observer = new MutationObserver(() => { changed = performance.now(); });
-                  observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
-                  const check = () => {
-                    const now = performance.now();
-                    if (now - changed < 200 && now - start < 1000) return setTimeout(check, 50);
-                    observer.disconnect();
-                    requestAnimationFrame(() => requestAnimationFrame(resolve));
-                    setTimeout(resolve, 100);
-                  };
-                  setTimeout(check, 50);
-                });
-                """, contentWorld: .defaultClient)
+        let pages = webViews(in: window.contentView)
+        let (settled, finish) = AsyncStream<Void>.makeStream()
+        Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            finish.yield()
         }
+        Task {
+            for page in pages {
+                _ = try? await page.callAsyncJavaScript("""
+                    await new Promise(resolve => {
+                      const start = performance.now();
+                      let changed = start;
+                      const observer = new MutationObserver(() => { changed = performance.now(); });
+                      observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+                      const check = () => {
+                        const now = performance.now();
+                        if (now - changed < 200 && now - start < 1000) return setTimeout(check, 50);
+                        observer.disconnect();
+                        requestAnimationFrame(() => requestAnimationFrame(resolve));
+                        setTimeout(resolve, 100);
+                      };
+                      setTimeout(check, 50);
+                    });
+                    """, contentWorld: .defaultClient)
+            }
+            finish.yield()
+        }
+        for await _ in settled { break }
     }
 
     private static func webViews(in view: NSView?) -> [WKWebView] {

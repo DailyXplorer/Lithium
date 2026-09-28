@@ -160,9 +160,9 @@ private struct SidebarPeek: View {
             }
         }
         // Moving from the edge onto the panel may report the exit before the entry.
-        .onChange(of: isEdgeHovered || isPanelHovered) { _, hovered in
+        .onChange(of: wantsShown) { _, wanted in
             pendingHide?.cancel()
-            if hovered {
+            if wanted {
                 setShown(true)
             } else {
                 pendingHide = Task {
@@ -175,7 +175,15 @@ private struct SidebarPeek: View {
         .onDisappear { pendingHide?.cancel() }
     }
 
+    /// A double click that renames a background tab selects it first, which hides the panel;
+    /// the rename brings it back and keeps it until the name is in.
+    private var wantsShown: Bool {
+        isEdgeHovered || isPanelHovered || browser.renamingTabID != nil
+    }
+
     private func setShown(_ shown: Bool) {
+        // A view removed from under the pointer never reports the exit.
+        if !shown { isPanelHovered = false }
         withAnimation(.snappy(duration: 0.2)) { isShown = shown }
     }
 }

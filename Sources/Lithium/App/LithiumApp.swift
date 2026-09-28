@@ -90,6 +90,11 @@ struct BrowserCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(browser.selectedTab?.url?.scheme?.hasPrefix("http") != true)
+            Button(browser.videoPopout.tab == nil ? "Pop Out Video" : "Put Video Back") {
+                if browser.videoPopout.tab == nil { browser.videoPopout.showSelected() } else { browser.videoPopout.returnToTab() }
+            }
+            .keyboardShortcut("p", modifiers: [.command, .option])
+            .disabled(browser.videoPopout.tab == nil && !browser.videoPopout.canShowSelected)
             Divider()
             Button("Zoom In") { zoom(by: 0.1) }
                 .keyboardShortcut("+")

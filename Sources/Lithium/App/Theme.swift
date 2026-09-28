@@ -53,6 +53,8 @@ enum Preference {
     static let sidebarColor = "sidebarColor"
     static let websiteFont = "dmSansOnWebsites"
     static let pdfSidebar = "pdfSidebar"
+    static let videoPopoutCorner = "videoPopoutCorner"
+    static let videoPopoutWidth = "videoPopoutWidth"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

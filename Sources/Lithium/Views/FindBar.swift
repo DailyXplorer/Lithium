@@ -31,6 +31,8 @@ struct FindBar: View {
             FindButton(icon: .close, help: "Done (Esc)") { find.hide() }
         }
         .font(Theme.font(13))
+        // On the page's background, not the sidebar color the window's ink is chosen for.
+        .foregroundStyle(Color.primary)
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .frame(height: 40)

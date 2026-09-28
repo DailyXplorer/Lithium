@@ -97,6 +97,11 @@ final class Tab: NSObject, Identifiable {
     }
 
     func load(_ url: URL) {
+        load(URLRequest(url: url))
+    }
+
+    func load(_ request: URLRequest) {
+        guard let url = request.url else { return }
         self.url = url
         isAsleep = false
         sleepingState = nil
@@ -107,7 +112,7 @@ final class Tab: NSObject, Identifiable {
             // The whole folder, so a document's relative images and links to its neighbours load.
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
-            webView.load(URLRequest(url: url))
+            webView.load(request)
         }
     }
 
@@ -397,7 +402,9 @@ final class Tab: NSObject, Identifiable {
             if favicon !== NSApp.applicationIconImage { favicon = NSApp.applicationIconImage }
             return
         }
-        guard let data = await Favicons.shared.favicon(for: webView), data != faviconData else { return }
+        // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
+        let host = url?.host()
+        guard let data = await Favicons.shared.favicon(for: webView), url?.host() == host, data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
         browser?.didLoadFavicon(data, in: self)
@@ -467,7 +474,8 @@ extension Tab: WKNavigationDelegate {
         setWebstoreBridge(ChromeWebStore.isStore(url))
 
         if isHome, !Browser.isHomeURL(url) {
-            browser?.newTab(url: url)
+            // The whole request, so a search form sent as POST keeps its query.
+            browser?.newTab(request: action.request)
             return (.cancel, preferences)
         }
 
@@ -487,12 +495,11 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        if !response.canShowMIMEType { return .download }
-        if let http = response.response as? HTTPURLResponse,
-           http.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true {
-            return .download
-        }
-        return .allow
+        let isAttachment = (response.response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
+        guard !response.canShowMIMEType || isAttachment else { return .allow }
+        // Only the page itself downloads: a frame in it (an ad) would drop files in Downloads without a click.
+        return response.isForMainFrame ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {

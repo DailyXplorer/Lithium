@@ -38,6 +38,11 @@ struct BrowserView: View {
                     .padding(.leading, browser.isSidebarVisible ? 0 : Layout.margin)
                     .padding([.trailing, .bottom], Layout.margin)
             }
+            .overlay(alignment: .leading) {
+                if !browser.isSidebarVisible {
+                    SidebarPeek(style: style, colorHex: colorHex)
+                }
+            }
         }
         .overlayPreferenceValue(AddressBarBounds.self) { anchor in
             GeometryReader { proxy in
@@ -136,23 +141,89 @@ final class WebContainerView: NSView {
     override func keyDown(with event: NSEvent) {}
 }
 
+/// With the sidebar hidden, the pointer on the window's left edge slides it out over the page.
+/// It slides back once the pointer leaves it or a tab is picked.
+private struct SidebarPeek: View {
+    let style: SidebarStyle
+    let colorHex: String
+    @Environment(Browser.self) private var browser
+    @State private var isEdgeHovered = false
+    @State private var isPanelHovered = false
+    @State private var isShown = false
+    @State private var pendingHide: Task<Void, Never>?
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Color.clear
+                .frame(width: Layout.margin)
+                .contentShape(Rectangle())
+                .onHover { isEdgeHovered = $0 }
+            if isShown {
+                SidebarView()
+                    .padding(.top, 8)
+                    .frame(width: Layout.sidebarWidth)
+                    .frame(maxHeight: .infinity)
+                    .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
+                    .padding([.leading, .bottom], Layout.margin)
+                    .onHover { isPanelHovered = $0 }
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        // Each event, not a combined flag: a rename left pending would otherwise hold the flag
+        // true, and pointing at the edge would no longer open the panel.
+        .onChange(of: isEdgeHovered) { update() }
+        .onChange(of: isPanelHovered) { update() }
+        .onChange(of: browser.renamingTabID) { update() }
+        .onChange(of: browser.selectedTabID) {
+            if browser.renamingTabID == nil { setShown(false) }
+        }
+        .onDisappear { pendingHide?.cancel() }
+    }
+
+    /// A double click that renames a background tab selects it first, which hides the panel;
+    /// the rename brings it back and keeps it until the name is in.
+    private func update() {
+        pendingHide?.cancel()
+        if isEdgeHovered || isPanelHovered || browser.renamingTabID != nil {
+            setShown(true)
+        } else {
+            // Moving from the edge onto the panel may report the exit before the entry.
+            pendingHide = Task {
+                try? await Task.sleep(for: .milliseconds(200))
+                if !Task.isCancelled { setShown(false) }
+            }
+        }
+    }
+
+    private func setShown(_ shown: Bool) {
+        // A view removed from under the pointer never reports the exit.
+        if !shown { isPanelHovered = false }
+        withAnimation(.snappy(duration: 0.2)) { isShown = shown }
+    }
+}
+
 private struct SidebarBackground: View {
     let style: SidebarStyle
     let color: Color
+    var blending: NSVisualEffectView.BlendingMode = .behindWindow
 
     var body: some View {
         switch style {
         case .solid: color
-        case .translucent: VisualEffectBackground()
+        case .translucent: VisualEffectBackground(blending: blending)
         }
     }
 }
 
 private struct VisualEffectBackground: NSViewRepresentable {
+    let blending: NSVisualEffectView.BlendingMode
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = .sidebar
-        view.blendingMode = .behindWindow
+        view.blendingMode = blending
         view.state = .followsWindowActiveState
         return view
     }

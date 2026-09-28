@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Network
 import class SwiftUI.NSHostingView
 import Testing
 import WebKit
@@ -68,6 +69,40 @@ struct BrowserTests {
             #expect(!second.isAsleep, "the selected tab was put to sleep")
             if second.isAsleep { break }
         }
+    }
+
+    /// From the home page, the next tab is the first one and the previous tab the last one.
+    @Test func adjacentTabFromHomeStartsAtTheEnds() {
+        // Other tests may leave a session behind, so the order is read rather than assumed.
+        let browser = Browser()
+        browser.newTab(url: URL(string: "data:text/html,one")!)
+        browser.newTab(url: URL(string: "data:text/html,two")!)
+        browser.newTabFocusingAddress()
+        browser.selectAdjacentTab(1)
+        #expect(browser.selectedTabID == browser.navigationOrder.first?.id)
+        browser.newTabFocusingAddress()
+        browser.selectAdjacentTab(-1)
+        #expect(browser.selectedTabID == browser.navigationOrder.last?.id)
+    }
+
+    /// A page downloads what it can't show; a frame inside it (an ad) never does.
+    /// Served over HTTP: WebKit itself never downloads a data: frame.
+    @Test func onlyThePageItselfDownloads() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<iframe src="/file"></iframe><iframe src="/attachment"></iframe>"#),
+            "/file": ("Content-Type: application/octet-stream", "Lithium"),
+            "/attachment": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let before = Downloads.shared.items.count
+        let page = browser.newTab(url: base)
+        #expect(await waitUntil(30) { loaded(page) })
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
+
+        browser.newTab(url: base.appending(path: "file"))
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
     }
 
     /// A tab that slept wakes on the page it showed, with its back history.
@@ -320,5 +355,32 @@ struct BrowserTests {
         proc_name(target, &name, 256)
         try #require(target > 0 && String(decoding: name.prefix { $0 != 0 }, as: UTF8.self) == "com.apple.WebKit.WebContent")
         kill(target, SIGKILL)
+    }
+}
+
+/// A tiny HTTP server on 127.0.0.1: each path answers with its headers and body, then closes.
+/// Outside the main actor: Network calls its handlers on a queue of its own.
+enum LocalHTTP {
+    static func serve(_ routes: [String: (headers: String, body: String)]) async throws -> (NWListener, URL) {
+        let listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
+                let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+                let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                let (headers, body) = routes[path] ?? ("Content-Type: text/plain", "")
+                let response = "HTTP/1.1 200 OK\r\n\(headers)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.start(queue: .global())
+        for _ in 0..<500 {
+            if let port = listener.port, listener.state == .ready {
+                return (listener, URL(string: "http://127.0.0.1:\(port.rawValue)/")!)
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        listener.cancel()
+        throw URLError(.cannotConnectToHost)
     }
 }

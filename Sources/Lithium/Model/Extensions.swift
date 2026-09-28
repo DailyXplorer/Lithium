@@ -128,12 +128,15 @@ final class Extensions: NSObject {
     }
 
     /// Downloads extension `id` from the Chrome Web Store and runs it, replacing an older version.
-    func install(id: String) async throws {
-        try await install(archive: try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id), id: id)
+    /// The package must ask for no more than the access the user `approved`.
+    func install(id: String, approved: ChromeWebStore.Access) async throws {
+        let package = try await ChromeWebStore.download(id)
+        try await install(archive: try ChromeWebStore.archive(fromPackage: package, id: id), id: id, approved: approved)
     }
 
-    /// Runs the extension in `archive` (a ZIP) as `id`, replacing an older version.
-    func install(archive: Data, id: String) async throws {
+    /// Runs the extension in `archive` (a ZIP) as `id`, replacing an older version. Every permission
+    /// it requests is granted, so with `approved` set, one asking for more is refused.
+    func install(archive: Data, id: String, approved: ChromeWebStore.Access? = nil) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let package = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
         try archive.write(to: package)
@@ -141,8 +144,15 @@ final class Extensions: NSObject {
         let staging = folder.appending(path: ".\(id)-\(UUID().uuidString)", directoryHint: .isDirectory)
         try await Self.unpack(package, into: staging)
         defer { try? FileManager.default.removeItem(at: staging) }
-        // A broken package is refused here, before anything changes.
+        // A broken package, or one asking for more than the user saw, is refused here, before anything changes.
         _ = try await WKWebExtension(resourceBaseURL: staging)
+        if let approved {
+            guard let data = try? Data(contentsOf: staging.appending(path: "manifest.json")),
+                  let manifest = try? JSONSerialization.jsonObject(with: data, options: .json5Allowed) as? [String: Any] else {
+                throw ChromeWebStore.PackageError.notAPackage
+            }
+            guard ChromeWebStore.Access(manifest: manifest).isCovered(by: approved) else { throw ChromeWebStore.PackageError.moreAccess }
+        }
 
         if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }
         try? FileManager.default.removeItem(at: files(id))

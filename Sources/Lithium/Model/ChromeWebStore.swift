@@ -44,13 +44,14 @@ enum ChromeWebStore {
     private static let session = URLSession(configuration: .ephemeral)
 
     enum PackageError: LocalizedError {
-        case unavailable, notAPackage, otherExtension
+        case unavailable, notAPackage, otherExtension, moreAccess
 
         var errorDescription: String? {
             switch self {
             case .unavailable: "The Chrome Web Store has no version of this extension for Lithium."
             case .notAPackage: "The download is not an extension package."
             case .otherExtension: "The download is a different extension than the one requested."
+            case .moreAccess: "The downloaded version asks for more access than you agreed to. Try adding it again."
             }
         }
     }
@@ -119,26 +120,47 @@ enum ChromeWebStore {
         return nil
     }
 
-    /// What an extension will be able to do, from its manifest, in the words Chrome uses.
-    static func warnings(for manifest: [String: Any]) -> [String] {
-        let permissions = manifest["permissions"] as? [String] ?? []
-        var patterns = (manifest["host_permissions"] as? [String] ?? []) + permissions.filter { $0.contains("://") || $0 == "<all_urls>" }
-        for script in manifest["content_scripts"] as? [[String: Any]] ?? [] {
-            patterns += script["matches"] as? [String] ?? []
-        }
-        var warnings: [String] = []
-        let hosts = patterns.map(host(of:))
-        if hosts.contains("*") {
-            warnings.append("Read and change all your data on all websites")
-        } else {
-            let sites = Array(Set(hosts.compactMap { $0 })).sorted()
-            if !sites.isEmpty {
-                let formatter = ListFormatter()
-                formatter.locale = Locale(identifier: "en")
-                warnings.append("Read and change your data on \(formatter.string(from: sites) ?? sites.joined(separator: ", "))")
+    /// What an extension's manifest lets it do, as far as Chrome warns about it.
+    struct Access {
+        var allSites = false
+        var sites: Set<String> = []
+        /// In manifest order, without repeats.
+        var permissions: [String] = []
+
+        init(manifest: [String: Any]) {
+            let declared = manifest["permissions"] as? [String] ?? []
+            var patterns = (manifest["host_permissions"] as? [String] ?? []) + declared.filter { $0.contains("://") || $0 == "<all_urls>" }
+            for script in manifest["content_scripts"] as? [[String: Any]] ?? [] {
+                patterns += script["matches"] as? [String] ?? []
+            }
+            let hosts = patterns.compactMap(ChromeWebStore.host(of:))
+            allSites = hosts.contains("*")
+            sites = allSites ? [] : Set(hosts)
+            for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
+                permissions.append(warning)
             }
         }
-        for warning in permissions.compactMap({ permissionWarnings[$0] }) where !warnings.contains(warning) {
+
+        /// Whether the user, having agreed to `approved`, already agreed to all of this.
+        func isCovered(by approved: Access) -> Bool {
+            (approved.allSites || (!allSites && sites.isSubset(of: approved.sites)))
+                && Set(permissions).isSubset(of: approved.permissions)
+        }
+    }
+
+    /// What an extension will be able to do, from its manifest, in the words Chrome uses.
+    static func warnings(for manifest: [String: Any]) -> [String] {
+        let access = Access(manifest: manifest)
+        var warnings: [String] = []
+        if access.allSites {
+            warnings.append("Read and change all your data on all websites")
+        } else if !access.sites.isEmpty {
+            let sites = access.sites.sorted()
+            let formatter = ListFormatter()
+            formatter.locale = Locale(identifier: "en")
+            warnings.append("Read and change your data on \(formatter.string(from: sites) ?? sites.joined(separator: ", "))")
+        }
+        for warning in access.permissions where !warnings.contains(warning) {
             warnings.append(warning)
         }
         return warnings
@@ -182,8 +204,8 @@ enum ChromeWebStore {
 final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "lithiumWebstore"
     private unowned let extensions: Extensions
-    /// Extensions the user agreed to add, waiting for the store's `completeInstall`.
-    private var approved: Set<String> = []
+    /// Extensions the user agreed to add, with the access they were shown, waiting for the store's `completeInstall`.
+    private var approved: [String: ChromeWebStore.Access] = [:]
 
     init(extensions: Extensions) {
         self.extensions = extensions
@@ -277,16 +299,16 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
         guard await present(alert, in: window) == .alertFirstButtonReturn else {
             return Reply(value: "user_cancelled", error: "User cancelled install")
         }
-        approved.insert(id)
+        approved[id] = ChromeWebStore.Access(manifest: manifest)
         return Reply(value: "")
     }
 
     private func completeInstall(_ id: String?, window: NSWindow?) async -> Reply {
-        guard let id, approved.remove(id) != nil else {
+        guard let id, let access = approved.removeValue(forKey: id) else {
             return Reply(error: "\(id ?? "") does not match a previous call to beginInstallWithManifest3")
         }
         do {
-            try await extensions.install(id: id)
+            try await extensions.install(id: id, approved: access)
             return Reply()
         } catch {
             let alert = NSAlert()

@@ -84,6 +84,23 @@ struct ChromeWebStoreTests {
         #expect(ChromeWebStore.warnings(for: ["permissions": ["storage"]]).isEmpty)
     }
 
+    /// The package installed may ask for what the user was shown, or less, never more.
+    @Test func accessIsCoveredOnlyByWhatWasShown() {
+        let shown = ChromeWebStore.Access(manifest: [
+            "permissions": ["storage", "tabs"],
+            "host_permissions": ["https://*.youtube.com/*", "https://sponsor.ajay.app/*"],
+        ])
+        let same = ChromeWebStore.Access(manifest: ["permissions": ["tabs"], "host_permissions": ["https://www.youtube.com/*"]])
+        let otherSite = ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*"]])
+        let everySite = ChromeWebStore.Access(manifest: ["permissions": ["<all_urls>"]])
+        let history = ChromeWebStore.Access(manifest: ["permissions": ["history"]])
+        #expect(same.isCovered(by: shown))
+        #expect(!otherSite.isCovered(by: shown))
+        #expect(!everySite.isCovered(by: shown))
+        #expect(!history.isCovered(by: shown))
+        #expect(otherSite.isCovered(by: everySite))
+    }
+
     /// The store page gets Chrome's user agent and `chrome.webstorePrivate`, answered by Lithium;
     /// installing needs the user's approval first, and no other site can reach the bridge.
     @Test func storePageTalksToLithiumAndNoOtherSiteDoes() async throws {

@@ -26,9 +26,6 @@ final class Tab: NSObject, Identifiable {
     /// The page's back and forward history (and scroll position) while the tab sleeps, so it
     /// wakes where it was left.
     @ObservationIgnored private var sleepingState: Any?
-    /// The address of a tab waking from its history, until its page commits. A page that can't
-    /// come back that way (a form's result, not in the cache) loads its address instead.
-    @ObservationIgnored private var wakingURL: URL?
     /// The tab whose page opened this one with script (`window.open`), as sign-in popups are.
     @ObservationIgnored weak var opener: Tab?
 
@@ -90,7 +87,6 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         isAsleep = false
         sleepingState = nil
-        wakingURL = nil
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -140,42 +136,25 @@ final class Tab: NSObject, Identifiable {
         isAsleep = false
         webView.interactionState = state
         // A state WebKit could not read leaves an empty page.
-        if webView.backForwardList.currentItem == nil { load(url) } else { wakingURL = url }
+        if webView.backForwardList.currentItem == nil { load(url) }
     }
 
     /// A tab that has been left alone for a while and is not busy (loading, playing sound,
     /// using the camera or microphone) can release its page. It loads again when selected,
-    /// with its history.
-    func canSleep(idleFor interval: TimeInterval) async -> Bool {
-        guard isQuiet(idleFor: interval) else { return false }
-        return await !isPlaying()
-    }
-
-    /// A page that hasn't answered within 3 seconds counts as silent: its process is stuck or
-    /// paged out, and its page is the one most worth releasing. Waiting on it would hold up
-    /// every other tab.
-    private func isPlaying() async -> Bool {
-        let webView = webView
-        return await withCheckedContinuation { continuation in
-            Task { @MainActor in
-                let answer = FirstAnswer(continuation)
-                Task { @MainActor in
-                    let state = await webView.requestMediaPlaybackState()
-                    answer.give(state == .playing)
-                }
-                Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(3))
-                    answer.give(false)
-                }
-            }
-        }
-    }
-
-    /// All of `canSleep` but the sound, which takes a round trip to the page's process.
-    func isQuiet(idleFor interval: TimeInterval) -> Bool {
+    /// with its history. All of it is known in the app, without asking the page's process,
+    /// which may be stuck, or slow to answer when memory is short.
+    func canSleep(idleFor interval: TimeInterval) -> Bool {
         !isAsleep && !isHome && url != nil && !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
             && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
+            && !isPlayingAudio
+    }
+
+    /// What the speaker icon of Safari's tabs shows. Private API: a WebKit without it counts
+    /// every page as playing, so none is cut off.
+    private var isPlayingAudio: Bool {
+        guard webView.responds(to: Selector(("_isPlayingAudio"))) else { return true }
+        return webView.value(forKey: "_isPlayingAudio") as? Bool ?? true
     }
 
     func sleep(configuration: WKWebViewConfiguration) {
@@ -315,17 +294,8 @@ final class Tab: NSObject, Identifiable {
 
     private func showError(_ error: Error, for url: URL?) {
         let error = error as NSError
-        // Whatever ended the wake (even a cancellation, like Back pressed meanwhile), it is over:
-        // a later failure is not its to answer.
-        let waking = wakingURL
-        wakingURL = nil
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
-        let wouldRepeat = error.domain == NSURLErrorDomain && Self.errorsALoadRepeats.contains(error.code)
-        if let waking, !wouldRepeat {
-            load(waking)
-            return
-        }
         failedURL = url
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
@@ -421,10 +391,6 @@ extension Tab: WKNavigationDelegate {
         if navigation !== errorNavigation { failedURL = nil }
     }
 
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        wakingURL = nil
-    }
-
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard failedURL == nil, !isHome else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
@@ -445,8 +411,6 @@ extension Tab: WKNavigationDelegate {
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let browser else { return }
-        // A crash is not a page that can't come back from history: the guard below handles it.
-        wakingURL = nil
         guard isHome || browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
             return
@@ -459,17 +423,6 @@ extension Tab: WKNavigationDelegate {
             webView.reload()
         }
     }
-
-    /// Connection and certificate failures, which loading the address again would only repeat.
-    private static let errorsALoadRepeats: Set<Int> = [
-        NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
-        NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
-        NSURLErrorInternationalRoamingOff, NSURLErrorDataNotAllowed,
-        NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateHasBadDate,
-        NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasUnknownRoot,
-        NSURLErrorServerCertificateNotYetValid, NSURLErrorClientCertificateRejected,
-        NSURLErrorClientCertificateRequired,
-    ]
 
     private static let crashedAgain = NSError(domain: "Lithium", code: 1, userInfo: [
         NSLocalizedDescriptionKey: "The page stopped working twice in a row. Reload to try again.",
@@ -638,20 +591,5 @@ extension Tab: WKWebExtensionTab {
 
     func goForward(for context: WKWebExtensionContext) async throws {
         webView.goForward()
-    }
-}
-
-/// Hands a continuation the first of several answers racing for it.
-@MainActor
-private final class FirstAnswer {
-    private var continuation: CheckedContinuation<Bool, Never>?
-
-    init(_ continuation: CheckedContinuation<Bool, Never>) {
-        self.continuation = continuation
-    }
-
-    func give(_ value: Bool) {
-        continuation?.resume(returning: value)
-        continuation = nil
     }
 }

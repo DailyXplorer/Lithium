@@ -49,7 +49,7 @@ struct BrowserTests {
         #expect(background.webView.title == "Background")
     }
 
-    /// Putting a tab to sleep waits on its page's process; a tab selected meanwhile stays awake.
+    /// Switching tabs quickly while tabs fall asleep every few milliseconds never puts the selected one to sleep.
     @Test func selectedTabNeverFallsAsleep() async throws {
         UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")
         defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
@@ -113,9 +113,9 @@ struct BrowserTests {
         let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
         #expect(await waitUntil(120) { loaded(background) && loaded(visible) })
 
-        await browser.relieveMemoryPressure(critical: false)
+        browser.relieveMemoryPressure(critical: false)
         #expect(!background.isAsleep, "a tab used a moment ago stays awake while memory is only low")
-        await browser.relieveMemoryPressure(critical: true)
+        browser.relieveMemoryPressure(critical: true)
         #expect(background.isAsleep)
         #expect(!visible.isAsleep)
     }

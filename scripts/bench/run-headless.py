@@ -52,6 +52,13 @@ try:
             env['LITHIUM_PERF_VARIANTS'] = 'webkit,previous,current' if round_index % 2 == 0 else 'current,previous,webkit'
             for name in ['page-font','farbling']:
                 (folder/(name+'-head.js')).write_bytes(subprocess.check_output(['git','show',f'HEAD:Sources/Lithium/Resources/Scripts/{name}.js'], cwd=root))
+            # HEAD's own web font: WOFF2 since it has one, the TTF before.
+            for font in ['DMSans.woff2', 'DMSans.ttf']:
+                try:
+                    (folder/'font-head.bin').write_bytes(subprocess.check_output(['git','show',f'HEAD:Sources/Lithium/Resources/Fonts/{font}'], cwd=root, stderr=subprocess.DEVNULL))
+                    break
+                except subprocess.CalledProcessError:
+                    continue
             command = ['nice','-n','15','swift','test','-c','release','-j','2','--no-parallel']
             if args.skip_build or round_index > 0:
                 command.append('--skip-build')

@@ -101,19 +101,15 @@ final class Browser {
     }
 
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
-    /// and its sleep, and two passes can't overlap.
-    private func sleepIdleTabs(idleFor interval: TimeInterval) {
-        for tab in tabs where tab.id != selectedTabID && tab.canSleep(idleFor: interval) && !isInPopupPair(tab) {
+    /// and its sleep, and two passes can't overlap. A page waiting on its popup window (a
+    /// sign-in or payment window) keeps its page for the popup to answer, unless memory is
+    /// critical. The popup itself sleeps like any tab once left alone, which ends the wait.
+    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingOpeners: Bool = true) {
+        tabs.forEach { $0.noteSound() }
+        let openers: Set<ObjectIdentifier> = sparingOpeners ? Set(tabs.compactMap { $0.opener.map { ObjectIdentifier($0) } }) : []
+        for tab in tabs where tab.id != selectedTabID && tab.canSleep(idleFor: interval) && !openers.contains(ObjectIdentifier(tab)) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
-    }
-
-    /// A popup window (a sign-in or payment window) and the page that opened it talk to
-    /// each other: while both are open and awake, neither sleeps, or messages between them
-    /// would go nowhere.
-    private func isInPopupPair(_ tab: Tab) -> Bool {
-        if let opener = tab.opener, !opener.isAsleep, tabs.contains(opener) { return true }
-        return tabs.contains { $0.opener === tab && !$0.isAsleep }
     }
 
     /// When macOS runs short of memory, Lithium gives some back before the system starts
@@ -134,7 +130,7 @@ final class Browser {
     /// memory runs low, and every one that can (not playing sound, recording or loading) when it
     /// is critical, like Firefox's tab unloading.
     func relieveMemoryPressure(critical: Bool) {
-        sleepIdleTabs(idleFor: critical ? 0 : min(Self.tabIdleInterval, Self.shortIdleInterval))
+        sleepIdleTabs(idleFor: critical ? 0 : min(Self.tabIdleInterval, Self.shortIdleInterval), sparingOpeners: !critical)
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.

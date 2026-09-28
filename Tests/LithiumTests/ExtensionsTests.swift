@@ -8,7 +8,7 @@ struct ExtensionsTests {
     private let id = "aabbccddeeffgghhiijjkkllmmnnoopp"
 
     /// A tiny Manifest V3 extension, zipped with its files at the root like a store package.
-    private func archive() throws -> Data {
+    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         let zip = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID()).zip")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
@@ -16,7 +16,7 @@ struct ExtensionsTests {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: zip)
         }
-        try Data(#"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#.utf8).write(to: source.appending(path: "manifest.json"))
+        try Data(manifest.utf8).write(to: source.appending(path: "manifest.json"))
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         ditto.arguments = ["-c", "-k", source.path, zip.path]
@@ -40,6 +40,24 @@ struct ExtensionsTests {
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "\(id)/manifest.json").path))
         let entries = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
         #expect(entries == ["\(id)", "\(id).zip", "installed.json"])
+    }
+
+    /// The store showed the user one manifest; a package asking for more is refused and nothing is kept.
+    @Test func aPackageAskingForMoreThanShownIsRefused() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        let shown = ChromeWebStore.Access(manifest: ["permissions": ["storage"]])
+        let greedy = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "host_permissions": ["<all_urls>"]}"#)
+
+        await #expect(throws: ChromeWebStore.PackageError.moreAccess) {
+            try await extensions.install(archive: greedy, id: id, approved: shown)
+        }
+        #expect(extensions.contexts[id] == nil)
+        #expect(extensions.installed.isEmpty)
+
+        try await extensions.install(archive: try archive(), id: id, approved: shown)
+        #expect(extensions.contexts[id] != nil)
     }
 
     /// Earlier builds only kept the ZIP archive: the next launch unpacks it and loads the files,

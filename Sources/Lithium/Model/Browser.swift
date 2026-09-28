@@ -274,6 +274,11 @@ final class Browser {
         return tab
     }
 
+    /// A navigation the home page hands off, with its method and form data.
+    func newTab(request: URLRequest) {
+        newTab(configuration: makeConfiguration(for: request.url)).load(request)
+    }
+
     func newTabFocusingAddress() {
         find.hide()
         // Left for the address bar: it counts as used until now.
@@ -390,7 +395,11 @@ final class Browser {
     func selectAdjacentTab(_ offset: Int) {
         let order = navigationOrder
         guard !order.isEmpty else { return }
-        let current = order.firstIndex { $0.id == selectedTabID } ?? 0
+        // From the home page, forward starts at the first item and backward at the last.
+        guard let current = order.firstIndex(where: { $0.id == selectedTabID }) else {
+            select(offset > 0 ? order[0] : order[order.count - 1])
+            return
+        }
         select(order[(current + offset + order.count) % order.count])
     }
 

@@ -306,7 +306,8 @@ struct CapturePreview: View {
             draft = nil
         }
         .onChange(of: toolName) {
-            // Changing tools mid-drag removes the drawing surface, which cancels the drag without ending it.
+            // Each tool has its own drawing surface: changing tools mid-drag removes the surface, which
+            // cancels the drag without ending it, and the next surface only takes drags that start on it.
             draft = nil
         }
     }
@@ -348,6 +349,7 @@ struct CapturePreview: View {
                         .contentShape(Rectangle())
                         .pointerStyle(.rectSelection)
                         .gesture(drawing(tool, on: frame, scale: scale))
+                        .id(tool)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)

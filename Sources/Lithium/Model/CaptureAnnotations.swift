@@ -51,6 +51,9 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
 
 /// A mark drawn over a screenshot, in the screenshot's points (top-left origin).
 struct Annotation: Equatable {
+    /// The highlighter's one color, a fluorescent yellow.
+    static let highlightHex = "#FFFF00"
+
     let tool: AnnotationTool
     let colorHex: String
     let lineWidth: CGFloat
@@ -127,7 +130,7 @@ struct Annotation: Equatable {
             context.fill(path, with: .color(color))
             context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: lineWidth / 2, lineJoin: .round))
         case .highlighter:
-            context.opacity = 0.55
+            context.opacity = 0.7
             context.stroke(path, with: .color(color), style: stroke)
         case .pen, .rectangle, .ellipse:
             context.stroke(path, with: .color(color), style: stroke)

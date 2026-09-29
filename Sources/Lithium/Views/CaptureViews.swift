@@ -223,7 +223,6 @@ struct CapturePreview: View {
     @AppStorage(Preference.captureSidebar) private var showsSidebar = false
     @AppStorage(Preference.captureTool) private var toolName = ""
     @AppStorage(Preference.captureInk) private var ink = "#FF3B30"
-    @AppStorage(Preference.captureMarker) private var marker = "#FFD60A"
     @State private var rendered: CGImage?
     @State private var annotations: [Annotation] = []
     @State private var past: [[Annotation]] = []
@@ -245,8 +244,8 @@ struct CapturePreview: View {
 
     private var tool: AnnotationTool? { AnnotationTool(rawValue: toolName) }
 
-    /// Highlights and ink remember their own colors, so a yellow highlight doesn't turn arrows yellow.
-    private var color: String { tool == .highlighter ? marker : ink }
+    /// The highlighter only comes in fluorescent yellow; the other tools draw in the chosen ink.
+    private var color: String { tool == .highlighter ? Annotation.highlightHex : ink }
 
     private var style: CaptureStyle {
         let fallback = CaptureBackdrop.color(Self.colors[1].key)
@@ -404,14 +403,16 @@ struct CapturePreview: View {
             Divider().frame(height: 18)
             HStack(spacing: 0) {
                 ForEach(Self.inks, id: \.key) { hex, name in
-                    Button { setColor(hex) } label: {
-                        InkSwatch(hex: hex, isSelected: color == hex)
+                    Button { ink = hex } label: {
+                        InkSwatch(hex: hex, isSelected: tool != .highlighter && ink == hex)
                     }
                     .buttonStyle(.plain)
+                    .disabled(tool == .highlighter)
                     .help(name)
                     .accessibilityLabel(name)
                 }
             }
+            .opacity(tool == .highlighter ? 0.35 : 1)
             Divider().frame(height: 18)
             HStack(spacing: 2) {
                 ToolButton(icon: .undo) { undo() }
@@ -430,10 +431,6 @@ struct CapturePreview: View {
                     .accessibilityLabel("Erase All")
             }
         }
-    }
-
-    private func setColor(_ hex: String) {
-        if tool == .highlighter { marker = hex } else { ink = hex }
     }
 
     private func change(_ update: (inout [Annotation]) -> Void) {

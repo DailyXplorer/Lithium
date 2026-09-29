@@ -237,5 +237,4 @@ extension Preference {
     static let captureSidebar = "captureSidebar"
     static let captureTool = "captureTool"
     static let captureInk = "captureInk"
-    static let captureMarker = "captureMarker"
 }

@@ -64,7 +64,7 @@ struct CaptureCompositionTests {
 
     @Test func highlightsKeepDarkPixelsDark() throws {
         let black = Shot(content: .area(Self.image(red: 0, blue: 0)), scale: 2, wallpaper: nil)
-        let highlight = Annotation(tool: .highlighter, colorHex: "#FFD60A", lineWidth: 16, points: [CGPoint(x: 10, y: 25), CGPoint(x: 90, y: 25)])
+        let highlight = Annotation(tool: .highlighter, colorHex: Annotation.highlightHex, lineWidth: 16, points: [CGPoint(x: 10, y: 25), CGPoint(x: 90, y: 25)])
         let image = try #require(CaptureComposition.render(black, CaptureStyle(backdrop: .none, showsBadge: false, annotations: [highlight])))
         #expect(hex(image, x: 100, y: 50) == "#000000")
     }

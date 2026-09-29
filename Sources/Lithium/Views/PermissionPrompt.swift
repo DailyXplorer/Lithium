@@ -11,7 +11,7 @@ struct PermissionPrompt: View {
                 ForEach(request.kinds) { Icon($0.icon, size: 16) }
             }
             .foregroundStyle(Color.accentColor)
-            (Text(request.host).fontWeight(.semibold) + Text(" wants to use your \(Self.list(request.kinds))"))
+            (Text(request.host).fontWeight(.semibold) + Text(Self.asks(request.kinds)))
                 .lineLimit(1)
             Text("Remembered in Settings")
                 .font(Theme.font(12))
@@ -29,7 +29,8 @@ struct PermissionPrompt: View {
         .overlay(alignment: .bottom) { Rectangle().fill(.primary.opacity(0.08)).frame(height: 1) }
     }
 
-    private static func list(_ kinds: [PermissionKind]) -> String {
-        kinds.map { $0.label.lowercased() }.formatted(.list(type: .and))
+    private static func asks(_ kinds: [PermissionKind]) -> String {
+        if kinds == [.downloads] { return " wants to download a file" }
+        return " wants to use your " + kinds.map { $0.label.lowercased() }.formatted(.list(type: .and))
     }
 }

@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 enum PermissionKind: String, Codable, CaseIterable, Identifiable {
-    case camera, microphone, location
+    case camera, microphone, location, downloads
     var id: Self { self }
 
     var label: String {
@@ -10,6 +10,7 @@ enum PermissionKind: String, Codable, CaseIterable, Identifiable {
         case .camera: "Camera"
         case .microphone: "Microphone"
         case .location: "Location"
+        case .downloads: "Downloads"
         }
     }
 
@@ -18,6 +19,7 @@ enum PermissionKind: String, Codable, CaseIterable, Identifiable {
         case .camera: .camera
         case .microphone: .microphone
         case .location: .location
+        case .downloads: .download
         }
     }
 }
@@ -34,14 +36,14 @@ struct PermissionRequest: Identifiable, Equatable {
     let kinds: [PermissionKind]
 }
 
-/// Per-site answers to camera, microphone and location prompts. Answers are remembered
+/// Per-site answers to camera, microphone, location and download prompts. Answers are remembered
 /// until the user changes them in Settings; pending prompts wait for the user in the tab.
 @MainActor
 @Observable
 final class SitePermissions {
     private(set) var decisions: [String: [PermissionKind: PermissionDecision]]
     private(set) var pending: [PermissionRequest] = []
-    @ObservationIgnored private var waiting: [PermissionRequest.ID: CheckedContinuation<Bool, Never>] = [:]
+    @ObservationIgnored private var waiting: [PermissionRequest.ID: [CheckedContinuation<Bool, Never>]] = [:]
 
     private static let storageKey = "sitePermissions"
 
@@ -61,9 +63,13 @@ final class SitePermissions {
         if known.contains(.deny) { return false }
         if known.allSatisfy({ $0 == .allow }) { return true }
 
+        // The same question again (a frame retrying its download) waits on the prompt already shown.
+        if let shown = pending.first(where: { $0.tabID == tabID && $0.host == host && $0.kinds == kinds }) {
+            return await withCheckedContinuation { waiting[shown.id, default: []].append($0) }
+        }
         let request = PermissionRequest(tabID: tabID, host: host, kinds: kinds)
         return await withCheckedContinuation { continuation in
-            waiting[request.id] = continuation
+            waiting[request.id] = [continuation]
             pending.append(request)
         }
     }
@@ -89,7 +95,7 @@ final class SitePermissions {
 
     private func resolve(_ id: PermissionRequest.ID, _ allow: Bool) {
         pending.removeAll { $0.id == id }
-        waiting.removeValue(forKey: id)?.resume(returning: allow)
+        waiting.removeValue(forKey: id)?.forEach { $0.resume(returning: allow) }
     }
 
     private func save() {

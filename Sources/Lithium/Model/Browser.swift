@@ -210,29 +210,8 @@ final class Browser {
             MainActor.assumeIsolated { Self.endEditingIfOutside(event) }
             return event
         }
-        let input = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) { [weak self] event in
-            MainActor.assumeIsolated { self?.noteUserInput(event) }
-            return event
-        }
-        eventMonitors = [escape, click, input].compactMap { $0 }
+        eventMonitors = [escape, click].compactMap { $0 }
     }
-
-    /// A click on the selected page, or a key that presses a button in it, lets its frames
-    /// download for a moment.
-    private func noteUserInput(_ event: NSEvent) {
-        let isKey = event.type == .keyDown
-        // Return and Space press the focused button; typing, arrows and menu shortcuts don't.
-        if isKey {
-            guard Self.buttonKeys.contains(event.keyCode), !event.isARepeat,
-                  event.modifierFlags.isDisjoint(with: [.command, .control, .option]) else { return }
-        }
-        guard let tab = selectedTab, !tab.isAsleep, let window = event.window, window === tab.webView.window else { return }
-        let target = isKey ? window.firstResponder as? NSView : window.contentView?.hitTest(event.locationInWindow)
-        if target?.isDescendant(of: tab.webView) == true { tab.noteUserInput(isKey: isKey) }
-    }
-
-    /// Return, Enter on the keypad and Space.
-    private static let buttonKeys: Set<UInt16> = [36, 76, 49]
 
     /// Ends text editing when a click lands outside the field being edited. The click then goes
     /// on as usual; the field commits on its own (a tab rename keeps the new name).

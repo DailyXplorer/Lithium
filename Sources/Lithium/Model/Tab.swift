@@ -34,8 +34,6 @@ final class Tab: NSObject, Identifiable {
     /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
-    /// When the user last clicked in or typed on the page, which lets a frame download right after.
-    @ObservationIgnored private var lastUserInput = Date.distantPast
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -180,18 +178,6 @@ final class Tab: NSObject, Identifiable {
             window.makeFirstResponder(reader.view)
         }
     }
-
-    /// A click, or a key pressing a button, on the page itself (Browser watches the window's
-    /// events). A key doesn't extend a moment already running: Space scrolling the page would
-    /// otherwise keep it open.
-    func noteUserInput(isKey: Bool = false) {
-        if isKey, Date().timeIntervalSince(lastUserInput) < Self.frameDownloadWindow { return }
-        lastUserInput = Date()
-    }
-
-    /// Long enough for a server to answer a Download button, short enough that an ad can't wait
-    /// for any click.
-    private static let frameDownloadWindow: TimeInterval = 10
 
     func markActive() {
         noteSound()
@@ -507,10 +493,11 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
-        // A frame downloads only right after the user acted on the page, as when a Download button
-        // points a hidden frame at the file: on its own, a frame (an ad) would drop files in Downloads.
-        let userActed = Date().timeIntervalSince(lastUserInput) < Self.frameDownloadWindow
-        return response.isForMainFrame || userActed ? .download : .cancel
+        if response.isForMainFrame { return .download }
+        // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
+        // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
+        guard let browser, let host = webView.url?.host(), !host.isEmpty else { return .cancel }
+        return await browser.permissions.request([.downloads], host: host, tabID: id) ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -534,8 +521,6 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        // The click was on the page before: the new page's frames haven't earned a download.
-        lastUserInput = .distantPast
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }

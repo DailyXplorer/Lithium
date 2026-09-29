@@ -55,34 +55,50 @@ struct Annotation: Equatable {
     let colorHex: String
     let lineWidth: CGFloat
     var points: [CGPoint]
+    /// While Shift is held in a freehand stroke, the index of the point its straight segment starts from.
+    var straightFrom: Int?
 
     /// Adds where the drag is now. With `constrained` (Shift held), lines and arrows snap to
-    /// multiples of 45° and shapes become squares and circles.
+    /// multiples of 45° and shapes become squares and circles. A freehand stroke goes straight
+    /// from where it was when Shift went down, keeping what was drawn before.
     mutating func extend(to point: CGPoint, constrained: Bool) {
         guard let start = points.first else {
             points = [point]
             return
         }
-        if tool.isFreehand && !constrained {
-            if let last = points.last, hypot(point.x - last.x, point.y - last.y) < lineWidth / 8 { return }
-            points.append(point)
+        if tool.isFreehand {
+            if constrained {
+                let anchor = straightFrom ?? points.count - 1
+                straightFrom = anchor
+                points = Array(points[...anchor]) + [Self.snapped(points[anchor], point)]
+            } else {
+                straightFrom = nil
+                if let last = points.last, hypot(point.x - last.x, point.y - last.y) < lineWidth / 8 { return }
+                points.append(point)
+            }
             return
         }
         var end = point
         if constrained {
-            let dx = point.x - start.x, dy = point.y - start.y
             switch tool {
             case .rectangle, .ellipse:
+                let dx = point.x - start.x, dy = point.y - start.y
                 let side = max(abs(dx), abs(dy))
                 end = CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
             case .pen, .highlighter, .arrow:
-                let step = CGFloat.pi / 4
-                let angle = (atan2(dy, dx) / step).rounded() * step
-                let length = hypot(dx, dy)
-                end = CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
+                end = Self.snapped(start, point)
             }
         }
         points = [start, end]
+    }
+
+    /// `end`, moved around `start` to the nearest multiple of 45°.
+    private static func snapped(_ start: CGPoint, _ end: CGPoint) -> CGPoint {
+        let dx = end.x - start.x, dy = end.y - start.y
+        let step = CGFloat.pi / 4
+        let angle = (atan2(dy, dx) / step).rounded() * step
+        let length = hypot(dx, dy)
+        return CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
     }
 
     /// A click with a freehand tool leaves a dot; shapes and arrows need some size to be kept.

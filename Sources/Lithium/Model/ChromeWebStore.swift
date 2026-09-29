@@ -135,21 +135,38 @@ enum ChromeWebStore {
         /// (`cookies`, `scripting`), though every one asked for is granted.
         private var apiPermissions: Set<String> = []
 
+        /// Lithium grants every site pattern WebKit finds in the manifest, optional ones and the
+        /// sites allowed to message the extension (`externally_connectable`) included, so all of them
+        /// are shown and compared, though Chrome warns about fewer.
         init(manifest: [String: Any]) {
-            let declared = manifest["permissions"] as? [String] ?? []
-            var patterns = (manifest["host_permissions"] as? [String] ?? []) + declared.filter { $0.contains("://") || $0 == "<all_urls>" }
+            let declared = (manifest["permissions"] as? [String] ?? []) + (manifest["optional_permissions"] as? [String] ?? [])
+            var patterns = (manifest["host_permissions"] as? [String] ?? [])
+                + (manifest["optional_host_permissions"] as? [String] ?? [])
+                + declared.filter(Self.isPattern)
             for script in manifest["content_scripts"] as? [[String: Any]] ?? [] {
                 patterns += script["matches"] as? [String] ?? []
             }
+            patterns += (manifest["externally_connectable"] as? [String: Any])?["matches"] as? [String] ?? []
+            self.init(permissions: declared.filter { !Self.isPattern($0) }, patterns: patterns)
             let hosts = patterns.compactMap(ChromeWebStore.host(of:))
             allSites = hosts.contains("*")
             sites = allSites ? [] : Set(hosts)
-            self.patterns = Set(patterns.compactMap(SitePattern.init))
-            unreadPatterns = Set(patterns.filter { SitePattern($0) == nil })
-            apiPermissions = Set(declared.filter { !$0.contains("://") && $0 != "<all_urls>" })
-            for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
+            // Optional API permissions aren't granted at install: the user is asked when the extension wants them.
+            let required = manifest["permissions"] as? [String] ?? []
+            for warning in required.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
                 permissions.append(warning)
             }
+        }
+
+        /// What an extension will be granted, as WebKit reads it from the package, for comparing only.
+        init(permissions: [String], patterns: [String]) {
+            self.patterns = Set(patterns.compactMap(SitePattern.init))
+            unreadPatterns = Set(patterns.filter { SitePattern($0) == nil })
+            apiPermissions = Set(permissions)
+        }
+
+        private static func isPattern(_ permission: String) -> Bool {
+            permission.contains("://") || permission == "<all_urls>"
         }
 
         /// Whether the user, having agreed to `approved`, already agreed to all of this.

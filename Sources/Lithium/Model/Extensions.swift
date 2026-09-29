@@ -145,13 +145,21 @@ final class Extensions: NSObject {
         try await Self.unpack(package, into: staging)
         defer { try? FileManager.default.removeItem(at: staging) }
         // A broken package, or one asking for more than the user saw, is refused here, before anything changes.
-        _ = try await WKWebExtension(resourceBaseURL: staging)
+        let staged = try await WKWebExtension(resourceBaseURL: staging)
         if let approved {
             guard let data = try? Data(contentsOf: staging.appending(path: "manifest.json")),
                   let manifest = try? JSONSerialization.jsonObject(with: data, options: .json5Allowed) as? [String: Any] else {
                 throw ChromeWebStore.PackageError.notAPackage
             }
-            guard ChromeWebStore.Access(manifest: manifest).isCovered(by: approved) else { throw ChromeWebStore.PackageError.moreAccess }
+            // What `activate` grants is what WebKit reads from the package, so that is checked too,
+            // in case it finds access the manifest's reading here misses.
+            let granted = ChromeWebStore.Access(
+                permissions: staged.requestedPermissions.map(\.rawValue),
+                patterns: staged.allRequestedMatchPatterns.map(\.string)
+            )
+            guard ChromeWebStore.Access(manifest: manifest).isCovered(by: approved), granted.isCovered(by: approved) else {
+                throw ChromeWebStore.PackageError.moreAccess
+            }
         }
 
         if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }

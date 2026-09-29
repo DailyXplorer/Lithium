@@ -119,6 +119,22 @@ struct ChromeWebStoreTests {
         #expect(!access("https://example.com/*").isCovered(by: access("http://*/*")))
     }
 
+    /// Sites allowed to message the extension, and optional site access, are granted like the rest,
+    /// so they are shown and checked like the rest.
+    @Test func messagingAndOptionalSitesAreShownAndChecked() {
+        let shown = ChromeWebStore.Access(manifest: ["permissions": ["storage"]])
+        let messaging = ChromeWebStore.Access(manifest: ["permissions": ["storage"], "externally_connectable": ["matches": ["https://example.com/*"]]])
+        let optional = ChromeWebStore.Access(manifest: ["permissions": ["storage"], "optional_host_permissions": ["https://example.com/*"]])
+        #expect(!messaging.isCovered(by: shown))
+        #expect(!optional.isCovered(by: shown))
+        #expect(messaging.isCovered(by: messaging))
+        #expect(messaging.sites == ["example.com"])
+
+        let granted = ChromeWebStore.Access(permissions: ["storage"], patterns: ["https://example.com/*"])
+        #expect(!granted.isCovered(by: shown))
+        #expect(granted.isCovered(by: optional))
+    }
+
     /// Local files and patterns that can't be read show no site, but are granted all the same.
     @Test func accessToLocalFilesIsCoveredOnlyWhenShown() {
         let shown = ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*"]])

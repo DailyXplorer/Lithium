@@ -116,24 +116,30 @@ enum CorrectionText {
     /// plan", measured).
     private static let negationWords: Set<String> = ["pas", "jamais", "rien", "aucun", "aucune", "not", "never", "nothing"]
 
+    /// Words that end a French negation but also mean something else ("plus tard", "une
+    /// personne"): negations only when the answer also adds or drops a "ne".
+    private static let negationEnds: Set<String> = ["plus", "personne", "guère", "point", "ni"]
+
     /// Whether the answer adds or removes a negation word, rather than fix one: a misspelled "pa"
     /// or "jamias", a "pas" typed twice, "can not" written "cannot". Compares the words that go
     /// with the words that come, wherever they are: the word-level edits don't pair them up.
     private static func turnsNegation(from original: String, to answer: String) -> Bool {
-        let old = words(original)
+        let old = negationCheckWords(original)
+        let new = negationCheckWords(answer)
         var gone = old
         var come: [String] = []
-        for word in words(answer) {
+        for word in new {
             if let index = gone.firstIndex(of: word) { gone.remove(at: index) } else { come.append(word) }
         }
+        let ne: Set<String> = ["ne", "n"]
+        let negations = old.filter(ne.contains).count == new.filter(ne.contains).count ? negationWords : negationWords.union(negationEnds)
         var typos = gone
-        for word in come where negationWords.contains(word) {
+        for word in come where negations.contains(word) {
             guard let index = typos.firstIndex(where: { close($0, word) }) else { return true }
             typos.remove(at: index)
         }
-        let typedTwice = Set(zip(old, old.dropFirst()).filter { $0 == $1 }.map(\.0))
         return gone.contains { word in
-            negationWords.contains(word) && !typedTwice.contains(word) && !come.contains { close($0, word) }
+            negations.contains(word) && !come.contains { close($0, word) }
         }
     }
 
@@ -145,8 +151,24 @@ enum CorrectionText {
         return min(a.count, b.count) >= 3 && (a.hasSuffix(b) || b.hasSuffix(a))
     }
 
-    private static func words(_ text: String) -> [String] {
-        text.lowercased().split { !$0.isLetter }.map(String.init)
+    /// The words of `text` with a word typed twice kept once, and negations cut out of the words
+    /// they're joined to: "don't" is "do" and "not", "cannot" is "can" and "not", "n'a" is "n"
+    /// and "a".
+    private static func negationCheckWords(_ text: String) -> [String] {
+        let tokens = text.lowercased().replacingOccurrences(of: "’", with: "'").split { !$0.isLetter && $0 != "'" }
+        var words: [String] = []
+        for token in tokens.map(String.init) {
+            let parts: [String]
+            if token == "cannot" {
+                parts = ["can", "not"]
+            } else if token.hasSuffix("n't") {
+                parts = [String(token.dropLast(3)), "not"]
+            } else {
+                parts = token.split(separator: "'").map(String.init)
+            }
+            for part in parts where !part.isEmpty && part != words.last { words.append(part) }
+        }
+        return words
     }
 
     /// Characters to change to turn one into the other (Levenshtein), so a fixed word counts for

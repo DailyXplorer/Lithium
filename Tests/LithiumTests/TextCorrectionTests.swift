@@ -67,6 +67,11 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("La boîte n'était pas abîmée.", for: "La boîte étais abîmer.") == nil)
         #expect(CorrectionText.accept("Il n'a pas vu le message ce matin.", for: "Il a vu le message ce matin.") == nil)
         #expect(CorrectionText.accept("Je veux venir avec toi demain.", for: "Je veux pas venir avec toi demain.") == nil)
+        #expect(CorrectionText.accept("Je veux venir demain avec les autres collègues.", for: "Je veux pas pas venir demain avec les autres collègues.") == nil)
+        #expect(CorrectionText.accept("I don't think they're ready for the launch.", for: "I think they're ready for the launch.") == nil)
+        #expect(CorrectionText.accept("I think they're ready for the launch.", for: "I don’t think they're ready for the launch.") == nil)
+        #expect(CorrectionText.accept("Il ne vient plus nous voir le dimanche avec les enfants.", for: "Il vient nous voir le dimanche avec les enfants.") == nil)
+        #expect(CorrectionText.accept("Il ne connaît personne dans cette ville depuis son arrivée.", for: "Il connaît dans cette ville depuis son arrivée.") == nil)
     }
 
     @Test func acceptsFixesOfTheNegationWordItself() {
@@ -75,6 +80,8 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("On n'a rien reçu de leur part.", for: "On a rein reçu de leur part.") == "On n'a rien reçu de leur part.")
         #expect(CorrectionText.accept("Je ne veux pas venir demain.", for: "Je veux pas pas venir demain.") == "Je ne veux pas venir demain.")
         #expect(CorrectionText.accept("I cannot come tomorrow.", for: "I can not come tomorrow.") == "I cannot come tomorrow.")
+        #expect(CorrectionText.accept("I don't know what they meant by that.", for: "I do not know what they meant by that.") == "I don't know what they meant by that.")
+        #expect(CorrectionText.accept("Il ne vient plus nous voir le dimanche.", for: "Il vient plu nous voir le dimanche.") == "Il ne vient plus nous voir le dimanche.")
     }
 
     @Test func piecesJoinBackIntoTheTextAndSkipLinesWithoutLetters() {

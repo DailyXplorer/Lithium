@@ -40,11 +40,15 @@ struct TranslationPanel: View {
                 HStack {
                     Text("Translated on this Mac.").font(Theme.font(11)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Copy") {
+                    Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(translation, forType: .string)
+                    } label: {
+                        Icon(.copy, size: 13)
                     }
-                    .controlSize(.small)
+                    .buttonStyle(.borderless)
+                    .help("Copy")
+                    .accessibilityLabel("Copy")
                 }
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

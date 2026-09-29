@@ -32,12 +32,13 @@ private struct ExtensionsList: View {
     var body: some View {
         let extensions = browser.extensions
         let _ = extensions.actionsRevision
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Extensions")
-                .font(Theme.font(15, .semibold))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-            Divider()
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Extensions").font(Theme.font(15, .semibold))
+                if let host = Privacy.siteHost(tab?.url) {
+                    Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
+                }
+            }
             VStack(spacing: 2) {
                 ForEach(extensions.installed.filter(\.isEnabled)) { entry in
                     if let action = extensions.contexts[entry.id]?.action(for: tab) {
@@ -45,15 +46,16 @@ private struct ExtensionsList: View {
                     }
                 }
             }
-            .padding(6)
+            .padding(.horizontal, -8)
             Divider()
             Button("Manage Extensions") { browser.openSettings(section: "extensions") }
                 .buttonStyle(.plain)
+                .font(Theme.font(12))
                 .foregroundStyle(Color.accentColor)
-                .padding(12)
         }
         .font(Theme.font(13))
-        .frame(width: 280)
+        .padding(16)
+        .frame(width: 300)
     }
 }
 

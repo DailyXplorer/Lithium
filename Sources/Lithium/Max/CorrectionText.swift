@@ -107,17 +107,46 @@ enum CorrectionText {
             total + distance(original.utf16Slice(edit.from, edit.to) ?? "", edit.text)
         }
         guard changed * 3 <= max(letters, 9) else { return nil }
-        guard negations(in: answer) == negations(in: original) else { return nil }
+        guard !turnsNegation(from: original, to: answer) else { return nil }
         return answer
     }
 
     /// Words that make a sentence negative. Told to add the "ne" French negations miss, the model
     /// also made affirmative sentences negative ("C'est un bon plan" became "Ce n'est pas un bon
-    /// plan", measured), so an answer must keep as many as the text.
+    /// plan", measured).
     private static let negationWords: Set<String> = ["pas", "jamais", "rien", "aucun", "aucune", "not", "never", "nothing"]
 
-    private static func negations(in text: String) -> Int {
-        text.lowercased().split { !$0.isLetter }.filter { negationWords.contains(String($0)) }.count
+    /// Whether the answer adds or removes a negation word, rather than fix one: a misspelled "pa"
+    /// or "jamias", a "pas" typed twice, "can not" written "cannot". Compares the words that go
+    /// with the words that come, wherever they are: the word-level edits don't pair them up.
+    private static func turnsNegation(from original: String, to answer: String) -> Bool {
+        let old = words(original)
+        var gone = old
+        var come: [String] = []
+        for word in words(answer) {
+            if let index = gone.firstIndex(of: word) { gone.remove(at: index) } else { come.append(word) }
+        }
+        var typos = gone
+        for word in come where negationWords.contains(word) {
+            guard let index = typos.firstIndex(where: { close($0, word) }) else { return true }
+            typos.remove(at: index)
+        }
+        let typedTwice = Set(zip(old, old.dropFirst()).filter { $0 == $1 }.map(\.0))
+        return gone.contains { word in
+            negationWords.contains(word) && !typedTwice.contains(word) && !come.contains { close($0, word) }
+        }
+    }
+
+    /// The same word with a typo: one letter wrong, letters swapped, or written together with the
+    /// word before it.
+    private static func close(_ a: String, _ b: String) -> Bool {
+        if distance(a, b) <= 1 && min(a.count, b.count) >= 2 { return true }
+        if a.count == b.count && a.sorted() == b.sorted() { return true }
+        return min(a.count, b.count) >= 3 && (a.hasSuffix(b) || b.hasSuffix(a))
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased().split { !$0.isLetter }.map(String.init)
     }
 
     /// Characters to change to turn one into the other (Levenshtein), so a fixed word counts for

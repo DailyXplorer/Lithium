@@ -65,6 +65,16 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("On n'a rien reçu.", for: "On a rien reçu.") == "On n'a rien reçu.")
         #expect(CorrectionText.accept("C'est un bon plan, mais il faudrait ne pas s'en occuper.", for: "Ces un bon plan, mais il faudrait sans occuper.") == nil)
         #expect(CorrectionText.accept("La boîte n'était pas abîmée.", for: "La boîte étais abîmer.") == nil)
+        #expect(CorrectionText.accept("Il n'a pas vu le message ce matin.", for: "Il a vu le message ce matin.") == nil)
+        #expect(CorrectionText.accept("Je veux venir avec toi demain.", for: "Je veux pas venir avec toi demain.") == nil)
+    }
+
+    @Test func acceptsFixesOfTheNegationWordItself() {
+        #expect(CorrectionText.accept("Je ne sais pas s'il viendra demain avec les autres collègues.", for: "Je sais pa si il viendra demain avec les autres collègues.") == "Je ne sais pas s'il viendra demain avec les autres collègues.")
+        #expect(CorrectionText.accept("Je n'ai jamais vu ça avant.", for: "J'ai jamias vu ça avant.") == "Je n'ai jamais vu ça avant.")
+        #expect(CorrectionText.accept("On n'a rien reçu de leur part.", for: "On a rein reçu de leur part.") == "On n'a rien reçu de leur part.")
+        #expect(CorrectionText.accept("Je ne veux pas venir demain.", for: "Je veux pas pas venir demain.") == "Je ne veux pas venir demain.")
+        #expect(CorrectionText.accept("I cannot come tomorrow.", for: "I can not come tomorrow.") == "I cannot come tomorrow.")
     }
 
     @Test func piecesJoinBackIntoTheTextAndSkipLinesWithoutLetters() {

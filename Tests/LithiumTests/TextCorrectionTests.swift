@@ -95,11 +95,17 @@ struct TextCorrectionPageTests {
         "Je te remerci pour les document.": "Je te remercie pour les documents.",
         "Est ce que tu vien mardi ?": "Est-ce que tu viens mardi ?",
         "A bientot.": "À bientôt.",
+        "Apelle getUsr() pour lire la valeur.": "Appelle getUser() pour lire la valeur.",
     ]
 
     private static let page = """
         <textarea id="plain" style="width: 400px; height: 120px"></textarea>
-        <textarea id="code" spellcheck="false" style="width: 400px; height: 120px"></textarea>
+        <textarea id="code" spellcheck="false" style="width: 400px; height: 120px; font-family: Menlo, monospace"></textarea>
+        <div class="cm-editor"><div id="codemirror" class="cm-content" contenteditable="true" style="width: 400px; min-height: 60px">let valeur = 1</div></div>
+        <textarea id="system-code" style="width: 400px; height: 120px; font-family: ui-monospace">Je te remerci pour les document.</textarea>
+        <textarea id="fancy" style="width: 400px; height: 120px; font-family: 'Monotype Corsiva', cursive">Je te remerci pour les document.</textarea>
+        <div id="snippet" contenteditable="true" style="width: 400px; min-height: 120px"><div>Apelle <code>getUsr()</code> pour lire la valeur.</div><pre>let reciever = getUsr()</pre></div>
+        <div id="gmail" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" g_editable="true" style="width: 400px; min-height: 120px"><div>Je te remerci pour les document.</div></div>
         <input id="line" type="text" value="Je te remerci pour les document.">
         <div id="reply" contenteditable="true" style="width: 400px; min-height: 120px"><div><br></div><div class="gmail_signature">Louis, directeur des ventes</div><blockquote>Est ce que tu vien mardi ?</blockquote></div>
         <div id="rich" contenteditable="true" style="width: 400px; min-height: 120px"><div>Je te <b>remerci</b> pour les <a href="https://example.com/">document</a>.</div><div><br></div><div>Est ce que tu vien mardi ?</div><div class="gmail_signature">A bientot.</div><blockquote>Est ce que tu vien mardi ?</blockquote></div>
@@ -111,7 +117,7 @@ struct TextCorrectionPageTests {
         return .corrected(lines.joined(separator: "\n"))
     }
 
-    private func loadedPage() async throws -> (WKWebView, NSWindow) {
+    private func loadedPage(html: String = page) async throws -> (WKWebView, NSWindow) {
         let corrections = TextCorrections { self.correct($0) }
         let configuration = WKWebViewConfiguration()
         corrections.install(on: configuration)
@@ -122,7 +128,7 @@ struct TextCorrectionPageTests {
         window.orderFrontRegardless()
         let loaded = Loaded()
         webView.navigationDelegate = loaded
-        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://example.com/")!)
+        webView.loadHTMLString(html, baseURL: URL(string: "https://example.com/")!)
         await loaded.wait()
         return (webView, window)
     }
@@ -190,12 +196,42 @@ struct TextCorrectionPageTests {
         #expect(text == "Je te remerci pour les document.\nEst ce que tu vien mardi ?")
     }
 
+    /// Gmail turns the browser's spellchecking off in its message body, since it has its own.
+    @Test func editorsWithTheirOwnSpellcheckerAreCorrected() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        #expect(try await run("gmail", in: webView) == "2 fixes")
+        let text = try await page("return document.getElementById('gmail').innerText.trim()", in: webView) as? String
+        #expect(text == "Je te remercie pour les documents.")
+    }
+
+    @Test func codeInsideAMessageIsLeftAsWritten() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        let text = try await webView.callAsyncJavaScript(
+            "return lithiumTextCorrection.read(document.getElementById('snippet'))",
+            contentWorld: .defaultClient
+        ) as? String
+        #expect(text == "Apelle getUsr() pour lire la valeur.", "inline code read with its sentence, code blocks left out")
+        #expect(try await run("snippet", in: webView) == "1 fix")
+        let html = try await page("return document.getElementById('snippet').innerHTML", in: webView) as? String
+        #expect(html == "<div>Appelle <code>getUsr()</code> pour lire la valeur.</div><pre>let reciever = getUsr()</pre>")
+    }
+
+    @Test func proseInAnyNonCodeFontIsCorrected() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        #expect(try await run("fancy", in: webView) == "2 fixes")
+    }
+
     @Test func singleLineAndCodeFieldsAreLeftAlone() async throws {
         let (webView, window) = try await loadedPage()
         defer { window.orderOut(nil) }
         #expect(try await run("line", in: webView) == nil)
         _ = try await page("document.getElementById('code').value = 'Je te remerci pour les document.'", in: webView)
         #expect(try await run("code", in: webView) == nil)
+        #expect(try await run("codemirror", in: webView) == nil)
+        #expect(try await run("system-code", in: webView) == nil, "the system's monospace font")
     }
 
     /// Off screen, WebKit doesn't run animation frames, which place the button; a timer stands in.
@@ -242,6 +278,21 @@ struct TextCorrectionPageTests {
         #expect(try await shown(after: "document.getElementById('rich').replaceChildren()") == false, "a chat box emptied once sent")
         #expect(try await shown(after: "document.getElementById('plain').focus()") == false)
         #expect(try await shown(after: "document.getElementById('plain').value = 'Un brouillon tout prêt'") == true, "a draft the page fills in")
+    }
+
+    /// Gmail requires Trusted Types, which turns away HTML written as a string.
+    @Test func buttonShowsOnPagesRequiringTrustedTypes() async throws {
+        let (webView, window) = try await loadedPage(html: #"<meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'">"# + Self.page)
+        defer { window.orderOut(nil) }
+        let enforced = try await page("try { document.body.insertAdjacentHTML('beforeend', '<i></i>'); return false } catch { return true }", in: webView) as? Bool
+        #expect(enforced == true, "the page enforces Trusted Types")
+        _ = try await webView.callAsyncJavaScript("window.requestAnimationFrame = (callback) => setTimeout(callback, 0)", contentWorld: .defaultClient)
+        let shown = try await page("""
+            document.getElementById('gmail').focus();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return document.querySelector('lithium-text-correction') !== null;
+            """, in: webView) as? Bool
+        #expect(shown == true)
     }
 
     @Test func correctionIsInvisibleToThePage() async throws {

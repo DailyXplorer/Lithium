@@ -7,24 +7,30 @@
   const SIZE = 22;
   const INSET = 6;
   const MINIMUM_WORDS = 3;
-  // Quoted replies and signatures in an email aren't the person's text to correct.
-  const SKIPPED = 'blockquote, [contenteditable="false"], .gmail_quote, .gmail_signature, [data-smartmail="gmail_signature"], script, style, noscript, template';
+  // Quoted replies, signatures and code blocks aren't the person's prose to correct.
+  const SKIPPED = 'blockquote, pre, [contenteditable="false"], .gmail_quote, .gmail_signature, [data-smartmail="gmail_signature"], script, style, noscript, template';
   const BLOCKS = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BR', 'DD', 'DIV', 'DL', 'DT', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TD', 'TH', 'TR', 'UL']);
 
-  // A field is a textarea (plain) or the root of a rich text editor. One-line inputs, fields
-  // that turn spellchecking off (code editors) and hidden helper textareas don't count.
+  // A field is a textarea (plain) or the root of a rich text editor. One-line inputs, code
+  // editors and hidden helper textareas don't count. Spellchecking being off says nothing:
+  // Gmail turns it off in its message body, since it has its own.
+  const CODE_EDITORS = '.cm-editor, .CodeMirror, .monaco-editor, .ace_editor';
+  const CODE_FONT = /^(ui-)?monospace$|^sf ?mono|\bmono\b|^(menlo|monaco|consolas|courier( new)?|lucida console|fira code|source code pro|cascadia code)$/i;
+  const isCode = (element) => !!element.closest(CODE_EDITORS)
+    || getComputedStyle(element).fontFamily.split(',').some((family) => CODE_FONT.test(family.trim().replace(/^["']|["']$/g, '')));
   const fieldOf = (node) => {
     let element = node instanceof Element ? node : node?.parentElement;
     if (!element) return null;
     if (element instanceof HTMLTextAreaElement) {
-      return element.readOnly || element.disabled || !element.spellcheck ? null : { kind: 'plain', element };
+      return element.readOnly || element.disabled || isCode(element) ? null : { kind: 'plain', element };
     }
     if (!element.isContentEditable) return null;
     while (element.parentElement?.isContentEditable) element = element.parentElement;
-    return element.spellcheck ? { kind: 'rich', element } : null;
+    return isCode(element) ? null : { kind: 'rich', element };
   };
 
-  // A rich editor's text nodes in order, with null where a block or line break falls.
+  // A rich editor's text nodes in order, with null where a block or line break falls. Inline
+  // code comes as a string: the model reads it with its sentence, but no change lands in it.
   function* walk(node) {
     for (let child = node.firstChild; child; child = child.nextSibling) {
       if (child.nodeType === Node.TEXT_NODE) {
@@ -32,6 +38,10 @@
         if (child.data && !(child.data.includes('\n') && !child.data.trim())) yield child;
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         const skipped = child.matches(SKIPPED);
+        if (!skipped && child.tagName === 'CODE') {
+          if (child.textContent) yield child.textContent;
+          continue;
+        }
         const block = skipped || BLOCKS.has(child.tagName);
         if (block) yield null;
         if (!skipped) yield* walk(child);
@@ -52,6 +62,10 @@
       }
       if (broken && text) text += '\n';
       broken = false;
+      if (typeof node === 'string') {
+        text += node;
+        continue;
+      }
       segments.push({ node, start: text.length, end: text.length + node.data.length });
       text += node.data;
     }
@@ -210,31 +224,34 @@
     for (const [name, value] of Object.entries(style)) host.style.setProperty(name, value, 'important');
     host.setAttribute('popover', 'manual');
     const shadow = host.attachShadow({ mode: 'closed' });
+    // A constructed sheet, which a page's content security policy can't turn away.
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(`
+      button {
+        all: initial; box-sizing: border-box; width: ${SIZE}px; height: ${SIZE}px; border-radius: 50%;
+        display: grid; place-items: center; cursor: default; color: #3c3c43;
+        background: rgb(255 255 255 / 0.92); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.18), 0 1px 3px rgb(0 0 0 / 0.14);
+        opacity: 0.8; transition: opacity 0.15s, transform 0.15s;
+      }
+      button:hover { opacity: 1; transform: scale(1.06); }
+      svg { width: 13px; height: 13px; }
+      .spinner { display: none; width: 11px; height: 11px; border-radius: 50%; border: 1.6px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; }
+      .working svg { display: none; }
+      .working .spinner { display: block; }
+      .note {
+        position: absolute; right: ${SIZE + 5}px; top: 50%; transform: translateY(-50%); white-space: nowrap;
+        font: 500 11.5px/1 -apple-system, system-ui, sans-serif; padding: 5px 8px; border-radius: 11px;
+        color: #fff; background: rgb(40 40 44 / 0.92); pointer-events: none; opacity: 0; transition: opacity 0.2s;
+      }
+      .note.shown { opacity: 1; }
+      .note.good::before { content: "✓ "; color: #5de07c; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-color-scheme: dark) {
+        button { color: #ebebf5; background: rgb(58 58 62 / 0.94); box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 1px 3px rgb(0 0 0 / 0.4); }
+      }
+    `);
+    shadow.adoptedStyleSheets = [sheet];
     shadow.innerHTML = `
-      <style>
-        button {
-          all: initial; box-sizing: border-box; width: ${SIZE}px; height: ${SIZE}px; border-radius: 50%;
-          display: grid; place-items: center; cursor: default; color: #3c3c43;
-          background: rgb(255 255 255 / 0.92); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.18), 0 1px 3px rgb(0 0 0 / 0.14);
-          opacity: 0.8; transition: opacity 0.15s, transform 0.15s;
-        }
-        button:hover { opacity: 1; transform: scale(1.06); }
-        svg { width: 13px; height: 13px; }
-        .spinner { display: none; width: 11px; height: 11px; border-radius: 50%; border: 1.6px solid currentColor; border-right-color: transparent; animation: spin 0.7s linear infinite; }
-        .working svg { display: none; }
-        .working .spinner { display: block; }
-        .note {
-          position: absolute; right: ${SIZE + 5}px; top: 50%; transform: translateY(-50%); white-space: nowrap;
-          font: 500 11.5px/1 -apple-system, system-ui, sans-serif; padding: 5px 8px; border-radius: 11px;
-          color: #fff; background: rgb(40 40 44 / 0.92); pointer-events: none; opacity: 0; transition: opacity 0.2s;
-        }
-        .note.shown { opacity: 1; }
-        .note.good::before { content: "✓ "; color: #5de07c; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @media (prefers-color-scheme: dark) {
-          button { color: #ebebf5; background: rgb(58 58 62 / 0.94); box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 1px 3px rgb(0 0 0 / 0.4); }
-        }
-      </style>
       <button title="Fix spelling and grammar (⌥⌘K)" aria-label="Fix spelling and grammar">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
           <path d="M1.5 12.5 4.5 3.5l3 9M2.6 9.4h3.8"/><path d="m9.5 10.5 2 2 3.5-5"/>

@@ -497,10 +497,14 @@ struct CapturePreview: View {
                 }
                 var result = changed(1)
                 // Without a backdrop, a shape wholly off the screenshot could no longer be seen or
-                // grabbed: it goes as far along the drag as it can while still touching it.
+                // grabbed: it goes as far along the drag as it can while still touching it. A frame
+                // touches only by its outline, so it can stop and start touching along the way: the
+                // drag is sampled from its end back, then the last touching sample is refined.
                 if style.backdrop == .none, !result.touches(screenshotBounds) {
-                    var reached: CGFloat = 0, missed: CGFloat = 1
-                    for _ in 0..<12 {
+                    let samples = 32
+                    let last = (0..<samples).reversed().first { changed(CGFloat($0) / CGFloat(samples)).touches(screenshotBounds) } ?? 0
+                    var reached = CGFloat(last) / CGFloat(samples), missed = CGFloat(last + 1) / CGFloat(samples)
+                    for _ in 0..<8 {
                         let middle = (reached + missed) / 2
                         if changed(middle).touches(screenshotBounds) { reached = middle } else { missed = middle }
                     }

@@ -5,12 +5,12 @@ import Testing
 @MainActor
 struct CaptureCompositionTests {
     /// 100 × 50 points of one color at 2×.
-    private static func image(red: CGFloat, blue: CGFloat) -> CGImage {
+    private static func image(red: CGFloat, blue: CGFloat, green: CGFloat = 0) -> CGImage {
         let context = CGContext(
             data: nil, width: 200, height: 100, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         )!
-        context.setFillColor(CGColor(srgbRed: red, green: 0, blue: blue, alpha: 1))
+        context.setFillColor(CGColor(srgbRed: red, green: green, blue: blue, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
         return context.makeImage()!
     }
@@ -69,6 +69,15 @@ struct CaptureCompositionTests {
         #expect(hex(image, x: 100, y: 50) == "#000000")
     }
 
+    @Test func highlightsLookAsTheyDidWhileDrawn() throws {
+        // The preview window showed #FFFF72 under a highlight being drawn over white, captured on a Display P3 screen.
+        let white = Shot(content: .area(Self.image(red: 1, blue: 1, green: 1)), scale: 2, wallpaper: nil)
+        let highlight = Annotation(tool: .highlighter, colorHex: Annotation.highlightHex, lineWidth: 16, points: [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 10)])
+        let image = try #require(CaptureComposition.render(white, CaptureStyle(backdrop: .none, showsBadge: false, annotations: [highlight])))
+        #expect(hex(image, x: 100, y: 20) == "#FFFF73")
+        #expect(hex(image, x: 100, y: 80) == "#FFFFFF")
+    }
+
     @Test func shiftSquaresShapesAndStraightensArrows() {
         var square = Annotation(tool: .rectangle, colorHex: "#FF3B30", lineWidth: 3, points: [.zero])
         square.extend(to: CGPoint(x: 40, y: -10), constrained: true)
@@ -87,7 +96,7 @@ struct CaptureCompositionTests {
         line.extend(to: CGPoint(x: 20, y: 0), constrained: false)
         line.extend(to: CGPoint(x: 40, y: 2), constrained: true)
         line.extend(to: CGPoint(x: 60, y: 3), constrained: true)
-        #expect(line.points == [.zero, CGPoint(x: 10, y: 5), CGPoint(x: 20, y: 0), CGPoint(x: 20 + hypot(40, 3), y: 0)])
+        #expect(line.points == [.zero, CGPoint(x: 10, y: 5), CGPoint(x: 20, y: 0), CGPoint(x: 20 + hypot(CGFloat(40), 3), y: 0)])
 
         // Letting go of Shift goes on from the end of the straight segment.
         line.extend(to: CGPoint(x: 70, y: 10), constrained: false)

@@ -116,18 +116,44 @@ struct CaptureStyle: Equatable {
 struct CaptureComposition: View {
     let shot: Shot
     let style: CaptureStyle
+    /// The screenshot with its marks drawn in.
+    let screenshot: CGImage
 
     static func render(_ shot: Shot, _ style: CaptureStyle) -> CGImage? {
-        let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style))
+        let screenshot = marked(shot.image(showingSidebar: style.showsSidebar), scale: shot.scale, with: style.annotations)
+        let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style, screenshot: screenshot))
         renderer.scale = shot.scale
         return renderer.cgImage
     }
 
+    /// Blend modes mix colors in the color space they draw into. The preview window blends the mark
+    /// being drawn in the screen's Display P3, so the marks are drawn into the screenshot in Display P3
+    /// too, and a highlight looks the same before and after the mouse is let go. The marked screenshot
+    /// goes back to the screenshot's own color space, so the exported image is in the same format.
+    private static func marked(_ screenshot: CGImage, scale: CGFloat, with annotations: [Annotation]) -> CGImage {
+        let pixels = CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height)
+        func context(_ space: CGColorSpace, bits: Int) -> CGContext? {
+            CGContext(
+                data: nil, width: screenshot.width, height: screenshot.height, bitsPerComponent: bits, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        }
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+        guard !annotations.isEmpty,
+              let blending = context(CGColorSpace(name: CGColorSpace.displayP3)!, bits: 16),
+              let output = context(screenshot.colorSpace ?? sRGB, bits: 8) ?? context(sRGB, bits: 8)
+        else { return screenshot }
+        blending.draw(screenshot, in: pixels)
+        blending.scaleBy(x: scale, y: scale)
+        ImageRenderer(content: AnnotationLayer(annotations: annotations).frame(width: pixels.width / scale, height: pixels.height / scale))
+            .render { _, draw in draw(blending) }
+        guard let blended = blending.makeImage() else { return screenshot }
+        output.draw(blended, in: pixels)
+        return output.makeImage() ?? screenshot
+    }
+
     var body: some View {
-        let image = Image(decorative: shot.image(showingSidebar: style.showsSidebar), scale: shot.scale)
-            .overlay {
-                if !style.annotations.isEmpty { AnnotationLayer(annotations: style.annotations) }
-            }
+        let image = Image(decorative: screenshot, scale: shot.scale)
         if style.backdrop == .none {
             image
         } else {

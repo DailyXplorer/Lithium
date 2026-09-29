@@ -93,6 +93,11 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("She can't come and he didn't call us back.", for: "She cant come and he didnt call us back.") == "She can't come and he didn't call us back.")
         #expect(CorrectionText.accept("I did not see the message this morning.", for: "I didnot see the message this morning.") == "I did not see the message this morning.")
         #expect(CorrectionText.accept("Je ne sais pas s'il viendra demain avec les autres.", for: "Je sais nepas si il viendra demain avec les autres.") == "Je ne sais pas s'il viendra demain avec les autres.")
+    }
+
+    @Test func keepsDontWontAndCantAsWordsOfTheirOwn() {
+        #expect(CorrectionText.accept("C'est la maison dont je parle depuis ce matin.", for: "C'est la maison que je parle depuis ce matin.") == "C'est la maison dont je parle depuis ce matin.")
+        #expect(CorrectionText.accept("I want to go to the beach with them tomorrow.", for: "I wont to go to the beach with them tomorrow.") == "I want to go to the beach with them tomorrow.")
         #expect(CorrectionText.accept("Il ne vient plus nous voir le dimanche.", for: "Il vient plu nous voir le dimanche.") == "Il ne vient plus nous voir le dimanche.")
     }
 

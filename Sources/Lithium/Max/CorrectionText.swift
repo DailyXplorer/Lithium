@@ -135,11 +135,11 @@ enum CorrectionText {
         let negations = old.filter(ne.contains).count == new.filter(ne.contains).count ? negationWords : negationWords.union(negationEnds)
         var typos = gone
         for word in come where negations.contains(word) {
-            guard let index = typos.firstIndex(where: { close($0, word) }) else { return true }
+            guard let index = typos.firstIndex(where: { close($0, word) || joins($0, word, among: come) }) else { return true }
             typos.remove(at: index)
         }
         return gone.contains { word in
-            negations.contains(word) && !come.contains { close($0, word) }
+            negations.contains(word) && !come.contains { close($0, word) || joins($0, word, among: gone) }
         }
     }
 
@@ -162,9 +162,22 @@ enum CorrectionText {
         }
     }
 
+    /// Whether `joined` is `word` typed stuck to the word before it, that word being among
+    /// `others`: "didnot" for "did not", "nepas" for "ne pas".
+    private static func joins(_ joined: String, _ word: String, among others: [String]) -> Bool {
+        joined.count > word.count && joined.hasSuffix(word) && others.contains(String(joined.dropLast(word.count)))
+    }
+
+    /// English negations written without their apostrophe, cut like "don't": "dont" is "do" and
+    /// "not".
+    private static let negationsWithoutApostrophe: Set<String> = [
+        "dont", "doesnt", "didnt", "cant", "couldnt", "wont", "wouldnt", "shouldnt", "isnt", "arent",
+        "wasnt", "werent", "hasnt", "havent", "hadnt", "mustnt", "neednt", "aint",
+    ]
+
     /// The words of `text` with a word typed twice kept once, and negations cut out of the words
-    /// they're joined to: "don't" is "do" and "not", "cannot" is "can" and "not", "n'a" is "n"
-    /// and "a".
+    /// they're joined to: "don't" and "dont" are "do" and "not", "cannot" is "can" and "not",
+    /// "n'a" is "n" and "a".
     private static func negationCheckWords(_ text: String) -> [String] {
         let tokens = text.lowercased().replacingOccurrences(of: "’", with: "'").split { !$0.isLetter && $0 != "'" }
         var words: [String] = []
@@ -174,6 +187,8 @@ enum CorrectionText {
                 parts = ["can", "not"]
             } else if token.hasSuffix("n't") {
                 parts = [String(token.dropLast(3)), "not"]
+            } else if negationsWithoutApostrophe.contains(token) {
+                parts = [String(token.dropLast(2)), "not"]
             } else {
                 parts = token.split(separator: "'").map(String.init)
             }

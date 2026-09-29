@@ -89,6 +89,10 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("Je ne veux pas venir demain.", for: "Je veux pas pas venir demain.") == "Je ne veux pas venir demain.")
         #expect(CorrectionText.accept("I cannot come tomorrow.", for: "I can not come tomorrow.") == "I cannot come tomorrow.")
         #expect(CorrectionText.accept("I don't know what they meant by that.", for: "I do not know what they meant by that.") == "I don't know what they meant by that.")
+        #expect(CorrectionText.accept("I don't think they're ready for the launch.", for: "I dont think their ready for the launch.") == "I don't think they're ready for the launch.")
+        #expect(CorrectionText.accept("She can't come and he didn't call us back.", for: "She cant come and he didnt call us back.") == "She can't come and he didn't call us back.")
+        #expect(CorrectionText.accept("I did not see the message this morning.", for: "I didnot see the message this morning.") == "I did not see the message this morning.")
+        #expect(CorrectionText.accept("Je ne sais pas s'il viendra demain avec les autres.", for: "Je sais nepas si il viendra demain avec les autres.") == "Je ne sais pas s'il viendra demain avec les autres.")
         #expect(CorrectionText.accept("Il ne vient plus nous voir le dimanche.", for: "Il vient plu nous voir le dimanche.") == "Il ne vient plus nous voir le dimanche.")
     }
 

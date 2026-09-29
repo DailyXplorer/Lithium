@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// A change to make in the field's text, in UTF-16 offsets since the page's script counts in
 /// JavaScript string indices.
@@ -25,26 +26,60 @@ enum CorrectionText {
     /// one request, it answered with the paragraph once (measured).
     static let pieceLength = 1_200
 
-    /// Runs of lines to correct together, each at most `pieceLength` characters, with the index
-    /// of their first line. Lines without letters (blank, numbers, symbols) are left out.
-    static func pieces(of text: String) -> [(first: Int, lines: [String])] {
-        var pieces: [(first: Int, lines: [String])] = []
-        var current: (first: Int, lines: [String], length: Int)?
-        for (index, line) in text.components(separatedBy: "\n").enumerated() {
-            guard line.contains(where: \.isLetter) else {
-                if let piece = current { pieces.append((piece.first, piece.lines)) }
-                current = nil
-                continue
-            }
-            if let piece = current, piece.length + 1 + line.count <= pieceLength {
-                current = (piece.first, piece.lines + [line], piece.length + 1 + line.count)
+    /// A part of the text: one to correct, or one kept as it is (line breaks, lines without letters).
+    struct Piece: Equatable {
+        let text: String
+        let corrects: Bool
+    }
+
+    /// The text cut for the model, back to back: runs of lines of at most `pieceLength`
+    /// characters, and a longer line cut between sentences. Lines without letters (blank,
+    /// numbers, symbols) are kept as they are.
+    static func pieces(of text: String) -> [Piece] {
+        var pieces: [Piece] = []
+        func keep(_ text: String) {
+            guard !text.isEmpty else { return }
+            if let last = pieces.last, !last.corrects {
+                pieces[pieces.count - 1] = Piece(text: last.text + text, corrects: false)
             } else {
-                if let piece = current { pieces.append((piece.first, piece.lines)) }
-                current = (index, [line], line.count)
+                pieces.append(Piece(text: text, corrects: false))
             }
         }
-        if let piece = current { pieces.append((piece.first, piece.lines)) }
+        for (index, line) in text.components(separatedBy: "\n").enumerated() {
+            let separator = index > 0 ? "\n" : ""
+            if !line.contains(where: \.isLetter) {
+                keep(separator + line)
+            } else if line.count > pieceLength {
+                keep(separator)
+                pieces += sentences(line).map { Piece(text: $0, corrects: true) }
+            } else if let last = pieces.last, last.corrects, last.text.count + 1 + line.count <= pieceLength {
+                pieces[pieces.count - 1] = Piece(text: last.text + "\n" + line, corrects: true)
+            } else {
+                keep(separator)
+                pieces.append(Piece(text: line, corrects: true))
+            }
+        }
         return pieces
+    }
+
+    /// A line cut into runs of whole sentences of at most `pieceLength` characters (one longer
+    /// sentence stays whole), each keeping its trailing spaces, so they join back exactly.
+    private static func sentences(_ line: String) -> [String] {
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = line
+        var runs: [String] = []
+        var current = ""
+        tokenizer.enumerateTokens(in: line.startIndex..<line.endIndex) { range, _ in
+            let sentence = String(line[range])
+            if !current.isEmpty, current.count + sentence.count > pieceLength {
+                runs.append(current)
+                current = ""
+            }
+            current += sentence
+            return true
+        }
+        if !current.isEmpty { runs.append(current) }
+        return runs.joined() == line ? runs : [line]
     }
 
     /// The model's answer for `original`, or nil when it isn't a correction of it: a different

@@ -29,26 +29,35 @@ final class ModelCorrections {
     /// of it is tried again line by line, then kept as written, and so is a piece the model declines.
     func correct(_ text: String) async -> CorrectionOutcome {
         guard isAvailable else { return .failed }
-        var lines = text.components(separatedBy: "\n")
         let pieces = CorrectionText.pieces(of: text)
+        var corrected = ""
         var declined = 0
         for piece in pieces {
+            guard piece.corrects else {
+                corrected += piece.text
+                continue
+            }
             do {
-                if let fixed = try await correction(of: piece.lines.joined(separator: "\n")) {
-                    lines.replaceSubrange(piece.first..<piece.first + piece.lines.count, with: fixed.components(separatedBy: "\n"))
-                } else if piece.lines.count > 1 {
-                    for (offset, line) in piece.lines.enumerated() {
-                        if let fixed = try await correction(of: line) { lines[piece.first + offset] = fixed }
+                if let fixed = try await correction(of: piece.text) {
+                    corrected += fixed
+                } else {
+                    var lines = piece.text.components(separatedBy: "\n")
+                    if lines.count > 1 {
+                        for (index, line) in lines.enumerated() where line.contains(where: \.isLetter) {
+                            if let fixed = try await correction(of: line) { lines[index] = fixed }
+                        }
                     }
+                    corrected += lines.joined(separator: "\n")
                 }
             } catch where ModelFailure(error) == .declined {
                 declined += 1
+                corrected += piece.text
             } catch {
                 return .failed
             }
         }
-        if !pieces.isEmpty && declined == pieces.count { return .declined }
-        return .corrected(lines.joined(separator: "\n"))
+        if declined > 0 && declined == pieces.filter(\.corrects).count { return .declined }
+        return .corrected(corrected)
     }
 
     private func correction(of text: String) async throws -> String? {

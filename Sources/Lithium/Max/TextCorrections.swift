@@ -52,8 +52,10 @@ final class TextCorrections: NSObject, WKScriptMessageHandlerWithReply {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
         guard let body = message.body as? [String: Any] else { return (nil, "Not allowed") }
-        if let undo = body["undo"] as? String, let webView = message.webView {
-            undo == "begin" ? beginUndoGroup(in: webView) : endUndoGroup(in: webView)
+        if let undo = body["undo"] as? String {
+            guard let webView = message.webView else { return (false, nil) }
+            if undo == "begin" { return (beginUndoGroup(in: webView), nil) }
+            endUndoGroup(in: webView)
             return (true, nil)
         }
         guard let text = body["text"] as? String else { return (nil, "Not allowed") }
@@ -74,8 +76,10 @@ final class TextCorrections: NSObject, WKScriptMessageHandlerWithReply {
     /// step per change; grouped, a single ⌘Z brings back what the person wrote.
     private var undoGroups: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    private func beginUndoGroup(in webView: WKWebView) {
-        guard let manager = webView.undoManager, undoGroups[ObjectIdentifier(webView)] == nil else { return }
+    /// False when another frame's corrections hold the tab's group: this frame's go ungrouped
+    /// rather than close that group early.
+    private func beginUndoGroup(in webView: WKWebView) -> Bool {
+        guard let manager = webView.undoManager, undoGroups[ObjectIdentifier(webView)] == nil else { return false }
         manager.beginUndoGrouping()
         // A page that leaves before saying it's done mustn't keep the group open.
         undoGroups[ObjectIdentifier(webView)] = Task { [weak self, weak webView] in
@@ -83,6 +87,7 @@ final class TextCorrections: NSObject, WKScriptMessageHandlerWithReply {
             guard !Task.isCancelled, let self, let webView else { return }
             self.endUndoGroup(in: webView)
         }
+        return true
     }
 
     private func endUndoGroup(in webView: WKWebView) {

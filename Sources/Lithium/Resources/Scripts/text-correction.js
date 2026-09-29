@@ -55,8 +55,9 @@
 
   const same = (a, b) => a.replace(/ /g, ' ') === b.replace(/ /g, ' ');
 
+  // Counts only what gets corrected: a signature or a quoted reply alone shows no button.
   const hasWords = (field) => {
-    const text = field.kind === 'plain' ? field.element.value : field.element.textContent;
+    const text = read(field);
     let count = 0;
     for (const _ of text.matchAll(/[\p{L}\p{N}]+/gu)) if (++count >= MINIMUM_WORDS) return true;
     return false;
@@ -99,6 +100,7 @@
     const caret = selection.rangeCount && root.contains(selection.anchorNode) ? selection.getRangeAt(0).cloneRange() : null;
     const ranges = [];
     let count = 0;
+    let asked = false;
     let grouped = false;
     for (let index = edits.length - 1; index >= 0; index--) {
       const [from, to, value] = edits[index];
@@ -106,7 +108,10 @@
       if (!same(text.slice(0, to), original.slice(0, to))) continue;
       const segment = segments.find((candidate) => candidate.start <= from && to <= candidate.end);
       if (!segment) continue;
-      if (!grouped) grouped = await handler.postMessage({ undo: 'begin' });
+      if (!asked) {
+        asked = true;
+        grouped = (await handler.postMessage({ undo: 'begin' })) === true;
+      }
       const range = document.createRange();
       range.setStart(segment.node, from - segment.start);
       range.setEnd(segment.node, to - segment.start);

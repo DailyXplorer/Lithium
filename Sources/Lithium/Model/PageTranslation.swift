@@ -21,8 +21,8 @@ final class PageWebView: WKWebView {
 /// The context menu's Translate. WebKit's own opens macOS's translation popover, which picks the
 /// target language itself: Spanish, for an English page read on a Mac set to English then French.
 /// Lithium's translates into the summary language, else the first preferred language the text
-/// isn't already in. In a text field, or a frame the script can't reach, WebKit's stays, since
-/// it can replace the field's text with its translation.
+/// isn't already in. In a text field WebKit's stays, since it can replace the field's text with its
+/// translation; so it does when no language fits, or the script couldn't read the selection.
 @MainActor
 final class PageTranslation: NSObject, WKScriptMessageHandler {
     static let name = "lithiumTranslate"
@@ -63,43 +63,46 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
 
     func adjust(_ menu: NSMenu, in webView: PageWebView, at point: NSPoint) {
         let text = webView.menuSelection.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let item = menu.items.first(where: { $0.identifier == Self.menuIdentifier }) else { return }
+        guard !text.isEmpty, let item = menu.items.first(where: { $0.identifier == Self.menuIdentifier }),
+              let target = Self.target(for: text, chosen: summaries.language, supported: supported) else { return }
         item.target = self
         item.action = #selector(translate(_:))
-        item.representedObject = Request(text: text, webView: webView, point: point)
+        item.representedObject = Request(text: text, target: target, webView: webView, point: point)
     }
 
     @objc private func translate(_ item: NSMenuItem) {
         guard let request = item.representedObject as? Request, let webView = request.webView, webView.window != nil else { return }
         popover?.close()
-        let target = Self.target(for: request.text, chosen: summaries.language, supported: supported)
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: TranslationPanel(text: request.text, target: target))
+        popover.contentViewController = NSHostingController(rootView: TranslationPanel(text: request.text, target: request.target))
         popover.show(relativeTo: NSRect(origin: request.point, size: .zero).insetBy(dx: -1, dy: -1), of: webView, preferredEdge: .maxY)
         self.popover = popover
     }
 
     private final class Request {
         let text: String
+        let target: Locale.Language
         weak var webView: PageWebView?
         let point: NSPoint
 
-        init(text: String, webView: PageWebView, point: NSPoint) {
+        init(text: String, target: Locale.Language, webView: PageWebView, point: NSPoint) {
             self.text = text
+            self.target = target
             self.webView = webView
             self.point = point
         }
     }
 
     /// The chosen language, then the preferred ones, skipping the one the text is written in and
-    /// those Translation doesn't have (all are kept until it has said which it has).
+    /// those Translation doesn't have (all are kept until it has said which it has). Nil when none
+    /// is left, and WebKit's Translate, which lets the reader pick, stays.
     nonisolated static func target(
         for text: String, chosen: String?, preferred: [String] = Locale.preferredLanguages, supported: [Locale.Language]
-    ) -> Locale.Language {
+    ) -> Locale.Language? {
         let languages = ((chosen.map { [$0] } ?? []) + preferred).map(Locale.Language.init(identifier:))
             .filter { language in supported.isEmpty || supported.contains { $0.languageCode == language.languageCode } }
         let source = NLLanguageRecognizer.dominantLanguage(for: text).map { Locale.Language(identifier: $0.rawValue).languageCode }
-        return languages.first { $0.languageCode != source } ?? languages.first ?? Locale.Language(identifier: "en")
+        return languages.first { $0.languageCode != source }
     }
 }

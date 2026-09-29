@@ -6,23 +6,29 @@ import WebKit
 struct TranslationTargetTests {
     @Test func chosenLanguageWins() {
         let target = PageTranslation.target(for: "The weather is lovely today, let's go for a walk.", chosen: "fr", preferred: ["en-US", "fr-US"], supported: [])
-        #expect(target.languageCode == "fr")
+        #expect(target?.languageCode == "fr")
     }
 
     @Test func textAlreadyInTheChosenLanguageGoesToTheNextOne() {
         let target = PageTranslation.target(for: "Il fait très beau aujourd'hui, allons nous promener.", chosen: "fr", preferred: ["en-US", "fr-US"], supported: [])
-        #expect(target.languageCode == "en")
+        #expect(target?.languageCode == "en")
     }
 
     @Test func languagesTranslationLacksAreSkipped() {
         let supported = ["en", "en-GB", "fr", "es"].map(Locale.Language.init(identifier:))
         let target = PageTranslation.target(for: "The weather is lovely today, let's go for a walk.", chosen: "sv", preferred: ["en-US", "fr-US"], supported: supported)
-        #expect(target.languageCode == "fr")
+        #expect(target?.languageCode == "fr")
+    }
+
+    @Test func noLanguageLeftKeepsWebKitsTranslate() {
+        let supported = ["en", "en-GB", "fr", "es"].map(Locale.Language.init(identifier:))
+        #expect(PageTranslation.target(for: "The weather is lovely today, let's go for a walk.", chosen: nil, preferred: ["cs-CZ"], supported: supported) == nil)
+        #expect(PageTranslation.target(for: "Il fait très beau aujourd'hui, allons nous promener.", chosen: nil, preferred: ["fr-FR"], supported: supported) == nil)
     }
 
     @Test func withoutAChoiceThePreferredLanguagesDecide() {
-        #expect(PageTranslation.target(for: "The weather is lovely today, let's go for a walk.", chosen: nil, preferred: ["en-US", "fr-US"], supported: []).languageCode == "fr")
-        #expect(PageTranslation.target(for: "Hace muy buen tiempo hoy, vamos a pasear.", chosen: nil, preferred: ["en-US", "fr-US"], supported: []).languageCode == "en")
+        #expect(PageTranslation.target(for: "The weather is lovely today, let's go for a walk.", chosen: nil, preferred: ["en-US", "fr-US"], supported: [])?.languageCode == "fr")
+        #expect(PageTranslation.target(for: "Hace muy buen tiempo hoy, vamos a pasear.", chosen: nil, preferred: ["en-US", "fr-US"], supported: [])?.languageCode == "en")
     }
 }
 

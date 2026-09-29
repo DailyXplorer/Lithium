@@ -65,7 +65,7 @@ final class ModelCorrections {
         let session = LanguageModelSession(model: model, instructions: Self.instructions)
         let response = try await session.respond(
             to: "Correct this text:\n<text>\n\(text)\n</text>",
-            options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: text.count / 2 + 100)
+            options: GenerationOptions(samplingMode: .greedy, maximumResponseTokens: CorrectionText.responseTokens(for: text))
         )
         return CorrectionText.accept(response.content, for: text)
     }

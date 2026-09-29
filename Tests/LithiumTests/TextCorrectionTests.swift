@@ -13,6 +13,14 @@ struct CorrectionTextTests {
         return result
     }
 
+    /// Chinese, Japanese or Korean take about a token a character; a cut-off answer would be rejected.
+    @Test func answersHaveRoomForTheWholeText() {
+        let chinese = String(repeating: "这是一个测试句子。", count: 120)
+        #expect(CorrectionText.responseTokens(for: chinese) >= chinese.count + 100)
+        let english = String(repeating: "This is a test sentence. ", count: 40)
+        #expect(CorrectionText.responseTokens(for: english) == english.count / 2 + 100)
+    }
+
     @Test func editsAreTheChangedWordsOnly() {
         let original = "Je te remerci pour les document que tu ma envoyer. Est ce que sa va ?"
         let corrected = "Je te remercie pour les documents que tu m'as envoyés. Est-ce que ça va ?"

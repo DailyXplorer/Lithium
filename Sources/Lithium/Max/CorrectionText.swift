@@ -26,6 +26,14 @@ enum CorrectionText {
     /// one request, it answered with the paragraph once (measured).
     static let pieceLength = 1_200
 
+    /// The most tokens the model may answer `text` with: room for the corrected text and some
+    /// slack. Latin text runs a few characters to a token, while Chinese, Japanese or Korean can
+    /// take one or more per character, so each character outside ASCII counts as one and a half.
+    static func responseTokens(for text: String) -> Int {
+        let halves = text.unicodeScalars.reduce(0) { $0 + ($1.isASCII ? 1 : 3) }
+        return halves / 2 + 100
+    }
+
     /// A part of the text: one to correct, or one kept as it is (line breaks, lines without letters).
     struct Piece: Equatable {
         let text: String

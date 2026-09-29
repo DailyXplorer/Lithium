@@ -74,6 +74,14 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("Il ne connaît personne dans cette ville depuis son arrivée.", for: "Il connaît dans cette ville depuis son arrivée.") == nil)
     }
 
+    @Test func rejectsARealWordSwappedForANegation() {
+        #expect(CorrectionText.accept("Have you never seen such a thing before today?", for: "Have you ever seen such a thing before today?") == nil)
+        #expect(CorrectionText.accept("I will not tell them about the party tonight.", for: "I will now tell them about the party tonight.") == nil)
+        #expect(CorrectionText.accept("I will now tell them about the party tonight.", for: "I will not tell them about the party tonight.") == nil)
+        #expect(CorrectionText.accept("Il viendra jamais sans sa voiture demain matin.", for: "Il viendra mais sans sa voiture demain matin.") == nil)
+        #expect(CorrectionText.accept("Tout va rien pour nous cette semaine au travail.", for: "Tout va bien pour nous cette semaine au travail.") == nil)
+    }
+
     @Test func acceptsFixesOfTheNegationWordItself() {
         #expect(CorrectionText.accept("Je ne sais pas s'il viendra demain avec les autres collègues.", for: "Je sais pa si il viendra demain avec les autres collègues.") == "Je ne sais pas s'il viendra demain avec les autres collègues.")
         #expect(CorrectionText.accept("Je n'ai jamais vu ça avant.", for: "J'ai jamias vu ça avant.") == "Je n'ai jamais vu ça avant.")

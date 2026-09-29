@@ -143,12 +143,23 @@ enum CorrectionText {
         }
     }
 
-    /// The same word with a typo: one letter wrong, letters swapped, or written together with the
-    /// word before it.
+    /// The same word with a typo: a letter left out or added, or two letters side by side swapped.
+    /// Not a letter changed, nor the first letter: "bien" and "rien", "now" and "not", "ever" and
+    /// "never", "mais" and "jamais" are other words.
     private static func close(_ a: String, _ b: String) -> Bool {
-        if distance(a, b) <= 1 && min(a.count, b.count) >= 2 { return true }
-        if a.count == b.count && a.sorted() == b.sorted() { return true }
-        return min(a.count, b.count) >= 3 && (a.hasSuffix(b) || b.hasSuffix(a))
+        let a = Array(a), b = Array(b)
+        guard min(a.count, b.count) >= 2, a.first == b.first else { return false }
+        if a.count == b.count {
+            let differ = a.indices.filter { a[$0] != b[$0] }
+            return differ.count == 2 && differ[1] == differ[0] + 1 && a[differ[0]] == b[differ[1]] && a[differ[1]] == b[differ[0]]
+        }
+        let (short, long) = a.count < b.count ? (a, b) : (b, a)
+        guard long.count == short.count + 1 else { return false }
+        return long.indices.contains { index in
+            var shortened = long
+            shortened.remove(at: index)
+            return shortened == short
+        }
     }
 
     /// The words of `text` with a word typed twice kept once, and negations cut out of the words

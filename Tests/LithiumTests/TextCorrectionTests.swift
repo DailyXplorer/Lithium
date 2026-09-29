@@ -102,6 +102,7 @@ struct TextCorrectionPageTests {
         <textarea id="plain" style="width: 400px; height: 120px"></textarea>
         <textarea id="code" spellcheck="false" style="width: 400px; height: 120px; font-family: Menlo, monospace"></textarea>
         <div class="cm-editor"><div id="codemirror" class="cm-content" contenteditable="true" style="width: 400px; min-height: 60px">let valeur = 1</div></div>
+        <textarea id="system-code" style="width: 400px; height: 120px; font-family: ui-monospace">Je te remerci pour les document.</textarea>
         <textarea id="fancy" style="width: 400px; height: 120px; font-family: 'Monotype Corsiva', cursive">Je te remerci pour les document.</textarea>
         <div id="snippet" contenteditable="true" style="width: 400px; min-height: 120px"><div>Apelle <code>getUsr()</code> pour lire la valeur.</div><pre>let reciever = getUsr()</pre></div>
         <div id="gmail" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" g_editable="true" style="width: 400px; min-height: 120px"><div>Je te remerci pour les document.</div></div>
@@ -230,6 +231,7 @@ struct TextCorrectionPageTests {
         _ = try await page("document.getElementById('code').value = 'Je te remerci pour les document.'", in: webView)
         #expect(try await run("code", in: webView) == nil)
         #expect(try await run("codemirror", in: webView) == nil)
+        #expect(try await run("system-code", in: webView) == nil, "the system's monospace font")
     }
 
     /// Off screen, WebKit doesn't run animation frames, which place the button; a timer stands in.

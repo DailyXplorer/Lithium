@@ -15,7 +15,7 @@
   // editors and hidden helper textareas don't count. Spellchecking being off says nothing:
   // Gmail turns it off in its message body, since it has its own.
   const CODE_EDITORS = '.cm-editor, .CodeMirror, .monaco-editor, .ace_editor';
-  const CODE_FONT = /^(monospace|menlo|monaco|consolas|courier( new)?|lucida console|fira code|source code pro|cascadia (code|mono))$|\bmono$/i;
+  const CODE_FONT = /^(ui-)?monospace$|^sf ?mono|\bmono\b|^(menlo|monaco|consolas|courier( new)?|lucida console|fira code|source code pro|cascadia code)$/i;
   const isCode = (element) => !!element.closest(CODE_EDITORS)
     || getComputedStyle(element).fontFamily.split(',').some((family) => CODE_FONT.test(family.trim().replace(/^["']|["']$/g, '')));
   const fieldOf = (node) => {

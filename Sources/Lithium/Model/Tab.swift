@@ -772,8 +772,9 @@ extension Tab: WKWebExtensionTab {
         browser?.close(self)
     }
 
+    /// Loading the address wakes a sleeping tab by itself, straight onto it rather than its old page.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
-        wakeForExtension()
+        lastActive = Date()
         load(url)
     }
 

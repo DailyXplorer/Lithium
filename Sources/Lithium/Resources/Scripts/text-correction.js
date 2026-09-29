@@ -280,6 +280,10 @@
   const hide = () => view?.host.remove();
 
   function place() {
+    if (field?.changed) {
+      field.changed = false;
+      field.wordy = hasWords(field);
+    }
     if (!field || !field.element.isConnected || (state === 'idle' && !field.wordy)) return hide();
     const element = field.element;
     const rect = element.getBoundingClientRect();
@@ -303,14 +307,37 @@
     }
   }
 
+  // The words are counted again on the next frame after the field's text changes, including
+  // when the page changes it itself (a chat box emptied once its message is sent).
+  const changed = () => {
+    if (!field) return;
+    field.changed = true;
+    update();
+  };
+
   let resizes = null;
+  let edits = null;
+  let polling = 0;
   const setField = (next) => {
     if (next?.element === field?.element) return;
     if (field) resizes.unobserve(field.element);
+    edits?.disconnect();
+    clearInterval(polling);
     field = next;
     if (field) {
-      field.wordy = hasWords(field);
+      field.changed = true;
       (resizes ??= new ResizeObserver(update)).observe(field.element);
+      if (field.kind === 'rich') {
+        (edits ??= new MutationObserver(changed)).observe(field.element, { childList: true, subtree: true, characterData: true });
+      } else {
+        // A script setting a textarea's value leaves no trace in the page to observe.
+        let value = field.element.value;
+        polling = setInterval(() => {
+          if (field?.element.value === value) return;
+          value = field?.element.value;
+          changed();
+        }, 500);
+      }
     }
     if (state !== 'working') setState('idle');
     update();
@@ -319,11 +346,7 @@
   const target = (event) => event.composedPath()[0];
   document.addEventListener('focusin', (event) => setField(fieldOf(target(event))), true);
   document.addEventListener('focusout', () => setTimeout(() => setField(fieldOf(activeElement()))), true);
-  document.addEventListener('input', () => {
-    if (!field) return;
-    field.wordy = hasWords(field);
-    update();
-  }, true);
+  document.addEventListener('input', changed, true);
   addEventListener('scroll', () => field && update(), { capture: true, passive: true });
   addEventListener('resize', () => field && update());
   document.addEventListener('keydown', (event) => {

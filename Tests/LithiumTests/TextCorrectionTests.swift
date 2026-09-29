@@ -227,6 +227,23 @@ struct TextCorrectionPageTests {
         #expect(try await button(afterFocusing: "plain") == "inside", "typing the third word shows it")
     }
 
+    @Test func buttonFollowsTextThePageChangesItself() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        _ = try await webView.callAsyncJavaScript("window.requestAnimationFrame = (callback) => setTimeout(callback, 0)", contentWorld: .defaultClient)
+        func shown(after script: String) async throws -> Bool? {
+            try await page("""
+                \(script)
+                await new Promise((resolve) => setTimeout(resolve, 700));
+                return document.querySelector('lithium-text-correction') !== null;
+                """, in: webView) as? Bool
+        }
+        #expect(try await shown(after: "document.getElementById('rich').focus()") == true)
+        #expect(try await shown(after: "document.getElementById('rich').replaceChildren()") == false, "a chat box emptied once sent")
+        #expect(try await shown(after: "document.getElementById('plain').focus()") == false)
+        #expect(try await shown(after: "document.getElementById('plain').value = 'Un brouillon tout prêt'") == true, "a draft the page fills in")
+    }
+
     @Test func correctionIsInvisibleToThePage() async throws {
         let (webView, window) = try await loadedPage()
         defer { window.orderOut(nil) }

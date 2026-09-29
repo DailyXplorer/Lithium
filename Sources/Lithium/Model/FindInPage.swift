@@ -65,6 +65,11 @@ final class FindInPage {
 
     func step(forward: Bool, in target: FindTarget) async {
         guard !query.isEmpty else { return }
+        // Its matches were cleared since it was searched (the bar closed): a PDF forgets them.
+        guard self.target === target else {
+            await update(query: query, in: target)
+            return
+        }
         let current = search
         let step = await target.showNextMatch(of: query, forward: forward)
         guard current == search else { return }

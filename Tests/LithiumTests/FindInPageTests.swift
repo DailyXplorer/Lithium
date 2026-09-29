@@ -45,6 +45,26 @@ struct FindInPageTests {
         #expect(find.currentMatch == 5)
     }
 
+    /// A PDF forgets its matches when the bar closes, so the next step searches it again rather
+    /// than finding nothing under the old count.
+    @Test func steppingAfterTheBarClosedSearchesAgain() async {
+        let find = FindInPage()
+        let pdf = Target(matches: 5)
+        pdf.forgetsClearedMatches = true
+        pdf.answer()
+        find.show()
+        await find.update(query: "licence", in: pdf)
+        await find.step(forward: true, in: pdf)
+        #expect(find.currentMatch == 2)
+        find.hide()
+        find.show()
+        await find.step(forward: true, in: pdf)
+        #expect(find.matchCount == 5)
+        #expect(find.currentMatch == 1)
+        await find.step(forward: true, in: pdf)
+        #expect(find.currentMatch == 2)
+    }
+
     @MainActor
     final class Target: FindTarget {
         let matches: Int
@@ -52,6 +72,10 @@ struct FindInPageTests {
         private(set) var shown = 0
         private(set) var cleared = false
         var canShow = true
+        /// Like a PDF: nothing to show once cleared, until counted again.
+        var forgetsClearedMatches = false
+        private var position = 0
+        private var hasMatches = false
         private var isAnswered = false
         private var gate: CheckedContinuation<Void, Never>?
         private var asked: CheckedContinuation<Void, Never>?
@@ -78,19 +102,23 @@ struct FindInPageTests {
             asked?.resume()
             asked = nil
             if !isAnswered { await withCheckedContinuation { gate = $0 } }
+            hasMatches = true
+            position = 0
             return matches
         }
 
         func showNextMatch(of query: String, forward: Bool) async -> FindStep {
-            guard canShow else { return .none }
+            guard canShow, hasMatches || !forgetsClearedMatches else { return .none }
             shown += 1
-            return .shown(position: knowsPosition ? shown : nil)
+            position = position % matches + 1
+            return .shown(position: knowsPosition ? position : nil)
         }
 
         func selectedText() async -> String? { nil }
 
         func clearMatches() {
             cleared = true
+            hasMatches = false
         }
     }
 }

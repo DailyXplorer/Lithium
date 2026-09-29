@@ -256,8 +256,8 @@ struct CapturePreview: View {
     @AppStorage(Preference.captureInk) private var ink = "#FF3B30"
     @State private var rendered: CGImage?
     @State private var annotations: [Annotation] = []
-    @State private var past: [[Annotation]] = []
-    @State private var future: [[Annotation]] = []
+    @State private var past: [Step] = []
+    @State private var future: [Step] = []
     /// The mark being drawn, moved or reshaped, shown over the preview until the render that includes it replaces the preview.
     @State private var draft: Annotation?
     @State private var drag: Drag?
@@ -275,6 +275,13 @@ struct CapturePreview: View {
         "#FF3B30": "Red", "#FF9500": "Orange", "#FFD60A": "Yellow", "#34C759": "Green",
         "#0A84FF": "Blue", "#1D1D1F": "Black", "#FFFFFF": "White",
     ]
+
+    /// The marks as they were before a change, for undo and redo. A change the backdrop made also
+    /// keeps the backdrop, which goes back with the marks; other changes leave it as it is.
+    private struct Step {
+        var annotations: [Annotation]
+        var backdrop: CaptureBackdrop?
+    }
 
     /// What the drag under way does.
     private enum Drag: Equatable {
@@ -354,13 +361,14 @@ struct CapturePreview: View {
             rendered = CaptureComposition.render(shot, style)
             if drag == nil { draft = nil }
         }
-        .onChange(of: style.backdrop) {
+        .onChange(of: backdrop) { previous, current in
             // Without a backdrop the image is only the screenshot: marks drawn wholly on the old margin
-            // would stay in the list unseen, unexported and out of reach. Undo brings them back.
-            guard style.backdrop == .none else { return }
+            // would stay in the list unseen, unexported and out of reach. Undo brings them back, and
+            // the backdrop they were drawn on with them.
+            guard current == .none else { return }
             let screenshot = CGRect(origin: .zero, size: shot.size)
             guard annotations.contains(where: { !$0.touches(screenshot) }) else { return }
-            change { $0.removeAll { !$0.touches(screenshot) } }
+            change(restoringBackdrop: previous) { $0.removeAll { !$0.touches(screenshot) } }
             if !annotations.contains(where: { $0.id == selection }) { selection = nil }
         }
         .onChange(of: toolName) {
@@ -564,22 +572,33 @@ struct CapturePreview: View {
         }
     }
 
-    private func change(_ update: (inout [Annotation]) -> Void) {
-        past.append(annotations)
+    /// With `restoringBackdrop`, undoing the change also puts that backdrop back.
+    private func change(restoringBackdrop previous: CaptureBackdrop? = nil, _ update: (inout [Annotation]) -> Void) {
+        past.append(Step(annotations: annotations, backdrop: previous))
         future.removeAll()
         update(&annotations)
     }
 
     private func undo() {
         guard let previous = past.popLast() else { return }
-        future.append(annotations)
-        annotations = previous
+        future.append(step(toward: previous))
+        restore(previous)
     }
 
     private func redo() {
         guard let next = future.popLast() else { return }
-        past.append(annotations)
-        annotations = next
+        past.append(step(toward: next))
+        restore(next)
+    }
+
+    /// Where things are now, to come back to after going to `other`: with the backdrop if `other` moves it.
+    private func step(toward other: Step) -> Step {
+        Step(annotations: annotations, backdrop: other.backdrop == nil ? nil : backdrop)
+    }
+
+    private func restore(_ step: Step) {
+        annotations = step.annotations
+        if let restored = step.backdrop { backdrop = restored }
     }
 
     private func copy() {

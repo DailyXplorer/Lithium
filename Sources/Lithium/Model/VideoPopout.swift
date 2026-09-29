@@ -44,7 +44,7 @@ final class VideoPopout {
             request += 1
             pending = nil
         }
-        guard let previous, previous !== tab, !previous.isAsleep, !previous.isHome, previous.pdf == nil else { return }
+        guard let previous, previous !== tab, !previous.isAsleep, previous.pdf == nil else { return }
         request += 1
         let current = request
         Task {

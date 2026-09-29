@@ -121,13 +121,27 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "setSidebarStyle":
             if let style = (value as? String).flatMap(SidebarStyle.init(rawValue:)) { defaults.set(style.rawValue, forKey: Preference.sidebarStyle) }
         case "setSidebarColor":
-            if let hex = value as? String, hex.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil {
-                defaults.set(hex.uppercased(), forKey: Preference.sidebarColor)
+            if let hex = Self.hex(value) { defaults.set(hex, forKey: Preference.sidebarColor) }
+        case "setStartBackground":
+            guard let kind = (value as? String).flatMap(StartBackground.init(rawValue:)) else { break }
+            if kind == .image, StartImage.current == nil {
+                _ = await StartImage.choose()
+            } else {
+                defaults.set(kind.rawValue, forKey: Preference.startBackground)
             }
+        case "setStartColor":
+            if let hex = Self.hex(value) { defaults.set(hex, forKey: Preference.startColor) }
+        case "setStartGradient":
+            if let colors = value as? [String: Any], let from = Self.hex(colors["from"]), let to = Self.hex(colors["to"]) {
+                defaults.set(from, forKey: Preference.startGradientFrom)
+                defaults.set(to, forKey: Preference.startGradientTo)
+            }
+        case "chooseStartImage":
+            _ = await StartImage.choose()
         case "setWebsiteFont":
             PageStyle.usesDMSansEverywhere = value as? Bool ?? true
         case "setSearchEngine":
-            if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { browser.setSearchEngine(engine) }
+            if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { defaults.set(engine.rawValue, forKey: SearchEngine.preferenceKey) }
         case "updateFilters":
             browser.privacy.updateFiltersNow()
         case "enableProtections":
@@ -173,6 +187,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         return (state(browser), nil)
     }
 
+    /// A "#RRGGBB" color from a page, uppercased; nil for anything else.
+    private static func hex(_ value: Any?) -> String? {
+        guard let hex = value as? String, hex.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil else { return nil }
+        return hex.uppercased()
+    }
+
     private static func dataURL(_ image: NSImage) -> String? {
         guard let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
@@ -195,6 +215,13 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "sidebarColor": defaults.string(forKey: Preference.sidebarColor) ?? Theme.defaultSidebarHex,
                 "defaultColor": Theme.defaultSidebarHex,
                 "websiteFont": PageStyle.usesDMSansEverywhere,
+                "startPage": [
+                    "background": defaults.string(forKey: Preference.startBackground) ?? StartBackground.lithium.rawValue,
+                    "color": defaults.string(forKey: Preference.startColor) ?? StartBackground.defaultColor,
+                    "gradientFrom": defaults.string(forKey: Preference.startGradientFrom) ?? StartBackground.defaultGradient.0,
+                    "gradientTo": defaults.string(forKey: Preference.startGradientTo) ?? StartBackground.defaultGradient.1,
+                    "hasImage": StartImage.current != nil,
+                ] as [String: Any],
             ],
             "search": [
                 "engine": SearchEngine.current.rawValue,

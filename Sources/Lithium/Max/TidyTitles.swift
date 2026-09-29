@@ -49,7 +49,7 @@ final class TidyTitles {
 
     /// Called when a page finishes loading or its title settles.
     func update(_ tab: Tab) {
-        guard isEnabled, !tab.isHome, let host = tab.url?.host(), tab.url?.scheme?.hasPrefix("http") == true else { return }
+        guard isEnabled, let host = tab.url?.host(), tab.url?.scheme?.hasPrefix("http") == true else { return }
         let original = tab.title
         guard !original.isEmpty else { return }
 

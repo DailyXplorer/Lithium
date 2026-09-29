@@ -20,7 +20,6 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var loadedWebView: WKWebView?
     /// What the next web view is made with.
     @ObservationIgnored private var configuration: WKWebViewConfiguration
-    let isHome: Bool
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
     /// The page's back and forward history (and scroll position) while the tab sleeps, so it
@@ -81,9 +80,8 @@ final class Tab: NSObject, Identifiable {
         return "New Tab"
     }
 
-    init(browser: Browser, configuration: WKWebViewConfiguration, isHome: Bool = false) {
+    init(browser: Browser, configuration: WKWebViewConfiguration) {
         self.browser = browser
-        self.isHome = isHome
         self.configuration = configuration
         super.init()
     }
@@ -168,7 +166,7 @@ final class Tab: NSObject, Identifiable {
         if favicon == nil { favicon = PDFReader.icon }
         if title.isEmpty {
             title = reader.title
-            if let url, !isHome { browser?.history.updateTitle(title, for: url) }
+            if let url { browser?.history.updateTitle(title, for: url) }
             browser?.tidyTitles.update(self)
             tellExtensions(.title)
         }
@@ -222,7 +220,7 @@ final class Tab: NSObject, Identifiable {
     /// which may be stuck, or slow to answer when memory is short: sound is as last noted,
     /// which every sleep pass does for every tab first.
     func canSleep(idleFor interval: TimeInterval) -> Bool {
-        guard !isAsleep, !isHome, url != nil else { return false }
+        guard !isAsleep, url != nil else { return false }
         return !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
             && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
@@ -305,7 +303,7 @@ final class Tab: NSObject, Identifiable {
                     self.title = webView.title ?? ""
                     self.tidyTitle = nil
                     self.browser?.tidyTitles.update(self)
-                    if let url = self.url, !self.isHome { self.browser?.history.updateTitle(self.title, for: url) }
+                    if let url = self.url { self.browser?.history.updateTitle(self.title, for: url) }
                     self.tellExtensions(.title)
                 }
             },
@@ -315,7 +313,7 @@ final class Tab: NSObject, Identifiable {
                     if url.host() != self.url?.host() { self.favicon = nil; self.faviconData = nil }
                     self.url = url
                     // Same-document navigations (pushState) never reach didFinish.
-                    if !webView.isLoading, !self.isHome { self.browser?.history.record(url, title: self.title) }
+                    if !webView.isLoading { self.browser?.history.record(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -338,7 +336,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func tellExtensions(_ properties: WKWebExtension.TabChangedProperties) {
-        guard !isHome, !isAsleep, let browser, browser.tabs.contains(self) else { return }
+        guard !isAsleep, let browser, browser.tabs.contains(self) else { return }
         browser.extensions.didChange(properties, of: self)
     }
 
@@ -363,7 +361,7 @@ final class Tab: NSObject, Identifiable {
 
     /// A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
     private func closeIfOnlyADownload() {
-        guard !isHome, webView.backForwardList.currentItem == nil else { return }
+        guard webView.backForwardList.currentItem == nil else { return }
         browser?.close(self)
     }
 
@@ -473,12 +471,6 @@ extension Tab: WKNavigationDelegate {
         setInternalBridge(false)
         setWebstoreBridge(ChromeWebStore.isStore(url))
 
-        if isHome, !Browser.isHomeURL(url) {
-            // The whole request, so a search form sent as POST keeps its query.
-            browser?.newTab(request: action.request)
-            return (.cancel, preferences)
-        }
-
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) {
             browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
             return (.cancel, preferences)
@@ -565,7 +557,7 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
-        guard failedURL == nil, !isHome else { return }
+        guard failedURL == nil else { return }
         if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         Task { await refreshFavicon() }
@@ -584,7 +576,7 @@ extension Tab: WKNavigationDelegate {
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let browser else { return }
-        guard isHome || browser.selectedTabID == id else {
+        guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
             return
         }
@@ -616,8 +608,7 @@ extension Tab: WKUIDelegate {
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
         // window.open with no features at all, which can't be told apart from one.
         let geometry = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y]
-        // The home page never sleeps, so it has no link to keep.
-        if !isHome, geometry.contains(where: { $0 != nil }) { popup.opener = self }
+        if geometry.contains(where: { $0 != nil }) { popup.opener = self }
         return popup.webView
     }
 
@@ -726,7 +717,7 @@ extension Tab: WKUIDelegate {
 /// Tabs as extensions see them (`chrome.tabs`).
 extension Tab: WKWebExtensionTab {
     func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-        isHome ? nil : browser?.extensions.window
+        browser?.extensions.window
     }
 
     func indexInWindow(for context: WKWebExtensionContext) -> Int {

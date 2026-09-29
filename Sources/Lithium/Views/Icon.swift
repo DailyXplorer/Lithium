@@ -43,6 +43,13 @@ enum Phosphor: String {
     case speakerOff = "speaker-slash"
     case returnToTab = "arrow-square-in"
     case popout = "picture-in-picture"
+    case pen = "pencil-simple"
+    case highlighter
+    case arrow = "arrow-up-right"
+    case rectangle = "square"
+    case ellipse = "circle"
+    case undo = "arrow-u-up-left"
+    case redo = "arrow-u-up-right"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

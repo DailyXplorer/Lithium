@@ -109,6 +109,7 @@ struct CaptureStyle: Equatable {
     var backdrop: CaptureBackdrop
     var showsBadge: Bool
     var showsSidebar = false
+    var annotations: [Annotation] = []
 }
 
 /// The finished screenshot. Rendered once per style change, so the preview is the exported image.
@@ -124,6 +125,9 @@ struct CaptureComposition: View {
 
     var body: some View {
         let image = Image(decorative: shot.image(showingSidebar: style.showsSidebar), scale: shot.scale)
+            .overlay {
+                if !style.annotations.isEmpty { AnnotationLayer(annotations: style.annotations) }
+            }
         if style.backdrop == .none {
             image
         } else {
@@ -165,6 +169,31 @@ struct CaptureComposition: View {
     }
 }
 
+/// Marks over a screenshot. Highlights go under the ink and multiply with what they cover, like a
+/// marker on paper: dark text stays dark. `transform` maps the screenshot's points to the layer's.
+struct AnnotationLayer: View {
+    let annotations: [Annotation]
+    var transform = CGAffineTransform.identity
+    var clip: CGRect?
+
+    var body: some View {
+        ZStack {
+            canvas(annotations.filter { $0.tool == .highlighter })
+                .blendMode(.multiply)
+            canvas(annotations.filter { $0.tool != .highlighter })
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func canvas(_ marks: [Annotation]) -> some View {
+        Canvas { context, size in
+            context.clip(to: Path(clip ?? CGRect(origin: .zero, size: size)))
+            context.concatenate(transform)
+            for mark in marks { mark.draw(in: context) }
+        }
+    }
+}
+
 private struct CaptureBadge: View {
     let size: CGFloat
     let onDark: Bool
@@ -192,19 +221,39 @@ struct CapturePreview: View {
     @AppStorage(Preference.captureBackdrop) private var backdrop = CaptureBackdrop.wallpaper
     @AppStorage(Preference.captureBadge) private var showsBadge = true
     @AppStorage(Preference.captureSidebar) private var showsSidebar = false
+    @AppStorage(Preference.captureTool) private var toolName = ""
+    @AppStorage(Preference.captureInk) private var ink = "#FF3B30"
     @State private var rendered: CGImage?
+    @State private var annotations: [Annotation] = []
+    @State private var past: [[Annotation]] = []
+    @State private var future: [[Annotation]] = []
+    /// The mark being drawn, shown over the preview until the render that includes it replaces the preview.
+    @State private var draft: Annotation?
+    /// Resets when a drag ends and also when it is cancelled (Cmd-Tab away mid-stroke), which skips `onEnded`.
+    @GestureState private var isDragging = false
 
     static let colors: KeyValuePairs<String, String> = [
         "#FFFFFF": "White", "#E8E8ED": "Light Gray", "#1D1D1F": "Black",
         Theme.defaultSidebarHex: "Lavender", "#F4D9CD": "Peach", "#CDE7D6": "Mint",
     ]
 
+    static let inks: KeyValuePairs<String, String> = [
+        "#FF3B30": "Red", "#FF9500": "Orange", "#FFD60A": "Yellow", "#34C759": "Green",
+        "#0A84FF": "Blue", "#1D1D1F": "Black", "#FFFFFF": "White",
+    ]
+
+    private var tool: AnnotationTool? { AnnotationTool(rawValue: toolName) }
+
+    /// The highlighter only comes in fluorescent yellow; the other tools draw in the chosen ink.
+    private var color: String { tool == .highlighter ? Annotation.highlightHex : ink }
+
     private var style: CaptureStyle {
         let fallback = CaptureBackdrop.color(Self.colors[1].key)
         return CaptureStyle(
             backdrop: backdrop == .wallpaper && shot.wallpaper == nil ? fallback : backdrop,
             showsBadge: showsBadge,
-            showsSidebar: showsSidebar
+            showsSidebar: showsSidebar,
+            annotations: annotations
         )
     }
 
@@ -213,7 +262,9 @@ struct CapturePreview: View {
             preview
                 .frame(maxWidth: .infinity)
                 .frame(height: 440)
-                .padding(24)
+                .padding([.horizontal, .top], 24)
+            annotationBar
+                .padding(.vertical, 12)
             Divider()
             HStack(spacing: 12) {
                 BackdropPicker(selection: $backdrop, wallpaper: shot.wallpaper, colors: Self.colors)
@@ -253,6 +304,16 @@ struct CapturePreview: View {
         .frame(width: 920)
         .onChange(of: style, initial: true) {
             rendered = CaptureComposition.render(shot, style)
+            draft = nil
+        }
+        .onChange(of: toolName) {
+            // Each tool has its own drawing surface: changing tools mid-drag removes the surface, which
+            // cancels the drag without ending it, and the next surface only takes drags that start on it.
+            draft = nil
+        }
+        .onChange(of: isDragging) {
+            // A drag that ended has already committed its mark or dropped it; this drops the mark of a cancelled one.
+            if !isDragging { draft = nil }
         }
     }
 
@@ -262,10 +323,132 @@ struct CapturePreview: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
+                .overlay { drawingSurface(over: rendered) }
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
                 .help("\(rendered.width) × \(rendered.height) pixels")
         }
+    }
+
+    /// Takes drags on the preview while a tool is picked. The preview is the whole finished image,
+    /// scaled to fit, with the screenshot in its middle.
+    private func drawingSurface(over rendered: CGImage) -> some View {
+        GeometryReader { proxy in
+            let scale = proxy.size.width * shot.scale / CGFloat(rendered.width)
+            let frame = CGRect(
+                x: (proxy.size.width - shot.size.width * scale) / 2,
+                y: (proxy.size.height - shot.size.height * scale) / 2,
+                width: shot.size.width * scale,
+                height: shot.size.height * scale
+            )
+            ZStack {
+                if let draft {
+                    AnnotationLayer(
+                        annotations: [draft],
+                        transform: CGAffineTransform(translationX: frame.minX, y: frame.minY).scaledBy(x: scale, y: scale),
+                        clip: frame
+                    )
+                }
+                if let tool {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .pointerStyle(.rectSelection)
+                        .gesture(drawing(tool, on: frame, scale: scale))
+                        .id(tool)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    /// `frame` is where the screenshot shows in the preview, `scale` preview points per screenshot point.
+    private func drawing(_ tool: AnnotationTool, on frame: CGRect, scale: CGFloat) -> some Gesture {
+        let inShot = { (location: CGPoint) in
+            CGPoint(x: (location.x - frame.minX) / scale, y: (location.y - frame.minY) / scale)
+        }
+        return DragGesture(minimumDistance: 0)
+            .updating($isDragging) { _, dragging, _ in dragging = true }
+            .onChanged { value in
+                if draft == nil {
+                    draft = Annotation(tool: tool, colorHex: color, lineWidth: tool.lineWidth / scale, points: [inShot(value.startLocation)])
+                }
+                draft?.extend(to: inShot(value.location), constrained: NSEvent.modifierFlags.contains(.shift))
+            }
+            .onEnded { _ in
+                guard let mark = draft else { return }
+                if mark.isVisible {
+                    change { $0.append(mark) }
+                } else {
+                    draft = nil
+                }
+            }
+    }
+
+    /// Undo, redo and erasing change the marks, which drops the one being drawn while the drag
+    /// goes on and would start another from where it began: they wait for the drag to end.
+    private var isDrawing: Bool { draft != nil }
+
+    private var annotationBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 2) {
+                ForEach(AnnotationTool.allCases) { item in
+                    ToolButton(icon: item.icon, isSelected: tool == item) {
+                        toolName = tool == item ? "" : item.rawValue
+                    }
+                    .keyboardShortcut(item.shortcut, modifiers: [])
+                    .help("\(item.label) (\(item.shortcut.character.uppercased()))")
+                    .accessibilityLabel(item.label)
+                }
+            }
+            Divider().frame(height: 18)
+            HStack(spacing: 0) {
+                ForEach(Self.inks, id: \.key) { hex, name in
+                    Button { ink = hex } label: {
+                        InkSwatch(hex: hex, isSelected: tool != .highlighter && ink == hex)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(tool == .highlighter)
+                    .help(name)
+                    .accessibilityLabel(name)
+                }
+            }
+            .opacity(tool == .highlighter ? 0.35 : 1)
+            Divider().frame(height: 18)
+            HStack(spacing: 2) {
+                ToolButton(icon: .undo) { undo() }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(past.isEmpty || isDrawing)
+                    .help("Undo")
+                    .accessibilityLabel("Undo")
+                ToolButton(icon: .redo) { redo() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(future.isEmpty || isDrawing)
+                    .help("Redo")
+                    .accessibilityLabel("Redo")
+                ToolButton(icon: .trash) { change { $0.removeAll() } }
+                    .disabled(annotations.isEmpty || isDrawing)
+                    .help("Erase All")
+                    .accessibilityLabel("Erase All")
+            }
+        }
+    }
+
+    private func change(_ update: (inout [Annotation]) -> Void) {
+        past.append(annotations)
+        future.removeAll()
+        update(&annotations)
+    }
+
+    private func undo() {
+        guard let previous = past.popLast() else { return }
+        future.append(annotations)
+        annotations = previous
+    }
+
+    private func redo() {
+        guard let next = future.popLast() else { return }
+        past.append(annotations)
+        annotations = next
     }
 
     private func copy() {
@@ -355,6 +538,46 @@ private struct BackdropPicker: View {
         .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+private struct ToolButton: View {
+    let icon: Phosphor
+    var isSelected = false
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Icon(icon, size: 16)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .frame(width: 30, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isSelected ? Color.accentColor : isHovered && isEnabled ? Color.primary.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.35)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct InkSwatch: View {
+    let hex: String
+    let isSelected: Bool
+
+    var body: some View {
+        Circle()
+            .fill(Color(hex: hex))
+            .overlay(Circle().strokeBorder(.black.opacity(0.15)))
+            .frame(width: 18, height: 18)
+            .padding(3)
+            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: isSelected ? 2 : 0))
+            .frame(width: 28, height: 28)
+            .contentShape(Circle())
     }
 }
 

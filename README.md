@@ -53,7 +53,7 @@ Leave a tab while its video plays with sound, and the video goes on playing in a
 
 ## Screenshots
 
-The camera button in the toolbar captures Lithium's window, the way Arc's Portrait Mode did. Click anywhere to take the whole window, or drag to take an area. For the whole window, the preview shows it with or without the sidebar (closed by default), and sets it on the Mac's wallpaper, a solid color or nothing at all, with an optional "Made with Lithium" badge, then copies it or saves a PNG. Lithium captures its own window through ScreenCaptureKit's current-process content (`Model/ScreenCapture.swift`), so it needs no Screen Recording permission.
+The camera button in the toolbar captures Lithium's window, the way Arc's Portrait Mode did. Click anywhere to take the whole window, or drag to take an area. For the whole window, the preview shows it with or without the sidebar (closed by default), and sets it on the Mac's wallpaper, a solid color or nothing at all, with an optional "Made with Lithium" badge, then copies it or saves a PNG. Before that, you can draw on it: pen (P), highlighter (H), arrows (A), rectangles (R) and ellipses (O), in a choice of colors (the highlighter is always fluorescent yellow), with undo (⌘Z) and redo (⇧⌘Z). Shift draws lines and arrows at 45° steps, squares and circles. Highlights darken what they cover like a marker, so text under them stays readable. Marks are drawn as thick on the screenshot as they look in the preview, and stay on the screenshot when its background or sidebar changes (`Model/CaptureAnnotations.swift`). Lithium captures its own window through ScreenCaptureKit's current-process content (`Model/ScreenCapture.swift`), so it needs no Screen Recording permission.
 
 ## Max
 

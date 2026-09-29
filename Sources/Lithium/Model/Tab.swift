@@ -12,7 +12,8 @@ final class Tab: NSObject, Identifiable {
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = PageWebView(frame: .zero, configuration: configuration)
+        webView.translation = browser?.translation
         loadedWebView = webView
         attach(webView)
         return webView
@@ -362,6 +363,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         if browser?.textCorrections.isAvailable == true { controller.addUserScript(TextCorrections.script) }
+        controller.addUserScript(PageTranslation.script)
         privacy.addScripts(enabled, for: url, to: controller)
     }
 

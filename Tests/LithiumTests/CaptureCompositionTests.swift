@@ -87,7 +87,7 @@ struct CaptureCompositionTests {
         line.extend(to: CGPoint(x: 20, y: 0), constrained: false)
         line.extend(to: CGPoint(x: 40, y: 2), constrained: true)
         line.extend(to: CGPoint(x: 60, y: 3), constrained: true)
-        #expect(line.points == [.zero, CGPoint(x: 10, y: 5), CGPoint(x: 20, y: 0), CGPoint(x: 20 + hypot(40, 3), y: 0)])
+        #expect(line.points == [.zero, CGPoint(x: 10, y: 5), CGPoint(x: 20, y: 0), CGPoint(x: 20 + hypot(CGFloat(40), 3), y: 0)])
 
         // Letting go of Shift goes on from the end of the straight segment.
         line.extend(to: CGPoint(x: 70, y: 10), constrained: false)

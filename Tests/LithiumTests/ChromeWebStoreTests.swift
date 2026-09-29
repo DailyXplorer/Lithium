@@ -119,6 +119,26 @@ struct ChromeWebStoreTests {
         #expect(!access("https://example.com/*").isCovered(by: access("http://*/*")))
     }
 
+    /// The names shown drop the path, and many permissions show no warning; what the package may
+    /// reach and use is compared as it is.
+    @Test func accessIsCoveredOnlyForThePathsAndPermissionsShown() {
+        let shown = ChromeWebStore.Access(manifest: [
+            "permissions": ["storage"],
+            "host_permissions": ["https://www.example.com/docs/*"],
+        ])
+        func access(_ pattern: String, _ permissions: [String] = ["storage"]) -> ChromeWebStore.Access {
+            ChromeWebStore.Access(manifest: ["permissions": permissions, "host_permissions": [pattern]])
+        }
+        #expect(access("https://www.example.com/docs/*").isCovered(by: shown))
+        #expect(access("https://www.example.com/docs/api/*").isCovered(by: shown))
+        #expect(access("https://www.example.com/docs/*", []).isCovered(by: shown))
+        #expect(!access("https://www.example.com/*").isCovered(by: shown))
+        #expect(!access("*://*.example.com/*").isCovered(by: shown))
+        #expect(!access("https://www.example.com/docs*").isCovered(by: shown))
+        #expect(!access("https://www.example.com/docs/*", ["storage", "cookies"]).isCovered(by: shown))
+        #expect(!access("https://www.example.com/docs/*", ["scripting"]).isCovered(by: shown))
+    }
+
     /// The store page gets Chrome's user agent and `chrome.webstorePrivate`, answered by Lithium;
     /// installing needs the user's approval first, and no other site can reach the bridge.
     @Test func storePageTalksToLithiumAndNoOtherSiteDoes() async throws {

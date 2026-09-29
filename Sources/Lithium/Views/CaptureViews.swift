@@ -354,6 +354,15 @@ struct CapturePreview: View {
             rendered = CaptureComposition.render(shot, style)
             if drag == nil { draft = nil }
         }
+        .onChange(of: style.backdrop) {
+            // Without a backdrop the image is only the screenshot: marks drawn wholly on the old margin
+            // would stay in the list unseen, unexported and out of reach. Undo brings them back.
+            guard style.backdrop == .none else { return }
+            let screenshot = CGRect(origin: .zero, size: shot.size)
+            guard annotations.contains(where: { !$0.touches(screenshot) }) else { return }
+            change { $0.removeAll { !$0.touches(screenshot) } }
+            if !annotations.contains(where: { $0.id == selection }) { selection = nil }
+        }
         .onChange(of: toolName) {
             // Each tool has its own drawing surface: changing tools mid-drag removes the surface, which
             // cancels the drag without ending it, and the next surface only takes drags that start on it.

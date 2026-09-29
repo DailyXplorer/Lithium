@@ -169,6 +169,11 @@ struct Annotation: Equatable, Identifiable {
         return CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
     }
 
+    /// Whether any of the mark, line width included, is drawn inside `rect`.
+    func touches(_ rect: CGRect) -> Bool {
+        path.boundingRect.insetBy(dx: -lineWidth / 2, dy: -lineWidth / 2).intersects(rect)
+    }
+
     /// A click with a freehand tool leaves a dot; shapes and arrows need some size to be kept.
     var isVisible: Bool {
         guard let start = points.first, let end = points.last else { return false }

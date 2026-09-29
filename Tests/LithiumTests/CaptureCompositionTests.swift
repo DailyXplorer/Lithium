@@ -70,6 +70,16 @@ struct CaptureCompositionTests {
         #expect(hex(framed, x: 2 * 4, y: 2 * (32 + 20)) == "#FFFFFF")
     }
 
+    @Test func marksTouchTheScreenshotWithTheirLineWidth() {
+        let screenshot = CGRect(x: 0, y: 0, width: 100, height: 50)
+        let inside = Annotation(tool: .rectangle, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -20, y: -10), CGPoint(x: 50, y: 40)])
+        let margin = Annotation(tool: .rectangle, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -30, y: 5), CGPoint(x: -10, y: 20)])
+        let edge = Annotation(tool: .pen, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -1, y: 10), CGPoint(x: -1, y: 30)])
+        #expect(inside.touches(screenshot))
+        #expect(!margin.touches(screenshot))
+        #expect(edge.touches(screenshot))
+    }
+
     @Test func marksStayOnANarrowShotWidenedByTheBadge() throws {
         // 20 × 20 points at 2×: the badge is wider than the shot and its margins, which widens the image.
         let context = CGContext(

@@ -53,14 +53,17 @@ struct TranslationPanel: View {
         .font(Theme.font(13))
         .padding(16)
         .frame(width: 340)
-        .task { languages = await LanguageAvailability().supportedLanguages.sorted { Self.name(of: $0) < Self.name(of: $1) } }
+        .task {
+            languages = await LanguageAvailability().supportedLanguages
+            languages.sort { name(of: $0) < name(of: $1) }
+        }
         .translationTask(TranslationSession.Configuration(target: target)) { session in
             state = .working
             do {
                 let response = try await session.translate(text)
                 state = .translated(response.targetText, from: response.sourceLanguage)
             } catch {
-                state = .failed("This text couldn’t be translated into \(Self.name(of: target)).")
+                state = .failed("This text couldn’t be translated into \(name(of: target)).")
             }
         }
     }
@@ -68,11 +71,11 @@ struct TranslationPanel: View {
     private var languageLine: some View {
         HStack(spacing: 4) {
             if case .translated(_, let source) = state {
-                Text("\(Self.name(of: source)) to").foregroundStyle(.secondary)
+                Text("\(name(of: source)) to").foregroundStyle(.secondary)
             }
-            Menu(Self.name(of: target)) {
+            Menu(name(of: target)) {
                 ForEach(languages, id: \.minimalIdentifier) { language in
-                    Button(Self.name(of: language)) { target = language }
+                    Button(name(of: language)) { target = language }
                 }
             }
             .menuStyle(.button)
@@ -82,9 +85,11 @@ struct TranslationPanel: View {
         .font(Theme.font(12))
     }
 
-    /// "French" for fr-US, as the region doesn't change the translation; "Chinese (Taiwan)" does.
-    private static func name(of language: Locale.Language) -> String {
-        let identifier = language.languageCode == "zh" ? language.minimalIdentifier : language.languageCode?.identifier
+    /// "French" for fr-US, as Translation has one French; "English (United Kingdom)" for en-GB,
+    /// as it has two Englishes.
+    private func name(of language: Locale.Language) -> String {
+        let variants = languages.filter { $0.languageCode == language.languageCode }.count
+        let identifier = variants > 1 ? language.minimalIdentifier : language.languageCode?.identifier
         return identifier.flatMap { Locale.current.localizedString(forIdentifier: $0) } ?? language.minimalIdentifier
     }
 }

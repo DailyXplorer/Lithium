@@ -1,6 +1,7 @@
 import AppKit
 import NaturalLanguage
 import SwiftUI
+@preconcurrency import Translation
 import WebKit
 
 /// A page's web view, which lets Lithium change its context menu.
@@ -42,10 +43,13 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
 
     private let summaries: PageSummaries
     private var popover: NSPopover?
+    /// The languages Translation translates into, which the summary language may not be one of.
+    private var supported: [Locale.Language] = []
 
     init(summaries: PageSummaries) {
         self.summaries = summaries
         super.init()
+        Task { supported = await LanguageAvailability().supportedLanguages }
     }
 
     func install(on configuration: WKWebViewConfiguration) {
@@ -68,7 +72,7 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
     @objc private func translate(_ item: NSMenuItem) {
         guard let request = item.representedObject as? Request, let webView = request.webView, webView.window != nil else { return }
         popover?.close()
-        let target = Self.target(for: request.text, chosen: summaries.language)
+        let target = Self.target(for: request.text, chosen: summaries.language, supported: supported)
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: TranslationPanel(text: request.text, target: target))
@@ -88,9 +92,13 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// The chosen language, then the preferred ones, skipping the one the text is written in.
-    nonisolated static func target(for text: String, chosen: String?, preferred: [String] = Locale.preferredLanguages) -> Locale.Language {
+    /// The chosen language, then the preferred ones, skipping the one the text is written in and
+    /// those Translation doesn't have (all are kept until it has said which it has).
+    nonisolated static func target(
+        for text: String, chosen: String?, preferred: [String] = Locale.preferredLanguages, supported: [Locale.Language]
+    ) -> Locale.Language {
         let languages = ((chosen.map { [$0] } ?? []) + preferred).map(Locale.Language.init(identifier:))
+            .filter { language in supported.isEmpty || supported.contains { $0.languageCode == language.languageCode } }
         let source = NLLanguageRecognizer.dominantLanguage(for: text).map { Locale.Language(identifier: $0.rawValue).languageCode }
         return languages.first { $0.languageCode != source } ?? languages.first ?? Locale.Language(identifier: "en")
     }

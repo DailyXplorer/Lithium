@@ -365,10 +365,8 @@ struct CapturePreview: View {
             // Without a backdrop the image is only the screenshot: marks drawn wholly on the old margin
             // would stay in the list unseen, unexported and out of reach. Undo brings them back, and
             // the backdrop they were drawn on with them.
-            guard current == .none else { return }
-            let screenshot = CGRect(origin: .zero, size: shot.size)
-            guard annotations.contains(where: { !$0.touches(screenshot) }) else { return }
-            change(restoringBackdrop: previous) { $0.removeAll { !$0.touches(screenshot) } }
+            guard current == .none, annotations.contains(where: { !$0.touches(screenshotBounds) }) else { return }
+            change(restoringBackdrop: previous) { $0.removeAll { !$0.touches(screenshotBounds) } }
             if !annotations.contains(where: { $0.id == selection }) { selection = nil }
         }
         .onChange(of: toolName) {
@@ -596,10 +594,14 @@ struct CapturePreview: View {
         Step(annotations: annotations, backdrop: other.backdrop == nil ? nil : backdrop)
     }
 
+    /// Without a backdrop, marks wholly off the screenshot can't be seen or grabbed, so they aren't
+    /// brought back (after Erase All, then no backdrop, say).
     private func restore(_ step: Step) {
-        annotations = step.annotations
         if let restored = step.backdrop { backdrop = restored }
+        annotations = (step.backdrop ?? backdrop) == .none ? step.annotations.filter { $0.touches(screenshotBounds) } : step.annotations
     }
+
+    private var screenshotBounds: CGRect { CGRect(origin: .zero, size: shot.size) }
 
     private func copy() {
         guard let rendered, let png = Self.png(rendered) else { return }

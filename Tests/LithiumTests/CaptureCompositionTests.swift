@@ -78,6 +78,12 @@ struct CaptureCompositionTests {
         #expect(inside.touches(screenshot))
         #expect(!margin.touches(screenshot))
         #expect(edge.touches(screenshot))
+
+        // A frame or ellipse drawn in the margin all around the screenshot only surrounds it.
+        let frame = Annotation(tool: .rectangle, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -20, y: -20), CGPoint(x: 120, y: 70)])
+        let ring = Annotation(tool: .ellipse, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -60, y: -60), CGPoint(x: 160, y: 110)])
+        #expect(!frame.touches(screenshot))
+        #expect(!ring.touches(screenshot))
     }
 
     @Test func marksStayOnANarrowShotWidenedByTheBadge() throws {

@@ -458,7 +458,8 @@ extension Tab: WKNavigationDelegate {
         // loads the address instead, without the form.
         if action.navigationType == .formResubmitted {
             guard await confirmResubmission(of: url, inFrame: !isMainFrame) else {
-                if isMainFrame, !hasShownPage { Task { self.load(url) } }
+                // Unless the tab was sent elsewhere meanwhile (an extension's address, say).
+                if isMainFrame, !hasShownPage { Task { if self.url == url { self.load(url) } } }
                 return (.cancel, preferences)
             }
         }
@@ -772,9 +773,14 @@ extension Tab: WKWebExtensionTab {
         browser?.close(self)
     }
 
-    /// Loading the address wakes a sleeping tab by itself, straight onto it rather than its old page.
+    /// A sleeping tab gets its history back, so Back returns to where it slept, and goes straight
+    /// on to the address: the old page's load is superseded rather than waited for.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         lastActive = Date()
+        if isAsleep, let state = sleepingState {
+            sleepingState = nil
+            webView.interactionState = state
+        }
         load(url)
     }
 

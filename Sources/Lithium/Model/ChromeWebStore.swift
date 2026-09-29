@@ -128,6 +128,9 @@ enum ChromeWebStore {
         var permissions: [String] = []
         /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
         private var patterns: Set<SitePattern> = []
+        /// Also what decides coverage: `permissions` are only their warnings, and many have none
+        /// (`cookies`, `scripting`), though every one asked for is granted.
+        private var apiPermissions: Set<String> = []
 
         init(manifest: [String: Any]) {
             let declared = manifest["permissions"] as? [String] ?? []
@@ -139,6 +142,7 @@ enum ChromeWebStore {
             allSites = hosts.contains("*")
             sites = allSites ? [] : Set(hosts)
             self.patterns = Set(patterns.compactMap(SitePattern.init))
+            apiPermissions = Set(declared.filter { !$0.contains("://") && $0 != "<all_urls>" })
             for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
                 permissions.append(warning)
             }
@@ -147,11 +151,11 @@ enum ChromeWebStore {
         /// Whether the user, having agreed to `approved`, already agreed to all of this.
         func isCovered(by approved: Access) -> Bool {
             patterns.allSatisfy { pattern in approved.patterns.contains { $0.covers(pattern) } }
-                && Set(permissions).isSubset(of: approved.permissions)
+                && apiPermissions.isSubset(of: approved.apiPermissions)
         }
     }
 
-    /// The scheme and host of a match pattern, which decide the pages it reaches.
+    /// The scheme, host and path of a match pattern, which decide the pages it reaches.
     struct SitePattern: Hashable {
         /// Nil for `<all_urls>`, every scheme; "*" is http and https, as in Chrome.
         let scheme: String?
@@ -159,6 +163,8 @@ enum ChromeWebStore {
         let host: String
         /// The host and every subdomain of it, from a leading "*.".
         let withSubdomains: Bool
+        /// From the "/" on, "*" standing for any characters.
+        let path: String
 
         /// Nil for a pattern that reaches no site (such as `file:` patterns), as `host(of:)`.
         init?(_ pattern: String) {
@@ -166,10 +172,14 @@ enum ChromeWebStore {
                 scheme = nil
                 host = "*"
                 withSubdomains = true
+                path = "/*"
                 return
             }
             guard let range = pattern.range(of: "://") else { return nil }
-            let authority = pattern[range.upperBound...].prefix { $0 != "/" }.lowercased()
+            let rest = pattern[range.upperBound...]
+            let slash = rest.firstIndex(of: "/") ?? rest.endIndex
+            let authority = rest[..<slash].lowercased()
+            path = String(rest[slash...])
             withSubdomains = authority.hasPrefix("*.")
             host = withSubdomains ? String(authority.dropFirst(2)) : authority
             guard !host.isEmpty else { return nil }
@@ -180,10 +190,39 @@ enum ChromeWebStore {
             guard let scheme else { return true }
             guard let otherScheme = other.scheme,
                   scheme == otherScheme || (scheme == "*" && ["http", "https"].contains(otherScheme)) else { return false }
+            guard Self.matches(path, other.path) else { return false }
             if host == "*" { return true }
             if other.host == "*" { return false }
             if withSubdomains { return other.host == host || other.host.hasSuffix("." + host) }
             return !other.withSubdomains && other.host == host
+        }
+
+        /// Whether `text`, its own "*" taken as a plain character, matches `glob`: then every path
+        /// the text reaches as a pattern, the glob reaches too. Backtracks to the last "*" only,
+        /// so a manifest full of them can't stall the check.
+        static func matches(_ glob: String, _ text: String) -> Bool {
+            let wildcard = Array(glob), literal = Array(text)
+            var g = 0, t = 0
+            var star: Int?
+            var resume = 0
+            while t < literal.count {
+                if g < wildcard.count, wildcard[g] == "*" {
+                    star = g
+                    resume = t
+                    g += 1
+                } else if g < wildcard.count, wildcard[g] == literal[t] {
+                    g += 1
+                    t += 1
+                } else if let star {
+                    g = star + 1
+                    resume += 1
+                    t = resume
+                } else {
+                    return false
+                }
+            }
+            while g < wildcard.count, wildcard[g] == "*" { g += 1 }
+            return g == wildcard.count
         }
     }
 

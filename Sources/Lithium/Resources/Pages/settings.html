@@ -127,7 +127,7 @@
 
   <section id="permissions" class="page">
     <h2>Site Permissions</h2>
-    <p class="lead">Sites ask the first time they need your camera, microphone or location. Your answers live here.</p>
+    <p class="lead">Sites ask the first time they need your camera, microphone or location, or a frame in them wants to download a file. Your answers live here.</p>
     <div id="permission-list" style="margin-top: 32px"></div>
   </section>
 
@@ -223,7 +223,7 @@
       return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
     }) : [el('div', { className: 'empty', textContent: 'None. Turn protections off for one site from the shield in the toolbar.' })]));
 
-    const kinds = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location']];
+    const kinds = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location'], ['downloads', 'Downloads']];
     $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
       el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...kinds.map(([, label]) => el('th', { textContent: label }))])]),
       el('tbody', {}, permissions.map((entry) => el('tr', {}, [

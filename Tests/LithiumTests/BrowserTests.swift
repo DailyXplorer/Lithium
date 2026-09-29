@@ -106,9 +106,10 @@ struct BrowserTests {
         #expect(browser.selectedTabID == third.id)
     }
 
-    /// A page downloads what it can't show; a frame inside it (an ad) never does.
+    /// A page downloads what it can't show; a frame inside it (an ad, or a site's Download button
+    /// pointing a hidden frame at the file) asks first, as in Safari, once for all its frames.
     /// Served over HTTP: WebKit itself never downloads a data: frame.
-    @Test func onlyThePageItselfDownloads() async throws {
+    @Test func aFrameAsksBeforeDownloading() async throws {
         let (listener, base) = try await LocalHTTP.serve([
             "/": ("Content-Type: text/html", #"<iframe src="/file"></iframe><iframe src="/attachment"></iframe>"#),
             "/file": ("Content-Type: application/octet-stream", "Lithium"),
@@ -116,14 +117,48 @@ struct BrowserTests {
         ])
         defer { listener.cancel() }
         let browser = Browser()
+        let host = try #require(base.host())
+        defer { browser.permissions.set(nil, for: .downloads, host: host) }
         let before = Downloads.shared.items.count
         let page = browser.newTab(url: base)
-        #expect(await waitUntil(30) { loaded(page) })
+        #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } })
         try await Task.sleep(for: .seconds(1))
+        let asked = browser.permissions.pending.filter { $0.tabID == page.id }
+        #expect(asked.count == 1)
+        let request = try #require(asked.first)
+        #expect(request.kinds == [.downloads] && request.host == host)
         #expect(Downloads.shared.items.count == before)
 
+        browser.permissions.answer(request, allow: true)
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 2 })
+
         browser.newTab(url: base.appending(path: "file"))
-        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 3 })
+        #expect(browser.permissions.pending.isEmpty, "the page itself downloads without asking")
+    }
+
+    /// A prompt left unanswered goes away with its page: answered over the next one, it would be
+    /// taken for that page's.
+    @Test func aDownloadPromptGoesAwayWithItsPage() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<iframe src="/attachment"></iframe>"#),
+            "/attachment": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+            "/next": ("Content-Type: text/html", "<p>Next</p>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let host = try #require(base.host())
+        let before = Downloads.shared.items.count
+        let page = browser.newTab(url: base)
+        defer { browser.close(page) }
+        #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } })
+
+        page.load(base.appending(path: "next"))
+        #expect(await waitUntil(30) { loaded(page) && page.url?.path() == "/next" })
+        #expect(!browser.permissions.pending.contains { $0.tabID == page.id })
+        #expect(browser.permissions.decisions[host]?[.downloads] == nil, "nothing is remembered")
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
     }
 
     /// A tab that slept wakes on the page it showed, with its back history.

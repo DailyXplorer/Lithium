@@ -34,6 +34,9 @@ final class Tab: NSObject, Identifiable {
     /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
+    /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
+    /// address as soon as it starts loading, while the frames still are the old page's.
+    @ObservationIgnored private var shownHost: String?
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -493,8 +496,11 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
-        // Only the page itself downloads: a frame in it (an ad) would drop files in Downloads without a click.
-        return response.isForMainFrame ? .download : .cancel
+        if response.isForMainFrame { return .download }
+        // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
+        // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
+        guard let browser, let host = shownHost, !host.isEmpty else { return .cancel }
+        return await browser.permissions.request([.downloads], host: host, tabID: id) ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -518,6 +524,9 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        // A prompt left from the page before would read as the new page's.
+        browser?.permissions.cancel(tabID: id)
+        shownHost = webView.url?.host()
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }

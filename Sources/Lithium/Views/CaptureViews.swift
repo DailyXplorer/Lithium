@@ -305,6 +305,10 @@ struct CapturePreview: View {
             rendered = CaptureComposition.render(shot, style)
             draft = nil
         }
+        .onChange(of: toolName) {
+            // Changing tools mid-drag removes the drawing surface, which cancels the drag without ending it.
+            draft = nil
+        }
     }
 
     @ViewBuilder private var preview: some View {

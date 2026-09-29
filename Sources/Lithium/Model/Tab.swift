@@ -181,8 +181,11 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// A click or a key on the page itself (Browser watches the window's events).
-    func noteUserInput() {
+    /// A click, or a key pressing a button, on the page itself (Browser watches the window's
+    /// events). A key doesn't extend a moment already running: Space scrolling the page would
+    /// otherwise keep it open.
+    func noteUserInput(isKey: Bool = false) {
+        if isKey, Date().timeIntervalSince(lastUserInput) < Self.frameDownloadWindow { return }
         lastUserInput = Date()
     }
 
@@ -531,6 +534,8 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        // The click was on the page before: the new page's frames haven't earned a download.
+        lastUserInput = .distantPast
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }

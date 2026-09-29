@@ -127,10 +127,11 @@ struct BrowserTests {
     }
 
     /// A site's Download button may point a hidden frame at the file: right after the user acts
-    /// on the page, a frame downloads.
+    /// on the page, a frame downloads. The next page's frames don't, even that soon after.
     @Test func aFrameDownloadsRightAfterTheUserActsOnThePage() async throws {
         let (listener, base) = try await LocalHTTP.serve([
             "/": ("Content-Type: text/html", "<p>Download</p>"),
+            "/next": ("Content-Type: text/html", #"<iframe src="/attachment"></iframe>"#),
             "/attachment": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
         ])
         defer { listener.cancel() }
@@ -145,6 +146,12 @@ struct BrowserTests {
             contentWorld: .page
         )
         #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
+
+        page.noteUserInput()
+        page.load(base.appending(path: "next"))
+        #expect(await waitUntil(30) { loaded(page) && page.url?.path() == "/next" })
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before + 1)
     }
 
     /// A tab that slept wakes on the page it showed, with its back history.

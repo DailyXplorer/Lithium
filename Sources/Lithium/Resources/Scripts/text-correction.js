@@ -7,15 +7,17 @@
   const SIZE = 22;
   const INSET = 6;
   const MINIMUM_WORDS = 3;
-  // Quoted replies and signatures in an email aren't the person's text to correct.
-  const SKIPPED = 'blockquote, [contenteditable="false"], .gmail_quote, .gmail_signature, [data-smartmail="gmail_signature"], script, style, noscript, template';
+  // Quoted replies, signatures and code blocks aren't the person's prose to correct.
+  const SKIPPED = 'blockquote, pre, [contenteditable="false"], .gmail_quote, .gmail_signature, [data-smartmail="gmail_signature"], script, style, noscript, template';
   const BLOCKS = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BR', 'DD', 'DIV', 'DL', 'DT', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI', 'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TD', 'TH', 'TR', 'UL']);
 
   // A field is a textarea (plain) or the root of a rich text editor. One-line inputs, code
   // editors and hidden helper textareas don't count. Spellchecking being off says nothing:
   // Gmail turns it off in its message body, since it has its own.
   const CODE_EDITORS = '.cm-editor, .CodeMirror, .monaco-editor, .ace_editor';
-  const isCode = (element) => !!element.closest(CODE_EDITORS) || /mono/i.test(getComputedStyle(element).fontFamily);
+  const CODE_FONT = /^(monospace|menlo|monaco|consolas|courier( new)?|lucida console|fira code|source code pro|cascadia (code|mono))$|\bmono$/i;
+  const isCode = (element) => !!element.closest(CODE_EDITORS)
+    || getComputedStyle(element).fontFamily.split(',').some((family) => CODE_FONT.test(family.trim().replace(/^["']|["']$/g, '')));
   const fieldOf = (node) => {
     let element = node instanceof Element ? node : node?.parentElement;
     if (!element) return null;
@@ -27,7 +29,8 @@
     return isCode(element) ? null : { kind: 'rich', element };
   };
 
-  // A rich editor's text nodes in order, with null where a block or line break falls.
+  // A rich editor's text nodes in order, with null where a block or line break falls. Inline
+  // code comes as a string: the model reads it with its sentence, but no change lands in it.
   function* walk(node) {
     for (let child = node.firstChild; child; child = child.nextSibling) {
       if (child.nodeType === Node.TEXT_NODE) {
@@ -35,6 +38,10 @@
         if (child.data && !(child.data.includes('\n') && !child.data.trim())) yield child;
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         const skipped = child.matches(SKIPPED);
+        if (!skipped && child.tagName === 'CODE') {
+          if (child.textContent) yield child.textContent;
+          continue;
+        }
         const block = skipped || BLOCKS.has(child.tagName);
         if (block) yield null;
         if (!skipped) yield* walk(child);
@@ -55,6 +62,10 @@
       }
       if (broken && text) text += '\n';
       broken = false;
+      if (typeof node === 'string') {
+        text += node;
+        continue;
+      }
       segments.push({ node, start: text.length, end: text.length + node.data.length });
       text += node.data;
     }

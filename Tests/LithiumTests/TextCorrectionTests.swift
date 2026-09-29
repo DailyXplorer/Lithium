@@ -95,12 +95,15 @@ struct TextCorrectionPageTests {
         "Je te remerci pour les document.": "Je te remercie pour les documents.",
         "Est ce que tu vien mardi ?": "Est-ce que tu viens mardi ?",
         "A bientot.": "À bientôt.",
+        "Apelle getUsr() pour lire la valeur.": "Appelle getUser() pour lire la valeur.",
     ]
 
     private static let page = """
         <textarea id="plain" style="width: 400px; height: 120px"></textarea>
         <textarea id="code" spellcheck="false" style="width: 400px; height: 120px; font-family: Menlo, monospace"></textarea>
         <div class="cm-editor"><div id="codemirror" class="cm-content" contenteditable="true" style="width: 400px; min-height: 60px">let valeur = 1</div></div>
+        <textarea id="fancy" style="width: 400px; height: 120px; font-family: 'Monotype Corsiva', cursive">Je te remerci pour les document.</textarea>
+        <div id="snippet" contenteditable="true" style="width: 400px; min-height: 120px"><div>Apelle <code>getUsr()</code> pour lire la valeur.</div><pre>let reciever = getUsr()</pre></div>
         <div id="gmail" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" g_editable="true" style="width: 400px; min-height: 120px"><div>Je te remerci pour les document.</div></div>
         <input id="line" type="text" value="Je te remerci pour les document.">
         <div id="reply" contenteditable="true" style="width: 400px; min-height: 120px"><div><br></div><div class="gmail_signature">Louis, directeur des ventes</div><blockquote>Est ce que tu vien mardi ?</blockquote></div>
@@ -199,6 +202,25 @@ struct TextCorrectionPageTests {
         #expect(try await run("gmail", in: webView) == "2 fixes")
         let text = try await page("return document.getElementById('gmail').innerText.trim()", in: webView) as? String
         #expect(text == "Je te remercie pour les documents.")
+    }
+
+    @Test func codeInsideAMessageIsLeftAsWritten() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        let text = try await webView.callAsyncJavaScript(
+            "return lithiumTextCorrection.read(document.getElementById('snippet'))",
+            contentWorld: .defaultClient
+        ) as? String
+        #expect(text == "Apelle getUsr() pour lire la valeur.", "inline code read with its sentence, code blocks left out")
+        #expect(try await run("snippet", in: webView) == "1 fix")
+        let html = try await page("return document.getElementById('snippet').innerHTML", in: webView) as? String
+        #expect(html == "<div>Appelle <code>getUsr()</code> pour lire la valeur.</div><pre>let reciever = getUsr()</pre>")
+    }
+
+    @Test func proseInAnyNonCodeFontIsCorrected() async throws {
+        let (webView, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        #expect(try await run("fancy", in: webView) == "2 fixes")
     }
 
     @Test func singleLineAndCodeFieldsAreLeftAlone() async throws {

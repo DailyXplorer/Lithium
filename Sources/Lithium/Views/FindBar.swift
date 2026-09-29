@@ -43,6 +43,8 @@ struct FindBar: View {
         .onAppear {
             text = find.query
             claimFocus($isFocused)
+            // Closing the bar cleared the last search's matches; reopened, it shows them again.
+            if !find.query.isEmpty { searchAgain() }
         }
         .onChange(of: find.focusToken) { claimFocus($isFocused) }
         .onChange(of: find.query) { text = find.query }

@@ -153,8 +153,10 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func openPDF(from webView: WKWebView, reader: PDFReader) async {
-        guard let data = await PDFReader.mainResourceData(of: webView), pdf === reader else { return }
-        guard reader.open(data) else {
+        let data = await PDFReader.mainResourceData(of: webView)
+        guard pdf === reader else { return }
+        // Without the bytes, or with bytes PDFKit can't read, WebKit's viewer stays.
+        guard let data, reader.open(data) else {
             pdf = nil
             return
         }

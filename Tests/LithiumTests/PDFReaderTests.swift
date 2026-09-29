@@ -31,6 +31,12 @@ extension BrowserTests {
         #expect(tab.pdf?.view.highlightedSelections?.count == 2)
         browser.find.hide()
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
+        // ⌘G with the bar closed searches the PDF again: it forgot its matches.
+        browser.find.show()
+        await browser.find.step(forward: true, in: tab.findTarget)
+        #expect(browser.find.matchCount == 1)
+        #expect(browser.find.currentMatch == 1)
+        #expect(tab.pdf?.view.highlightedSelections?.count == 2)
     }
 
     /// Fitted whole, two pages side by side fit the view's width, margins included.

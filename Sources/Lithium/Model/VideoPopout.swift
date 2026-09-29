@@ -45,12 +45,14 @@ final class VideoPopout {
             pending = nil
         }
         guard let previous, previous !== tab, !previous.isAsleep, previous.pdf == nil else { return }
-        request += 1
+        // A request only once the page plays: leaving a tab that plays nothing leaves another
+        // tab's video on its way to the player alone.
         let current = request
         Task {
             let playing = try? await Self.run("playing", in: previous.webView)
             guard playing as? Bool == true, current == request, isOutOfSight(previous) else { return }
-            await show(previous, request: current)
+            request += 1
+            await show(previous, request: request)
         }
     }
 
@@ -121,7 +123,9 @@ final class VideoPopout {
         let state = try? await Self.run("show", in: webView)
         let newer = pending.map { $0.tab === tab && $0.request != current } ?? false
         if pending?.request == current { pending = nil }
-        guard current == request else {
+        // Closed or put to sleep meanwhile, the tab has no page left to show.
+        let isLive = browser?.tabs.contains(tab) == true && !tab.isAsleep
+        guard current == request, isLive else {
             // Unless the player has this video or a newer request shows it, the page would be
             // left showing only its video.
             if self.tab !== tab, !newer { await Self.putBack(webView, pausing: false) }

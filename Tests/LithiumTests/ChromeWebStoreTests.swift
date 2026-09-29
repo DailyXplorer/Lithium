@@ -101,6 +101,24 @@ struct ChromeWebStoreTests {
         #expect(otherSite.isCovered(by: everySite))
     }
 
+    /// The names shown drop the scheme and a leading "*.", but what the package may reach doesn't.
+    @Test func accessIsCoveredOnlyForTheSchemesAndSubdomainsShown() {
+        let shown = ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*", "https://*.youtube.com/*"]])
+        func access(_ pattern: String) -> ChromeWebStore.Access {
+            ChromeWebStore.Access(manifest: ["host_permissions": [pattern]])
+        }
+        #expect(!access("*://*.example.com/*").isCovered(by: shown))
+        #expect(!access("https://*.example.com/*").isCovered(by: shown))
+        #expect(!access("https://www.example.com/*").isCovered(by: shown))
+        #expect(!access("http://example.com/*").isCovered(by: shown))
+        #expect(!access("https://*/*").isCovered(by: shown))
+        #expect(access("https://example.com/path/*").isCovered(by: shown))
+        #expect(access("https://music.youtube.com/*").isCovered(by: shown))
+        #expect(!access("https://notyoutube.com/*").isCovered(by: shown))
+        #expect(access("http://example.com/*").isCovered(by: access("*://example.com/*")))
+        #expect(!access("https://example.com/*").isCovered(by: access("http://*/*")))
+    }
+
     /// The store page gets Chrome's user agent and `chrome.webstorePrivate`, answered by Lithium;
     /// installing needs the user's approval first, and no other site can reach the bridge.
     @Test func storePageTalksToLithiumAndNoOtherSiteDoes() async throws {

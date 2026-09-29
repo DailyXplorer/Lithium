@@ -126,6 +126,8 @@ enum ChromeWebStore {
         var sites: Set<String> = []
         /// In manifest order, without repeats.
         var permissions: [String] = []
+        /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
+        private var patterns: Set<SitePattern> = []
 
         init(manifest: [String: Any]) {
             let declared = manifest["permissions"] as? [String] ?? []
@@ -136,6 +138,7 @@ enum ChromeWebStore {
             let hosts = patterns.compactMap(ChromeWebStore.host(of:))
             allSites = hosts.contains("*")
             sites = allSites ? [] : Set(hosts)
+            self.patterns = Set(patterns.compactMap(SitePattern.init))
             for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
                 permissions.append(warning)
             }
@@ -143,8 +146,44 @@ enum ChromeWebStore {
 
         /// Whether the user, having agreed to `approved`, already agreed to all of this.
         func isCovered(by approved: Access) -> Bool {
-            (approved.allSites || (!allSites && sites.isSubset(of: approved.sites)))
+            patterns.allSatisfy { pattern in approved.patterns.contains { $0.covers(pattern) } }
                 && Set(permissions).isSubset(of: approved.permissions)
+        }
+    }
+
+    /// The scheme and host of a match pattern, which decide the pages it reaches.
+    struct SitePattern: Hashable {
+        /// Nil for `<all_urls>`, every scheme; "*" is http and https, as in Chrome.
+        let scheme: String?
+        /// "*" for every host.
+        let host: String
+        /// The host and every subdomain of it, from a leading "*.".
+        let withSubdomains: Bool
+
+        /// Nil for a pattern that reaches no site (such as `file:` patterns), as `host(of:)`.
+        init?(_ pattern: String) {
+            if pattern == "<all_urls>" {
+                scheme = nil
+                host = "*"
+                withSubdomains = true
+                return
+            }
+            guard let range = pattern.range(of: "://") else { return nil }
+            let authority = pattern[range.upperBound...].prefix { $0 != "/" }.lowercased()
+            withSubdomains = authority.hasPrefix("*.")
+            host = withSubdomains ? String(authority.dropFirst(2)) : authority
+            guard !host.isEmpty else { return nil }
+            scheme = pattern[..<range.lowerBound].lowercased()
+        }
+
+        func covers(_ other: SitePattern) -> Bool {
+            guard let scheme else { return true }
+            guard let otherScheme = other.scheme,
+                  scheme == otherScheme || (scheme == "*" && ["http", "https"].contains(otherScheme)) else { return false }
+            if host == "*" { return true }
+            if other.host == "*" { return false }
+            if withSubdomains { return other.host == host || other.host.hasSuffix("." + host) }
+            return !other.withSubdomains && other.host == host
         }
     }
 

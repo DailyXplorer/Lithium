@@ -483,15 +483,30 @@ struct CapturePreview: View {
                     draft = mark
                 }
                 guard case .editing(let original, let handle) = drag else { return }
-                let offset = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
-                var changed = original
-                if let handle, let (_, point) = original.handles.first(where: { $0.0 == handle }) {
-                    let target = CGPoint(x: point.x + offset.width, y: point.y + offset.height)
-                    changed.drag(handle, to: target, constrained: NSEvent.modifierFlags.contains(.shift))
-                } else {
-                    changed.move(by: offset)
+                let constrained = NSEvent.modifierFlags.contains(.shift)
+                // The shape with `fraction` of the drag so far.
+                func changed(_ fraction: CGFloat) -> Annotation {
+                    let offset = CGSize(width: value.translation.width / scale * fraction, height: value.translation.height / scale * fraction)
+                    var shape = original
+                    if let handle, let (_, point) = original.handles.first(where: { $0.0 == handle }) {
+                        shape.drag(handle, to: CGPoint(x: point.x + offset.width, y: point.y + offset.height), constrained: constrained)
+                    } else {
+                        shape.move(by: offset)
+                    }
+                    return shape
                 }
-                draft = changed
+                var result = changed(1)
+                // Without a backdrop, a shape wholly off the screenshot could no longer be seen or
+                // grabbed: it goes as far along the drag as it can while still touching it.
+                if style.backdrop == .none, !result.touches(screenshotBounds) {
+                    var reached: CGFloat = 0, missed: CGFloat = 1
+                    for _ in 0..<12 {
+                        let middle = (reached + missed) / 2
+                        if changed(middle).touches(screenshotBounds) { reached = middle } else { missed = middle }
+                    }
+                    result = changed(reached)
+                }
+                draft = result
             }
             .onEnded { _ in
                 guard case .editing(let original, _) = drag, let changed = draft else { return }

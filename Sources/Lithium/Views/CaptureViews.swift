@@ -230,6 +230,8 @@ struct CapturePreview: View {
     @State private var future: [[Annotation]] = []
     /// The mark being drawn, shown over the preview until the render that includes it replaces the preview.
     @State private var draft: Annotation?
+    /// Resets when a drag ends and also when it is cancelled (Cmd-Tab away mid-stroke), which skips `onEnded`.
+    @GestureState private var isDragging = false
 
     static let colors: KeyValuePairs<String, String> = [
         "#FFFFFF": "White", "#E8E8ED": "Light Gray", "#1D1D1F": "Black",
@@ -310,6 +312,10 @@ struct CapturePreview: View {
             // cancels the drag without ending it, and the next surface only takes drags that start on it.
             draft = nil
         }
+        .onChange(of: isDragging) {
+            // A drag that ended has already committed its mark or dropped it; this drops the mark of a cancelled one.
+            if !isDragging { draft = nil }
+        }
     }
 
     @ViewBuilder private var preview: some View {
@@ -362,6 +368,7 @@ struct CapturePreview: View {
             CGPoint(x: (location.x - frame.minX) / scale, y: (location.y - frame.minY) / scale)
         }
         return DragGesture(minimumDistance: 0)
+            .updating($isDragging) { _, dragging, _ in dragging = true }
             .onChanged { value in
                 if draft == nil {
                     draft = Annotation(tool: tool, colorHex: color, lineWidth: tool.lineWidth / scale, points: [inShot(value.startLocation)])

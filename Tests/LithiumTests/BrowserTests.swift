@@ -26,6 +26,15 @@ struct BrowserTests {
         #expect(controller.userScripts.contains { $0.source.contains("function trustedJsonEditXhrRequest(") })
     }
 
+    /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
+    @Test func restoresAnInternalTabAtLaunch() throws {
+        SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))
+        let browser = Browser()
+        let tab = try #require(browser.selectedTab)
+        #expect(tab.url == Internal.settingsURL)
+        #expect(tab.favicon != nil)
+    }
+
     /// A tab out of sight waits to be selected; the visible one reloads once, then stops.
     @Test func crashedTabs() async throws {
         let browser = Browser()

@@ -123,7 +123,7 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         self.title = title
         faviconData = Favicons.shared.cachedData(host: url.host() ?? "")
-        favicon = Internal.isInternal(url) ? NSApp.applicationIconImage : faviconData.flatMap(NSImage.init(data:))
+        favicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : faviconData.flatMap(NSImage.init(data:))
         isAsleep = true
     }
 

@@ -235,4 +235,7 @@ extension Preference {
     static let captureBackdrop = "captureBackdrop"
     static let captureBadge = "captureBadge"
     static let captureSidebar = "captureSidebar"
+    static let captureTool = "captureTool"
+    static let captureInk = "captureInk"
+    static let captureMarker = "captureMarker"
 }

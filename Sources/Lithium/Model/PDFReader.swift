@@ -181,10 +181,12 @@ final class PDFReader: NSObject {
         return name.isEmpty || name == "/" ? (url.host() ?? "PDF") : name
     }
 
+    /// A name for the file alone: the URL's last segment comes percent-decoded, so an encoded "/" in
+    /// it would otherwise lead the saved file out of its folder.
     var filename: String {
         let name = url.lastPathComponent
-        if name.lowercased().hasSuffix(".pdf") { return name }
-        return title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-") + ".pdf"
+        let chosen = name.lowercased().hasSuffix(".pdf") ? name : title + ".pdf"
+        return chosen.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     }
 
     // MARK: Navigation and zoom

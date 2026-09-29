@@ -81,7 +81,7 @@ final class SitePermissions {
         resolve(request.id, allow)
     }
 
-    /// Unanswered prompts of a closed tab are denied, without remembering anything.
+    /// Unanswered prompts of a closed tab, or of the page it left, are denied, without remembering anything.
     func cancel(tabID: Tab.ID) {
         pending.filter { $0.tabID == tabID }.forEach { resolve($0.id, false) }
     }

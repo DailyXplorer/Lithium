@@ -137,6 +137,30 @@ struct BrowserTests {
         #expect(browser.permissions.pending.isEmpty, "the page itself downloads without asking")
     }
 
+    /// A prompt left unanswered goes away with its page: answered over the next one, it would be
+    /// taken for that page's.
+    @Test func aDownloadPromptGoesAwayWithItsPage() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<iframe src="/attachment"></iframe>"#),
+            "/attachment": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+            "/next": ("Content-Type: text/html", "<p>Next</p>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let host = try #require(base.host())
+        let before = Downloads.shared.items.count
+        let page = browser.newTab(url: base)
+        defer { browser.close(page) }
+        #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } })
+
+        page.load(base.appending(path: "next"))
+        #expect(await waitUntil(30) { loaded(page) && page.url?.path() == "/next" })
+        #expect(!browser.permissions.pending.contains { $0.tabID == page.id })
+        #expect(browser.permissions.decisions[host]?[.downloads] == nil, "nothing is remembered")
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
+    }
+
     /// A tab that slept wakes on the page it showed, with its back history.
     @Test func sleepingTabKeepsItsHistory() async throws {
         let browser = Browser()

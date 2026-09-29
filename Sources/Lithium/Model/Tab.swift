@@ -521,6 +521,8 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        // A prompt left from the page before would read as the new page's.
+        browser?.permissions.cancel(tabID: id)
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }

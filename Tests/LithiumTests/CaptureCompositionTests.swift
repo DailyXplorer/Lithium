@@ -70,6 +70,21 @@ struct CaptureCompositionTests {
         #expect(hex(framed, x: 2 * 4, y: 2 * (32 + 20)) == "#FFFFFF")
     }
 
+    @Test func marksStayOnANarrowShotWidenedByTheBadge() throws {
+        // 20 × 20 points at 2×: the badge is wider than the shot and its margins, which widens the image.
+        let context = CGContext(
+            data: nil, width: 40, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
+        let narrow = Shot(content: .area(context.makeImage()!), scale: 2, wallpaper: nil)
+        let dot = Annotation(tool: .pen, colorHex: "#00FF00", lineWidth: 6, points: [CGPoint(x: 10, y: 10)])
+        let image = try #require(CaptureComposition.render(narrow, CaptureStyle(backdrop: .color("#FFFFFF"), showsBadge: true, annotations: [dot])))
+        #expect(image.width > 2 * (20 + 2 * 32))
+        #expect(hex(image, x: image.width / 2, y: image.height / 2) == "#00FF00")
+    }
+
     @Test func highlightsKeepDarkPixelsDark() throws {
         let black = Shot(content: .area(Self.image(red: 0, blue: 0)), scale: 2, wallpaper: nil)
         let highlight = Annotation(tool: .highlighter, colorHex: Annotation.highlightHex, lineWidth: 16, points: [CGPoint(x: 10, y: 25), CGPoint(x: 90, y: 25)])

@@ -122,15 +122,12 @@ struct CaptureComposition: View {
         let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style))
         renderer.scale = shot.scale
         guard let composed = renderer.cgImage else { return nil }
-        let inset = padding(around: shot, on: style.backdrop)
-        return marked(composed, scale: shot.scale, offset: CGPoint(x: inset, y: inset), with: style.annotations)
-    }
-
-    /// How far the screenshot sits from the edges of its backdrop, in points.
-    static func padding(around shot: Shot, on backdrop: CaptureBackdrop) -> CGFloat {
-        guard backdrop != .none else { return 0 }
-        let side = max(shot.size.width, shot.size.height)
-        return min(max((side * 0.07).rounded(), 32), 96)
+        // The screenshot sits in the middle, even when a badge wider than it widens the image.
+        let offset = CGPoint(
+            x: (CGFloat(composed.width) / shot.scale - shot.size.width) / 2,
+            y: (CGFloat(composed.height) / shot.scale - shot.size.height) / 2
+        )
+        return marked(composed, scale: shot.scale, offset: offset, with: style.annotations)
     }
 
     /// Blend modes mix colors in the color space they draw into. The preview window blends the mark
@@ -167,7 +164,7 @@ struct CaptureComposition: View {
             image
         } else {
             let side = max(shot.size.width, shot.size.height)
-            let padding = Self.padding(around: shot, on: style.backdrop)
+            let padding = min(max((side * 0.07).rounded(), 32), 96)
             ZStack(alignment: .bottom) {
                 image
                     .clipShape(RoundedRectangle(cornerRadius: shot.isWindow ? 0 : 10, style: .continuous))

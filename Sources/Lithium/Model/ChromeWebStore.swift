@@ -128,6 +128,9 @@ enum ChromeWebStore {
         var permissions: [String] = []
         /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
         private var patterns: Set<SitePattern> = []
+        /// Patterns `SitePattern` can't read, which only the same pattern covers: whatever they
+        /// reach, they are granted all the same.
+        private var unreadPatterns: Set<String> = []
         /// Also what decides coverage: `permissions` are only their warnings, and many have none
         /// (`cookies`, `scripting`), though every one asked for is granted.
         private var apiPermissions: Set<String> = []
@@ -142,6 +145,7 @@ enum ChromeWebStore {
             allSites = hosts.contains("*")
             sites = allSites ? [] : Set(hosts)
             self.patterns = Set(patterns.compactMap(SitePattern.init))
+            unreadPatterns = Set(patterns.filter { SitePattern($0) == nil })
             apiPermissions = Set(declared.filter { !$0.contains("://") && $0 != "<all_urls>" })
             for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
                 permissions.append(warning)
@@ -151,6 +155,7 @@ enum ChromeWebStore {
         /// Whether the user, having agreed to `approved`, already agreed to all of this.
         func isCovered(by approved: Access) -> Bool {
             patterns.allSatisfy { pattern in approved.patterns.contains { $0.covers(pattern) } }
+                && unreadPatterns.isSubset(of: approved.unreadPatterns)
                 && apiPermissions.isSubset(of: approved.apiPermissions)
         }
     }
@@ -166,7 +171,7 @@ enum ChromeWebStore {
         /// From the "/" on, "*" standing for any characters.
         let path: String
 
-        /// Nil for a pattern that reaches no site (such as `file:` patterns), as `host(of:)`.
+        /// A `file:` pattern has no host, "" here. Nil for a pattern that can't be read.
         init?(_ pattern: String) {
             if pattern == "<all_urls>" {
                 scheme = nil
@@ -182,8 +187,9 @@ enum ChromeWebStore {
             path = String(rest[slash...])
             withSubdomains = authority.hasPrefix("*.")
             host = withSubdomains ? String(authority.dropFirst(2)) : authority
-            guard !host.isEmpty else { return nil }
-            scheme = pattern[..<range.lowerBound].lowercased()
+            let scheme = pattern[..<range.lowerBound].lowercased()
+            guard !host.isEmpty || (scheme == "file" && !authority.hasPrefix("*.")) else { return nil }
+            self.scheme = scheme
         }
 
         func covers(_ other: SitePattern) -> Bool {

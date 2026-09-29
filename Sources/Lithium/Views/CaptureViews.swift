@@ -116,21 +116,29 @@ struct CaptureStyle: Equatable {
 struct CaptureComposition: View {
     let shot: Shot
     let style: CaptureStyle
-    /// The screenshot with its marks drawn in.
-    let screenshot: CGImage
 
+    /// The marks go over the whole image, backdrop included, so a mark can reach past the screenshot's edges.
     static func render(_ shot: Shot, _ style: CaptureStyle) -> CGImage? {
-        let screenshot = marked(shot.image(showingSidebar: style.showsSidebar), scale: shot.scale, with: style.annotations)
-        let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style, screenshot: screenshot))
+        let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style))
         renderer.scale = shot.scale
-        return renderer.cgImage
+        guard let composed = renderer.cgImage else { return nil }
+        let inset = padding(around: shot, on: style.backdrop)
+        return marked(composed, scale: shot.scale, offset: CGPoint(x: inset, y: inset), with: style.annotations)
+    }
+
+    /// How far the screenshot sits from the edges of its backdrop, in points.
+    static func padding(around shot: Shot, on backdrop: CaptureBackdrop) -> CGFloat {
+        guard backdrop != .none else { return 0 }
+        let side = max(shot.size.width, shot.size.height)
+        return min(max((side * 0.07).rounded(), 32), 96)
     }
 
     /// Blend modes mix colors in the color space they draw into. The preview window blends the mark
-    /// being drawn in the screen's Display P3, so the marks are drawn into the screenshot in Display P3
-    /// too, and a highlight looks the same before and after the mouse is let go. The marked screenshot
-    /// goes back to the screenshot's own color space, so the exported image is in the same format.
-    private static func marked(_ screenshot: CGImage, scale: CGFloat, with annotations: [Annotation]) -> CGImage {
+    /// being drawn in the screen's Display P3, so the marks are drawn into the image in Display P3
+    /// too, and a highlight looks the same before and after the mouse is let go. The marked image
+    /// goes back to its own color space, so the exported image is in the same format. `offset` is
+    /// where the screenshot's top-left corner is in the image, in points.
+    private static func marked(_ screenshot: CGImage, scale: CGFloat, offset: CGPoint, with annotations: [Annotation]) -> CGImage {
         let pixels = CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height)
         func context(_ space: CGColorSpace, bits: Int) -> CGContext? {
             CGContext(
@@ -145,7 +153,8 @@ struct CaptureComposition: View {
         else { return screenshot }
         blending.draw(screenshot, in: pixels)
         blending.scaleBy(x: scale, y: scale)
-        ImageRenderer(content: AnnotationLayer(annotations: annotations).frame(width: pixels.width / scale, height: pixels.height / scale))
+        let layer = AnnotationLayer(annotations: annotations, transform: CGAffineTransform(translationX: offset.x, y: offset.y))
+        ImageRenderer(content: layer.frame(width: pixels.width / scale, height: pixels.height / scale))
             .render { _, draw in draw(blending) }
         guard let blended = blending.makeImage() else { return screenshot }
         output.draw(blended, in: pixels)
@@ -153,12 +162,12 @@ struct CaptureComposition: View {
     }
 
     var body: some View {
-        let image = Image(decorative: screenshot, scale: shot.scale)
+        let image = Image(decorative: shot.image(showingSidebar: style.showsSidebar), scale: shot.scale)
         if style.backdrop == .none {
             image
         } else {
             let side = max(shot.size.width, shot.size.height)
-            let padding = min(max((side * 0.07).rounded(), 32), 96)
+            let padding = Self.padding(around: shot, on: style.backdrop)
             ZStack(alignment: .bottom) {
                 image
                     .clipShape(RoundedRectangle(cornerRadius: shot.isWindow ? 0 : 10, style: .continuous))
@@ -200,7 +209,6 @@ struct CaptureComposition: View {
 struct AnnotationLayer: View {
     let annotations: [Annotation]
     var transform = CGAffineTransform.identity
-    var clip: CGRect?
 
     var body: some View {
         ZStack {
@@ -213,7 +221,7 @@ struct AnnotationLayer: View {
 
     private func canvas(_ marks: [Annotation]) -> some View {
         Canvas { context, size in
-            context.clip(to: Path(clip ?? CGRect(origin: .zero, size: size)))
+            context.clip(to: Path(CGRect(origin: .zero, size: size)))
             context.concatenate(transform)
             for mark in marks { mark.draw(in: context) }
         }
@@ -395,7 +403,7 @@ struct CapturePreview: View {
             }
             ZStack {
                 if let draft {
-                    AnnotationLayer(annotations: [draft], transform: transform, clip: frame)
+                    AnnotationLayer(annotations: [draft], transform: transform)
                 }
                 if let tool {
                     Color.clear

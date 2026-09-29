@@ -62,6 +62,14 @@ struct CaptureCompositionTests {
         #expect(hex(framed, x: 64 + 100, y: 64 + 50) == "#FF0000")
     }
 
+    @Test func marksReachOntoTheBackdrop() throws {
+        // Its left side is 20 points left of the screenshot, over the backdrop's 32-point margin.
+        let frame = Annotation(tool: .rectangle, colorHex: "#00FF00", lineWidth: 4, points: [CGPoint(x: -20, y: -10), CGPoint(x: 50, y: 40)])
+        let framed = try #require(CaptureComposition.render(Self.shot, CaptureStyle(backdrop: .color("#FFFFFF"), showsBadge: false, annotations: [frame])))
+        #expect(hex(framed, x: 2 * 12, y: 2 * (32 + 20)) == "#00FF00")
+        #expect(hex(framed, x: 2 * 4, y: 2 * (32 + 20)) == "#FFFFFF")
+    }
+
     @Test func highlightsKeepDarkPixelsDark() throws {
         let black = Shot(content: .area(Self.image(red: 0, blue: 0)), scale: 2, wallpaper: nil)
         let highlight = Annotation(tool: .highlighter, colorHex: Annotation.highlightHex, lineWidth: 16, points: [CGPoint(x: 10, y: 25), CGPoint(x: 90, y: 25)])

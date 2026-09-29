@@ -34,6 +34,9 @@ final class Tab: NSObject, Identifiable {
     /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
+    /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
+    /// the history back, is cancelled until the next page is shown.
+    @ObservationIgnored private var supersededURL: URL?
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
     @ObservationIgnored private var shownHost: String?
@@ -450,6 +453,7 @@ extension Tab: WKNavigationDelegate {
         }
 
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
+        if isMainFrame, url == supersededURL { return (.cancel, preferences) }
 
         // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
         // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
@@ -526,6 +530,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        supersededURL = nil
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         shownHost = webView.url?.host()
@@ -779,6 +784,9 @@ extension Tab: WKWebExtensionTab {
         lastActive = Date()
         if isAsleep, let state = sleepingState {
             sleepingState = nil
+            // Putting the history back starts loading the old page. That load is only on its way
+            // out, so it mustn't ask to resend a form or be reloaded without its tracking parameters.
+            if let old = self.url, old != url { supersededURL = old }
             webView.interactionState = state
         }
         load(url)

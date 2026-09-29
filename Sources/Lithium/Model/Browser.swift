@@ -347,8 +347,11 @@ final class Browser {
         if previous !== tab { extensions.didActivate(tab, previous: previous) }
     }
 
+    /// The selection falls back on the tab list only, never on a favorite: the tab below the
+    /// closed one (above, at the bottom), and the home page once the list is empty. Closing a
+    /// favorite's page selects the top of the list.
     func close(_ tab: Tab) {
-        let order = navigationOrder
+        let order = regularTabs
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)
         if let url = tab.url {

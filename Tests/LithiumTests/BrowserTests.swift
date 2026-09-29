@@ -85,6 +85,27 @@ struct BrowserTests {
         #expect(browser.selectedTabID == browser.navigationOrder.last?.id)
     }
 
+    /// Closing the last tab of the list shows the home page, not a favorite's live page.
+    @Test func closingTheLastTabShowsHomeNotAFavorite() {
+        let browser = Browser()
+        browser.regularTabs.forEach(browser.close)
+        let favorite = browser.newTab(url: URL(string: "data:text/html,favorite")!)
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        let first = browser.newTab(url: URL(string: "data:text/html,first")!)
+        let second = browser.newTab(url: URL(string: "data:text/html,second")!)
+
+        browser.close(second)
+        #expect(browser.selectedTabID == first.id)
+        browser.close(first)
+        #expect(browser.selectedTabID == nil)
+
+        let third = browser.newTab(url: URL(string: "data:text/html,third")!)
+        browser.select(favorite)
+        browser.close(favorite)
+        #expect(browser.selectedTabID == third.id)
+    }
+
     /// A page downloads what it can't show; a frame inside it (an ad) never does.
     /// Served over HTTP: WebKit itself never downloads a data: frame.
     @Test func onlyThePageItselfDownloads() async throws {

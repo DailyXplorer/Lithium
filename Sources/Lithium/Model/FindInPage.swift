@@ -45,7 +45,8 @@ final class FindInPage {
         target = nil
     }
 
-    func update(query newQuery: String, in target: FindTarget) async {
+    /// Searches for `newQuery` and shows its first match, or with `forward` false its last.
+    func update(query newQuery: String, in target: FindTarget, forward: Bool = true) async {
         if self.target !== target { self.target?.clearMatches() }
         self.target = target
         search += 1
@@ -60,14 +61,14 @@ final class FindInPage {
         let count = await target.countMatches(of: newQuery)
         guard current == search else { return }
         matchCount = count
-        await step(forward: true, in: target)
+        await step(forward: forward, in: target)
     }
 
     func step(forward: Bool, in target: FindTarget) async {
         guard !query.isEmpty else { return }
         // Its matches were cleared since it was searched (the bar closed): a PDF forgets them.
         guard self.target === target else {
-            await update(query: query, in: target)
+            await update(query: query, in: target, forward: forward)
             return
         }
         let current = search

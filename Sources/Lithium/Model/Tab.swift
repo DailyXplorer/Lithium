@@ -453,10 +453,11 @@ extension Tab: WKNavigationDelegate {
 
         // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
         // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
-        // front only. Refused, a web view with nothing shown yet (a tab waking on that page)
+        // front only; a frame's form too (an embedded payment check or sign-in), which refused
+        // stays blank. Refused, a web view with nothing shown yet (a tab waking on that page)
         // loads the address instead, without the form.
         if action.navigationType == .formResubmitted {
-            guard isMainFrame, await confirmResubmission(of: url) else {
+            guard await confirmResubmission(of: url, inFrame: !isMainFrame) else {
                 if isMainFrame, !hasShownPage { Task { self.load(url) } }
                 return (.cancel, preferences)
             }
@@ -710,11 +711,14 @@ extension Tab: WKUIDelegate {
     }
 
     /// A tab out of sight never sends a form again by itself.
-    private func confirmResubmission(of url: URL) async -> Bool {
+    private func confirmResubmission(of url: URL, inFrame: Bool) async -> Bool {
         guard browser?.selectedTabID == id, let window = webView.window else { return false }
         let alert = NSAlert()
+        let site = url.host() ?? "this site"
         alert.messageText = "Send the form again?"
-        alert.informativeText = "This page on \(url.host() ?? "this site") was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+        alert.informativeText = inFrame
+            ? "A part of this page, from \(site), was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+            : "This page on \(site) was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
         alert.addButton(withTitle: "Send Again")
         alert.addButton(withTitle: "Cancel")
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn

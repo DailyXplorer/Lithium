@@ -253,8 +253,11 @@ struct CapturePreview: View {
     @State private var annotations: [Annotation] = []
     @State private var past: [[Annotation]] = []
     @State private var future: [[Annotation]] = []
-    /// The mark being drawn, shown over the preview until the render that includes it replaces the preview.
+    /// The mark being drawn, moved or reshaped, shown over the preview until the render that includes it replaces the preview.
     @State private var draft: Annotation?
+    @State private var drag: Drag?
+    /// The shape showing its handles.
+    @State private var selection: Annotation.ID?
     /// Resets when a drag ends and also when it is cancelled (Cmd-Tab away mid-stroke), which skips `onEnded`.
     @GestureState private var isDragging = false
 
@@ -268,7 +271,21 @@ struct CapturePreview: View {
         "#0A84FF": "Blue", "#1D1D1F": "Black", "#FFFFFF": "White",
     ]
 
+    /// What the drag under way does.
+    private enum Drag: Equatable {
+        case drawing
+        /// Moves `original`, or with a handle reshapes it. The preview leaves it out once `draft` differs from it.
+        case editing(original: Annotation, handle: AnnotationHandle?)
+    }
+
+    private static let space = "preview"
+
     private var tool: AnnotationTool? { AnnotationTool(rawValue: toolName) }
+
+    /// The shape being moved or reshaped, if it has changed yet.
+    private var edited: Annotation.ID? {
+        if case .editing(let original, _) = drag, draft != original { original.id } else { nil }
+    }
 
     /// The highlighter only comes in fluorescent yellow; the other tools draw in the chosen ink.
     private var color: String { tool == .highlighter ? Annotation.highlightHex : ink }
@@ -279,7 +296,7 @@ struct CapturePreview: View {
             backdrop: backdrop == .wallpaper && shot.wallpaper == nil ? fallback : backdrop,
             showsBadge: showsBadge,
             showsSidebar: showsSidebar,
-            annotations: annotations
+            annotations: annotations.filter { $0.id != edited }
         )
     }
 
@@ -330,16 +347,20 @@ struct CapturePreview: View {
         .frame(width: 920)
         .onChange(of: style, initial: true) {
             rendered = CaptureComposition.render(shot, style)
-            draft = nil
+            if drag == nil { draft = nil }
         }
         .onChange(of: toolName) {
             // Each tool has its own drawing surface: changing tools mid-drag removes the surface, which
             // cancels the drag without ending it, and the next surface only takes drags that start on it.
+            drag = nil
             draft = nil
         }
         .onChange(of: isDragging) {
             // A drag that ended has already committed its mark or dropped it; this drops the mark of a cancelled one.
-            if !isDragging { draft = nil }
+            if !isDragging {
+                drag = nil
+                draft = nil
+            }
         }
     }
 
@@ -356,8 +377,9 @@ struct CapturePreview: View {
         }
     }
 
-    /// Takes drags on the preview while a tool is picked. The preview is the whole finished image,
-    /// scaled to fit, with the screenshot in its middle.
+    /// Takes drags on the preview: on a shape or its handles they move or reshape it, elsewhere they
+    /// draw with the picked tool. The preview is the whole finished image, scaled to fit, with the
+    /// screenshot in its middle.
     private func drawingSurface(over rendered: CGImage) -> some View {
         GeometryReader { proxy in
             let scale = proxy.size.width * shot.scale / CGFloat(rendered.width)
@@ -367,47 +389,107 @@ struct CapturePreview: View {
                 width: shot.size.width * scale,
                 height: shot.size.height * scale
             )
+            let transform = CGAffineTransform(translationX: frame.minX, y: frame.minY).scaledBy(x: scale, y: scale)
+            let inShot = { (location: CGPoint) in
+                CGPoint(x: (location.x - frame.minX) / scale, y: (location.y - frame.minY) / scale)
+            }
             ZStack {
                 if let draft {
-                    AnnotationLayer(
-                        annotations: [draft],
-                        transform: CGAffineTransform(translationX: frame.minX, y: frame.minY).scaledBy(x: scale, y: scale),
-                        clip: frame
-                    )
+                    AnnotationLayer(annotations: [draft], transform: transform, clip: frame)
                 }
                 if let tool {
                     Color.clear
                         .contentShape(Rectangle())
                         .pointerStyle(.rectSelection)
-                        .gesture(drawing(tool, on: frame, scale: scale))
+                        .gesture(drawing(tool, scale: scale, inShot: inShot))
                         .id(tool)
+                } else if selection != nil {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { selection = nil }
+                }
+                ForEach(annotations.filter(\.isEditable)) { mark in
+                    Color.clear
+                        .contentShape(mark.grabArea(tolerance: 5 / scale).applying(transform))
+                        .pointerStyle(.grabIdle)
+                        .gesture(editing(mark, handle: nil, scale: scale, inShot: inShot))
+                }
+                if let mark = drag == nil ? annotations.first(where: { $0.id == selection }) : draft, mark.id == selection {
+                    ForEach(mark.handles, id: \.0) { handle, point in
+                        HandleKnob()
+                            .pointerStyle(pointer(for: handle, of: mark))
+                            .gesture(editing(annotations.first { $0.id == mark.id } ?? mark, handle: handle, scale: scale, inShot: inShot))
+                            .position(point.applying(transform))
+                    }
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .coordinateSpace(.named(Self.space))
         }
     }
 
-    /// `frame` is where the screenshot shows in the preview, `scale` preview points per screenshot point.
-    private func drawing(_ tool: AnnotationTool, on frame: CGRect, scale: CGFloat) -> some Gesture {
-        let inShot = { (location: CGPoint) in
-            CGPoint(x: (location.x - frame.minX) / scale, y: (location.y - frame.minY) / scale)
-        }
-        return DragGesture(minimumDistance: 0)
+    /// `inShot` turns a place in the preview into the screenshot's points, `scale` preview points per screenshot point.
+    private func drawing(_ tool: AnnotationTool, scale: CGFloat, inShot: @escaping (CGPoint) -> CGPoint) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
             .updating($isDragging) { _, dragging, _ in dragging = true }
             .onChanged { value in
-                if draft == nil {
+                if drag == nil {
+                    drag = .drawing
+                    selection = nil
                     draft = Annotation(tool: tool, colorHex: color, lineWidth: tool.lineWidth / scale, points: [inShot(value.startLocation)])
                 }
                 draft?.extend(to: inShot(value.location), constrained: NSEvent.modifierFlags.contains(.shift))
             }
             .onEnded { _ in
+                drag = nil
                 guard let mark = draft else { return }
                 if mark.isVisible {
                     change { $0.append(mark) }
+                    if mark.isEditable { selection = mark.id }
                 } else {
                     draft = nil
                 }
             }
+    }
+
+    /// Moves `mark` with the pointer, or with `handle` drags that handle. Grabbing a shape selects it.
+    private func editing(_ mark: Annotation, handle: AnnotationHandle?, scale: CGFloat, inShot: @escaping (CGPoint) -> CGPoint) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
+            .updating($isDragging) { _, dragging, _ in dragging = true }
+            .onChanged { value in
+                if drag == nil {
+                    drag = .editing(original: mark, handle: handle)
+                    selection = mark.id
+                    draft = mark
+                }
+                guard case .editing(let original, let handle) = drag else { return }
+                let offset = CGSize(width: value.translation.width / scale, height: value.translation.height / scale)
+                var changed = original
+                if let handle, let (_, point) = original.handles.first(where: { $0.0 == handle }) {
+                    let target = CGPoint(x: point.x + offset.width, y: point.y + offset.height)
+                    changed.drag(handle, to: target, constrained: NSEvent.modifierFlags.contains(.shift))
+                } else {
+                    changed.move(by: offset)
+                }
+                draft = changed
+            }
+            .onEnded { _ in
+                guard case .editing(let original, _) = drag, let changed = draft else { return }
+                drag = nil
+                if changed != original {
+                    change { marks in
+                        if let index = marks.firstIndex(where: { $0.id == original.id }) { marks[index] = changed }
+                    }
+                }
+            }
+    }
+
+    /// Resize arrows on the corners of a frame, a hand on an arrow's ends and middle.
+    private func pointer(for handle: AnnotationHandle, of mark: Annotation) -> PointerStyle {
+        guard case .corner(let x, let y) = handle, mark.tool != .arrow else { return .grabIdle }
+        let top = mark.points[y].y < mark.points[1 - y].y
+        let leading = mark.points[x].x < mark.points[1 - x].x
+        return .frameResize(position: top ? (leading ? .topLeading : .topTrailing) : (leading ? .bottomLeading : .bottomTrailing))
     }
 
     /// Undo, redo and erasing change the marks, which drops the one being drawn while the drag
@@ -456,6 +538,15 @@ struct CapturePreview: View {
                     .help("Erase All")
                     .accessibilityLabel("Erase All")
             }
+        }
+        .background {
+            // ⌫ removes the selected shape. The button is only there for its shortcut; the key types
+            // U+007F, which `KeyEquivalent.delete` (U+0008) doesn't match.
+            Button("Delete Shape") { change { $0.removeAll { $0.id == selection } } }
+                .keyboardShortcut(KeyEquivalent("\u{7F}"), modifiers: [])
+                .disabled(!annotations.contains { $0.id == selection } || isDrawing)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
     }
 
@@ -588,6 +679,19 @@ private struct ToolButton: View {
         .buttonStyle(.plain)
         .opacity(isEnabled ? 1 : 0.35)
         .onHover { isHovered = $0 }
+    }
+}
+
+/// A handle of the selected shape: a white dot ringed in the accent color, easy to see on any screenshot.
+private struct HandleKnob: View {
+    var body: some View {
+        Circle()
+            .fill(.white)
+            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 2))
+            .frame(width: 11, height: 11)
+            .shadow(color: .black.opacity(0.25), radius: 1.5, y: 0.5)
+            .frame(width: 20, height: 20)
+            .contentShape(Circle())
     }
 }
 

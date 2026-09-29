@@ -34,6 +34,8 @@ final class Tab: NSObject, Identifiable {
     /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
+    /// When the user last clicked in or typed on the page, which lets a frame download right after.
+    @ObservationIgnored private var lastUserInput = Date.distantPast
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -178,6 +180,15 @@ final class Tab: NSObject, Identifiable {
             window.makeFirstResponder(reader.view)
         }
     }
+
+    /// A click or a key on the page itself (Browser watches the window's events).
+    func noteUserInput() {
+        lastUserInput = Date()
+    }
+
+    /// Long enough for a server to answer a Download button, short enough that an ad can't wait
+    /// for any click.
+    private static let frameDownloadWindow: TimeInterval = 10
 
     func markActive() {
         noteSound()
@@ -493,8 +504,10 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
-        // Only the page itself downloads: a frame in it (an ad) would drop files in Downloads without a click.
-        return response.isForMainFrame ? .download : .cancel
+        // A frame downloads only right after the user acted on the page, as when a Download button
+        // points a hidden frame at the file: on its own, a frame (an ad) would drop files in Downloads.
+        let userActed = Date().timeIntervalSince(lastUserInput) < Self.frameDownloadWindow
+        return response.isForMainFrame || userActed ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {

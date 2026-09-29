@@ -126,6 +126,27 @@ struct BrowserTests {
         #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
     }
 
+    /// A site's Download button may point a hidden frame at the file: right after the user acts
+    /// on the page, a frame downloads.
+    @Test func aFrameDownloadsRightAfterTheUserActsOnThePage() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<p>Download</p>"),
+            "/attachment": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let page = browser.newTab(url: base)
+        defer { browser.close(page) }
+        #expect(await waitUntil(30) { loaded(page) })
+        let before = Downloads.shared.items.count
+        page.noteUserInput()
+        _ = try await page.webView.callAsyncJavaScript(
+            "const frame = document.createElement('iframe'); frame.hidden = true; frame.src = '/attachment'; document.body.append(frame);",
+            contentWorld: .page
+        )
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
+    }
+
     /// A tab that slept wakes on the page it showed, with its back history.
     @Test func sleepingTabKeepsItsHistory() async throws {
         let browser = Browser()

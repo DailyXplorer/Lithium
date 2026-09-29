@@ -3,8 +3,10 @@ import SwiftUI
 import Testing
 @testable import Lithium
 
-/// Drives the screenshot preview with mouse and key events, in a window far off screen.
+/// Drives the screenshot preview with mouse and key events, in a window far off screen. One test at
+/// a time: they pick the tool through the preferences they share.
 @MainActor
+@Suite(.serialized)
 struct CapturePreviewTests {
     @Test func shapesMoveResizeBendAndDelete() async throws {
         let defaults = UserDefaults.standard
@@ -42,6 +44,20 @@ struct CapturePreviewTests {
         #expect(preview.press("z", keyCode: 6, modifiers: .command))
         try await Task.sleep(for: .milliseconds(150))
         #expect(preview.color(at: CGPoint(x: 100, y: 12)) == .ink)
+    }
+
+    @Test func shortArrowsKeepTheirEndsWithinReach() async throws {
+        let defaults = UserDefaults.standard
+        defaults.set("none", forKey: Preference.captureBackdrop)
+        defaults.set("arrow", forKey: Preference.captureTool)
+        defaults.set("#0A84FF", forKey: Preference.captureInk)
+        let preview = try await Preview()
+        defer { preview.window.orderOut(nil) }
+
+        // 8 points long, under 18 in the preview: the middle handle's reach covers both ends.
+        try await preview.drag(CGPoint(x: 20, y: 150), to: CGPoint(x: 28, y: 150))
+        try await preview.drag(CGPoint(x: 28, y: 150), to: CGPoint(x: 80, y: 150))
+        #expect(preview.color(at: CGPoint(x: 60, y: 150)) == .ink)
     }
 
     /// A 300 × 200 point red screenshot on no backdrop. It shows 2.2 times as large, 130 points from

@@ -111,11 +111,12 @@ struct Annotation: Equatable, Identifiable {
     /// Rectangles, ellipses and arrows can be moved and reshaped once drawn; hand-drawn lines can't.
     var isEditable: Bool { !tool.isFreehand }
 
-    /// Where the handles of an editable shape are.
+    /// Where the handles of an editable shape are, bottom to top. An arrow's ends come after its
+    /// middle, so on a short arrow, where the handles overlap, its ends can still be grabbed.
     var handles: [(AnnotationHandle, CGPoint)] {
         guard isEditable, points.count == 2 else { return [] }
         if tool == .arrow {
-            return [(.corner(x: 0, y: 0), points[0]), (.corner(x: 1, y: 1), points[1]), (.bend, middle)]
+            return [(.bend, middle), (.corner(x: 0, y: 0), points[0]), (.corner(x: 1, y: 1), points[1])]
         }
         return [(0, 0), (1, 0), (1, 1), (0, 1)].map { x, y in
             (.corner(x: x, y: y), CGPoint(x: points[x].x, y: points[y].y))

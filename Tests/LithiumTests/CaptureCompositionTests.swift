@@ -95,13 +95,13 @@ struct CaptureCompositionTests {
         arrow.drag(.bend, to: CGPoint(x: 20, y: 15), constrained: false)
         arrow.move(by: CGSize(width: 5, height: -5))
         #expect(arrow.points == [CGPoint(x: 5, y: -5), CGPoint(x: 45, y: -5)])
-        #expect(arrow.handles.last?.1 == CGPoint(x: 25, y: 10))
+        #expect(arrow.handles.first?.1 == CGPoint(x: 25, y: 10))
     }
 
     @Test func arrowsBendThroughTheirMiddleHandle() throws {
         var arrow = Annotation(tool: .arrow, colorHex: "#00FF00", lineWidth: 4, points: [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 10)])
         arrow.drag(.bend, to: CGPoint(x: 50, y: 40), constrained: false)
-        #expect(arrow.handles.map(\.0) == [.corner(x: 0, y: 0), .corner(x: 1, y: 1), .bend])
+        #expect(arrow.handles.map(\.0) == [.bend, .corner(x: 0, y: 0), .corner(x: 1, y: 1)])
 
         let image = try #require(CaptureComposition.render(Self.shot, CaptureStyle(backdrop: .none, showsBadge: false, annotations: [arrow])))
         #expect(hex(image, x: 100, y: 80) == "#00FF00")
@@ -109,7 +109,7 @@ struct CaptureCompositionTests {
 
         // Moving an end keeps the bend.
         arrow.drag(.corner(x: 1, y: 1), to: CGPoint(x: 90, y: 30), constrained: false)
-        #expect(arrow.handles.last?.1 == CGPoint(x: 50, y: 50))
+        #expect(arrow.handles.first?.1 == CGPoint(x: 50, y: 50))
     }
 
     @Test func shiftSquaresShapesAndStraightensArrows() {

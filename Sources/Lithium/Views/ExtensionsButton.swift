@@ -35,7 +35,7 @@ private struct ExtensionsList: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Extensions").font(Theme.font(15, .semibold))
-                if let host = Privacy.siteHost(tab?.url) {
+                if tab?.url?.scheme?.hasPrefix("http") == true, let host = Privacy.siteHost(tab?.url) {
                     Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
                 }
             }

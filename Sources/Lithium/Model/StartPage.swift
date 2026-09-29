@@ -8,6 +8,8 @@ enum StartBackground: String, CaseIterable {
     case lithium, color, gradient, image, wallpaper
 
     static let defaultColor = "#2B2D42"
+
+    var showsPicture: Bool { self == .image || self == .wallpaper }
     static let defaultGradient = ("#D5DAF5", "#F6DDE4")
 }
 
@@ -42,6 +44,7 @@ enum StartImage {
         panel.message = "Choose a picture for the start page."
         let response = if let window = NSApp.keyWindow { await panel.beginSheetModal(for: window) } else { panel.runModal() }
         guard response == .OK, let file = panel.url, (try? use(file)) != nil else { return false }
+        StartPictures.forget()
         UserDefaults.standard.set(StartBackground.image.rawValue, forKey: Preference.startBackground)
         return true
     }
@@ -62,6 +65,12 @@ enum StartImage {
 @MainActor
 enum StartPictures {
     private static var last: (url: URL, image: CGImage)?
+
+    /// Drops the kept picture once the start page no longer shows it, so its bitmap (tens of
+    /// megabytes at screen size) doesn't outlive it.
+    static func forget() {
+        last = nil
+    }
 
     static func cached(_ url: URL?) -> CGImage? {
         guard let url, let last, last.url == url else { return nil }

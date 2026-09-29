@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import WebKit
 @testable import Lithium
 
 /// The whole window, off screen. It builds a Browser, which keeps its data in the home folder,
@@ -31,5 +32,29 @@ struct StartPageTests {
         #expect(browser.selectedTab == nil)
         try await Task.sleep(for: .seconds(1))
         #expect((window.firstResponder as? NSTextView)?.delegate is URLTextField)
+    }
+
+    /// The decoded picture is let go once Settings switches the start page to something else.
+    @Test func switchingAwayFromAPictureReleasesIt() async throws {
+        let picture = URL(fileURLWithPath: "/System/Library/Desktop Pictures/iMac Blue.heic")
+        #expect(await StartPictures.load(picture) != nil)
+        #expect(StartPictures.cached(picture) != nil)
+
+        let browser = Browser()
+        let settings = browser.newTab(url: Internal.settingsURL)
+        var ready = false
+        for _ in 0..<100 where !ready {
+            try await Task.sleep(for: .milliseconds(50))
+            ready = (try? await settings.webView.evaluateJavaScript("!!document.querySelector('#start-kind button.on')")) as? Bool == true
+        }
+        #expect(ready)
+        _ = try await settings.webView.evaluateJavaScript("document.querySelector('#start-kind button[data-value=color]').click()")
+        var released = false
+        for _ in 0..<50 where !released {
+            try await Task.sleep(for: .milliseconds(20))
+            released = StartPictures.cached(picture) == nil
+        }
+        #expect(released)
+        #expect(UserDefaults.standard.string(forKey: Preference.startBackground) == "color")
     }
 }

@@ -128,6 +128,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 _ = await StartImage.choose()
             } else {
                 defaults.set(kind.rawValue, forKey: Preference.startBackground)
+                if !kind.showsPicture { StartPictures.forget() }
             }
         case "setStartColor":
             if let hex = Self.hex(value) { defaults.set(hex, forKey: Preference.startColor) }

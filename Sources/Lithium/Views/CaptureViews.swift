@@ -463,7 +463,9 @@ struct CapturePreview: View {
             .onEnded { _ in
                 drag = nil
                 guard let mark = draft else { return }
-                if mark.isVisible {
+                // Without a backdrop, a mark wholly off the screenshot (an ellipse dragged out past
+                // a corner) could never be seen or grabbed, so it isn't kept.
+                if mark.isVisible, style.backdrop != .none || mark.touches(screenshotBounds) {
                     change { $0.append(mark) }
                     if mark.isEditable { selection = mark.id }
                 } else {

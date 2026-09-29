@@ -77,23 +77,25 @@ struct ContentCard: View {
     @Environment(Browser.self) private var browser
 
     var body: some View {
-        let tab = browser.selectedTab ?? browser.home
+        let tab = browser.selectedTab
         // Strips sit above the page and push it down, so they never hide its top.
         VStack(spacing: 0) {
-            if let request = browser.permissions.pending.first(where: { $0.tabID == tab.id }) {
+            if let request = browser.permissions.pending.first(where: { $0.tabID == tab?.id }) {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             Group {
-                if browser.videoPopout.tab === tab {
+                if let tab, browser.videoPopout.tab === tab {
                     PoppedOutPlaceholder(popout: browser.videoPopout)
-                } else {
+                } else if let tab {
                     PageContainer(view: tab.webView)
                         .overlay {
                             if let pdf = tab.pdf {
                                 PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                             }
                         }
+                } else {
+                    StartPageView()
                 }
             }
             // Only the player animates: a page fading out would hold on to its web view, which
@@ -105,7 +107,7 @@ struct ContentCard: View {
             // Floats in the top right corner, like Chrome's, below the PDF viewer's controls
             // and above the player.
             .overlay(alignment: .topTrailing) {
-                if browser.find.isVisible {
+                if let tab, browser.find.isVisible {
                     FindBar(tab: tab)
                         .padding(.top, tab.pdf == nil ? 10 : 50)
                         .padding(.horizontal, 10)

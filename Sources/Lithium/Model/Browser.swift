@@ -4,8 +4,8 @@ import WebKit
 
 /// Window state. Every open page is a `Tab`; a tab whose `pinID` is set is the live page of a
 /// favorite and shows in the grid instead of the tab list. Pins and the open tabs are persisted.
-/// With no tab selected the window shows `home` (Brave Search), which hands every navigation
-/// off to a new tab, so empty tabs never pile up.
+/// With no tab selected the window shows the start page, and the address bar opens a new
+/// tab, so empty tabs never pile up.
 @MainActor
 @Observable
 final class Browser {
@@ -35,22 +35,6 @@ final class Browser {
     let videoPopout = VideoPopout()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
-    @ObservationIgnored private(set) lazy var home: Tab = {
-        let tab = Tab(browser: self, configuration: makeConfiguration(), isHome: true)
-        tab.load(Self.homeURL)
-        return tab
-    }()
-
-    static var homeURL: URL { SearchEngine.current.home }
-
-    static func isHomeURL(_ url: URL) -> Bool {
-        url.host() == homeURL.host() && (url.path().isEmpty || url.path() == "/")
-    }
-
-    func setSearchEngine(_ engine: SearchEngine) {
-        UserDefaults.standard.set(engine.rawValue, forKey: SearchEngine.preferenceKey)
-        home.load(Self.homeURL)
-    }
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private var eventMonitors: [Any] = []
@@ -284,24 +268,12 @@ final class Browser {
         return tab
     }
 
-    /// A navigation the home page hands off, with its method and form data.
-    func newTab(request: URLRequest) {
-        newTab(configuration: makeConfiguration(for: request.url)).load(request)
-    }
-
     func newTabFocusingAddress() {
         find.hide()
         // Left for the address bar: it counts as used until now.
         selectedTab?.markActive()
-        if selectedTabID == nil { resetHome() }
         selectedTabID = nil
         requestAddressFocus()
-    }
-
-    /// The home page keeps whatever was typed into it (its URL never changes), so every
-    /// visit has to start from a fresh load. Done on the way out, the reload is out of sight.
-    private func resetHome() {
-        home.load(Self.homeURL)
     }
 
     func open(_ input: String) {
@@ -338,7 +310,6 @@ final class Browser {
     }
 
     func select(_ tab: Tab) {
-        if selectedTabID == nil { resetHome() }
         let previous = selectedTab
         if tab.id != selectedTabID {
             find.hide()
@@ -350,7 +321,7 @@ final class Browser {
     }
 
     /// The selection falls back on the tab list only, never on a favorite: the tab below the
-    /// closed one (above, at the bottom), and the home page once the list is empty. Closing a
+    /// closed one (above, at the bottom), and the start page once the list is empty. Closing a
     /// favorite's page selects the top of the list.
     func close(_ tab: Tab) {
         let order = regularTabs
@@ -409,7 +380,7 @@ final class Browser {
     func selectAdjacentTab(_ offset: Int) {
         let order = navigationOrder
         guard !order.isEmpty else { return }
-        // From the home page, forward starts at the first item and backward at the last.
+        // From the start page, forward starts at the first item and backward at the last.
         guard let current = order.firstIndex(where: { $0.id == selectedTabID }) else {
             select(offset > 0 ? order[0] : order[order.count - 1])
             return

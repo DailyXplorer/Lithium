@@ -46,7 +46,7 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .printItem) {
-            Button("Print…") { currentTab.print() }
+            Button("Print…") { browser.selectedTab?.print() }
                 .keyboardShortcut("p")
         }
         CommandGroup(after: .textEditing) {
@@ -55,9 +55,8 @@ struct BrowserCommands: Commands {
             Button(browser.find.isVisible ? "Hide Find Bar" : "Find…") {
                 if browser.find.isVisible {
                     browser.find.hide()
-                    let view = currentTab.contentView
-                    view.window?.makeFirstResponder(view)
-                } else {
+                    if let view = browser.selectedTab?.contentView { view.window?.makeFirstResponder(view) }
+                } else if browser.selectedTab != nil {
                     browser.find.show()
                 }
             }
@@ -67,7 +66,7 @@ struct BrowserCommands: Commands {
             Button("Find Previous") { findStep(forward: false) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("Use Selection for Find") {
-                let tab = currentTab
+                guard let tab = browser.selectedTab else { return }
                 Task { await browser.find.useSelection(in: tab.findTarget) }
             }
             .keyboardShortcut("e")
@@ -101,7 +100,8 @@ struct BrowserCommands: Commands {
             Button("Zoom Out") { zoom(by: -0.1) }
                 .keyboardShortcut("-")
             Button("Actual Size") {
-                if let pdf = currentTab.pdf { pdf.setScale(1) } else { currentWebView.pageZoom = 1 }
+                guard let tab = browser.selectedTab else { return }
+                if let pdf = tab.pdf { pdf.setScale(1) } else { tab.webView.pageZoom = 1 }
             }
                 .keyboardShortcut("0")
             Divider()
@@ -110,9 +110,9 @@ struct BrowserCommands: Commands {
             Button("Show All History") { browser.openHistory() }
                 .keyboardShortcut("y")
             Divider()
-            Button("Back") { currentWebView.goBack() }
+            Button("Back") { browser.selectedTab?.webView.goBack() }
                 .keyboardShortcut("[")
-            Button("Forward") { currentWebView.goForward() }
+            Button("Forward") { browser.selectedTab?.webView.goForward() }
                 .keyboardShortcut("]")
         }
         CommandMenu("Tabs") {
@@ -137,26 +137,19 @@ struct BrowserCommands: Commands {
         browser.privacy.isEnabled(for: browser.selectedTab?.url)
     }
 
-    private var currentTab: Tab {
-        browser.selectedTab ?? browser.home
-    }
-
-    private var currentWebView: WKWebView {
-        currentTab.webView
-    }
-
     private func findStep(forward: Bool) {
-        let tab = currentTab
+        guard let tab = browser.selectedTab else { return }
         browser.find.show()
         Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 
     private func zoom(by delta: Double) {
-        if let pdf = currentTab.pdf {
+        guard let tab = browser.selectedTab else { return }
+        if let pdf = tab.pdf {
             if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
             return
         }
-        let webView = currentWebView
+        let webView = tab.webView
         webView.pageZoom = min(max(webView.pageZoom + delta, 0.5), 3)
     }
 

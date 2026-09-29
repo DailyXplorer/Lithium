@@ -85,7 +85,7 @@ struct BrowserTests {
         #expect(browser.selectedTabID == browser.navigationOrder.last?.id)
     }
 
-    /// Closing the last tab of the list shows the home page, not a favorite's live page.
+    /// Closing the last tab of the list shows the start page, not a favorite's live page.
     @Test func closingTheLastTabShowsHomeNotAFavorite() {
         let browser = Browser()
         browser.regularTabs.forEach(browser.close)

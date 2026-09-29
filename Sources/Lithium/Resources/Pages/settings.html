@@ -24,6 +24,7 @@
   .extension .title { display: flex; align-items: center; gap: 10px; }
   .extension img { width: 24px; height: 24px; flex: none; }
   .extension .actions { display: flex; align-items: center; gap: 10px; }
+  #start-kind button { padding: 5px 11px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -32,7 +33,7 @@
 <main>
   <section id="appearance" class="page">
     <h2>Appearance</h2>
-    <p class="lead">How the sidebar, toolbar and websites look.</p>
+    <p class="lead">How the sidebar, toolbar, start page and websites look.</p>
     <h3>Sidebar</h3>
     <div class="row">
       <div><div class="title">Background</div><div class="hint">A solid color, or the frosted glass of macOS.</div></div>
@@ -41,6 +42,23 @@
     <div class="row" id="color-row">
       <div><div class="title">Color</div><div class="hint" id="color-hex"></div></div>
       <div class="swatches" id="swatches"><input type="color" id="custom-color" title="Custom color"></div>
+    </div>
+    <h3>Start page</h3>
+    <div class="row">
+      <div><div class="title">Background</div><div class="hint">What a new tab shows behind the address bar.</div></div>
+      <div class="segmented" id="start-kind"><button data-value="lithium">Lithium</button><button data-value="color">Color</button><button data-value="gradient">Gradient</button><button data-value="image">Picture</button><button data-value="wallpaper">Wallpaper</button></div>
+    </div>
+    <div class="row" id="start-color-row">
+      <div><div class="title">Color</div><div class="hint" id="start-color-hex"></div></div>
+      <div class="swatches" id="start-swatches"><input type="color" id="start-custom-color" title="Custom color"></div>
+    </div>
+    <div class="row" id="start-gradient-row">
+      <div><div class="title">Colors</div><div class="hint">From the top left corner to the bottom right one.</div></div>
+      <div class="swatches"><input type="color" id="start-from" title="Top left"><input type="color" id="start-to" title="Bottom right"></div>
+    </div>
+    <div class="row" id="start-image-row">
+      <div><div class="title">Picture</div><div class="hint">Lithium keeps its own copy.</div></div>
+      <button class="button" id="start-image">Choose…</button>
     </div>
     <h3>Websites</h3>
     <div class="row">
@@ -51,7 +69,7 @@
 
   <section id="search" class="page">
     <h2>Search</h2>
-    <p class="lead">Used by the address bar and the start page.</p>
+    <p class="lead">Used by the address bar.</p>
     <h3>Search engine</h3>
     <div class="rows" id="engines"></div>
   </section>
@@ -129,6 +147,7 @@
 <script src="lithium://pages/pages.js"></script>
 <script>
   const SWATCHES = ['#D5DAF5', '#E6DDF6', '#F6DDE4', '#F7E7D4', '#DDEFE3', '#D8ECF3', '#E4E4E7', '#2B2D42'];
+  const START_SWATCHES = ['#2B2D42', '#1F3A5F', '#3D2C4E', '#2F4A3A', '#5B3A29', '#D5DAF5', '#F6DDE4', '#E4E4E7'];
   let pollTimer = null;
 
   const showSection = () => {
@@ -163,6 +182,24 @@
       $('#swatches').insertBefore(swatch, $('#custom-color'));
     });
     $('#custom-color').value = appearance.sidebarColor.toLowerCase();
+
+    const start = appearance.startPage;
+    document.querySelectorAll('#start-kind button').forEach((b) => b.classList.toggle('on', b.dataset.value === start.background));
+    $('#start-color-row').style.display = start.background === 'color' ? '' : 'none';
+    $('#start-gradient-row').style.display = start.background === 'gradient' ? '' : 'none';
+    $('#start-image-row').style.display = start.background === 'image' ? '' : 'none';
+    $('#start-color-hex').textContent = start.color;
+    $('#start-swatches').querySelectorAll('.swatch').forEach((s) => s.remove());
+    START_SWATCHES.forEach((color) => {
+      const swatch = el('button', { className: 'swatch' + (color.toUpperCase() === start.color.toUpperCase() ? ' on' : ''), title: color });
+      swatch.style.background = color;
+      swatch.onclick = () => call('setStartColor', color).then(render);
+      $('#start-swatches').insertBefore(swatch, $('#start-custom-color'));
+    });
+    $('#start-custom-color').value = start.color.toLowerCase();
+    $('#start-from').value = start.gradientFrom.toLowerCase();
+    $('#start-to').value = start.gradientTo.toLowerCase();
+    $('#start-image').textContent = start.hasImage ? 'Change…' : 'Choose…';
 
     $('#engines').replaceChildren(...search.engines.map((engine) => {
       const row = el('div', { className: 'row choice' + (engine.id === search.engine ? ' on' : '') }, [
@@ -245,6 +282,14 @@
     button.onclick = () => call('setSidebarStyle', button.dataset.value).then(render);
   });
   $('#custom-color').oninput = (event) => call('setSidebarColor', event.target.value).then(render);
+  document.querySelectorAll('#start-kind button').forEach((button) => {
+    button.onclick = () => call('setStartBackground', button.dataset.value).then(render);
+  });
+  $('#start-custom-color').oninput = (event) => call('setStartColor', event.target.value).then(render);
+  const setGradient = () => call('setStartGradient', { from: $('#start-from').value, to: $('#start-to').value }).then(render);
+  $('#start-from').oninput = setGradient;
+  $('#start-to').oninput = setGradient;
+  $('#start-image').onclick = () => call('chooseStartImage').then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');

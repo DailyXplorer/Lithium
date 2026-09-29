@@ -107,7 +107,17 @@ enum CorrectionText {
             total + distance(original.utf16Slice(edit.from, edit.to) ?? "", edit.text)
         }
         guard changed * 3 <= max(letters, 9) else { return nil }
+        guard negations(in: answer) == negations(in: original) else { return nil }
         return answer
+    }
+
+    /// Words that make a sentence negative. Told to add the "ne" French negations miss, the model
+    /// also made affirmative sentences negative ("C'est un bon plan" became "Ce n'est pas un bon
+    /// plan", measured), so an answer must keep as many as the text.
+    private static let negationWords: Set<String> = ["pas", "jamais", "rien", "aucun", "aucune", "not", "never", "nothing"]
+
+    private static func negations(in text: String) -> Int {
+        text.lowercased().split { !$0.isLetter }.filter { negationWords.contains(String($0)) }.count
     }
 
     /// Characters to change to turn one into the other (Levenshtein), so a fixed word counts for

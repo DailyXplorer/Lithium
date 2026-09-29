@@ -60,6 +60,13 @@ struct CorrectionTextTests {
         #expect(CorrectionText.accept("Bien sûr ! Je viendrai avec plaisir à la fête samedi soir.", for: "Tu vien samedi ?") == nil, "answer")
     }
 
+    @Test func acceptsAMissingNeButNeverANewNegation() {
+        #expect(CorrectionText.accept("Je ne sais pas s'il viendra demain.", for: "Je sais pas si il viendra demain.") == "Je ne sais pas s'il viendra demain.")
+        #expect(CorrectionText.accept("On n'a rien reçu.", for: "On a rien reçu.") == "On n'a rien reçu.")
+        #expect(CorrectionText.accept("C'est un bon plan, mais il faudrait ne pas s'en occuper.", for: "Ces un bon plan, mais il faudrait sans occuper.") == nil)
+        #expect(CorrectionText.accept("La boîte n'était pas abîmée.", for: "La boîte étais abîmer.") == nil)
+    }
+
     @Test func piecesJoinBackIntoTheTextAndSkipLinesWithoutLetters() {
         let text = "Bonjour,\n\nLigne un\nLigne deux\n---\nFin"
         let pieces = CorrectionText.pieces(of: text)

@@ -35,7 +35,7 @@ final class Tab: NSObject, Identifiable {
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
-    /// the history back, is cancelled until the next page is shown.
+    /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
@@ -445,6 +445,14 @@ extension Tab: WKNavigationDelegate {
         preferences: WKWebpagePreferences
     ) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         guard let url = action.request.url else { return (.cancel, preferences) }
+        let isMainFrame = action.targetFrame?.isMainFrame ?? true
+        // Only the first decision after an extension sent a sleeping tab on can be its old page's
+        // load, started first; whatever it is, the next ones (the new address's redirects, a
+        // Reload after a download) go through.
+        if isMainFrame, let superseded = supersededURL {
+            supersededURL = nil
+            if url == superseded { return (.cancel, preferences) }
+        }
         if action.shouldPerformDownload { return (.download, preferences) }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
@@ -452,8 +460,6 @@ extension Tab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
-        let isMainFrame = action.targetFrame?.isMainFrame ?? true
-        if isMainFrame, url == supersededURL { return (.cancel, preferences) }
 
         // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
         // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
@@ -530,7 +536,6 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        supersededURL = nil
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         shownHost = webView.url?.host()

@@ -378,6 +378,10 @@ struct CapturePreview: View {
             }
     }
 
+    /// Undo, redo and erasing change the marks, which drops the one being drawn while the drag
+    /// goes on and would start another from where it began: they wait for the drag to end.
+    private var isDrawing: Bool { draft != nil }
+
     private var annotationBar: some View {
         HStack(spacing: 12) {
             HStack(spacing: 2) {
@@ -405,16 +409,16 @@ struct CapturePreview: View {
             HStack(spacing: 2) {
                 ToolButton(icon: .undo) { undo() }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(past.isEmpty)
+                    .disabled(past.isEmpty || isDrawing)
                     .help("Undo")
                     .accessibilityLabel("Undo")
                 ToolButton(icon: .redo) { redo() }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(future.isEmpty)
+                    .disabled(future.isEmpty || isDrawing)
                     .help("Redo")
                     .accessibilityLabel("Redo")
                 ToolButton(icon: .trash) { change { $0.removeAll() } }
-                    .disabled(annotations.isEmpty)
+                    .disabled(annotations.isEmpty || isDrawing)
                     .help("Erase All")
                     .accessibilityLabel("Erase All")
             }

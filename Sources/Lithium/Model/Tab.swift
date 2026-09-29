@@ -773,21 +773,28 @@ extension Tab: WKWebExtensionTab {
     }
 
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
+        wakeForExtension()
         load(url)
     }
 
     /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.
     func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
-        if isAsleep { wakeIfAsleep() } else { reload() }
+        if isAsleep { wakeForExtension() } else { reload() }
     }
 
     func goBack(for context: WKWebExtensionContext) async throws {
-        wakeIfAsleep()
+        wakeForExtension()
         webView.goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
-        wakeIfAsleep()
+        wakeForExtension()
         webView.goForward()
+    }
+
+    /// What an extension sends a tab to counts as using it, so the next sleep pass leaves it be.
+    private func wakeForExtension() {
+        lastActive = Date()
+        wakeIfAsleep()
     }
 }

@@ -145,6 +145,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             }
         case "setSummaries":
             browser.summaries.isEnabled = value as? Bool ?? true
+        case "setTextCorrection":
+            browser.textCorrections.isEnabled = value as? Bool ?? true
         case "setSummaryLanguage":
             let code = value as? String ?? ""
             let known = browser.summaries.languageChoices.languages.contains { $0.code == code }
@@ -214,6 +216,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             "max": [
                 "tidyTitles": browser.tidyTitles.isEnabled,
                 "summaries": browser.summaries.isEnabled,
+                "textCorrection": browser.textCorrections.isEnabled,
                 "summaryLanguage": browser.summaries.language ?? "",
                 "summarySystemLanguage": browser.summaries.languageChoices.system,
                 "summaryLanguages": browser.summaries.languageChoices.languages.map { ["code": $0.code, "name": $0.name] },

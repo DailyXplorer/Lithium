@@ -218,8 +218,13 @@ struct TextCorrectionPageTests {
         #expect(try await button(afterFocusing: "plain") == "none", "an empty textarea")
         #expect(try await button(afterFocusing: "line") == "none", "a one-line input")
         #expect(try await button(afterFocusing: "reply") == "none", "only a signature and a quoted reply")
-        _ = try await page("document.getElementById('plain').value = 'Bonjour à tous'", in: webView)
-        #expect(try await button(afterFocusing: "plain") == "inside")
+        #expect(try await button(afterFocusing: "plain") == "none")
+        _ = try await page("""
+            const plain = document.getElementById('plain');
+            plain.value = 'Bonjour à tous';
+            plain.dispatchEvent(new InputEvent('input', { bubbles: true }));
+            """, in: webView)
+        #expect(try await button(afterFocusing: "plain") == "inside", "typing the third word shows it")
     }
 
     @Test func correctionIsInvisibleToThePage() async throws {

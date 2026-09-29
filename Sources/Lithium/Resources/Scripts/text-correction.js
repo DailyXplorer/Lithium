@@ -24,30 +24,37 @@
     return element.spellcheck ? { kind: 'rich', element } : null;
   };
 
+  // A rich editor's text nodes in order, with null where a block or line break falls.
+  function* walk(node) {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        // Whitespace from the HTML source between blocks isn't text anyone typed.
+        if (child.data && !(child.data.includes('\n') && !child.data.trim())) yield child;
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        const skipped = child.matches(SKIPPED);
+        const block = skipped || BLOCKS.has(child.tagName);
+        if (block) yield null;
+        if (!skipped) yield* walk(child);
+        if (block) yield null;
+      }
+    }
+  }
+
   // A rich editor's text, one line per block or line break, and where each text node sits in it.
   const readRich = (root) => {
     const segments = [];
     let text = '';
     let broken = false;
-    const walk = (node) => {
-      for (let child = node.firstChild; child; child = child.nextSibling) {
-        if (child.nodeType === Node.TEXT_NODE) {
-          // Whitespace from the HTML source between blocks isn't text anyone typed.
-          if (!child.data || (child.data.includes('\n') && !child.data.trim())) continue;
-          if (broken && text) text += '\n';
-          broken = false;
-          segments.push({ node: child, start: text.length, end: text.length + child.data.length });
-          text += child.data;
-        } else if (child.nodeType === Node.ELEMENT_NODE) {
-          const skipped = child.matches(SKIPPED);
-          const block = skipped || BLOCKS.has(child.tagName);
-          if (block) broken = true;
-          if (!skipped) walk(child);
-          if (block) broken = true;
-        }
+    for (const node of walk(root)) {
+      if (!node) {
+        broken = true;
+        continue;
       }
-    };
-    walk(root);
+      if (broken && text) text += '\n';
+      broken = false;
+      segments.push({ node, start: text.length, end: text.length + node.data.length });
+      text += node.data;
+    }
     return { text, segments };
   };
 
@@ -55,11 +62,16 @@
 
   const same = (a, b) => a.replace(/ /g, ' ') === b.replace(/ /g, ' ');
 
-  // Counts only what gets corrected: a signature or a quoted reply alone shows no button.
+  // Counts only what gets corrected (a signature or a quoted reply alone shows no button), and
+  // stops at the third word, since a rich editor can hold a long document.
   const hasWords = (field) => {
-    const text = read(field);
     let count = 0;
-    for (const _ of text.matchAll(/[\p{L}\p{N}]+/gu)) if (++count >= MINIMUM_WORDS) return true;
+    for (const text of field.kind === 'plain' ? [field.element.value] : walk(field.element)) {
+      if (!text) continue;
+      for (const _ of (typeof text === 'string' ? text : text.data).matchAll(/[\p{L}\p{N}]+/gu)) {
+        if (++count >= MINIMUM_WORDS) return true;
+      }
+    }
     return false;
   };
 
@@ -268,7 +280,7 @@
   const hide = () => view?.host.remove();
 
   function place() {
-    if (!field || !field.element.isConnected || (state === 'idle' && !hasWords(field))) return hide();
+    if (!field || !field.element.isConnected || (state === 'idle' && !field.wordy)) return hide();
     const element = field.element;
     const rect = element.getBoundingClientRect();
     if (rect.width < 120 || rect.height < 18 || rect.bottom <= 0 || rect.top >= innerHeight) return hide();
@@ -296,7 +308,10 @@
     if (next?.element === field?.element) return;
     if (field) resizes.unobserve(field.element);
     field = next;
-    if (field) (resizes ??= new ResizeObserver(update)).observe(field.element);
+    if (field) {
+      field.wordy = hasWords(field);
+      (resizes ??= new ResizeObserver(update)).observe(field.element);
+    }
     if (state !== 'working') setState('idle');
     update();
   };
@@ -304,7 +319,11 @@
   const target = (event) => event.composedPath()[0];
   document.addEventListener('focusin', (event) => setField(fieldOf(target(event))), true);
   document.addEventListener('focusout', () => setTimeout(() => setField(fieldOf(activeElement()))), true);
-  document.addEventListener('input', () => field && update(), true);
+  document.addEventListener('input', () => {
+    if (!field) return;
+    field.wordy = hasWords(field);
+    update();
+  }, true);
   addEventListener('scroll', () => field && update(), { capture: true, passive: true });
   addEventListener('resize', () => field && update());
   document.addEventListener('keydown', (event) => {

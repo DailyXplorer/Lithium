@@ -20,7 +20,7 @@ struct ToolbarView: View {
                 help: tab?.isLoading == true ? "Stop" : "Reload (⌘R)",
                 isEnabled: tab?.url != nil
             ) {
-                if tab?.isLoading == true { tab?.webView.stopLoading() } else { tab?.reload() }
+                if tab?.isLoading == true { tab?.stopLoading() } else { tab?.reload() }
             }
             Spacer(minLength: 16)
             AddressBar(tab: tab)

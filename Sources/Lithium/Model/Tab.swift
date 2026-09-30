@@ -37,7 +37,8 @@ final class Tab: NSObject, Identifiable {
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
-    /// Where an extension sent a tab that slept without its history, loaded once its old page is shown.
+    /// Where an extension sent a tab that slept without its history, loaded once its old page is
+    /// shown, or once it is clear it won't be. Stopping the tab drops it.
     @ObservationIgnored private var addressAfterWaking: URL?
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
@@ -130,6 +131,12 @@ final class Tab: NSObject, Identifiable {
         faviconData = Favicons.shared.cachedData(host: url.host() ?? "")
         favicon = Internal.isInternal(url) ? NSApp.applicationIconImage : faviconData.flatMap(NSImage.init(data:))
         isAsleep = true
+    }
+
+    /// Stops the page, and whatever it was to go on to once shown.
+    func stopLoading() {
+        addressAfterWaking = nil
+        webView.stopLoading()
     }
 
     func reload() {
@@ -279,6 +286,7 @@ final class Tab: NSObject, Identifiable {
         guard !isAsleep else { return }
         browser?.videoPopout.discard(self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
+        addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
         unpair()
         // The next web view asks afresh, even if this one's question never gets an answer.
@@ -371,9 +379,23 @@ final class Tab: NSObject, Identifiable {
         privacy.addScripts(enabled, for: url, to: controller)
     }
 
+    /// Sends a tab an extension woke without its history on to the extension's address. Called
+    /// when its old page is shown, and also when that load ends without showing anything (it
+    /// failed, was refused, or became a download): the address is loaded all the same, without
+    /// the old page to go back to. Otherwise it would wait for, and replace, whichever page
+    /// shows next.
+    @discardableResult
+    private func goToAddressAfterWaking() -> Bool {
+        guard let next = addressAfterWaking else { return false }
+        addressAfterWaking = nil
+        Task { self.load(next) }
+        return true
+    }
+
     /// A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
     private func closeIfOnlyADownload() {
-        guard webView.backForwardList.currentItem == nil else { return }
+        // A tab going on to an extension's address isn't empty, though nothing is shown yet.
+        guard !goToAddressAfterWaking(), webView.backForwardList.currentItem == nil else { return }
         browser?.close(self)
     }
 
@@ -460,6 +482,8 @@ extension Tab: WKNavigationDelegate {
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
+            // A load refused here ends without a word from WebKit.
+            if isMainFrame { goToAddressAfterWaking() }
             return (.cancel, preferences)
         }
 
@@ -539,11 +563,8 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        if let next = addressAfterWaking {
-            // The old page (or its error) is now in the history, one Back away.
-            addressAfterWaking = nil
-            Task { self.load(next) }
-        }
+        // The old page is now in the history, one Back away.
+        goToAddressAfterWaking()
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         shownHost = webView.url?.host()
@@ -596,6 +617,8 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // Whatever the error, cancellations included: the old page was only on its way out.
+        guard !goToAddressAfterWaking() else { return }
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)
     }
 
@@ -793,7 +816,8 @@ extension Tab: WKWebExtensionTab {
 
     /// A sleeping tab keeps its old page one Back away. With its history saved, it gets it back
     /// and goes straight on to the address: the old page's load is superseded rather than waited
-    /// for. Without (a tab restored asleep from the last session), it wakes onto its old page first.
+    /// for. Without (a tab restored asleep from the last session), it wakes onto its old page first,
+    /// and goes on once that is shown or has failed to be.
     /// Sent to the page it slept on, it just wakes, which loads that page.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         lastActive = Date()

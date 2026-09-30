@@ -37,6 +37,8 @@ final class Tab: NSObject, Identifiable {
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
+    /// Where an extension sent a tab that slept without its history, loaded once its old page is shown.
+    @ObservationIgnored private var addressAfterWaking: URL?
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
     @ObservationIgnored private var shownHost: String?
@@ -109,6 +111,7 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         isAsleep = false
         sleepingState = nil
+        addressAfterWaking = nil
         // A page the user sends elsewhere is no longer what its popup was talking to.
         unpair()
         if Internal.isInternal(url) { trustedInternalURL = url }
@@ -536,6 +539,11 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        if let next = addressAfterWaking {
+            // The old page (or its error) is now in the history, one Back away.
+            addressAfterWaking = nil
+            Task { self.load(next) }
+        }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         shownHost = webView.url?.host()
@@ -783,18 +791,32 @@ extension Tab: WKWebExtensionTab {
         browser?.close(self)
     }
 
-    /// A sleeping tab gets its history back, so Back returns to where it slept, and goes straight
-    /// on to the address: the old page's load is superseded rather than waited for.
+    /// A sleeping tab keeps its old page one Back away. With its history saved, it gets it back
+    /// and goes straight on to the address: the old page's load is superseded rather than waited
+    /// for. Without (a tab restored asleep from the last session), it wakes onto its old page first.
+    /// Sent to the page it slept on, it just wakes, which loads that page.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         lastActive = Date()
-        if isAsleep, let state = sleepingState {
+        guard isAsleep, let old = self.url else {
+            load(url)
+            return
+        }
+        guard old != url else {
+            wakeIfAsleep()
+            return
+        }
+        if let state = sleepingState {
             sleepingState = nil
             // Putting the history back starts loading the old page. That load is only on its way
             // out, so it mustn't ask to resend a form or be reloaded without its tracking parameters.
-            if let old = self.url, old != url { supersededURL = old }
+            supersededURL = old
             webView.interactionState = state
+            load(url)
+        } else {
+            wakeIfAsleep()
+            // After waking, which clears anything pending.
+            addressAfterWaking = url
         }
-        load(url)
     }
 
     /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.

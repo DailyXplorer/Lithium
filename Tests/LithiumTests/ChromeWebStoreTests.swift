@@ -119,6 +119,43 @@ struct ChromeWebStoreTests {
         #expect(!access("https://example.com/*").isCovered(by: access("http://*/*")))
     }
 
+    /// Sites allowed to message the extension, and optional site access, are granted like the rest,
+    /// so they are shown and checked like the rest.
+    @Test func messagingAndOptionalSitesAreShownAndChecked() {
+        let shown = ChromeWebStore.Access(manifest: ["permissions": ["storage"]])
+        let messaging = ChromeWebStore.Access(manifest: ["permissions": ["storage"], "externally_connectable": ["matches": ["https://example.com/*"]]])
+        let optional = ChromeWebStore.Access(manifest: ["permissions": ["storage"], "optional_host_permissions": ["https://example.com/*"]])
+        #expect(!messaging.isCovered(by: shown))
+        #expect(!optional.isCovered(by: shown))
+        #expect(messaging.isCovered(by: messaging))
+        #expect(messaging.sites == ["example.com"])
+
+        let granted = ChromeWebStore.Access(permissions: ["storage"], patterns: ["https://example.com/*"])
+        #expect(!granted.isCovered(by: shown))
+        #expect(granted.isCovered(by: optional))
+    }
+
+    /// Access to local files, or through a pattern that names no site, is granted, so it is shown.
+    @Test func localFilesAndUnreadPatternsAreShown() {
+        #expect(ChromeWebStore.warnings(for: ["host_permissions": ["file:///*"]]) == ["Read files on this Mac"])
+        #expect(ChromeWebStore.warnings(for: ["host_permissions": ["https:///*"]]) == ["Reach https:///*"])
+        #expect(ChromeWebStore.warnings(for: ["permissions": ["storage"]]).isEmpty)
+    }
+
+    /// Local files and patterns that can't be read name no site, and are only covered by what was shown.
+    @Test func accessToLocalFilesIsCoveredOnlyWhenShown() {
+        let shown = ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*"]])
+        func access(_ pattern: String) -> ChromeWebStore.Access {
+            ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*", pattern]])
+        }
+        #expect(!access("file:///*").isCovered(by: shown))
+        #expect(!access("https:///*").isCovered(by: shown))
+        #expect(access("file:///Users/*").isCovered(by: access("file:///*")))
+        #expect(access("file:///*").isCovered(by: ChromeWebStore.Access(manifest: ["permissions": ["<all_urls>"]])))
+        #expect(!access("file:///*").isCovered(by: ChromeWebStore.Access(manifest: ["host_permissions": ["*://*/*"]])))
+        #expect(access("https:///*").isCovered(by: access("https:///*")))
+    }
+
     /// The names shown drop the path, and many permissions show no warning; what the package may
     /// reach and use is compared as it is.
     @Test func accessIsCoveredOnlyForThePathsAndPermissionsShown() {

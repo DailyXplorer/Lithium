@@ -126,31 +126,57 @@ enum ChromeWebStore {
         var sites: Set<String> = []
         /// In manifest order, without repeats.
         var permissions: [String] = []
+        /// Whether a `file:` pattern gives it the files on this Mac, which no site name shows.
+        var localFiles: Bool { patterns.contains { $0.scheme == "file" } }
+        /// Patterns that are neither a site nor local files, shown as written.
+        var otherAccess: [String] { unreadPatterns.sorted() }
         /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
         private var patterns: Set<SitePattern> = []
+        /// Patterns `SitePattern` can't read, which only the same pattern covers: whatever they
+        /// reach, they are granted all the same.
+        private var unreadPatterns: Set<String> = []
         /// Also what decides coverage: `permissions` are only their warnings, and many have none
         /// (`cookies`, `scripting`), though every one asked for is granted.
         private var apiPermissions: Set<String> = []
 
+        /// Lithium grants every site pattern WebKit finds in the manifest, optional ones and the
+        /// sites allowed to message the extension (`externally_connectable`) included, so all of them
+        /// are shown and compared, though Chrome warns about fewer.
         init(manifest: [String: Any]) {
-            let declared = manifest["permissions"] as? [String] ?? []
-            var patterns = (manifest["host_permissions"] as? [String] ?? []) + declared.filter { $0.contains("://") || $0 == "<all_urls>" }
+            let declared = (manifest["permissions"] as? [String] ?? []) + (manifest["optional_permissions"] as? [String] ?? [])
+            var patterns = (manifest["host_permissions"] as? [String] ?? [])
+                + (manifest["optional_host_permissions"] as? [String] ?? [])
+                + declared.filter(Self.isPattern)
             for script in manifest["content_scripts"] as? [[String: Any]] ?? [] {
                 patterns += script["matches"] as? [String] ?? []
             }
+            patterns += (manifest["externally_connectable"] as? [String: Any])?["matches"] as? [String] ?? []
+            self.init(permissions: declared.filter { !Self.isPattern($0) }, patterns: patterns)
             let hosts = patterns.compactMap(ChromeWebStore.host(of:))
             allSites = hosts.contains("*")
             sites = allSites ? [] : Set(hosts)
-            self.patterns = Set(patterns.compactMap(SitePattern.init))
-            apiPermissions = Set(declared.filter { !$0.contains("://") && $0 != "<all_urls>" })
-            for warning in declared.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
+            // Optional API permissions aren't granted at install: the user is asked when the extension wants them.
+            let required = manifest["permissions"] as? [String] ?? []
+            for warning in required.compactMap({ ChromeWebStore.permissionWarnings[$0] }) where !permissions.contains(warning) {
                 permissions.append(warning)
             }
+        }
+
+        /// What an extension will be granted, as WebKit reads it from the package, for comparing only.
+        init(permissions: [String], patterns: [String]) {
+            self.patterns = Set(patterns.compactMap(SitePattern.init))
+            unreadPatterns = Set(patterns.filter { SitePattern($0) == nil })
+            apiPermissions = Set(permissions)
+        }
+
+        private static func isPattern(_ permission: String) -> Bool {
+            permission.contains("://") || permission == "<all_urls>"
         }
 
         /// Whether the user, having agreed to `approved`, already agreed to all of this.
         func isCovered(by approved: Access) -> Bool {
             patterns.allSatisfy { pattern in approved.patterns.contains { $0.covers(pattern) } }
+                && unreadPatterns.isSubset(of: approved.unreadPatterns)
                 && apiPermissions.isSubset(of: approved.apiPermissions)
         }
     }
@@ -166,7 +192,7 @@ enum ChromeWebStore {
         /// From the "/" on, "*" standing for any characters.
         let path: String
 
-        /// Nil for a pattern that reaches no site (such as `file:` patterns), as `host(of:)`.
+        /// A `file:` pattern has no host, "" here. Nil for a pattern that can't be read.
         init?(_ pattern: String) {
             if pattern == "<all_urls>" {
                 scheme = nil
@@ -182,8 +208,9 @@ enum ChromeWebStore {
             path = String(rest[slash...])
             withSubdomains = authority.hasPrefix("*.")
             host = withSubdomains ? String(authority.dropFirst(2)) : authority
-            guard !host.isEmpty else { return nil }
-            scheme = pattern[..<range.lowerBound].lowercased()
+            let scheme = pattern[..<range.lowerBound].lowercased()
+            guard !host.isEmpty || (scheme == "file" && !authority.hasPrefix("*.")) else { return nil }
+            self.scheme = scheme
         }
 
         func covers(_ other: SitePattern) -> Bool {
@@ -238,6 +265,9 @@ enum ChromeWebStore {
             formatter.locale = Locale(identifier: "en")
             warnings.append("Read and change your data on \(formatter.string(from: sites) ?? sites.joined(separator: ", "))")
         }
+        // Granted like the sites, so shown like them, though they name no site.
+        if access.localFiles { warnings.append("Read files on this Mac") }
+        if !access.otherAccess.isEmpty { warnings.append("Reach \(access.otherAccess.joined(separator: ", "))") }
         for warning in access.permissions where !warnings.contains(warning) {
             warnings.append(warning)
         }

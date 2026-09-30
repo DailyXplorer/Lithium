@@ -65,6 +65,20 @@ struct FindInPageTests {
         #expect(find.currentMatch == 2)
     }
 
+    /// Searching again after the bar closed keeps the direction asked for: Find Previous lands on the last match.
+    @Test func steppingBackAfterTheBarClosedLandsOnTheLast() async {
+        let find = FindInPage()
+        let pdf = Target(matches: 5)
+        pdf.forgetsClearedMatches = true
+        pdf.answer()
+        find.show()
+        await find.update(query: "licence", in: pdf)
+        find.hide()
+        find.show()
+        await find.step(forward: false, in: pdf)
+        #expect(find.currentMatch == 5)
+    }
+
     @MainActor
     final class Target: FindTarget {
         let matches: Int
@@ -110,7 +124,7 @@ struct FindInPageTests {
         func showNextMatch(of query: String, forward: Bool) async -> FindStep {
             guard canShow, hasMatches || !forgetsClearedMatches else { return .none }
             shown += 1
-            position = position % matches + 1
+            position = forward ? position % matches + 1 : (position <= 1 ? matches : position - 1)
             return .shown(position: knowsPosition ? position : nil)
         }
 

@@ -169,6 +169,19 @@ struct Annotation: Equatable, Identifiable {
         return CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
     }
 
+    /// Whether any of the mark, line width included, is drawn inside `rect`. Only what is drawn
+    /// counts: a frame around `rect` doesn't touch it.
+    func touches(_ rect: CGRect) -> Bool {
+        // A click's dot is a line of no length, which a stroked outline may leave out: its round cap is a disc.
+        if tool.isFreehand, let first = points.first, points.allSatisfy({ $0 == first }) {
+            let radius = lineWidth / 2
+            return Path(ellipseIn: CGRect(x: first.x - radius, y: first.y - radius, width: lineWidth, height: lineWidth))
+                .cgPath.intersects(CGPath(rect: rect, transform: nil))
+        }
+        let drawn = tool == .arrow ? path : path.strokedPath(StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+        return drawn.cgPath.intersects(CGPath(rect: rect, transform: nil))
+    }
+
     /// A click with a freehand tool leaves a dot; shapes and arrows need some size to be kept.
     var isVisible: Bool {
         guard let start = points.first, let end = points.last else { return false }

@@ -84,6 +84,12 @@ struct CaptureCompositionTests {
         let ring = Annotation(tool: .ellipse, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -60, y: -60), CGPoint(x: 160, y: 110)])
         #expect(!frame.touches(screenshot))
         #expect(!ring.touches(screenshot))
+
+        // A click with the pen leaves a dot, which touches where its disc does.
+        let dot = Annotation(tool: .pen, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: 10, y: 10)])
+        let dotOff = Annotation(tool: .pen, colorHex: "#FF3B30", lineWidth: 4, points: [CGPoint(x: -10, y: 10)])
+        #expect(dot.touches(screenshot))
+        #expect(!dotOff.touches(screenshot))
     }
 
     @Test func marksStayOnANarrowShotWidenedByTheBadge() throws {

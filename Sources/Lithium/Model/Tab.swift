@@ -362,7 +362,6 @@ final class Tab: NSObject, Identifiable {
         PageStyle.scripts(for: url).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
-        if browser?.textCorrections.isAvailable == true { controller.addUserScript(TextCorrections.script) }
         controller.addUserScript(PageTranslation.script)
         privacy.addScripts(enabled, for: url, to: controller)
     }

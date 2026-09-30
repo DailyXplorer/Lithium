@@ -126,6 +126,10 @@ enum ChromeWebStore {
         var sites: Set<String> = []
         /// In manifest order, without repeats.
         var permissions: [String] = []
+        /// Whether a `file:` pattern gives it the files on this Mac, which no site name shows.
+        var localFiles: Bool { patterns.contains { $0.scheme == "file" } }
+        /// Patterns that are neither a site nor local files, shown as written.
+        var otherAccess: [String] { unreadPatterns.sorted() }
         /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
         private var patterns: Set<SitePattern> = []
         /// Patterns `SitePattern` can't read, which only the same pattern covers: whatever they
@@ -261,6 +265,9 @@ enum ChromeWebStore {
             formatter.locale = Locale(identifier: "en")
             warnings.append("Read and change your data on \(formatter.string(from: sites) ?? sites.joined(separator: ", "))")
         }
+        // Granted like the sites, so shown like them, though they name no site.
+        if access.localFiles { warnings.append("Read files on this Mac") }
+        if !access.otherAccess.isEmpty { warnings.append("Reach \(access.otherAccess.joined(separator: ", "))") }
         for warning in access.permissions where !warnings.contains(warning) {
             warnings.append(warning)
         }

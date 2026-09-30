@@ -135,7 +135,14 @@ struct ChromeWebStoreTests {
         #expect(granted.isCovered(by: optional))
     }
 
-    /// Local files and patterns that can't be read show no site, but are granted all the same.
+    /// Access to local files, or through a pattern that names no site, is granted, so it is shown.
+    @Test func localFilesAndUnreadPatternsAreShown() {
+        #expect(ChromeWebStore.warnings(for: ["host_permissions": ["file:///*"]]) == ["Read files on this Mac"])
+        #expect(ChromeWebStore.warnings(for: ["host_permissions": ["https:///*"]]) == ["Reach https:///*"])
+        #expect(ChromeWebStore.warnings(for: ["permissions": ["storage"]]).isEmpty)
+    }
+
+    /// Local files and patterns that can't be read name no site, and are only covered by what was shown.
     @Test func accessToLocalFilesIsCoveredOnlyWhenShown() {
         let shown = ChromeWebStore.Access(manifest: ["host_permissions": ["https://example.com/*"]])
         func access(_ pattern: String) -> ChromeWebStore.Access {

@@ -41,8 +41,38 @@ for bundle in "$bin_path"/*.bundle; do
   ditto "$bundle" "$app/Contents/Resources/$(basename "$bundle")"
 done
 
+# Ad-hoc signatures pin the designated requirement to the cdhash, so every rebuild looks like
+# a new app to the keychain and WebKit's items (WebCrypto master key…) prompt for the password
+# again. A stable self-signed identity keeps the requirement identical across builds.
+identity="Lithium Local Code Signing"
+if ! security find-identity -p codesigning | grep -q "\"$identity\""; then
+  certdir=$(mktemp -d)
+  cat > "$certdir/cfg" <<EOF
+[req]
+distinguished_name=dn
+prompt=no
+x509_extensions=ext
+[dn]
+CN=$identity
+[ext]
+basicConstraints=critical,CA:false
+keyUsage=critical,digitalSignature
+extendedKeyUsage=critical,codeSigning
+EOF
+  openssl req -x509 -newkey rsa:2048 -nodes -days 36500 -config "$certdir/cfg" \
+    -keyout "$certdir/key.pem" -out "$certdir/cert.pem" 2>/dev/null
+  openssl pkcs12 -export -legacy -inkey "$certdir/key.pem" -in "$certdir/cert.pem" \
+    -name "$identity" -out "$certdir/id.p12" -passout pass:lithium 2>/dev/null \
+    || openssl pkcs12 -export -inkey "$certdir/key.pem" -in "$certdir/cert.pem" \
+      -name "$identity" -out "$certdir/id.p12" -passout pass:lithium
+  security import "$certdir/id.p12" -k "$HOME/Library/Keychains/login.keychain-db" \
+    -P lithium -T /usr/bin/codesign >/dev/null
+  rm -rf "$certdir"
+fi
+sign_hash=$(security find-identity -p codesigning | grep "\"$identity\"" | awk '{ print $2; exit }')
+
 xattr -cr "$app"
-codesign --force --sign - "$app"
+codesign --force --sign "$sign_hash" "$app"
 codesign --verify --deep --strict "$app"
 
 osascript -e 'tell application id "app.lithium.browser" to quit' >/dev/null 2>&1 || true

@@ -50,44 +50,46 @@ private struct DownloadsList: View {
     private let downloads = Downloads.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Downloads").font(Theme.font(15, .semibold))
-                Spacer()
-                Button("Clear") { downloads.clearFinished() }
-                    .disabled(downloads.items.allSatisfy { $0.state == .downloading })
+                Text(subtitle).font(Theme.font(12)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            Divider()
-            if downloads.items.isEmpty {
-                Text("Files you download appear here.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 90)
-            } else {
+            if !downloads.items.isEmpty {
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(downloads.items) { DownloadRow(item: $0) }
                     }
-                    .padding(6)
                 }
                 .frame(maxHeight: 360)
+                .padding(.horizontal, -8)
             }
             Divider()
-            Button {
-                NSWorkspace.shared.open(URL.downloadsDirectory)
-            } label: {
-                HStack(spacing: 6) {
-                    Icon(.folder, size: 14)
-                    Text("Open Downloads Folder")
+            HStack {
+                Button("Open Downloads Folder") { NSWorkspace.shared.open(URL.downloadsDirectory) }
+                Spacer()
+                if downloads.items.contains(where: { $0.state != .downloading }) {
+                    Button("Clear") { downloads.clearFinished() }
                 }
             }
             .buttonStyle(.plain)
+            .font(Theme.font(12))
             .foregroundStyle(Color.accentColor)
-            .padding(12)
         }
         .font(Theme.font(13))
-        .frame(width: 360)
+        .padding(16)
+        .frame(width: 340)
+    }
+
+    private var subtitle: String {
+        let active = downloads.active.count
+        if active > 0 { return active == 1 ? "1 file downloading" : "\(active) files downloading" }
+        let count = downloads.items.count
+        switch count {
+        case 0: return "Files you download appear here."
+        case 1: return "1 file"
+        default: return "\(count) files"
+        }
     }
 }
 

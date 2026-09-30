@@ -33,6 +33,7 @@ final class Browser {
     let extensions = Extensions()
     let videoPopout = VideoPopout()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
+    @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
@@ -164,6 +165,7 @@ final class Browser {
 
     private func prepare(_ configuration: WKWebViewConfiguration) {
         InternalSchemeHandler.shared.install(on: configuration)
+        translation.install(on: configuration)
         configuration.webExtensionController = extensions.controller
     }
 

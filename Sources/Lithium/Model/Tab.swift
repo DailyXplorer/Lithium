@@ -12,7 +12,8 @@ final class Tab: NSObject, Identifiable {
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = PageWebView(frame: .zero, configuration: configuration)
+        webView.translation = browser?.translation
         loadedWebView = webView
         attach(webView)
         return webView
@@ -122,7 +123,7 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         self.title = title
         faviconData = Favicons.shared.cachedData(host: url.host() ?? "")
-        favicon = Internal.isInternal(url) ? NSApp.applicationIconImage : faviconData.flatMap(NSImage.init(data:))
+        favicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : faviconData.flatMap(NSImage.init(data:))
         isAsleep = true
     }
 
@@ -361,6 +362,7 @@ final class Tab: NSObject, Identifiable {
         PageStyle.scripts(for: url).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
+        controller.addUserScript(PageTranslation.script)
         privacy.addScripts(enabled, for: url, to: controller)
     }
 

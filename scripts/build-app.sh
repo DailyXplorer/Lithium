@@ -46,7 +46,8 @@ done
 # again. A stable self-signed identity keeps the requirement identical across builds.
 identity="Lithium Local Code Signing"
 if ! security find-identity -p codesigning | grep -q "\"$identity\""; then
-  certdir=$(mktemp -d)
+  certdir="$stage/cert"
+  mkdir "$certdir"
   cat > "$certdir/cfg" <<EOF
 [req]
 distinguished_name=dn

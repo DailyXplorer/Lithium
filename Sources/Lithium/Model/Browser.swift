@@ -30,7 +30,6 @@ final class Browser {
     let permissions = SitePermissions()
     let tidyTitles = TidyTitles()
     let summaries = PageSummaries()
-    let textCorrections = TextCorrections()
     let extensions = Extensions()
     let videoPopout = VideoPopout()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
@@ -165,7 +164,6 @@ final class Browser {
 
     private func prepare(_ configuration: WKWebViewConfiguration) {
         InternalSchemeHandler.shared.install(on: configuration)
-        textCorrections.install(on: configuration)
         configuration.webExtensionController = extensions.controller
     }
 

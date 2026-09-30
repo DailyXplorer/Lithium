@@ -116,12 +116,8 @@
       <label class="switch" for="summaries"><input type="checkbox" id="summaries" role="switch"><span></span></label>
     </div>
     <div class="row" id="summary-language-row">
-      <div><div class="title">Summary language</div><div class="hint">Summaries are written in this language, whatever the page’s own.</div></div>
+      <div><div class="title">Summary language</div><div class="hint">Summaries and translations are written in this language, whatever the page’s own.</div></div>
       <select id="summary-language"></select>
-    </div>
-    <div class="row">
-      <div><div class="title">Fix spelling and grammar</div><div class="hint">Adds a small button to the corner of the text box you’re writing in, like an email. Click it or press ⌥⌘K to fix spelling and grammar mistakes in your text without rewording it. ⌘Z brings back what you wrote.</div></div>
-      <label class="switch" for="text-correction"><input type="checkbox" id="text-correction" role="switch"><span></span></label>
     </div>
   </section>
 
@@ -240,7 +236,6 @@
     const { max } = state;
     $('#tidy-titles').checked = max.tidyTitles;
     $('#summaries').checked = max.summaries;
-    $('#text-correction').checked = max.textCorrection;
     $('#summary-language-row').hidden = !max.summaries || max.summaryLanguages.length === 0;
     $('#summary-language').replaceChildren(
       el('option', { value: '', textContent: `Same as the system (${max.summarySystemLanguage})` }),
@@ -295,7 +290,6 @@
   $('#web-store').onclick = () => call('openWebStore');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
-  $('#text-correction').onchange = (event) => call('setTextCorrection', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state').then(render); });
 

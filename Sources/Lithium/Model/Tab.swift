@@ -244,8 +244,7 @@ final class Tab: NSObject, Identifiable {
         return !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
             && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
-            && webView.cameraCaptureState == .none && webView.microphoneCaptureState == .none
-            && !isSharingScreen
+            && !isInCall
     }
 
     private static let silenceBeforeSleep: TimeInterval = 5 * 60
@@ -278,8 +277,12 @@ final class Tab: NSObject, Identifiable {
         return webView.value(forKey: "_isPlayingAudio") as? Bool
     }
 
-    /// Sharing the screen or a window in a call. Private API, absent from older WebKits.
-    private var isSharingScreen: Bool {
+    /// Using the camera or microphone, or sharing the screen or a window: a call, whose
+    /// participants are heard through the page's media. Screen sharing is private API, absent
+    /// from older WebKits.
+    var isInCall: Bool {
+        guard let webView = loadedWebView else { return false }
+        if webView.cameraCaptureState != .none || webView.microphoneCaptureState != .none { return true }
         guard webView.responds(to: Selector(("_displayCaptureState"))) else { return false }
         return (webView.value(forKey: "_displayCaptureState") as? Int ?? 0) != 0
     }

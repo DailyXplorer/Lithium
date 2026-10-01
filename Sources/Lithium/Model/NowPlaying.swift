@@ -118,6 +118,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored weak var browser: Browser?
     /// Whether WebKit hears the tab, nil when it can't tell; replaced in tests.
     @ObservationIgnored var isHeard: (Tab) -> Bool? = { $0.isPlayingAudio }
+    /// Whether the tab is in a call, which no other sound pauses; replaced in tests.
+    @ObservationIgnored var isInCall: (Tab) -> Bool = { $0.isInCall }
     /// Pauses every media of the tab, in all its frames and in the floating player; replaced in tests.
     @ObservationIgnored var pause: (Tab) -> Void = { tab in
         guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
@@ -155,7 +157,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
     /// An iframe takes it only if WebKit hears the tab too: any page, or an ad in it, may say it
     /// plays. The page itself is taken at its word; it is the site the user went to.
-    /// One sound at a time: a tab taking the player from another that was heard pauses it.
+    /// One sound at a time: a tab taking the player from another that was heard pauses it, unless
+    /// that one is in a call, whose participants it would silence.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let claims = { (media: Media) in
@@ -163,7 +166,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         }
         if let media, holds || claims(media) || media.isRestored && self.tab == nil {
             if !holds { expected = nil }
-            if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible {
+            if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible,
+               !isInCall(previous) {
                 pause(previous)
             }
             self.tab = tab

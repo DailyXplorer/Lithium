@@ -218,6 +218,23 @@ struct NowPlayingBrowserTests {
         #expect(paused == [first, second], "a tab never pauses itself")
     }
 
+    /// A call's participants are heard through the page's media: other sound mustn't silence them.
+    @Test func pausesNoTabInACall() {
+        let browser = Browser()
+        let (call, video, other) = (browser.newTab(), browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        player.isInCall = { $0 === call }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+
+        player.receive(playing, from: call)
+        player.receive(playing, from: video)
+        #expect(player.tab === video && paused.isEmpty, "the call goes on, the video takes the player")
+        player.receive(playing, from: other)
+        #expect(paused == [video], "a tab not in a call still pauses")
+    }
+
     @Test func pausesNothingForMediaNotHeard() {
         let browser = Browser()
         let (first, second) = (browser.newTab(), browser.newTab())

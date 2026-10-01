@@ -16,7 +16,7 @@ struct SidebarToggle: View {
 
     var body: some View {
         IconButton(icon: .sidebar, help: "Toggle Sidebar (⌘B)") {
-            withAnimation(.snappy(duration: 0.2)) { browser.isSidebarVisible.toggle() }
+            withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
         }
     }
 }
@@ -85,8 +85,8 @@ private struct PinGrid: View {
                     )
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(browser.pins) { pin in
-                        PinTile(pin: pin)
+                    ForEach(Array(browser.pins.enumerated()), id: \.element.id) { index, pin in
+                        PinTile(pin: pin, index: index)
                     }
                 }
             }
@@ -96,18 +96,40 @@ private struct PinGrid: View {
                 .fill(isTargeted ? palette.ink.opacity(0.08) : .clear)
                 .padding(-4)
         )
-        .dropDestination(for: String.self) { ids, _ in
-            ids.forEach(browser.pinTab(withID:))
-            return !ids.isEmpty
+        // Space around the tiles: a tab is pinned at the end, a favorite moves to the end.
+        .dropDestination(for: String.self) { items, _ in
+            browser.dropOnFavorites(items, at: nil)
         } isTargeted: { isTargeted = $0 }
+    }
+}
+
+/// A favorite drags as `pin:<id>` and a tab as its bare id, both UUID strings: the prefix tells them apart.
+private let pinDragPrefix = "pin:"
+
+private extension Browser {
+    /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
+    func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
+        guard let item = items.first else { return false }
+        withAnimation(.snappy(duration: 0.2)) {
+            if item.hasPrefix(pinDragPrefix) {
+                if let id = UUID(uuidString: String(item.dropFirst(pinDragPrefix.count))) {
+                    movePin(id: id, to: index ?? pins.count)
+                }
+            } else {
+                pinTab(withID: item, at: index)
+            }
+        }
+        return true
     }
 }
 
 private struct PinTile: View {
     let pin: Pin
+    let index: Int
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isHovered = false
+    @State private var isTargeted = false
 
     var body: some View {
         let live = browser.liveTab(for: pin)
@@ -119,9 +141,18 @@ private struct PinTile: View {
             .overlay {
                 Favicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, size: 20)
             }
+            // The slot a drop lands in: whatever is dragged takes this place and the tile shifts along.
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
+            }
             .contentShape(Rectangle())
             .onTapGesture { browser.activate(pin) }
             .onHover { isHovered = $0 }
+            .draggable(pinDragPrefix + pin.id.uuidString)
+            .dropDestination(for: String.self) { items, _ in
+                browser.dropOnFavorites(items, at: index)
+            } isTargeted: { isTargeted = $0 }
             .help(pin.title)
             .contextMenu {
                 if let live {

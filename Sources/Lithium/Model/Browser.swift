@@ -20,7 +20,9 @@ final class Browser {
         }
     }
     private(set) var addressFocusToken = 0
-    var isSidebarVisible = true
+    /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
+    /// the screenshot taking both looks never outlives the app.
+    var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
     var renamingTabID: Tab.ID?
 
     let privacy = Privacy()
@@ -244,6 +246,11 @@ final class Browser {
             return true
         }
         return false
+    }
+
+    func toggleSidebar() {
+        isSidebarVisible.toggle()
+        UserDefaults.standard.set(isSidebarVisible, forKey: Preference.sidebarVisible)
     }
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }

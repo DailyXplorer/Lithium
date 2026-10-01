@@ -16,7 +16,7 @@ struct SidebarToggle: View {
 
     var body: some View {
         IconButton(icon: .sidebar, help: "Toggle Sidebar (⌘B)") {
-            withAnimation(.snappy(duration: 0.2)) { browser.isSidebarVisible.toggle() }
+            withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
         }
     }
 }

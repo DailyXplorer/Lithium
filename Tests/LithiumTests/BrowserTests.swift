@@ -60,6 +60,20 @@ struct BrowserTests {
         #expect(background.webView.title == "Background")
     }
 
+    /// The sidebar opens as the user left it, and a screenshot's passing flip is not remembered.
+    @Test func sidebarVisibilitySurvivesRelaunch() {
+        UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible) }
+        let first = Browser()
+        #expect(first.isSidebarVisible == true)
+
+        first.toggleSidebar()
+        #expect(Browser().isSidebarVisible == false)
+
+        first.isSidebarVisible = true
+        #expect(Browser().isSidebarVisible == false)
+    }
+
     /// Switching tabs quickly while tabs fall asleep every few milliseconds never puts the selected one to sleep.
     @Test func selectedTabNeverFallsAsleep() async throws {
         UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")

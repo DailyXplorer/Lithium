@@ -39,6 +39,7 @@ struct SidebarView: View {
                 Text("New Tab")
             }
             .opacity(browser.selectedTabID == nil ? 1 : 0.7)
+            .contextMenu { ReopenClosedTabButton() }
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(browser.regularTabs) { tab in
@@ -47,6 +48,9 @@ struct SidebarView: View {
                 }
             }
             .scrollIndicators(.never)
+            // The empty space below the tabs too; a row's own menu wins over this one.
+            .contentShape(Rectangle())
+            .contextMenu { ReopenClosedTabButton() }
             if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
                 MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -156,6 +160,9 @@ private struct PinTile: View {
             .help(pin.title)
             .contextMenu {
                 if let live {
+                    Button("Duplicate Tab") { browser.duplicate(live) }
+                    MuteButton(tab: live)
+                    Divider()
                     Button("Close Page") { browser.close(live) }
                 }
                 Button("Unpin") { browser.unpin(pin) }
@@ -188,6 +195,16 @@ private struct TabRow: View {
                     .help(tab.displayTitle == tab.title ? "" : tab.title)
             }
             Spacer(minLength: 0)
+            if tab.isMuted {
+                Button { tab.isMuted = false } label: {
+                    Icon(.speakerOff, size: 12)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.6)
+                .help("Unmute Tab")
+            }
             if (isHovered || isSelected) && browser.renamingTabID != tab.id {
                 Button { browser.close(tab) } label: {
                     Icon(.close, size: 12)
@@ -204,15 +221,50 @@ private struct TabRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
         .draggable(tab.id.uuidString)
         .contextMenu {
+            Button("Reload Tab") { tab.reload() }
+                .disabled(tab.url == nil)
+            Button("Duplicate Tab") { browser.duplicate(tab) }
+                .disabled(tab.url == nil)
+            MuteButton(tab: tab)
+            Divider()
+            Button("Copy Link") { browser.copyLink(of: tab) }
+                .disabled(tab.url == nil)
+            Divider()
             Button("Rename Tab…") { browser.renamingTabID = tab.id }
             if tab.customTitle != nil {
                 Button("Use Page Title") { browser.rename(tab, to: "") }
             }
-            Divider()
             Button("Pin Tab") { browser.pin(tab) }
                 .disabled(tab.url == nil)
+            Divider()
             Button("Close Tab") { browser.close(tab) }
+            Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
+                .disabled(browser.regularTabs.allSatisfy { $0 === tab })
+            Button("Close Tabs Below") { browser.closeTabs(below: tab) }
+                .disabled(browser.tabs(below: tab).isEmpty)
+            Divider()
+            ReopenClosedTabButton()
         }
+    }
+}
+
+/// Hidden where WebKit has no per-page mute.
+private struct MuteButton: View {
+    let tab: Tab
+
+    var body: some View {
+        if Tab.canMute {
+            Button(tab.isMuted ? "Unmute Tab" : "Mute Tab") { tab.isMuted.toggle() }
+        }
+    }
+}
+
+private struct ReopenClosedTabButton: View {
+    @Environment(Browser.self) private var browser
+
+    var body: some View {
+        Button("Reopen Closed Tab") { browser.reopenClosedTab() }
+            .disabled(!browser.canReopenClosedTab)
     }
 }
 

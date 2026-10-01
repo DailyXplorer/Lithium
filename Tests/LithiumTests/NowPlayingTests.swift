@@ -81,6 +81,17 @@ struct NowPlayingBrowserTests {
         #expect(player.tab == nil)
     }
 
+    @Test func letsGoWhenThePageCrashes() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.receive(NowPlaying.Media(message: ["paused": false], at: Date()), from: tab)
+        #expect(browser.selectedTab === tab && player.tab === tab)
+
+        tab.webViewWebContentProcessDidTerminate(tab.webView)
+        #expect(player.tab == nil && player.media == nil, "the selected tab reloads, but its media are gone now")
+    }
+
     @Test func followsTheLastFrameThatPlayed() {
         let browser = Browser()
         let tab = browser.newTab()

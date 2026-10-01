@@ -636,6 +636,8 @@ extension Tab: WKNavigationDelegate {
     /// have been dropped to free memory. A page that takes its process down again right after
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // The media died with the process; a reload that never commits would leave it showing as playing.
+        browser?.nowPlaying.discard(self)
         guard let browser else { return }
         guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))

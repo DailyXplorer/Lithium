@@ -112,6 +112,23 @@ struct NowPlayingBrowserTests {
         #expect(player.tab == nil)
     }
 
+    /// A video muted while it plays still reports, but the tab heard keeps the player.
+    @Test func takesThePlayerOnlyWhenHeard() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
+
+        player.receive(playing, from: first)
+        player.receive(muted, from: second)
+        #expect(player.tab === first, "a muted video doesn't take the player")
+        player.receive(muted, from: first)
+        #expect(player.tab === first && player.media?.isPaused == false && player.media?.isAudible == false, "muted, it keeps its own")
+        player.receive(playing, from: second)
+        #expect(player.tab === second)
+    }
+
     @Test func letsGoWhenThePageCrashes() {
         let browser = Browser()
         let tab = browser.newTab()
@@ -353,6 +370,20 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { try await page.run("return window.sound.paused") as? Bool == true })
         try await Task.sleep(for: .milliseconds(300))
         #expect(page.last?.isPaused == true, "paused, a sound never in the document stays in the player")
+    }
+
+    /// Muted after it started, the media playing says it isn't heard, and is again once unmuted.
+    @Test func reportsWhetherItIsHeard() async throws {
+        let page = try await PlayingPage("<video src=\"red.mp4\" loop playsinline></video>")
+        defer { page.close() }
+        try await page.play("document.querySelector('video')")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.isAudible == true })
+
+        try await page.run("document.querySelector('video').muted = true")
+        #expect(await waitUntil { page.last?.isAudible == false })
+        #expect(page.last?.isPaused == false)
+        try await page.run("document.querySelector('video').muted = false")
+        #expect(await waitUntil { page.last?.isAudible == true })
     }
 
     /// X takes a video out of the page when its view closes: WebKit pauses it, but it stays loaded.

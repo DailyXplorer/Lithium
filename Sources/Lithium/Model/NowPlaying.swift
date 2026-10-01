@@ -18,6 +18,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         /// A small JPEG or PNG the page drew itself: the app never loads what a page names.
         var artwork: CGImage?
         var isPaused: Bool
+        /// Not muted nor at volume 0: only media heard take the player from another tab.
+        var isAudible: Bool
         /// Where the media was when the page reported it, at `reportedAt`.
         var time: Double
         /// Nil for a live stream.
@@ -45,6 +47,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             artist = text("artist")
             artwork = text("artwork").flatMap(Self.picture)
             isPaused = body["paused"] as? Bool ?? true
+            isAudible = body["audible"] as? Bool ?? true
             duration = number("duration").flatMap { $0 > 0 ? $0 : nil }
             time = min(number("time") ?? 0, duration ?? .infinity)
             rate = number("rate").flatMap { $0 > 0 ? $0 : nil } ?? 1
@@ -126,11 +129,11 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         receive(Media(message: body["media"] ?? NSNull(), at: Date()), from: tab, frame: frame)
     }
 
-    /// A frame playing takes the player, as does a page back from the back-forward cache when the
-    /// player is free; the frame in it updates it, or leaves it with nothing to play.
+    /// A frame playing sound takes the player, as does a page back from the back-forward cache when
+    /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
-        if let media, !media.isPaused || holds || media.isRestored && self.tab == nil {
+        if let media, !media.isPaused && media.isAudible || holds || media.isRestored && self.tab == nil {
             if !holds { expected = nil }
             self.tab = tab
             self.frame = frame

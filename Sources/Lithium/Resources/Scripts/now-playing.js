@@ -52,6 +52,8 @@
       artist: metadata?.artist || null,
       artwork: draw(artwork(metadata?.artwork)),
       paused,
+      // Muted while it plays, it keeps its own card but takes no player from another tab.
+      audible: isAudible(active),
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
       rate: active.playbackRate || 1,

@@ -11,3 +11,13 @@ func claimFocus(_ focus: FocusState<Bool>.Binding) {
     NSApp.keyWindow?.makeFirstResponder(nil)
     DispatchQueue.main.async { focus.wrappedValue = true }
 }
+
+/// Gives the keyboard to a page (its web view or PDF viewer), as a click into it would, unless a
+/// text field of the window is being edited: the address bar after ⌘L, a tab being renamed.
+@MainActor
+func focusPage(_ view: NSView) {
+    guard let window = view.window else { return }
+    if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+       (editor.delegate as? NSView)?.window === window { return }
+    window.makeFirstResponder(view)
+}

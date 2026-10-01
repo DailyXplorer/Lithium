@@ -37,6 +37,39 @@ struct WebContainerTests {
         #expect(window.unhandledKeyDowns == 0)
         window.orderOut(nil)
     }
+
+    /// Swapping pages takes the keyboard away with the outgoing one; the incoming page gets it back.
+    @Test func switchingPagesHandsTheKeyboardToTheNewPage() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let container = WebContainerView(frame: window.contentLayoutRect)
+        window.contentView = container
+        let outgoing = WKWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
+        let incoming = WKWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
+        container.addSubview(outgoing)
+        window.makeFirstResponder(outgoing)
+
+        outgoing.removeFromSuperview()
+        container.addSubview(incoming)
+        #expect(window.firstResponder === window)
+
+        focusPage(incoming)
+        #expect(window.firstResponder === incoming)
+    }
+
+    /// The address bar focused with ⌘L, or a tab being renamed, keeps the keyboard.
+    @Test func aFieldBeingEditedKeepsTheKeyboard() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let container = WebContainerView(frame: window.contentLayoutRect)
+        window.contentView = container
+        let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: WKWebViewConfiguration())
+        let field = NSTextField(frame: NSRect(x: 0, y: 520, width: 300, height: 24))
+        container.addSubview(page)
+        container.addSubview(field)
+        window.makeFirstResponder(field)
+
+        focusPage(page)
+        #expect((window.firstResponder as? NSTextView)?.delegate === field)
+    }
 }
 
 private final class BeepCountingWindow: NSWindow {

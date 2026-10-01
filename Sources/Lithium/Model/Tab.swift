@@ -19,7 +19,7 @@ final class Tab: NSObject, Identifiable {
         attach(webView)
         return webView
     }
-    @ObservationIgnored private var loadedWebView: WKWebView?
+    @ObservationIgnored private(set) var loadedWebView: WKWebView?
     /// What the next web view is made with.
     @ObservationIgnored private var configuration: WKWebViewConfiguration
     private(set) var isAsleep = false

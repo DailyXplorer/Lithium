@@ -24,6 +24,7 @@ struct SidebarToggle: View {
 struct SidebarView: View {
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
+    @AppStorage(Preference.miniPlayer) private var showsMiniPlayer = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -46,7 +47,12 @@ struct SidebarView: View {
                 }
             }
             .scrollIndicators(.never)
+            if showsMiniPlayer, let tab = browser.nowPlaying.tab, let media = browser.nowPlaying.media {
+                MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.snappy(duration: 0.2), value: browser.nowPlaying.tab?.id)
         .padding(.top, 2)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)

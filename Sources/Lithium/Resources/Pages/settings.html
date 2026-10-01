@@ -47,6 +47,10 @@
       <div><div class="title">Reveal sensitivity</div><div class="hint">When the sidebar is hidden, how quickly the window’s left edge brings it out and how long it stays once the pointer leaves.</div></div>
       <div class="segmented" id="reveal"><button data-value="responsive">Responsive</button><button data-value="normal">Normal</button><button data-value="calm">Calm</button></div>
     </div>
+    <div class="row">
+      <div><div class="title">Mini player</div><div class="hint">Shows what the last tab with sound plays at the bottom of the sidebar, with play, pause, previous and next. Applies to pages as they load.</div></div>
+      <label class="switch" for="mini-player"><input type="checkbox" id="mini-player" role="switch"><span></span></label>
+    </div>
     <h3>Start page</h3>
     <div class="row">
       <div><div class="title">Background</div><div class="hint">What a new tab shows behind the address bar.</div></div>
@@ -174,6 +178,7 @@
     $('#color-row').style.display = appearance.sidebarStyle === 'solid' ? '' : 'none';
     $('#color-hex').textContent = appearance.sidebarColor;
     document.querySelectorAll('#reveal button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarReveal));
+    $('#mini-player').checked = appearance.miniPlayer;
     $('#website-font').checked = appearance.websiteFont;
     $('#swatches').querySelectorAll('.swatch').forEach((s) => s.remove());
     [appearance.defaultColor, ...SWATCHES.filter((c) => c !== appearance.defaultColor)].forEach((color) => {
@@ -293,7 +298,8 @@
   $('#start-from').oninput = setGradient;
   $('#start-to').oninput = setGradient;
   $('#start-image').onclick = () => call('chooseStartImage').then(render);
-  $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
+  $('#website-font').onchange =(event) => call('setWebsiteFont', event.target.checked).then(render);
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);

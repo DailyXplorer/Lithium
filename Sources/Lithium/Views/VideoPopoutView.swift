@@ -317,7 +317,7 @@ private struct Scrubber: View {
     var body: some View {
         let shown = scrubbing ?? time
         HStack(spacing: 8) {
-            Text(Self.format(shown))
+            Text(PlaybackTime.format(shown))
                 .monospacedDigit()
             GeometryReader { proxy in
                 let fraction = duration > 0 ? min(max(shown / duration, 0), 1) : 0
@@ -343,13 +343,16 @@ private struct Scrubber: View {
             }
             .frame(height: 16)
             .onHover { isHovered = $0 }
-            Text(Self.format(duration))
+            Text(PlaybackTime.format(duration))
                 .monospacedDigit()
                 .opacity(0.8)
         }
         .font(Theme.font(11, .medium))
     }
+}
 
+/// Times as players show them: m:ss, or h:mm:ss past an hour.
+enum PlaybackTime {
     static func format(_ seconds: Double) -> String {
         let total = Int(seconds.isFinite ? max(seconds, 0) : 0)
         let (hours, minutes, rest) = (total / 3600, total / 60 % 60, total % 60)

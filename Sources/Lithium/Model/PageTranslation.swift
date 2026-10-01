@@ -10,6 +10,8 @@ final class PageWebView: WKWebView {
     /// reports just before WebKit opens the menu. Empty in a text field.
     var menuSelection = ""
     weak var translation: PageTranslation?
+    /// The tab showing this page, for the messages it sends.
+    weak var tab: Tab?
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)

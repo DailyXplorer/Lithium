@@ -14,6 +14,7 @@ final class Tab: NSObject, Identifiable {
         if let loadedWebView { return loadedWebView }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
+        webView.tab = self
         loadedWebView = webView
         attach(webView)
         return webView
@@ -286,6 +287,7 @@ final class Tab: NSObject, Identifiable {
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
         browser?.videoPopout.discard(self)
+        browser?.nowPlaying.discard(self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -377,6 +379,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
+        if NowPlaying.isEnabled { controller.addUserScript(NowPlaying.script) }
         privacy.addScripts(enabled, for: url, to: controller)
     }
 
@@ -568,6 +571,8 @@ extension Tab: WKNavigationDelegate {
         goToAddressAfterWaking()
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
+        // The page that played is gone; the new one reports its own media.
+        browser?.nowPlaying.discard(self)
         shownHost = webView.url?.host()
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })

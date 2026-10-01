@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import Observation
+import UniformTypeIdentifiers
 import WebKit
 
 /// What the last tab heard plays, for the mini player at the bottom of the sidebar. Pages tell
@@ -14,7 +16,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var title: String?
         var artist: String?
         /// A small JPEG or PNG the page drew itself: the app never loads what a page names.
-        var artwork: Data?
+        var artwork: CGImage?
         var isPaused: Bool
         /// Where the media was when the page reported it, at `reportedAt`.
         var time: Double
@@ -52,11 +54,23 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             reportedAt = date
         }
 
-        /// The bytes of a data URL as the script makes it, at most 64 KB.
-        private static func picture(_ url: String) -> Data? {
+        /// A data URL as the script makes it, at most 64 KB and 512 pixels a side. Any script of
+        /// the page can post one, and ImageIO decodes it here, outside WebContent's sandbox:
+        /// only a JPEG or a PNG gets that far, whatever the bytes say they are.
+        private static func picture(_ url: String) -> CGImage? {
+            let formats: [String: (type: UTType, magic: [UInt8])] = [
+                "data:image/jpeg;base64": (.jpeg, [0xFF, 0xD8, 0xFF]),
+                "data:image/png;base64": (.png, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            ]
             guard url.utf8.count <= 64 * 1024, let comma = url.firstIndex(of: ","),
-                  ["data:image/jpeg;base64", "data:image/png;base64"].contains(url[..<comma]) else { return nil }
-            return Data(base64Encoded: String(url[url.index(after: comma)...]))
+                  let format = formats[String(url[..<comma])],
+                  let data = Data(base64Encoded: String(url[url.index(after: comma)...])), data.starts(with: format.magic),
+                  let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceTypeIdentifierHint: format.type.identifier] as CFDictionary),
+                  CGImageSourceGetType(source) as String? == format.type.identifier,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  1...512 ~= width, 1...512 ~= height else { return nil }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil)
         }
     }
 

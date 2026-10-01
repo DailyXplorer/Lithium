@@ -12,7 +12,7 @@ struct MiniPlayer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Artwork(data: media.artwork, tab: tab)
+                Artwork(image: media.artwork, tab: tab)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(media.title ?? tab.displayTitle)
                         .font(Theme.font(12, .medium))
@@ -54,7 +54,7 @@ struct MiniPlayer: View {
 }
 
 private struct Artwork: View {
-    let data: Data?
+    let image: CGImage?
     let tab: Tab
     @Environment(\.sidebarPalette) private var palette
 
@@ -63,8 +63,8 @@ private struct Artwork: View {
             .fill(palette.field)
             .frame(width: 36, height: 36)
             .overlay {
-                if let image = data.flatMap(NSImage.init(data:)) {
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                if let image {
+                    Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fill)
                 } else {
                     Favicon(image: tab.favicon, fallback: tab.url?.host() ?? "", size: 18)
                 }

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 import WebKit
 @testable import Lithium
 
@@ -16,12 +17,12 @@ struct NowPlayingTests {
     @Test func readsThePageMessage() throws {
         let date = Date(timeIntervalSinceReferenceDate: 0)
         let media = try #require(NowPlaying.Media(message: [
-            "title": "Song", "artist": "", "artwork": "data:image/png;base64,iVBORw==",
+            "title": "Song", "artist": "", "artwork": try picture(.png, label: "png"),
             "paused": false, "time": 12, "duration": 200.5, "rate": 1.5, "previous": false, "next": true,
         ] as [String: Any], at: date))
         #expect(media.title == "Song")
         #expect(media.artist == nil)
-        #expect(media.artwork == Data([0x89, 0x50, 0x4E, 0x47]))
+        #expect(media.artwork?.width == 4 && media.artwork?.height == 4)
         #expect(!media.isPaused)
         #expect(media.time == 12)
         #expect(media.duration == 200.5)
@@ -39,6 +40,36 @@ struct NowPlayingTests {
             #expect(NowPlaying.Media(message: ["artwork": url], at: date)?.artwork == nil, "the app loads no picture itself")
         }
         #expect(NowPlaying.Media(message: ["time": 250, "duration": 200], at: date)?.time == 200)
+    }
+
+    /// The app decodes the page's picture outside WebContent's sandbox: nothing but what it says it is.
+    @Test func takesOnlyAJPEGOrAPNG() throws {
+        let date = Date(timeIntervalSinceReferenceDate: 0)
+        let artwork = { (url: String) in NowPlaying.Media(message: ["artwork": url], at: date)?.artwork }
+        #expect(artwork(try picture(.png, label: "png"))?.width == 4)
+        #expect(artwork(try picture(.jpeg, label: "jpeg"))?.width == 4)
+        #expect(artwork(try picture(.tiff, label: "png")) == nil, "a TIFF said to be a PNG")
+        #expect(artwork(try picture(.gif, label: "jpeg")) == nil, "a GIF said to be a JPEG")
+        #expect(artwork(try picture(.jpeg, label: "png")) == nil, "a JPEG said to be a PNG")
+        #expect(artwork(try picture(.png, label: "jpeg")) == nil, "a PNG said to be a JPEG")
+        let truncated = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).base64EncodedString()
+        #expect(artwork("data:image/png;base64," + truncated) == nil, "a PNG's signature alone")
+        #expect(artwork(try picture(.png, label: "png", side: 600)) == nil, "too large to be drawn by the script")
+    }
+
+    /// A data URL of a blue square, encoded as `type` and labelled `image/<label>`.
+    private func picture(_ type: UTType, label: String, side: Int = 4) throws -> String {
+        let context = try #require(CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let data = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return "data:image/\(label);base64," + (data as Data).base64EncodedString()
     }
 
     @Test func countsOnFromTheLastReport() throws {
@@ -232,7 +263,7 @@ struct NowPlayingPageTests {
         try await page.play("document.querySelector('video')")
 
         #expect(await waitUntil { page.last?.artwork != nil })
-        let picture = try #require(page.last?.artwork.flatMap(NSBitmapImageRep.init(data:)))
+        let picture = try #require(page.last?.artwork.map(NSBitmapImageRep.init(cgImage:)))
         #expect(picture.pixelsWide == 96 && picture.pixelsHigh == 96)
         let color = try #require(picture.colorAt(x: 48, y: 48))
         #expect(color.blueComponent > 0.9 && color.redComponent < 0.1)

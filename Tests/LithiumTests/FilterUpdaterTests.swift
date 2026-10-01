@@ -13,7 +13,7 @@ func downloadsAndCompilesTheRealLists() async throws {
 
     let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: destination.appending(path: "manifest.json")))
     #expect(manifest.format == Manifest.currentFormat)
-    #expect(Set(manifest.groups.keys) == ["ads", "privacy", "security"])
+    #expect(Set(manifest.groups.keys) == ["ads", "cookies", "privacy", "security"])
     #expect(manifest.groups.values.allSatisfy { $0.webkitRules > 10_000 })
     #expect((manifest.advancedRules ?? 0) > 1_000)
     #expect((manifest.scriptletRules ?? 0) > 5_000)
@@ -45,4 +45,34 @@ func readsTheCertificateOfARealPage() async throws {
     #expect(info.isSecure)
     #expect(info.certificate?.subject == "github.com")
     #expect((info.certificate?.validUntil ?? .distantPast) > Date())
+}
+
+struct CookieFiltersTests {
+    @Test func bundledSourcesHaveACookiesGroup() throws {
+        let sources = try #require(FilterUpdater.bundled()).sources
+        #expect(sources.groups["cookies"] == ["ubo-cookies", "easylist-cookies", "ubo-unbreak"])
+        #expect(sources.lists["ubo-cookies"]?.absoluteString == "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/annoyances-cookies.txt")
+        #expect(sources.lists["easylist-cookies"]?.absoluteString == "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt")
+    }
+
+    @Test func onlyUBOCookieFiltersRunAsUBOScriptlets() {
+        let rule = "example.com##+js(trusted-click-element, #reject-all)"
+        #expect(FilterUpdater.isUBOScriptlet(rule, list: "ubo-cookies"))
+        #expect(!FilterUpdater.isUBOScriptlet(rule, list: "easylist-cookies"))
+    }
+
+    @Test func manifestMissingAGroupOrListWasNotBuiltFromTheSources() {
+        let sources = FilterUpdater.Sources(
+            lists: [:],
+            groups: ["ads": ["easylist", "ubo-unbreak"], "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]],
+            trueTokens: []
+        )
+        func manifest(_ groups: [String: [String]?]) -> Manifest {
+            Manifest(updated: "2026-10-02T00:00:00Z", groups: groups.mapValues { Manifest.Group(lists: $0, webkitRules: 1) }, advancedRules: nil)
+        }
+        #expect(sources.built(manifest(["ads": ["easylist", "ubo-unbreak"], "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]])))
+        #expect(!sources.built(manifest(["ads": ["easylist", "ubo-unbreak"]])))
+        #expect(!sources.built(manifest(["ads": ["easylist", "ubo-unbreak"], "cookies": ["ubo-cookies", "ubo-unbreak"]])))
+        #expect(!sources.built(manifest(["ads": nil, "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]])))
+    }
 }

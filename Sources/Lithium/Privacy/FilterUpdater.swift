@@ -10,6 +10,12 @@ struct FilterUpdater: Sendable {
         let lists: [String: URL]
         let groups: [String: [String]]
         let trueTokens: Set<String>
+
+        /// Whether `manifest` was built from these groups and lists. A folder downloaded before a
+        /// list was added lacks it until refreshed, however recent it is.
+        func built(_ manifest: Manifest) -> Bool {
+            groups == manifest.groups.compactMapValues(\.lists)
+        }
     }
 
     let sources: Sources

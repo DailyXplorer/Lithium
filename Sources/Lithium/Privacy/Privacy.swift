@@ -17,6 +17,9 @@ final class Privacy {
     @ObservationIgnored private var ruleLists: [WKContentRuleList] = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var updateLoop: Task<Void, Never>?
+    /// False when the loaded filters predate a change to FilterSources.json, such as a new group:
+    /// they are then refreshed at once instead of when they turn a day old.
+    @ObservationIgnored private var filtersMatchSources = true
     @ObservationIgnored private let farbling: WKUserScript
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
@@ -67,7 +70,8 @@ final class Privacy {
     }
 
     private func updateFiltersIfStale() async {
-        guard !isUpdatingFilters, Date().timeIntervalSince(filtersUpdated ?? .distantPast) > Self.updateInterval else { return }
+        guard !isUpdatingFilters,
+              !filtersMatchSources || Date().timeIntervalSince(filtersUpdated ?? .distantPast) > Self.updateInterval else { return }
         isUpdatingFilters = true
         await updateFilters()
     }
@@ -233,6 +237,7 @@ final class Privacy {
         ruleLists = lists
         ruleCount = manifest.groups.values.reduce(0) { $0 + $1.webkitRules } + (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0)
         filtersUpdated = manifest.date
+        filtersMatchSources = FilterUpdater.bundled()?.sources.built(manifest) ?? true
         generation += 1
 
         // Awaited, so pages also wait for the in-page engine (waitUntilReady). Without it, the tab

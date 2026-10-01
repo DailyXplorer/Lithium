@@ -82,8 +82,12 @@ final class Tab: NSObject, Identifiable {
     /// A shorter name for the page's title (Max, Tidy tab titles).
     private(set) var tidyTitle: String?
     /// Silenced by the user. WebKit keeps it per web view, so each new one (waking) is muted again.
+    /// Muted, it gives up the mini player: it is no longer heard, and would otherwise keep it.
     var isMuted = false {
-        didSet { if let loadedWebView { applyMute(to: loadedWebView) } }
+        didSet {
+            if let loadedWebView { applyMute(to: loadedWebView) }
+            if isMuted { browser?.nowPlaying.discard(self) }
+        }
     }
 
     /// Per-page mute is private WebKit (`_setPageMuted:`, as Safari's tab speaker uses), absent from older ones.

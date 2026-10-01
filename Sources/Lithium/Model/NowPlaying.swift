@@ -163,7 +163,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// plays. The page itself is taken at its word; it is the site the user went to. A muted tab
     /// is not heard, so it never takes the player.
     /// One sound at a time: a tab taking the player from another that was heard pauses it once
-    /// WebKit hears it as well, unless that one is in a call, whose participants it would silence.
+    /// WebKit hears it as well, unless that one is in a call, whose participants it would silence,
+    /// or muted, which makes no sound to stop.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let claims = { (media: Media) in
@@ -173,14 +174,15 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             if !holds {
                 expected = nil
                 unpaused = nil
-                if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible {
+                if let previous = self.tab, previous !== tab, !previous.isMuted,
+                   let heard = self.media, !heard.isPaused, heard.isAudible {
                     unpaused = previous
                 }
             }
             if let previous = unpaused, !media.isPaused, media.isAudible {
                 if isHeard(tab) != false {
                     unpaused = nil
-                    if !isInCall(previous) { pause(previous) }
+                    if !isInCall(previous), !previous.isMuted { pause(previous) }
                 }
             } else {
                 unpaused = nil
@@ -194,7 +196,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// The tab closed, fell asleep, or went to another page.
+    /// The tab closed, fell asleep, went to another page, or was muted.
     func discard(_ tab: Tab) {
         if tab === unpaused { unpaused = nil }
         guard tab === self.tab else { return }

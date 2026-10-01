@@ -83,11 +83,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var id: String
         /// Where the player's buttons go; nil for the page itself.
         var info: WKFrameInfo? = nil
+        /// An iframe, perhaps an ad's: its word alone takes no player.
+        var isSubframe = false
     }
 
     static let name = "lithiumNowPlaying"
 
-    /// On by default. Pages loaded while it is off don't get the script.
+    /// On by default. Pages loaded while it is off get neither the script nor its channel, which
+    /// any script of the page could see to tell Lithium from Safari.
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: Preference.miniPlayer) as? Bool ?? true
     }
@@ -110,6 +113,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     static let settle: TimeInterval = 1.5
 
     @ObservationIgnored weak var browser: Browser?
+    /// Whether WebKit hears the tab, nil when it can't tell; replaced in tests.
+    @ObservationIgnored var isHeard: (Tab) -> Bool? = { $0.isPlayingAudio }
+    /// The content controllers that have the channel.
+    @ObservationIgnored private let channels = NSHashTable<WKUserContentController>.weakObjects()
 
     /// The tab the sidebar's player shows: none while its video is in the floating player, which
     /// already shows it. The tab keeps the player meanwhile, and shows again when the video goes back.
@@ -117,23 +124,41 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         tab === popout ? nil : tab
     }
 
-    func install(on configuration: WKWebViewConfiguration) {
-        configuration.userContentController.add(self, contentWorld: .page, name: Self.name)
+    /// Gives the controller the script and its channel, or neither, as the setting is now: when a
+    /// configuration is made and before each page. The channel changes only with the setting:
+    /// the page still shown when a navigation turns into a download keeps the one it took.
+    func install(on controller: WKUserContentController) {
+        if Self.isEnabled != channels.contains(controller) {
+            if Self.isEnabled {
+                controller.add(self, contentWorld: .page, name: Self.name)
+                channels.add(controller)
+            } else {
+                controller.removeScriptMessageHandler(forName: Self.name, contentWorld: .page)
+                channels.remove(controller)
+            }
+        }
+        if Self.isEnabled { controller.addUserScript(Self.script) }
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let id = body["frame"] as? String,
               let tab = (message.webView as? PageWebView)?.tab,
               browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
-        let frame = Frame(id: id, info: message.frameInfo.isMainFrame ? nil : message.frameInfo)
+        let isMain = message.frameInfo.isMainFrame
+        let frame = Frame(id: id, info: isMain ? nil : message.frameInfo, isSubframe: !isMain)
         receive(Media(message: body["media"] ?? NSNull(), at: Date()), from: tab, frame: frame)
     }
 
     /// A frame playing sound takes the player, as does a page back from the back-forward cache when
     /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
+    /// An iframe takes it only if WebKit hears the tab too: any page, or an ad in it, may say it
+    /// plays. The page itself is taken at its word; it is the site the user went to.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
-        if let media, !media.isPaused && media.isAudible || holds || media.isRestored && self.tab == nil {
+        let claims = { (media: Media) in
+            !media.isPaused && media.isAudible && (!frame.isSubframe || self.isHeard(tab) != false)
+        }
+        if let media, holds || claims(media) || media.isRestored && self.tab == nil {
             if !holds { expected = nil }
             self.tab = tab
             self.frame = frame

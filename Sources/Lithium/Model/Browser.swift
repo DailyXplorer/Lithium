@@ -168,7 +168,7 @@ final class Browser {
     private func prepare(_ configuration: WKWebViewConfiguration) {
         InternalSchemeHandler.shared.install(on: configuration)
         translation.install(on: configuration)
-        nowPlaying.install(on: configuration)
+        nowPlaying.install(on: configuration.userContentController)
         configuration.webExtensionController = extensions.controller
     }
 

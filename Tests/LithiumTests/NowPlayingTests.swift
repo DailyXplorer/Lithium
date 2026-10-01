@@ -158,6 +158,78 @@ struct NowPlayingBrowserTests {
         #expect(player.tab == nil && player.media == nil)
     }
 
+    /// Any page, or an ad in it, may post that it plays: an iframe's word needs WebKit's ear.
+    @Test func takesAnIframesWordOnlyIfWebKitHearsIt() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var heard: Bool? = false
+        player.isHeard = { _ in heard }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let paused = NowPlaying.Media(message: ["paused": true], at: Date())
+        let (page, ad) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "ad", isSubframe: true))
+
+        player.receive(playing, from: first, frame: page)
+        #expect(player.tab === first, "the page itself is taken at its word")
+        player.receive(playing, from: second, frame: ad)
+        #expect(player.tab === first, "an iframe of a tab WebKit doesn't hear")
+        player.receive(playing, from: first, frame: ad)
+        player.receive(nil, from: first, frame: page)
+        #expect(player.tab == nil, "nor from another frame of the same tab")
+
+        player.receive(playing, from: second, frame: ad)
+        #expect(player.tab == nil, "nor when the player is free")
+        heard = true
+        player.receive(playing, from: second, frame: ad)
+        #expect(player.tab === second)
+        heard = false
+        player.receive(paused, from: second, frame: ad)
+        #expect(player.tab === second && player.media?.isPaused == true, "the iframe holding it updates it")
+        player.receive(playing, from: first, frame: page)
+        #expect(player.tab === first, "a page heard or not, as before")
+
+        heard = nil
+        player.receive(playing, from: second, frame: ad)
+        #expect(player.tab === second, "a WebKit that can't tell leaves the iframe's word")
+    }
+
+    /// While the mini player is off, nothing in the page tells Lithium from Safari.
+    @Test func givesPagesNoChannelWhenOff() async throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: Preference.miniPlayer)
+        defer { defaults.set(saved, forKey: Preference.miniPlayer) }
+        let browser = Browser()
+        let hasScript = { (configuration: WKWebViewConfiguration) in
+            configuration.userContentController.userScripts.contains { $0.source == NowPlaying.script.source }
+        }
+        let channel = { (webView: WKWebView) async throws -> String? in
+            webView.loadHTMLString("<title>Page</title>", baseURL: URL(string: "https://example.com/"))
+            for _ in 0..<100 where webView.isLoading || webView.title != "Page" {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            return try await webView.evaluateJavaScript("typeof window.webkit?.messageHandlers?.lithiumNowPlaying") as? String
+        }
+
+        defaults.set(false, forKey: Preference.miniPlayer)
+        let off = browser.makeConfiguration()
+        #expect(!hasScript(off))
+        let webView = WKWebView(frame: .zero, configuration: off)
+        #expect(try await channel(webView) == "undefined")
+
+        defaults.set(true, forKey: Preference.miniPlayer)
+        let on = browser.makeConfiguration()
+        #expect(hasScript(on))
+        #expect(try await channel(WKWebView(frame: .zero, configuration: on)) == "object")
+
+        browser.nowPlaying.install(on: off.userContentController)
+        #expect(try await channel(webView) == "object", "turned on, the next page gets it")
+        defaults.set(false, forKey: Preference.miniPlayer)
+        off.userContentController.removeAllUserScripts()
+        browser.nowPlaying.install(on: off.userContentController)
+        #expect(!hasScript(off))
+        #expect(try await channel(webView) == "undefined", "turned off, the next page doesn't")
+    }
+
     /// Back from the back-forward cache, a page's media are paused, and the tab lost the player
     /// when it left.
     @Test func takesARestoredPageBackWhenFree() {

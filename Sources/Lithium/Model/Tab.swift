@@ -257,8 +257,8 @@ final class Tab: NSObject, Identifiable {
     /// Lithium did before, and counts from the next pass, since the page's process answers it.
     func noteSound() {
         guard let webView = loadedWebView, !isAsleep else { return }
-        if webView.responds(to: Selector(("_isPlayingAudio"))) {
-            if webView.value(forKey: "_isPlayingAudio") as? Bool == true { lastHeard = Date() }
+        if let isPlayingAudio {
+            if isPlayingAudio { lastHeard = Date() }
             return
         }
         // One question at a time: a stuck process doesn't pile them up.
@@ -270,6 +270,12 @@ final class Tab: NSObject, Identifiable {
             self.isAskingPlayback = false
             if state == .playing { self.lastHeard = Date() }
         }
+    }
+
+    /// Safari's speaker icon, asked of the app's side of WebKit; nil from a WebKit without it.
+    var isPlayingAudio: Bool? {
+        guard let webView = loadedWebView, webView.responds(to: Selector(("_isPlayingAudio"))) else { return nil }
+        return webView.value(forKey: "_isPlayingAudio") as? Bool
     }
 
     /// Sharing the screen or a window in a call. Private API, absent from older WebKits.
@@ -379,7 +385,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
-        if NowPlaying.isEnabled { controller.addUserScript(NowPlaying.script) }
+        browser?.nowPlaying.install(on: controller)
         privacy.addScripts(enabled, for: url, to: controller)
     }
 

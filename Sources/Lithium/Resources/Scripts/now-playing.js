@@ -1,7 +1,9 @@
-// Injected by NowPlaying at document start in every frame, in the page's own world: the page's
-// Media Session handlers and the sounds it never attaches to the document (Spotify plays a
-// detached Audio) can only be seen from there. It reports what plays to the sidebar's mini
-// player when the media changes, never on a timer, and answers the player's buttons.
+// Injected by NowPlaying at document start in every frame while the mini player is on, in the
+// page's own world: the page's Media Session handlers and the sounds it never attaches to the
+// document (Spotify plays a detached Audio) can only be seen from there. Its channel is the
+// page's to see and post to as well, so the app doesn't take an iframe's word alone. It reports
+// what plays to the sidebar's mini player when the media changes, never on a timer, and answers
+// the player's buttons.
 (() => {
   const key = Symbol.for('lithium.nowPlaying');
   if (globalThis[key]) return;

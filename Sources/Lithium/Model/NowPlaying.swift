@@ -80,6 +80,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     @ObservationIgnored weak var browser: Browser?
 
+    /// The tab the sidebar's player shows: none while its video is in the floating player, which
+    /// already shows it. The tab keeps the player meanwhile, and shows again when the video goes back.
+    func shownTab(besides popout: Tab?) -> Tab? {
+        tab === popout ? nil : tab
+    }
+
     func install(on configuration: WKWebViewConfiguration) {
         configuration.userContentController.add(self, contentWorld: .page, name: Self.name)
     }

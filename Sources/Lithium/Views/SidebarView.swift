@@ -47,15 +47,19 @@ struct SidebarView: View {
                 }
             }
             .scrollIndicators(.never)
-            if showsMiniPlayer, let tab = browser.nowPlaying.tab, let media = browser.nowPlaying.media {
+            if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
                 MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: 0.2), value: browser.nowPlaying.tab?.id)
+        .animation(.snappy(duration: 0.2), value: playingTab?.id)
         .padding(.top, 2)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
+    }
+
+    private var playingTab: Tab? {
+        browser.nowPlaying.shownTab(besides: browser.videoPopout.tab)
     }
 }
 

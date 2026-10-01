@@ -109,6 +109,19 @@ struct NowPlayingBrowserTests {
         player.receive(restored, from: first)
         #expect(player.tab === second, "it doesn't take the player from another tab")
     }
+
+    @Test func hidesWhileItsVideoIsPoppedOut() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        #expect(player.shownTab(besides: nil) == nil)
+
+        player.receive(NowPlaying.Media(message: ["paused": false], at: Date()), from: first)
+        #expect(player.shownTab(besides: nil) === first)
+        #expect(player.shownTab(besides: first) == nil, "the floating player already shows it")
+        #expect(player.tab === first, "it keeps the player for when the video goes back")
+        #expect(player.shownTab(besides: second) === first, "another tab's video is other media")
+    }
 }
 
 /// `now-playing.js` in a real page playing `red.mp4` (a red video with a silent sound track),

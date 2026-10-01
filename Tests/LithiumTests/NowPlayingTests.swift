@@ -75,6 +75,40 @@ struct NowPlayingBrowserTests {
         browser.close(first)
         #expect(player.tab == nil)
     }
+
+    @Test func followsTheLastFrameThatPlayed() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        let playing = NowPlaying.Media(message: ["paused": false], at: Date())
+        let paused = NowPlaying.Media(message: ["paused": true], at: Date())
+        let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed"))
+
+        player.receive(playing, from: tab, frame: page)
+        player.receive(playing, from: tab, frame: embed)
+        player.receive(paused, from: tab, frame: page)
+        #expect(player.media?.isPaused == false, "the page's other media don't speak for the embed")
+        player.receive(nil, from: tab, frame: page)
+        #expect(player.tab === tab)
+        player.receive(nil, from: tab, frame: embed)
+        #expect(player.tab == nil && player.media == nil)
+    }
+
+    /// Back from the back-forward cache, a page's media are paused, and the tab lost the player
+    /// when it left.
+    @Test func takesARestoredPageBackWhenFree() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        let playing = NowPlaying.Media(message: ["paused": false], at: Date())
+        let restored = NowPlaying.Media(message: ["paused": true, "restored": true], at: Date())
+
+        player.receive(restored, from: first)
+        #expect(player.tab === first && player.media?.isPaused == true)
+        player.receive(playing, from: second)
+        player.receive(restored, from: first)
+        #expect(player.tab === second, "it doesn't take the player from another tab")
+    }
 }
 
 /// `now-playing.js` in a real page playing `red.mp4` (a red video with a silent sound track),
@@ -110,6 +144,11 @@ struct NowPlayingPageTests {
         await NowPlaying.run("toggle", in: page.webView)
         #expect(await waitUntil { page.last?.isPaused == true }, "paused, the page still reports its media")
         #expect(try await page.run("return document.querySelector('video').paused") as? Bool == true)
+        #expect(page.last?.isRestored == false)
+
+        try await page.run("dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))")
+        #expect(await waitUntil { page.last?.isRestored == true }, "back from the back-forward cache, it asks for the player again")
+        #expect(page.last?.isPaused == true)
 
         let count = page.messages.count
         page.webView.load(URLRequest(url: URL(string: "about:blank")!))
@@ -131,6 +170,30 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { try await page.run("return window.sound.paused") as? Bool == true })
     }
 
+    /// A video embedded in an article plays in its own frame, which answers the buttons.
+    @Test func hearsAnIframe() async throws {
+        let page = try await PlayingPage("""
+            <title>Article</title>
+            <iframe srcdoc="<video src='red.mp4' loop playsinline></video>"></iframe>
+            """)
+        defer { page.close() }
+        let video = "document.querySelector('iframe').contentDocument.querySelector('video')"
+        #expect(await waitUntil { try await page.run("return !!\(video)") as? Bool == true })
+        try await page.play(video)
+
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let frame = try #require(page.lastFrame)
+        #expect(!frame.isMainFrame)
+        #expect(page.last?.title == nil)
+
+        await NowPlaying.run("toggle", in: page.webView)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await page.run("return \(video).paused") as? Bool == false, "the page itself plays nothing")
+        await NowPlaying.run("toggle", in: page.webView, frame: frame)
+        #expect(await waitUntil { try await page.run("return \(video).paused") as? Bool == true })
+        #expect(await waitUntil { page.last?.isPaused == true })
+    }
+
     private func waitUntil(_ seconds: Double = 5, _ condition: () async throws -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
@@ -146,6 +209,7 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     let webView: WKWebView
     /// Every message, nil for "nothing plays".
     private(set) var messages: [NowPlaying.Media?] = []
+    private(set) var lastFrame: WKFrameInfo?
     private let folder: URL
     private let window: NSWindow
 
@@ -182,7 +246,8 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        messages.append(NowPlaying.Media(message: message.body, at: Date()))
+        lastFrame = message.frameInfo
+        messages.append(NowPlaying.Media(message: (message.body as? [String: Any])?["media"] ?? NSNull(), at: Date()))
     }
 
     @discardableResult

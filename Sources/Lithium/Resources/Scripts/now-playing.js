@@ -1,20 +1,24 @@
-// Injected by NowPlaying at document start, in the page's own world: the page's Media Session
-// handlers and the sounds it never attaches to the document (Spotify plays a detached Audio)
-// can only be seen from there. It reports what plays to the sidebar's mini player when the
-// media changes, never on a timer, and answers the player's buttons.
+// Injected by NowPlaying at document start in every frame, in the page's own world: the page's
+// Media Session handlers and the sounds it never attaches to the document (Spotify plays a
+// detached Audio) can only be seen from there. It reports what plays to the sidebar's mini
+// player when the media changes, never on a timer, and answers the player's buttons.
 (() => {
   const key = Symbol.for('lithium.nowPlaying');
   if (globalThis[key]) return;
   // Taken now, before the page can replace them.
   const channel = globalThis.webkit?.messageHandlers?.lithiumNowPlaying;
   if (!channel) return;
-  const send = channel.postMessage.bind(channel);
+  const post = channel.postMessage.bind(channel);
+  // Tells this frame's reports from its parent's and its siblings'.
+  const frame = Math.random().toString(36).slice(2);
+  const send = (media) => post({ frame, media });
   const session = navigator.mediaSession;
   const handlers = {};
   let position = null;
   // The last media heard: what the player shows and controls.
   let active = null;
   let reported = false;
+  let restored = false;
   let timer = 0;
 
   const isAudible = (media) => !media.muted && media.volume > 0;
@@ -31,6 +35,7 @@
     if (!active) {
       if (reported) send(null);
       reported = false;
+      restored = false;
       return;
     }
     const metadata = session?.metadata;
@@ -49,8 +54,10 @@
       rate: active.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
+      restored,
     });
     reported = true;
+    restored = false;
   };
 
   // A burst of media events (a new track fires half a dozen) makes one message.
@@ -68,9 +75,9 @@
     return (sized.find((image) => image.size >= 96) ?? sized.at(-1))?.url ?? null;
   };
 
-  // YouTube's own player buttons, shown only when there is a track to go to.
+  // YouTube's own player buttons, embedded ones included, shown only when there is a track to go to.
   const youTubeButton = (which) => {
-    if (!/(^|\.)youtube\.com$/.test(location.hostname)) return null;
+    if (!/(^|\.)youtube(-nocookie)?\.com$/.test(location.hostname)) return null;
     const button = document.querySelector(`.ytp-${which}-button`);
     return button && button.offsetParent && button.getAttribute('aria-disabled') !== 'true' ? button : null;
   };
@@ -134,15 +141,19 @@
     }
   }
 
-  // Leaving the page takes it out of the player; coming back from the back-forward cache
-  // puts it back.
+  // Leaving the page takes it out of the player. Coming back from the back-forward cache, where
+  // WebKit paused its media, puts it back paused, if no other tab holds the player meanwhile.
   addEventListener('pagehide', () => {
     clearTimeout(timer);
     timer = 0;
     if (reported) send(null);
     reported = false;
   });
-  addEventListener('pageshow', (event) => { if (event.persisted && active) schedule(); });
+  addEventListener('pageshow', (event) => {
+    if (!event.persisted || !(active?.readyState >= HTMLMediaElement.HAVE_METADATA)) return;
+    restored = true;
+    schedule();
+  });
 
   const call = (action) => {
     const handler = handlers[action];

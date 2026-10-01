@@ -4,7 +4,8 @@ import WebKit
 
 /// What the last tab heard plays, for the mini player at the bottom of the sidebar. Pages tell
 /// it themselves through `now-playing.js` when their media changes: a tab takes the player when
-/// it starts playing sound, keeps it while paused, and gives it up when its page goes away.
+/// one of its frames starts playing sound, keeps it while paused, and gives it up when that
+/// frame's page goes away.
 @MainActor
 @Observable
 final class NowPlaying: NSObject, WKScriptMessageHandler {
@@ -21,6 +22,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var rate: Double
         var hasPrevious: Bool
         var hasNext: Bool
+        /// Its page just came back from the back-forward cache, its media paused by WebKit.
+        var isRestored: Bool
         var reportedAt: Date
 
         /// Where the media is now, counted on from the last report rather than asked again.
@@ -44,8 +47,17 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             rate = number("rate").flatMap { $0 > 0 ? $0 : nil } ?? 1
             hasPrevious = body["previous"] as? Bool ?? false
             hasNext = body["next"] as? Bool ?? false
+            isRestored = body["restored"] as? Bool ?? false
             reportedAt = date
         }
+    }
+
+    /// The frame of the tab that reports, the page or one of its iframes, each with its own script.
+    struct Frame {
+        /// Made up by the frame's script.
+        var id: String
+        /// Where the player's buttons go; nil for the page itself.
+        var info: WKFrameInfo? = nil
     }
 
     static let name = "lithiumNowPlaying"
@@ -59,11 +71,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     static let script = WKUserScript(
         source: Resources.bundle.url(forResource: "now-playing", withExtension: "js")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "",
-        injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page
+        injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page
     )
 
     private(set) var tab: Tab?
     private(set) var media: Media?
+    @ObservationIgnored private var frame: Frame?
 
     @ObservationIgnored weak var browser: Browser?
 
@@ -72,19 +85,23 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, let tab = (message.webView as? PageWebView)?.tab,
+        guard let body = message.body as? [String: Any], let id = body["frame"] as? String,
+              let tab = (message.webView as? PageWebView)?.tab,
               browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
-        receive(Media(message: message.body, at: Date()), from: tab)
+        let frame = Frame(id: id, info: message.frameInfo.isMainFrame ? nil : message.frameInfo)
+        receive(Media(message: body["media"] ?? NSNull(), at: Date()), from: tab, frame: frame)
     }
 
-    /// A tab playing takes the player; the one in it updates it, or leaves it with nothing to play.
-    func receive(_ media: Media?, from tab: Tab) {
-        if let media, !media.isPaused {
+    /// A frame playing takes the player, as does a page back from the back-forward cache when the
+    /// player is free; the frame in it updates it, or leaves it with nothing to play.
+    func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
+        let holds = tab === self.tab && frame.id == self.frame?.id
+        if let media, !media.isPaused || holds || media.isRestored && self.tab == nil {
             self.tab = tab
+            self.frame = frame
             self.media = media
-        } else if tab === self.tab {
-            self.media = media
-            if media == nil { self.tab = nil }
+        } else if holds {
+            discard(tab)
         }
     }
 
@@ -92,6 +109,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     func discard(_ tab: Tab) {
         guard tab === self.tab else { return }
         self.tab = nil
+        frame = nil
         media = nil
     }
 
@@ -116,14 +134,15 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     private func send(_ command: String) {
         guard let tab, !tab.isAsleep else { return }
         let webView = tab.webView
-        Task { await Self.run(command, in: webView) }
+        let frame = frame?.info
+        Task { await Self.run(command, in: webView, frame: frame) }
     }
 
-    /// "toggle", "previous" or "next", answered by the page's script.
-    static func run(_ command: String, in webView: WKWebView) async {
+    /// "toggle", "previous" or "next", answered by the script of the frame that plays.
+    static func run(_ command: String, in webView: WKWebView, frame: WKFrameInfo? = nil) async {
         _ = try? await webView.callAsyncJavaScript(
             "globalThis[Symbol.for('lithium.nowPlaying')]?.(command)",
-            arguments: ["command": command], in: nil, contentWorld: .page
+            arguments: ["command": command], in: frame, contentWorld: .page
         )
     }
 }

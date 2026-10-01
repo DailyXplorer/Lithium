@@ -456,15 +456,27 @@ final class Browser {
         }
     }
 
-    func pin(_ tab: Tab) {
+    /// Without an index the favorite goes at the end of the grid; with one it takes that slot.
+    func pin(_ tab: Tab, at index: Int? = nil) {
         guard tab.pinID == nil, let url = tab.url else { return }
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
-        pins.append(pin)
+        pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
         tab.pinID = pin.id
     }
 
-    func pinTab(withID id: String) {
-        if let tab = tabs.first(where: { $0.id.uuidString == id }) { pin(tab) }
+    func pinTab(withID id: String, at index: Int? = nil) {
+        if let tab = tabs.first(where: { $0.id.uuidString == id }) { pin(tab, at: index) }
+    }
+
+    /// Moves a favorite into the slot at `index`, the others shifting around it, as on a home screen.
+    /// Built on a copy so `pins` is saved once, never without the moving favorite.
+    func movePin(id: UUID, to index: Int) {
+        guard let from = pins.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(index, 0), pins.count - 1)
+        guard from != to else { return }
+        var reordered = pins
+        reordered.insert(reordered.remove(at: from), at: to)
+        pins = reordered
     }
 
     func unpin(_ pin: Pin) {

@@ -14,7 +14,10 @@
   const send = (media) => post({ frame, media });
   const session = navigator.mediaSession;
   const handlers = {};
+  // Set by the page for the media then active: another media has its own.
   let position = null;
+  // The artwork drawn small here, so the app never fetches what the page names.
+  let art = { src: null, data: null };
   // The last media heard: what the player shows and controls.
   let active = null;
   let reported = false;
@@ -47,7 +50,7 @@
     send({
       title: metadata?.title || null,
       artist: metadata?.artist || null,
-      artwork: artwork(metadata?.artwork),
+      artwork: draw(artwork(metadata?.artwork)),
       paused,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
@@ -69,10 +72,36 @@
       const sizes = String(image.sizes ?? '').split(/\s+/).map((size) => parseInt(size, 10) || 0);
       try {
         const url = new URL(image.src, location.href);
-        return /^https?:$/.test(url.protocol) ? { url: url.href, size: Math.max(0, ...sizes) } : null;
+        return /^(https?|data|blob):$/.test(url.protocol) ? { url: url.href, size: Math.max(0, ...sizes) } : null;
       } catch { return null; }
     }).filter(Boolean).sort((a, b) => a.size - b.size);
     return (sized.find((image) => image.size >= 96) ?? sized.at(-1))?.url ?? null;
+  };
+
+  // Loaded by the page, under its content blocking and without credentials, then drawn into a
+  // 96-pixel square sent as a data URL. Until then, or when the page may not read the picture
+  // (no CORS), the player shows the tab's icon.
+  const draw = (src) => {
+    if (src === art.src) return art.data;
+    art = { src, data: null };
+    if (!src) return null;
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => {
+      const side = Math.min(image.naturalWidth, image.naturalHeight);
+      if (art.src !== src || !side) return;
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 96;
+        canvas.getContext('2d').drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
+        const data = canvas.toDataURL('image/jpeg', 0.85);
+        if (data.length > 64 * 1024) return;
+        art.data = data;
+        schedule();
+      } catch {}
+    };
+    image.src = src;
+    return null;
   };
 
   // YouTube's own player buttons, embedded ones included, shown only when there is a track to go to.
@@ -89,6 +118,9 @@
     if (event.type === 'emptied' && media === active && !media.currentSrc) active = null;
     else if (isPlaying(media) && isAudible(media)) active = media;
     if (media !== active && active === before) return;
+    if (position && active !== before) {
+      position = position.media && position.media !== active ? null : { ...position, media: active };
+    }
     anchor();
     schedule();
   };
@@ -121,12 +153,14 @@
       return setActionHandler.apply(this, arguments);
     };
     const setPositionState = proto.setPositionState;
+    // Kept only once WebKit took it: it throws on a position past the end or a negative one.
     proto.setPositionState = function (state) {
+      const result = setPositionState.apply(this, arguments);
       position = state && Number.isFinite(state.position)
-        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isPlaying(active) }
+        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isPlaying(active), media: active }
         : null;
       schedule();
-      return setPositionState.apply(this, arguments);
+      return result;
     };
     for (const name of ['metadata', 'playbackState']) {
       const property = Object.getOwnPropertyDescriptor(proto, name);
@@ -162,6 +196,8 @@
     return true;
   };
 
+  // The media's own events report the outcome: a page that pauses later (Spotify) would still
+  // say it plays if asked right away.
   Object.defineProperty(globalThis, key, {
     value: (command) => {
       switch (command) {
@@ -175,7 +211,6 @@
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
       }
-      schedule();
     },
   });
 })();

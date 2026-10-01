@@ -12,7 +12,7 @@ struct MiniPlayer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Artwork(url: media.artwork, tab: tab)
+                Artwork(data: media.artwork, tab: tab)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(media.title ?? tab.displayTitle)
                         .font(Theme.font(12, .medium))
@@ -54,7 +54,7 @@ struct MiniPlayer: View {
 }
 
 private struct Artwork: View {
-    let url: URL?
+    let data: Data?
     let tab: Tab
     @Environment(\.sidebarPalette) private var palette
 
@@ -63,12 +63,10 @@ private struct Artwork: View {
             .fill(palette.field)
             .frame(width: 36, height: 36)
             .overlay {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        Favicon(image: tab.favicon, fallback: tab.url?.host() ?? "", size: 18)
-                    }
+                if let image = data.flatMap(NSImage.init(data:)) {
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Favicon(image: tab.favicon, fallback: tab.url?.host() ?? "", size: 18)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))

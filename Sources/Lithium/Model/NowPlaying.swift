@@ -13,7 +13,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         /// From the page's Media Session; the player falls back on the tab's title and icon.
         var title: String?
         var artist: String?
-        var artwork: URL?
+        /// A small JPEG or PNG the page drew itself: the app never loads what a page names.
+        var artwork: Data?
         var isPaused: Bool
         /// Where the media was when the page reported it, at `reportedAt`.
         var time: Double
@@ -40,15 +41,22 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             let number = { (key: String) in (body[key] as? NSNumber)?.doubleValue.nonNegative }
             title = text("title")
             artist = text("artist")
-            artwork = text("artwork").flatMap(URL.init(string:)).flatMap { ["http", "https"].contains($0.scheme) ? $0 : nil }
+            artwork = text("artwork").flatMap(Self.picture)
             isPaused = body["paused"] as? Bool ?? true
-            time = number("time") ?? 0
             duration = number("duration").flatMap { $0 > 0 ? $0 : nil }
+            time = min(number("time") ?? 0, duration ?? .infinity)
             rate = number("rate").flatMap { $0 > 0 ? $0 : nil } ?? 1
             hasPrevious = body["previous"] as? Bool ?? false
             hasNext = body["next"] as? Bool ?? false
             isRestored = body["restored"] as? Bool ?? false
             reportedAt = date
+        }
+
+        /// The bytes of a data URL as the script makes it, at most 64 KB.
+        private static func picture(_ url: String) -> Data? {
+            guard url.utf8.count <= 64 * 1024, let comma = url.firstIndex(of: ","),
+                  ["data:image/jpeg;base64", "data:image/png;base64"].contains(url[..<comma]) else { return nil }
+            return Data(base64Encoded: String(url[url.index(after: comma)...]))
         }
     }
 
@@ -77,6 +85,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     private(set) var tab: Tab?
     private(set) var media: Media?
     @ObservationIgnored private var frame: Frame?
+    /// The page's own last word, which `media` may contradict while a toggle settles.
+    @ObservationIgnored private var reported: Media?
+    /// What the last toggle shows, until the page agrees or `settle` seconds pass.
+    @ObservationIgnored private var expected: (isPaused: Bool, until: Date)?
+
+    static let settle: TimeInterval = 1.5
 
     @ObservationIgnored weak var browser: Browser?
 
@@ -103,9 +117,11 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         if let media, !media.isPaused || holds || media.isRestored && self.tab == nil {
+            if !holds { expected = nil }
             self.tab = tab
             self.frame = frame
-            self.media = media
+            reported = media
+            self.media = settled(media)
         } else if holds {
             discard(tab)
         }
@@ -117,9 +133,24 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         self.tab = nil
         frame = nil
         media = nil
+        reported = nil
+        expected = nil
     }
 
-    /// Shows the change at once; the page's next report confirms it.
+    /// The page's report, unless it contradicts a toggle still settling: a page that pauses
+    /// later (Spotify) reports playing for a moment, which would flicker the button.
+    private func settled(_ media: Media) -> Media {
+        guard let expected else { return media }
+        guard media.isPaused != expected.isPaused, media.reportedAt < expected.until else {
+            self.expected = nil
+            return media
+        }
+        var media = media
+        media.isPaused = expected.isPaused
+        return media
+    }
+
+    /// Shows the change at once, until the page's media follow, or shows them again if they don't.
     func togglePlay() {
         guard var media else { return }
         let now = Date()
@@ -127,7 +158,15 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         media.reportedAt = now
         media.isPaused.toggle()
         self.media = media
+        let until = now.addingTimeInterval(Self.settle)
+        expected = (media.isPaused, until)
         send("toggle")
+        Task {
+            try? await Task.sleep(for: .seconds(Self.settle))
+            guard expected?.until == until else { return }
+            expected = nil
+            self.media = reported
+        }
     }
 
     func previous() { send("previous") }

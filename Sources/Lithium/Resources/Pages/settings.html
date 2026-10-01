@@ -299,7 +299,7 @@
   $('#start-to').oninput = setGradient;
   $('#start-image').onclick = () => call('chooseStartImage').then(render);
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
-  $('#website-font').onchange =(event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);

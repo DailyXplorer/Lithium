@@ -16,12 +16,12 @@ struct NowPlayingTests {
     @Test func readsThePageMessage() throws {
         let date = Date(timeIntervalSinceReferenceDate: 0)
         let media = try #require(NowPlaying.Media(message: [
-            "title": "Song", "artist": "", "artwork": "https://i.example/a.jpg",
+            "title": "Song", "artist": "", "artwork": "data:image/png;base64,iVBORw==",
             "paused": false, "time": 12, "duration": 200.5, "rate": 1.5, "previous": false, "next": true,
         ] as [String: Any], at: date))
         #expect(media.title == "Song")
         #expect(media.artist == nil)
-        #expect(media.artwork == URL(string: "https://i.example/a.jpg"))
+        #expect(media.artwork == Data([0x89, 0x50, 0x4E, 0x47]))
         #expect(!media.isPaused)
         #expect(media.time == 12)
         #expect(media.duration == 200.5)
@@ -34,6 +34,11 @@ struct NowPlayingTests {
         #expect(live.isPaused)
         #expect(live.rate == 1)
         #expect(NowPlaying.Media(message: NSNull(), at: date) == nil)
+
+        for url in ["https://i.example/a.jpg", "data:image/svg+xml;base64,PHN2Zy8+", "data:image/png;base64," + String(repeating: "A", count: 70_000)] {
+            #expect(NowPlaying.Media(message: ["artwork": url], at: date)?.artwork == nil, "the app loads no picture itself")
+        }
+        #expect(NowPlaying.Media(message: ["time": 250, "duration": 200], at: date)?.time == 200)
     }
 
     @Test func countsOnFromTheLastReport() throws {
@@ -110,6 +115,32 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === second, "it doesn't take the player from another tab")
     }
 
+    @Test func holdsAToggleUntilThePageFollows() async throws {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        let playing = { (date: Date) in NowPlaying.Media(message: ["paused": false], at: date) }
+
+        player.receive(playing(Date()), from: tab)
+        player.togglePlay()
+        #expect(player.media?.isPaused == true)
+        player.receive(playing(Date()), from: tab)
+        #expect(player.media?.isPaused == true, "a page that pauses later still says it plays for a moment")
+        player.receive(NowPlaying.Media(message: ["paused": true], at: Date()), from: tab)
+        #expect(player.media?.isPaused == true)
+        player.receive(playing(Date()), from: tab)
+        #expect(player.media?.isPaused == false, "once it followed, the page has the last word")
+
+        player.togglePlay()
+        player.receive(playing(Date().addingTimeInterval(NowPlaying.settle + 1)), from: tab)
+        #expect(player.media?.isPaused == false, "after a while too")
+
+        player.togglePlay()
+        #expect(player.media?.isPaused == true)
+        try await Task.sleep(for: .seconds(NowPlaying.settle + 0.3))
+        #expect(player.media?.isPaused == false, "a page that didn't follow shows what it plays again")
+    }
+
     @Test func hidesWhileItsVideoIsPoppedOut() {
         let browser = Browser()
         let (first, second) = (browser.newTab(), browser.newTab())
@@ -148,7 +179,7 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { page.last?.isPaused == false })
         let media = try #require(page.last)
         #expect(media.title == "Song" && media.artist == "Band")
-        #expect(media.artwork == URL(string: "https://i.example/128.jpg"))
+        #expect(media.artwork == nil, "a picture the page may not read leaves the tab's icon")
         #expect(media.hasNext && !media.hasPrevious)
         #expect(media.duration ?? 0 > 0)
 
@@ -166,6 +197,73 @@ struct NowPlayingPageTests {
         let count = page.messages.count
         page.webView.load(URLRequest(url: URL(string: "about:blank")!))
         #expect(await waitUntil { page.messages.count > count && page.messages.last! == nil }, "leaving the page clears it")
+    }
+
+    /// The page loads and draws the picture; the app gets a small one.
+    @Test func drawsTheArtworkInThePage() async throws {
+        let page = try await PlayingPage("""
+            <video src="red.mp4" loop playsinline></video>
+            <script>
+              const canvas = Object.assign(document.createElement('canvas'), { width: 300, height: 200 });
+              const context = canvas.getContext('2d');
+              context.fillStyle = 'blue';
+              context.fillRect(0, 0, 300, 200);
+              navigator.mediaSession.metadata = new MediaMetadata({ title: 'Song', artwork: [{ src: canvas.toDataURL(), sizes: '300x200' }] });
+            </script>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('video')")
+
+        #expect(await waitUntil { page.last?.artwork != nil })
+        let picture = try #require(page.last?.artwork.flatMap(NSBitmapImageRep.init(data:)))
+        #expect(picture.pixelsWide == 96 && picture.pixelsHigh == 96)
+        let color = try #require(picture.colorAt(x: 48, y: 48))
+        #expect(color.blueComponent > 0.9 && color.redComponent < 0.1)
+    }
+
+    /// Spotify pauses a moment after its handler is called: the page mustn't say it still plays.
+    @Test func reportsAToggleOnceThePageFollows() async throws {
+        let page = try await PlayingPage("""
+            <video src="red.mp4" loop playsinline></video>
+            <script>
+              navigator.mediaSession.setActionHandler('pause', () => setTimeout(() => document.querySelector('video').pause(), 500));
+            </script>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('video')")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        try await Task.sleep(for: .milliseconds(400))
+
+        let count = page.messages.count
+        await NowPlaying.run("toggle", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == true })
+        #expect(page.messages[count...].allSatisfy { $0?.isPaused == true }, "no report in between says it plays")
+    }
+
+    /// The page's position is its active media's; WebKit's refusals don't count.
+    @Test func keepsThePositionStateOfItsMedia() async throws {
+        let page = try await PlayingPage("""
+            <video id="first" src="red.mp4" loop playsinline></video>
+            <video id="second" src="red.mp4" loop playsinline></video>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('#first')")
+        try await page.run("navigator.mediaSession.setPositionState({ duration: 1000, position: 500 })")
+        #expect(await waitUntil { page.last?.duration == 1000 && page.last?.isPaused == false })
+
+        let refused = try await page.run("""
+            try { navigator.mediaSession.setPositionState({ duration: 10, position: 50 }); return false; } catch { return true; }
+            """) as? Bool
+        #expect(refused == true)
+        try await page.run("navigator.mediaSession.metadata = new MediaMetadata({ title: 'After' })")
+        #expect(await waitUntil { page.last?.title == "After" })
+        #expect(page.last?.duration == 1000)
+
+        try await page.run("document.querySelector('#first').pause()")
+        try await page.play("document.querySelector('#second')")
+        let duration = try #require(try await page.run("return document.querySelector('#second').duration") as? Double)
+        #expect(duration < 1000)
+        #expect(await waitUntil { page.last?.duration == duration && page.last?.isPaused == false }, "the other media has its own time")
     }
 
     /// Spotify plays a sound it never puts in the document; muted media isn't heard.

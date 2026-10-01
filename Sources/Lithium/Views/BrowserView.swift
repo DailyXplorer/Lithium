@@ -115,6 +115,14 @@ struct ContentCard: View {
                 }
             }
         }
+        // The outgoing page leaves with the keyboard, which falls back on the window: keys beep and
+        // the first click only focuses the page. The next run-loop turn has the new page in place.
+        .onChange(of: tab?.id) {
+            DispatchQueue.main.async {
+                guard let tab = browser.selectedTab, browser.videoPopout.tab !== tab else { return }
+                focusPage(tab.contentView)
+            }
+        }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

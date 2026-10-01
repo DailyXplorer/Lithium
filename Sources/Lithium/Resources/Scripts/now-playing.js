@@ -130,8 +130,12 @@
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
     if (active !== before) {
-      if (active && attached.has(active)) removals.observe(document, { childList: true, subtree: true });
-      else removals.disconnect();
+      removals.disconnect();
+      if (active && attached.has(active)) {
+        removals.observe(document, { childList: true, subtree: true });
+        // The document's subtree stops at shadow roots: one in the root that holds the media.
+        removals.observe(active.getRootNode(), { childList: true, subtree: true });
+      }
     }
     anchor();
     schedule();
@@ -155,12 +159,20 @@
     }
   };
 
-  // Media in the document reach a capturing listener; detached ones only through play().
-  addEventListener('play', (event) => {
+  // Media in the document reach a capturing listener; detached ones only through play(). A media
+  // event stops at its shadow root (Reddit's player), which gets a listener of its own.
+  const onPlay = (event) => {
     if (watched.has(event.target)) return;
     watch(event.target);
     onMedia(event);
-  }, true);
+  };
+  addEventListener('play', onPlay, true);
+  const attachShadow = Element.prototype.attachShadow;
+  Element.prototype.attachShadow = function () {
+    const root = attachShadow.apply(this, arguments);
+    root.addEventListener('play', onPlay, true);
+    return root;
+  };
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function () {
     watch(this);

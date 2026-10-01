@@ -407,6 +407,29 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { cleared() }, "removed paused, with no media event")
     }
 
+    /// Reddit's player keeps its video in a shadow root, whose play event never reaches the window.
+    @Test func hearsMediaInAShadowRoot() async throws {
+        let page = try await PlayingPage("""
+            <script>
+            customElements.define('shadow-player', class extends HTMLElement {
+                constructor() {
+                    super();
+                    window.shadow = this.attachShadow({ mode: 'closed' });
+                    window.shadow.innerHTML = '<video src="red.mp4" autoplay loop playsinline></video>';
+                }
+            });
+            </script>
+            <shadow-player></shadow-player>
+            """)
+        defer { page.close() }
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.isAudible == true }, "started by autoplay")
+
+        await NowPlaying.run("pause", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == true })
+        try await page.run("window.shadow.replaceChildren()")
+        #expect(await waitUntil { page.messages.last.map { $0 == nil } ?? false }, "removed paused from its shadow root")
+    }
+
     /// A video embedded in an article plays in its own frame, which answers the buttons.
     @Test func hearsAnIframe() async throws {
         let page = try await PlayingPage("""

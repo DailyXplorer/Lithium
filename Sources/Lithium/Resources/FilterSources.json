@@ -9,12 +9,15 @@
     "easylist": "https://easylist.to/easylist/easylist.txt",
     "easyprivacy": "https://easylist.to/easylist/easyprivacy.txt",
     "peter-lowe": "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&showintro=0&mimetype=plaintext",
-    "urlhaus": "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-ag-online.txt"
+    "urlhaus": "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-ag-online.txt",
+    "ubo-cookies": "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/annoyances-cookies.txt",
+    "easylist-cookies": "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"
   },
   "groups": {
     "ads": ["ubo-filters", "ubo-quick-fixes", "easylist", "ubo-unbreak"],
     "privacy": ["ubo-privacy", "easyprivacy", "peter-lowe", "ubo-unbreak"],
-    "security": ["ubo-badware", "ubo-resource-abuse", "urlhaus"]
+    "security": ["ubo-badware", "ubo-resource-abuse", "urlhaus"],
+    "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]
   },
   "trueTokens": ["env_safari", "cap_user_stylesheet", "adguard", "adguard_ext_safari"]
 }

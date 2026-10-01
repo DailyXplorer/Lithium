@@ -109,6 +109,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored private var reported: Media?
     /// What the last toggle shows, until the page agrees or `settle` seconds pass.
     @ObservationIgnored private var expected: (isPaused: Bool, until: Date)?
+    /// Ends the last toggle's wait; awaited in tests, where the main actor may run it late.
+    @ObservationIgnored private(set) var settling: Task<Void, Never>?
 
     static let settle: TimeInterval = 1.5
 
@@ -205,7 +207,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         let until = now.addingTimeInterval(Self.settle)
         expected = (media.isPaused, until)
         send(media.isPaused ? "pause" : "play")
-        Task {
+        settling = Task {
             try? await Task.sleep(for: .seconds(Self.settle))
             guard expected?.until == until else { return }
             expected = nil

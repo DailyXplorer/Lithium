@@ -268,7 +268,7 @@ struct NowPlayingBrowserTests {
 
         player.togglePlay()
         #expect(player.media?.isPaused == true)
-        try await Task.sleep(for: .seconds(NowPlaying.settle + 0.3))
+        await player.settling?.value
         #expect(player.media?.isPaused == false, "a page that didn't follow shows what it plays again")
 
         player.togglePlay()

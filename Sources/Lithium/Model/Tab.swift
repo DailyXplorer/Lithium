@@ -81,6 +81,20 @@ final class Tab: NSObject, Identifiable {
     var customTitle: String?
     /// A shorter name for the page's title (Max, Tidy tab titles).
     private(set) var tidyTitle: String?
+    /// Silenced by the user. WebKit keeps it per web view, so each new one (waking) is muted again.
+    /// Muted, it gives up the mini player: it is no longer heard, and would otherwise keep it.
+    var isMuted = false {
+        didSet {
+            if let loadedWebView { applyMute(to: loadedWebView) }
+            if isMuted { browser?.nowPlaying.discard(self) }
+        }
+    }
+
+    /// Per-page mute is private WebKit (`_setPageMuted:`, as Safari's tab speaker uses), absent from older ones.
+    nonisolated static let canMute = WKWebView.instancesRespond(to: Selector(("_setPageMuted:")))
+    private static let setPageMuted = Selector(("_setPageMuted:"))
+    /// `_WKMediaAudioMuted`; the other bits (camera, microphone, screen) are left as they are.
+    private static let audioMuted = 1
 
     var displayTitle: String {
         if let customTitle { return customTitle }
@@ -103,6 +117,15 @@ final class Tab: NSObject, Identifiable {
         webView.uiDelegate = self
         webView.allowsMagnification = true
         observeWebView()
+        if isMuted { applyMute(to: webView) }
+    }
+
+    private func applyMute(to webView: WKWebView) {
+        guard Self.canMute else { return }
+        let state = webView.responds(to: Selector(("_mediaMutedState"))) ? webView.value(forKey: "_mediaMutedState") as? Int ?? 0 : 0
+        typealias Setter = @convention(c) (AnyObject, Selector, Int) -> Void
+        let setter = unsafeBitCast(webView.method(for: Self.setPageMuted), to: Setter.self)
+        setter(webView, Self.setPageMuted, isMuted ? state | Self.audioMuted : state & ~Self.audioMuted)
     }
 
     func load(_ url: URL) {
@@ -205,7 +228,13 @@ final class Tab: NSObject, Identifiable {
 
     private func wakeIfAsleep() {
         guard isAsleep, let url else { return }
-        if let sleepingState { wake(from: sleepingState, at: url) } else { load(url) }
+        load(url, history: sleepingState)
+    }
+
+    /// What `load(_:history:)` takes to bring this page back elsewhere (a reopened or duplicated
+    /// tab) with its back and forward history; nil when it can't come back that way.
+    var history: Any? {
+        isAsleep ? sleepingState : loadedWebView.flatMap(restorableState(of:))
     }
 
     /// The history a sleeping tab wakes with, if every page in it can come back that way. Local
@@ -226,10 +255,13 @@ final class Tab: NSObject, Identifiable {
         !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme && url.scheme != "blob"
     }
 
-    private func wake(from state: Any, at url: URL) {
+    /// Shows the page with the history it had, or loads it afresh without one.
+    func load(_ url: URL, history: Any?) {
+        guard let history else { return load(url) }
+        self.url = url
         sleepingState = nil
         isAsleep = false
-        webView.interactionState = state
+        webView.interactionState = history
         // A state WebKit could not read leaves an empty page.
         if webView.backForwardList.currentItem == nil { load(url) }
     }
@@ -658,6 +690,8 @@ extension Tab: WKNavigationDelegate {
         } else {
             lastCrashReload = Date()
             webView.reload()
+            // The new process starts from the page's settings; said again in case mute isn't among them.
+            if isMuted { applyMute(to: webView) }
         }
     }
 

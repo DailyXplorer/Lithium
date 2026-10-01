@@ -44,6 +44,7 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("w")
             Button("Reopen Closed Tab") { browser.reopenClosedTab() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!browser.canReopenClosedTab)
         }
         CommandGroup(replacing: .printItem) {
             Button("Print…") { browser.selectedTab?.print() }
@@ -123,8 +124,17 @@ struct BrowserCommands: Commands {
             Divider()
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
-            Button("Copy Link") { copyLink() }
+            Button("Copy Link") { browser.copyLink(of: browser.selectedTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(browser.selectedTab?.url == nil)
+            if Tab.canMute {
+                Button(browser.selectedTab?.isMuted == true ? "Unmute Tab" : "Mute Tab") {
+                    browser.selectedTab?.isMuted.toggle()
+                }
+                .disabled(browser.selectedTab == nil)
+            }
             Divider()
             ForEach(1..<10) { number in
                 Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
@@ -151,11 +161,5 @@ struct BrowserCommands: Commands {
         }
         let webView = tab.webView
         webView.pageZoom = min(max(webView.pageZoom + delta, 0.5), 3)
-    }
-
-    private func copyLink() {
-        guard let url = browser.selectedTab?.url else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 }

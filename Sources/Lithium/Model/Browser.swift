@@ -41,7 +41,8 @@ final class Browser {
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private var eventMonitors: [Any] = []
-    @ObservationIgnored private var closedTabs: [ClosedTab] = []
+    /// Observed, so Reopen Closed Tab is enabled as soon as there is one. Never saved.
+    private var closedTabs: [ClosedTab] = []
     // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
     @ObservationIgnored nonisolated(unsafe) private var sleepLoop: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var memoryPressure: DispatchSourceMemoryPressure?
@@ -53,6 +54,10 @@ final class Browser {
         let url: URL
         let pinID: Pin.ID?
         let customTitle: String?
+        /// Its place in the tab list; nil for a favorite's page.
+        let index: Int?
+        /// From `Tab.history`.
+        let history: Any?
     }
 
     /// 30 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot), as in
@@ -270,11 +275,20 @@ final class Browser {
 
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(for: url))
-        tabs.insert(tab, at: 0)
-        extensions.didOpen(tab)
+        let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url))
         if let url { tab.load(url) }
         if selecting { select(tab) }
+        return tab
+    }
+
+    /// `index` is a place in the tab list, clamped to it. `tabs` also holds favorites' pages, in
+    /// no particular order, so the new tab goes just before the one it pushes down.
+    private func insertTab(at index: Int, configuration: WKWebViewConfiguration) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration)
+        let list = regularTabs
+        let position = index <= 0 ? 0 : index >= list.count ? tabs.count : tabs.firstIndex { $0 === list[index] } ?? tabs.count
+        tabs.insert(tab, at: position)
+        extensions.didOpen(tab)
         return tab
     }
 
@@ -339,7 +353,9 @@ final class Browser {
         videoPopout.discard(tab)
         nowPlaying.discard(tab)
         if let url = tab.url {
-            closedTabs.append(ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle))
+            let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle,
+                                   index: order.firstIndex { $0 === tab }, history: tab.history)
+            closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
         if tab.id == selectedTabID {
@@ -361,15 +377,55 @@ final class Browser {
         if let tab = selectedTab { close(tab) }
     }
 
+    /// Favorites' pages stay open, as Chrome keeps pinned tabs. Tabs close bottom up, so ⇧⌘T
+    /// brings them back top down, each where it was.
+    func closeOtherTabs(than tab: Tab) {
+        select(tab)
+        regularTabs.reversed().filter { $0 !== tab }.forEach(close)
+    }
+
+    func closeTabs(below tab: Tab) {
+        let below = tabs(below: tab)
+        // Selected first, so the selection doesn't walk through (and wake) the tabs about to close.
+        if below.contains(where: { $0.id == selectedTabID }) { select(tab) }
+        below.reversed().forEach(close)
+    }
+
+    func tabs(below tab: Tab) -> ArraySlice<Tab> {
+        let list = regularTabs
+        guard let index = list.firstIndex(where: { $0 === tab }) else { return [] }
+        return list[(index + 1)...]
+    }
+
     var canReopenClosedTab: Bool { !closedTabs.isEmpty }
 
+    /// Like Chrome: back in its place, with its history. A favorite's page goes back to its
+    /// favorite if that has no page open, or else to the top of the list.
     func reopenClosedTab() {
         guard let closed = closedTabs.popLast() else { return }
-        let tab = newTab(url: closed.url)
+        let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
+        let tab = insertTab(at: pin == nil ? closed.index ?? 0 : 0, configuration: makeConfiguration(for: closed.url))
+        tab.pinID = pin?.id
         tab.customTitle = closed.customTitle
-        if let pin = pins.first(where: { $0.id == closed.pinID }), liveTab(for: pin) == nil {
-            tab.pinID = pin.id
-        }
+        tab.load(closed.url, history: closed.history)
+        select(tab)
+    }
+
+    /// Just below the original, with its history and name; a favorite's page has its copy at the
+    /// top of the list. The copy is never a favorite.
+    func duplicate(_ tab: Tab) {
+        guard let url = tab.url else { return }
+        let index = regularTabs.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
+        let copy = insertTab(at: index, configuration: makeConfiguration(for: url))
+        copy.customTitle = tab.customTitle
+        copy.load(url, history: tab.history)
+        select(copy)
+    }
+
+    func copyLink(of tab: Tab?) {
+        guard let url = tab?.url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
     }
 
     /// Empty or whitespace-only names give the tab back its page title.

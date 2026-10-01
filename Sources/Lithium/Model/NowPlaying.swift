@@ -161,7 +161,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
     /// An iframe takes it only if WebKit hears the tab too: any page, or an ad in it, may say it
     /// plays. The page itself is taken at its word; it is the site the user went to. A muted tab
-    /// is not heard, so it never takes the player.
+    /// is not heard, so it never takes the player, even back from the back-forward cache.
     /// One sound at a time: a tab taking the player from another that was heard pauses it once
     /// WebKit hears it as well, unless that one is in a call, whose participants it would silence,
     /// or muted, which makes no sound to stop.
@@ -170,7 +170,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         let claims = { (media: Media) in
             !media.isPaused && media.isAudible && !tab.isMuted && (!frame.isSubframe || self.isHeard(tab) != false)
         }
-        if let media, holds || claims(media) || media.isRestored && self.tab == nil {
+        if let media, holds || claims(media) || media.isRestored && self.tab == nil && !tab.isMuted {
             if !holds {
                 expected = nil
                 unpaused = nil

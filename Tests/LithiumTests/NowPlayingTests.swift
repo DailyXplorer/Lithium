@@ -396,6 +396,20 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === second, "it doesn't take the player from another tab")
     }
 
+    @Test func aMutedTabDoesNotTakeARestoredPage() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        let restored = NowPlaying.Media(message: ["paused": true, "restored": true], at: Date())
+
+        tab.isMuted = true
+        player.receive(restored, from: tab)
+        #expect(player.tab == nil, "muted, the player stays free")
+        tab.isMuted = false
+        player.receive(restored, from: tab)
+        #expect(player.tab === tab, "unmuted, it takes it")
+    }
+
     @Test func holdsAToggleUntilThePageFollows() async throws {
         let browser = Browser()
         let tab = browser.newTab()

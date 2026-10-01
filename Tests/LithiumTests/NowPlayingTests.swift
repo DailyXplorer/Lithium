@@ -204,6 +204,7 @@ struct NowPlayingBrowserTests {
         let player = browser.nowPlaying
         var paused: [Tab] = []
         player.pause = { paused.append($0) }
+        player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
@@ -226,6 +227,7 @@ struct NowPlayingBrowserTests {
         var paused: [Tab] = []
         player.pause = { paused.append($0) }
         player.isInCall = { $0 === call }
+        player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
 
         player.receive(playing, from: call)
@@ -233,6 +235,55 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === video && paused.isEmpty, "the call goes on, the video takes the player")
         player.receive(playing, from: other)
         #expect(paused == [video], "a tab not in a call still pauses")
+    }
+
+    /// Any script of a page can post that it plays: the page's word takes the player, but only
+    /// WebKit's ear pauses another tab, maybe a report later, once the media loaded.
+    @Test func pausesTheTabHeardBeforeOnlyOnceWebKitHearsTheNewOne() {
+        let browser = Browser()
+        let (first, second, third) = (browser.newTab(), browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        var heard: Bool? = true
+        player.isHeard = { $0 === first ? true : heard }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
+
+        player.receive(playing, from: first)
+        heard = false
+        player.receive(playing, from: second)
+        #expect(player.tab === second && paused.isEmpty, "a page's word alone")
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused == [first], "heard on its next report")
+        player.receive(playing, from: second)
+        #expect(paused == [first], "paused once")
+
+        player.receive(playing, from: first)
+        paused = []
+        heard = false
+        player.receive(playing, from: second)
+        player.receive(stopped, from: second)
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused.isEmpty, "paused before WebKit heard it, it pauses nothing later")
+
+        player.receive(playing, from: first)
+        paused = []
+        heard = false
+        player.receive(playing, from: second)
+        browser.close(first)
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused.isEmpty, "the tab heard before closed meanwhile")
+
+        player.receive(playing, from: third)
+        #expect(paused == [second], "heard at once")
+        paused = []
+        heard = nil
+        player.receive(playing, from: second)
+        #expect(paused == [third], "a WebKit that can't tell leaves the page's word")
     }
 
     @Test func pausesNothingForMediaNotHeard() {

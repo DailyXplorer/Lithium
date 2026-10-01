@@ -112,6 +112,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored private var expected: (isPaused: Bool, until: Date)?
     /// Ends the last toggle's wait; awaited in tests, where the main actor may run it late.
     @ObservationIgnored private(set) var settling: Task<Void, Never>?
+    /// The tab heard before the one holding the player, paused once WebKit hears the new one too:
+    /// a page's word alone silences no other tab. WebKit may hear it only a report later, once
+    /// the media loaded (the script reports at `play`, then at `playing`).
+    @ObservationIgnored private weak var unpaused: Tab?
 
     static let settle: TimeInterval = 1.5
 
@@ -157,18 +161,28 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
     /// An iframe takes it only if WebKit hears the tab too: any page, or an ad in it, may say it
     /// plays. The page itself is taken at its word; it is the site the user went to.
-    /// One sound at a time: a tab taking the player from another that was heard pauses it, unless
-    /// that one is in a call, whose participants it would silence.
+    /// One sound at a time: a tab taking the player from another that was heard pauses it once
+    /// WebKit hears it as well, unless that one is in a call, whose participants it would silence.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let claims = { (media: Media) in
             !media.isPaused && media.isAudible && (!frame.isSubframe || self.isHeard(tab) != false)
         }
         if let media, holds || claims(media) || media.isRestored && self.tab == nil {
-            if !holds { expected = nil }
-            if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible,
-               !isInCall(previous) {
-                pause(previous)
+            if !holds {
+                expected = nil
+                unpaused = nil
+                if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible {
+                    unpaused = previous
+                }
+            }
+            if let previous = unpaused, !media.isPaused, media.isAudible {
+                if isHeard(tab) != false {
+                    unpaused = nil
+                    if !isInCall(previous) { pause(previous) }
+                }
+            } else {
+                unpaused = nil
             }
             self.tab = tab
             self.frame = frame
@@ -181,8 +195,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     /// The tab closed, fell asleep, or went to another page.
     func discard(_ tab: Tab) {
+        if tab === unpaused { unpaused = nil }
         guard tab === self.tab else { return }
         self.tab = nil
+        unpaused = nil
         frame = nil
         media = nil
         reported = nil

@@ -153,23 +153,25 @@ final class WebContainerView: NSView {
     override func keyDown(with event: NSEvent) {}
 }
 
-/// With the sidebar hidden, the pointer on the window's left edge slides it out over the page.
-/// It slides back once the pointer leaves it or a tab is picked.
+/// With the sidebar hidden, the pointer resting on the window's left edge slides it out over the
+/// page. It slides back once the pointer has stayed off it and its margin for a while, or a tab
+/// is picked. The reveal setting picks the delays and the margin.
 private struct SidebarPeek: View {
     let style: SidebarStyle
     let colorHex: String
     @Environment(Browser.self) private var browser
-    @State private var isEdgeHovered = false
-    @State private var isPanelHovered = false
+    @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
+    @State private var zone = PeekZone.outside
     @State private var isShown = false
-    @State private var pendingHide: Task<Void, Never>?
+    @State private var pending: Task<Void, Never>?
 
     var body: some View {
         ZStack(alignment: .leading) {
-            Color.clear
-                .frame(width: Layout.margin)
-                .contentShape(Rectangle())
-                .onHover { isEdgeHovered = $0 }
+            // Spans the panel plus its margin, above it too, so its own frame is the keep-open zone.
+            PeekTracker(topMargin: reveal.margin) { zone = $0 }
+                .frame(width: Layout.margin + Layout.sidebarWidth + reveal.margin)
+                .padding(.top, -reveal.margin)
+                .allowsHitTesting(false)
             if isShown {
                 SidebarView()
                     .padding(.top, 8)
@@ -179,40 +181,94 @@ private struct SidebarPeek: View {
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
                     .padding([.leading, .bottom], Layout.margin)
-                    .onHover { isPanelHovered = $0 }
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        // Each event, not a combined flag: a rename left pending would otherwise hold the flag
-        // true, and pointing at the edge would no longer open the panel.
-        .onChange(of: isEdgeHovered) { update() }
-        .onChange(of: isPanelHovered) { update() }
+        .onChange(of: zone) { update() }
         .onChange(of: browser.renamingTabID) { update() }
         .onChange(of: browser.selectedTabID) {
-            if browser.renamingTabID == nil { setShown(false) }
+            guard browser.renamingTabID == nil else { return }
+            pending?.cancel()
+            setShown(false)
         }
-        .onDisappear { pendingHide?.cancel() }
+        .onDisappear { pending?.cancel() }
     }
 
-    /// A double click that renames a background tab selects it first, which hides the panel;
-    /// the rename brings it back and keeps it until the name is in.
+    /// Opening waits for the pointer to rest on the edge, closing for it to stay away, and any
+    /// move in between calls the change off. A double click that renames a background tab selects
+    /// it first, which hides the panel; the rename brings it back at once and keeps it until the
+    /// name is in.
     private func update() {
-        pendingHide?.cancel()
-        if isEdgeHovered || isPanelHovered || browser.renamingTabID != nil {
+        pending?.cancel()
+        let renaming = browser.renamingTabID != nil
+        let wanted = renaming || (isShown ? zone != .outside : zone == .edge)
+        guard wanted != isShown else { return }
+        if renaming {
             setShown(true)
-        } else {
-            // Moving from the edge onto the panel may report the exit before the entry.
-            pendingHide = Task {
-                try? await Task.sleep(for: .milliseconds(200))
-                if !Task.isCancelled { setShown(false) }
-            }
+            return
+        }
+        let delay = wanted ? reveal.openDelay : reveal.closeDelay
+        pending = Task {
+            try? await Task.sleep(for: delay)
+            if !Task.isCancelled { setShown(wanted) }
         }
     }
 
     private func setShown(_ shown: Bool) {
-        // A view removed from under the pointer never reports the exit.
-        if !shown { isPanelHovered = false }
         withAnimation(.snappy(duration: 0.2)) { isShown = shown }
+    }
+}
+
+private enum PeekZone { case outside, near, edge }
+
+/// Where the pointer is, for the hidden sidebar. One tracking area judged by geometry alone: hover
+/// on the panel itself got exits and entries as the panel slid in under the pointer, and flickered.
+/// It never takes clicks, which go on to the page below, and only exists while the sidebar is hidden.
+private struct PeekTracker: NSViewRepresentable {
+    let topMargin: CGFloat
+    let onChange: (PeekZone) -> Void
+
+    func makeNSView(context: Context) -> TrackerView { TrackerView() }
+
+    func updateNSView(_ view: TrackerView, context: Context) {
+        view.topMargin = topMargin
+        view.onChange = onChange
+    }
+
+    final class TrackerView: NSView {
+        /// A little wider than the window margin, so the edge is easy to hit without covering
+        /// more than a sliver of the page.
+        private static let edgeWidth: CGFloat = 10
+        var topMargin: CGFloat = 0
+        var onChange: (PeekZone) -> Void = { _ in }
+        private var zone = PeekZone.outside
+
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            guard trackingAreas.isEmpty else { return }
+            let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeInActiveApp, .inVisibleRect]
+            addTrackingArea(NSTrackingArea(rect: .zero, options: options, owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { locate(event) }
+        override func mouseMoved(with event: NSEvent) { locate(event) }
+        override func mouseExited(with event: NSEvent) { report(.outside) }
+
+        /// The edge starts below the top margin, where the page does.
+        private func locate(_ event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            report(point.x < Self.edgeWidth && point.y >= topMargin ? .edge : .near)
+        }
+
+        /// Only changes reach SwiftUI, so a moving pointer doesn't redraw anything.
+        private func report(_ new: PeekZone) {
+            guard new != zone else { return }
+            zone = new
+            onChange(new)
+        }
     }
 }
 

@@ -120,6 +120,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "state": break
         case "setSidebarStyle":
             if let style = (value as? String).flatMap(SidebarStyle.init(rawValue:)) { defaults.set(style.rawValue, forKey: Preference.sidebarStyle) }
+        case "setSidebarReveal":
+            if let reveal = (value as? String).flatMap(SidebarReveal.init(rawValue:)) { defaults.set(reveal.rawValue, forKey: Preference.sidebarReveal) }
         case "setSidebarColor":
             if let hex = Self.hex(value) { defaults.set(hex, forKey: Preference.sidebarColor) }
         case "setStartBackground":
@@ -215,6 +217,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "sidebarStyle": defaults.string(forKey: Preference.sidebarStyle) ?? SidebarStyle.solid.rawValue,
                 "sidebarColor": defaults.string(forKey: Preference.sidebarColor) ?? Theme.defaultSidebarHex,
                 "defaultColor": Theme.defaultSidebarHex,
+                "sidebarReveal": defaults.string(forKey: Preference.sidebarReveal) ?? SidebarReveal.normal.rawValue,
                 "websiteFont": PageStyle.usesDMSansEverywhere,
                 "startPage": [
                     "background": defaults.string(forKey: Preference.startBackground) ?? StartBackground.lithium.rawValue,

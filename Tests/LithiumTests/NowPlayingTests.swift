@@ -237,6 +237,49 @@ struct NowPlayingBrowserTests {
         #expect(paused == [video], "a tab not in a call still pauses")
     }
 
+    /// A muted tab makes no sound for another to stop.
+    @Test func pausesNoMutedTab() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        var heard: Bool? = true
+        player.isHeard = { $0 === first ? true : heard }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+
+        player.receive(playing, from: first)
+        first.isMuted = true
+        player.receive(playing, from: second)
+        #expect(player.tab === second && paused.isEmpty, "muted while it held the player")
+
+        first.isMuted = false
+        player.receive(playing, from: first)
+        paused = []
+        heard = false
+        player.receive(playing, from: second)
+        first.isMuted = true
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused.isEmpty, "muted before WebKit heard the new one")
+    }
+
+    @Test func letsGoWhenMuted() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        #expect(player.tab === tab)
+
+        tab.isMuted = true
+        #expect(player.tab == nil && player.media == nil)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        #expect(player.tab == nil, "a muted tab doesn't take it back")
+        tab.isMuted = false
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        #expect(player.tab === tab, "unmuted, its next report does")
+    }
+
     /// Any script of a page can post that it plays: the page's word takes the player, but only
     /// WebKit's ear pauses another tab, maybe a report later, once the media loaded.
     @Test func pausesTheTabHeardBeforeOnlyOnceWebKitHearsTheNewOne() {
@@ -351,6 +394,20 @@ struct NowPlayingBrowserTests {
         player.receive(playing, from: second)
         player.receive(restored, from: first)
         #expect(player.tab === second, "it doesn't take the player from another tab")
+    }
+
+    @Test func aMutedTabDoesNotTakeARestoredPage() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        let restored = NowPlaying.Media(message: ["paused": true, "restored": true], at: Date())
+
+        tab.isMuted = true
+        player.receive(restored, from: tab)
+        #expect(player.tab == nil, "muted, the player stays free")
+        tab.isMuted = false
+        player.receive(restored, from: tab)
+        #expect(player.tab === tab, "unmuted, it takes it")
     }
 
     @Test func holdsAToggleUntilThePageFollows() async throws {

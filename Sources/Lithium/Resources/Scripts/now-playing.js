@@ -111,18 +111,39 @@
     return button && button.offsetParent && button.getAttribute('aria-disabled') !== 'true' ? button : null;
   };
 
-  const watched = new WeakSet();
-  const onMedia = (event) => {
-    const media = event.target;
-    const before = active;
-    if (event.type === 'emptied' && media === active && !media.currentSrc) active = null;
-    else if (isPlaying(media) && isAudible(media)) active = media;
-    if (media !== active && active === before) return;
+  // Media once in the document. Taken out of it (X closing a video), WebKit pauses them but keeps
+  // them loaded, and Play would sound from nothing on screen. A sound never in it (Spotify) stays.
+  // Still playing out of it, a media was put back, or WebKit lets it be heard.
+  const attached = new WeakSet();
+  const isGone = (media) => attached.has(media) && !media.isConnected && media.paused;
+  // Only while the active media is in the document: it sees one removed already paused, which
+  // fires no event.
+  const removals = new MutationObserver(() => {
+    if (active && isGone(active)) changed(active, null);
+  });
+
+  const changed = (before, media) => {
+    active = media;
     if (position && active !== before) {
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
+    if (active !== before) {
+      if (active && attached.has(active)) removals.observe(document, { childList: true, subtree: true });
+      else removals.disconnect();
+    }
     anchor();
     schedule();
+  };
+
+  const watched = new WeakSet();
+  const onMedia = (event) => {
+    const media = event.target;
+    if (media.isConnected) attached.add(media);
+    let next = active;
+    if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
+    else if (isPlaying(media) && isAudible(media)) next = media;
+    if (media !== next && next === active) return;
+    changed(active, next);
   };
   const watch = (media) => {
     if (!(media instanceof HTMLMediaElement) || watched.has(media)) return;
@@ -201,13 +222,10 @@
   Object.defineProperty(globalThis, key, {
     value: (command) => {
       switch (command) {
-        case 'toggle': {
-          const playing = isPlaying(active);
-          if (!call(playing ? 'pause' : 'play') && active) {
-            if (playing) active.pause(); else active.play().catch(() => {});
-          }
-          break;
-        }
+        // Asked of the page even when its media seem there already: a pause it hasn't made yet
+        // would otherwise win over the play that follows.
+        case 'play': if (!call('play')) active?.play().catch(() => {}); break;
+        case 'pause': if (!call('pause')) active?.pause(); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
       }

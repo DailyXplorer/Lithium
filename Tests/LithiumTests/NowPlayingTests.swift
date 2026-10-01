@@ -139,6 +139,12 @@ struct NowPlayingBrowserTests {
         #expect(player.media?.isPaused == true)
         try await Task.sleep(for: .seconds(NowPlaying.settle + 0.3))
         #expect(player.media?.isPaused == false, "a page that didn't follow shows what it plays again")
+
+        player.togglePlay()
+        player.togglePlay()
+        #expect(player.media?.isPaused == false)
+        player.receive(NowPlaying.Media(message: ["paused": true], at: Date()), from: tab)
+        #expect(player.media?.isPaused == false, "the first click's pause comes before the second's play")
     }
 
     @Test func hidesWhileItsVideoIsPoppedOut() {
@@ -185,7 +191,7 @@ struct NowPlayingPageTests {
 
         await NowPlaying.run("next", in: page.webView)
         #expect(await waitUntil { try await page.run("return window.nexts") as? Int == 1 })
-        await NowPlaying.run("toggle", in: page.webView)
+        await NowPlaying.run("pause", in: page.webView)
         #expect(await waitUntil { page.last?.isPaused == true }, "paused, the page still reports its media")
         #expect(try await page.run("return document.querySelector('video').paused") as? Bool == true)
         #expect(page.last?.isRestored == false)
@@ -235,9 +241,33 @@ struct NowPlayingPageTests {
         try await Task.sleep(for: .milliseconds(400))
 
         let count = page.messages.count
-        await NowPlaying.run("toggle", in: page.webView)
+        await NowPlaying.run("pause", in: page.webView)
         #expect(await waitUntil { page.last?.isPaused == true })
         #expect(page.messages[count...].allSatisfy { $0?.isPaused == true }, "no report in between says it plays")
+    }
+
+    /// Clicked twice before Spotify paused, the player asks for a pause then a play, not two pauses.
+    @Test func endsInTheLastStateAskedFor() async throws {
+        let page = try await PlayingPage("""
+            <video src="red.mp4" loop playsinline></video>
+            <script>
+              const video = document.querySelector('video');
+              window.pauses = 0;
+              video.addEventListener('pause', () => window.pauses++);
+              navigator.mediaSession.setActionHandler('pause', () => setTimeout(() => video.pause(), 300));
+              navigator.mediaSession.setActionHandler('play', () => setTimeout(() => video.play(), 300));
+            </script>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('video')")
+        #expect(await waitUntil { page.last?.isPaused == false })
+
+        await NowPlaying.run("pause", in: page.webView)
+        await NowPlaying.run("play", in: page.webView)
+        #expect(await waitUntil { try await page.run("return window.pauses") as? Int == 1 }, "the first click's pause comes")
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await page.run("return document.querySelector('video').paused") as? Bool == false, "then the second click's play")
+        #expect(page.last?.isPaused == false)
     }
 
     /// The page's position is its active media's; WebKit's refusals don't count.
@@ -277,8 +307,31 @@ struct NowPlayingPageTests {
         try await page.play("window.sound = new Audio('red.mp4')")
         #expect(await waitUntil { page.last?.isPaused == false })
         #expect(page.last?.title == nil && page.last?.hasNext == false)
-        await NowPlaying.run("toggle", in: page.webView)
+        await NowPlaying.run("pause", in: page.webView)
         #expect(await waitUntil { try await page.run("return window.sound.paused") as? Bool == true })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(page.last?.isPaused == true, "paused, a sound never in the document stays in the player")
+    }
+
+    /// X takes a video out of the page when its view closes: WebKit pauses it, but it stays loaded.
+    @Test func dropsMediaTakenOutOfThePage() async throws {
+        let page = try await PlayingPage("""
+            <video id="first" src="red.mp4" loop playsinline></video>
+            <video id="second" src="red.mp4" loop playsinline></video>
+            """)
+        defer { page.close() }
+        let cleared = { page.messages.last.map { $0 == nil } ?? false }
+        try await page.play("document.querySelector('#first')")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        try await page.run("document.querySelector('#first').remove()")
+        #expect(await waitUntil { cleared() }, "removed while playing")
+
+        try await page.play("document.querySelector('#second')")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        try await page.run("document.querySelector('#second').pause()")
+        #expect(await waitUntil { page.last?.isPaused == true })
+        try await page.run("document.body.replaceChildren()")
+        #expect(await waitUntil { cleared() }, "removed paused, with no media event")
     }
 
     /// A video embedded in an article plays in its own frame, which answers the buttons.
@@ -297,10 +350,10 @@ struct NowPlayingPageTests {
         #expect(!frame.isMainFrame)
         #expect(page.last?.title == nil)
 
-        await NowPlaying.run("toggle", in: page.webView)
+        await NowPlaying.run("pause", in: page.webView)
         try await Task.sleep(for: .milliseconds(300))
         #expect(try await page.run("return \(video).paused") as? Bool == false, "the page itself plays nothing")
-        await NowPlaying.run("toggle", in: page.webView, frame: frame)
+        await NowPlaying.run("pause", in: page.webView, frame: frame)
         #expect(await waitUntil { try await page.run("return \(video).paused") as? Bool == true })
         #expect(await waitUntil { page.last?.isPaused == true })
     }

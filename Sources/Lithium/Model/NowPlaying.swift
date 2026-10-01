@@ -151,6 +151,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     /// Shows the change at once, until the page's media follow, or shows them again if they don't.
+    /// The page is told what the button showed, not to toggle: a page still pausing from the
+    /// last click (Spotify) would take a second one for another pause.
     func togglePlay() {
         guard var media else { return }
         let now = Date()
@@ -160,7 +162,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         self.media = media
         let until = now.addingTimeInterval(Self.settle)
         expected = (media.isPaused, until)
-        send("toggle")
+        send(media.isPaused ? "pause" : "play")
         Task {
             try? await Task.sleep(for: .seconds(Self.settle))
             guard expected?.until == until else { return }
@@ -183,7 +185,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         Task { await Self.run(command, in: webView, frame: frame) }
     }
 
-    /// "toggle", "previous" or "next", answered by the script of the frame that plays.
+    /// "play", "pause", "previous" or "next", answered by the script of the frame that plays.
     static func run(_ command: String, in webView: WKWebView, frame: WKFrameInfo? = nil) async {
         _ = try? await webView.callAsyncJavaScript(
             "globalThis[Symbol.for('lithium.nowPlaying')]?.(command)",

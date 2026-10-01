@@ -32,6 +32,7 @@ final class Browser {
     let summaries = PageSummaries()
     let extensions = Extensions()
     let videoPopout = VideoPopout()
+    let nowPlaying = NowPlaying()
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
@@ -72,6 +73,7 @@ final class Browser {
         privacy.start()
         extensions.browser = self
         videoPopout.browser = self
+        nowPlaying.browser = self
         extensions.start()
         restore(SessionStore.load())
         saveSession()
@@ -166,6 +168,7 @@ final class Browser {
     private func prepare(_ configuration: WKWebViewConfiguration) {
         InternalSchemeHandler.shared.install(on: configuration)
         translation.install(on: configuration)
+        nowPlaying.install(on: configuration.userContentController)
         configuration.webExtensionController = extensions.controller
     }
 
@@ -327,6 +330,7 @@ final class Browser {
         let order = regularTabs
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)
+        nowPlaying.discard(tab)
         if let url = tab.url {
             closedTabs.append(ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle))
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }

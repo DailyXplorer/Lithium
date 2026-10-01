@@ -14,6 +14,7 @@ final class Tab: NSObject, Identifiable {
         if let loadedWebView { return loadedWebView }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
+        webView.tab = self
         loadedWebView = webView
         attach(webView)
         return webView
@@ -256,8 +257,8 @@ final class Tab: NSObject, Identifiable {
     /// Lithium did before, and counts from the next pass, since the page's process answers it.
     func noteSound() {
         guard let webView = loadedWebView, !isAsleep else { return }
-        if webView.responds(to: Selector(("_isPlayingAudio"))) {
-            if webView.value(forKey: "_isPlayingAudio") as? Bool == true { lastHeard = Date() }
+        if let isPlayingAudio {
+            if isPlayingAudio { lastHeard = Date() }
             return
         }
         // One question at a time: a stuck process doesn't pile them up.
@@ -269,6 +270,12 @@ final class Tab: NSObject, Identifiable {
             self.isAskingPlayback = false
             if state == .playing { self.lastHeard = Date() }
         }
+    }
+
+    /// Safari's speaker icon, asked of the app's side of WebKit; nil from a WebKit without it.
+    var isPlayingAudio: Bool? {
+        guard let webView = loadedWebView, webView.responds(to: Selector(("_isPlayingAudio"))) else { return nil }
+        return webView.value(forKey: "_isPlayingAudio") as? Bool
     }
 
     /// Sharing the screen or a window in a call. Private API, absent from older WebKits.
@@ -286,6 +293,7 @@ final class Tab: NSObject, Identifiable {
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
         browser?.videoPopout.discard(self)
+        browser?.nowPlaying.discard(self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -377,6 +385,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
+        browser?.nowPlaying.install(on: controller)
         privacy.addScripts(enabled, for: url, to: controller)
     }
 
@@ -568,6 +577,8 @@ extension Tab: WKNavigationDelegate {
         goToAddressAfterWaking()
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
+        // The page that played is gone; the new one reports its own media.
+        browser?.nowPlaying.discard(self)
         shownHost = webView.url?.host()
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
@@ -631,6 +642,8 @@ extension Tab: WKNavigationDelegate {
     /// have been dropped to free memory. A page that takes its process down again right after
     /// reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // The media died with the process; a reload that never commits would leave it showing as playing.
+        browser?.nowPlaying.discard(self)
         guard let browser else { return }
         guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))

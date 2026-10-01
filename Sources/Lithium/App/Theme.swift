@@ -52,6 +52,7 @@ enum Preference {
     static let sidebarStyle = "sidebarStyle"
     static let sidebarColor = "sidebarColor"
     static let sidebarReveal = "sidebarReveal"
+    static let miniPlayer = "sidebarMiniPlayer"
     static let websiteFont = "dmSansOnWebsites"
     static let pdfSidebar = "pdfSidebar"
     static let videoPopoutCorner = "videoPopoutCorner"

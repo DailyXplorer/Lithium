@@ -51,6 +51,7 @@ enum Theme {
 enum Preference {
     static let sidebarStyle = "sidebarStyle"
     static let sidebarColor = "sidebarColor"
+    static let sidebarReveal = "sidebarReveal"
     static let websiteFont = "dmSansOnWebsites"
     static let pdfSidebar = "pdfSidebar"
     static let videoPopoutCorner = "videoPopoutCorner"
@@ -66,6 +67,47 @@ enum SidebarStyle: String, CaseIterable, Identifiable {
         switch self {
         case .solid: "Solid Color"
         case .translucent: "Translucent"
+        }
+    }
+}
+
+/// How eagerly the collapsed sidebar slides out from the window's left edge, and how long it
+/// stays once the pointer wanders off it.
+enum SidebarReveal: String, CaseIterable, Identifiable {
+    case responsive, normal, calm
+    var id: Self { self }
+    var label: String {
+        switch self {
+        case .responsive: "Responsive"
+        case .normal: "Normal"
+        case .calm: "Calm"
+        }
+    }
+
+    /// How long the pointer rests on the edge before the panel opens, so brushing past it doesn't.
+    var openDelay: Duration {
+        switch self {
+        case .responsive: .milliseconds(50)
+        case .normal: .milliseconds(150)
+        case .calm: .milliseconds(300)
+        }
+    }
+
+    /// How long the pointer stays off the panel and its margin before the panel closes.
+    var closeDelay: Duration {
+        switch self {
+        case .responsive: .milliseconds(300)
+        case .normal: .milliseconds(600)
+        case .calm: .milliseconds(1200)
+        }
+    }
+
+    /// Invisible band around the open panel that still counts as being on it.
+    var margin: CGFloat {
+        switch self {
+        case .responsive: 24
+        case .normal: 48
+        case .calm: 80
         }
     }
 }

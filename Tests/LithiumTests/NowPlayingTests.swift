@@ -193,41 +193,148 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === second, "a WebKit that can't tell leaves the iframe's word")
     }
 
-    /// While the mini player is off, nothing in the page tells Lithium from Safari.
-    @Test func givesPagesNoChannelWhenOff() async throws {
+    /// One sound at a time, the mini player shown or not.
+    @Test func pausesTheTabHeardBefore() {
         let defaults = UserDefaults.standard
         let saved = defaults.object(forKey: Preference.miniPlayer)
         defer { defaults.set(saved, forKey: Preference.miniPlayer) }
+        defaults.set(false, forKey: Preference.miniPlayer)
         let browser = Browser()
-        let hasScript = { (configuration: WKWebViewConfiguration) in
-            configuration.userContentController.userScripts.contains { $0.source == NowPlaying.script.source }
-        }
-        let channel = { (webView: WKWebView) async throws -> String? in
-            webView.loadHTMLString("<title>Page</title>", baseURL: URL(string: "https://example.com/"))
-            for _ in 0..<100 where webView.isLoading || webView.title != "Page" {
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            return try await webView.evaluateJavaScript("typeof window.webkit?.messageHandlers?.lithiumNowPlaying") as? String
-        }
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        player.isHeard = { _ in true }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
+        player.receive(playing, from: first)
+        #expect(paused.isEmpty)
+        player.receive(playing, from: second)
+        #expect(paused == [first])
+        player.receive(stopped, from: first)
+        player.receive(playing, from: first)
+        #expect(paused == [first, second], "resumed, the first tab pauses the second")
+        player.receive(playing, from: first)
+        #expect(paused == [first, second], "a tab never pauses itself")
+    }
+
+    /// A call's participants are heard through the page's media: other sound mustn't silence them.
+    @Test func pausesNoTabInACall() {
+        let browser = Browser()
+        let (call, video, other) = (browser.newTab(), browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        player.isInCall = { $0 === call }
+        player.isHeard = { _ in true }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+
+        player.receive(playing, from: call)
+        player.receive(playing, from: video)
+        #expect(player.tab === video && paused.isEmpty, "the call goes on, the video takes the player")
+        player.receive(playing, from: other)
+        #expect(paused == [video], "a tab not in a call still pauses")
+    }
+
+    /// Any script of a page can post that it plays: the page's word takes the player, but only
+    /// WebKit's ear pauses another tab, maybe a report later, once the media loaded.
+    @Test func pausesTheTabHeardBeforeOnlyOnceWebKitHearsTheNewOne() {
+        let browser = Browser()
+        let (first, second, third) = (browser.newTab(), browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        var heard: Bool? = true
+        player.isHeard = { $0 === first ? true : heard }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
+
+        player.receive(playing, from: first)
+        heard = false
+        player.receive(playing, from: second)
+        #expect(player.tab === second && paused.isEmpty, "a page's word alone")
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused == [first], "heard on its next report")
+        player.receive(playing, from: second)
+        #expect(paused == [first], "paused once")
+
+        player.receive(playing, from: first)
+        paused = []
+        heard = false
+        player.receive(playing, from: second)
+        player.receive(stopped, from: second)
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused.isEmpty, "paused before WebKit heard it, it pauses nothing later")
+
+        player.receive(playing, from: first)
+        paused = []
+        heard = false
+        player.receive(playing, from: second)
+        browser.close(first)
+        heard = true
+        player.receive(playing, from: second)
+        #expect(paused.isEmpty, "the tab heard before closed meanwhile")
+
+        player.receive(playing, from: third)
+        #expect(paused == [second], "heard at once")
+        paused = []
+        heard = nil
+        player.receive(playing, from: second)
+        #expect(paused == [third], "a WebKit that can't tell leaves the page's word")
+    }
+
+    @Test func pausesNothingForMediaNotHeard() {
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.pause = { paused.append($0) }
+        player.isHeard = { _ in false }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
+        let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
+        let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
+
+        player.receive(playing, from: first, frame: page)
+        player.receive(muted, from: second)
+        #expect(paused.isEmpty, "a muted preview")
+        player.receive(playing, from: second, frame: embed)
+        #expect(paused.isEmpty, "an iframe, perhaps an ad's, WebKit doesn't hear")
+        player.isHeard = { _ in true }
+        player.receive(playing, from: first, frame: embed)
+        #expect(player.tab === first && paused.isEmpty, "another frame of the same tab")
+
+        player.receive(stopped, from: first, frame: embed)
+        player.receive(playing, from: second)
+        #expect(player.tab === second && paused.isEmpty, "a tab already paused")
+        player.receive(muted, from: second)
+        player.receive(playing, from: first, frame: page)
+        #expect(player.tab === first && paused.isEmpty, "a tab playing muted")
+    }
+
+    /// Mini player shown or not, pages report what they play.
+    @Test func givesPagesTheChannelWhenOff() async throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: Preference.miniPlayer)
+        defer { defaults.set(saved, forKey: Preference.miniPlayer) }
         defaults.set(false, forKey: Preference.miniPlayer)
+        let browser = Browser()
         let off = browser.makeConfiguration()
-        #expect(!hasScript(off))
+        #expect(off.userContentController.userScripts.contains { $0.source == NowPlaying.script.source })
+
         let webView = WKWebView(frame: .zero, configuration: off)
-        #expect(try await channel(webView) == "undefined")
-
-        defaults.set(true, forKey: Preference.miniPlayer)
-        let on = browser.makeConfiguration()
-        #expect(hasScript(on))
-        #expect(try await channel(WKWebView(frame: .zero, configuration: on)) == "object")
-
-        browser.nowPlaying.install(on: off.userContentController)
-        #expect(try await channel(webView) == "object", "turned on, the next page gets it")
-        defaults.set(false, forKey: Preference.miniPlayer)
+        webView.loadHTMLString("<title>Page</title>", baseURL: URL(string: "https://example.com/"))
+        for _ in 0..<100 where webView.isLoading || webView.title != "Page" {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let channel = try await webView.evaluateJavaScript("typeof window.webkit?.messageHandlers?.lithiumNowPlaying") as? String
+        #expect(channel == "object")
         off.userContentController.removeAllUserScripts()
         browser.nowPlaying.install(on: off.userContentController)
-        #expect(!hasScript(off))
-        #expect(try await channel(webView) == "undefined", "turned off, the next page doesn't")
+        #expect(off.userContentController.userScripts.count { $0.source == NowPlaying.script.source } == 1, "before the next page, the channel already there")
     }
 
     /// Back from the back-forward cache, a page's media are paused, and the tab lost the player
@@ -523,6 +630,26 @@ struct NowPlayingPageTests {
         #expect(try await page.run("return \(video).paused") as? Bool == false, "the page itself plays nothing")
         await NowPlaying.run("pause", in: page.webView, frame: frame)
         #expect(await waitUntil { try await page.run("return \(video).paused") as? Bool == true })
+        #expect(await waitUntil { page.last?.isPaused == true })
+    }
+
+    /// What another tab's sound does to this one: every media stops, the iframe's too, and the page says so.
+    @Test func pausesEveryFrame() async throws {
+        let page = try await PlayingPage("""
+            <video src="red.mp4" loop playsinline></video>
+            <iframe srcdoc="<video src='red.mp4' loop playsinline></video>"></iframe>
+            """)
+        defer { page.close() }
+        let embedded = "document.querySelector('iframe').contentDocument.querySelector('video')"
+        #expect(await waitUntil { try await page.run("return !!\(embedded)") as? Bool == true })
+        try await page.play("document.querySelector('video')")
+        try await page.play(embedded)
+        #expect(await waitUntil { page.last?.isPaused == false })
+
+        await page.webView.pauseAllMediaPlayback()
+        #expect(await waitUntil {
+            try await page.run("return document.querySelector('video').paused && \(embedded).paused") as? Bool == true
+        })
         #expect(await waitUntil { page.last?.isPaused == true })
     }
 

@@ -89,8 +89,9 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     static let name = "lithiumNowPlaying"
 
-    /// On by default. Pages loaded while it is off get neither the script nor its channel, which
-    /// any script of the page could see to tell Lithium from Safari.
+    /// Whether the sidebar shows the player, on by default. Pages get the script and its channel
+    /// either way, which any script of the page could see to tell Lithium from Safari: a tab
+    /// that starts playing sound pauses the one heard before, player shown or not.
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: Preference.miniPlayer) as? Bool ?? true
     }
@@ -111,12 +112,23 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored private var expected: (isPaused: Bool, until: Date)?
     /// Ends the last toggle's wait; awaited in tests, where the main actor may run it late.
     @ObservationIgnored private(set) var settling: Task<Void, Never>?
+    /// The tab heard before the one holding the player, paused once WebKit hears the new one too:
+    /// a page's word alone silences no other tab. WebKit may hear it only a report later, once
+    /// the media loaded (the script reports at `play`, then at `playing`).
+    @ObservationIgnored private weak var unpaused: Tab?
 
     static let settle: TimeInterval = 1.5
 
     @ObservationIgnored weak var browser: Browser?
     /// Whether WebKit hears the tab, nil when it can't tell; replaced in tests.
     @ObservationIgnored var isHeard: (Tab) -> Bool? = { $0.isPlayingAudio }
+    /// Whether the tab is in a call, which no other sound pauses; replaced in tests.
+    @ObservationIgnored var isInCall: (Tab) -> Bool = { $0.isInCall }
+    /// Pauses every media of the tab, in all its frames and in the floating player; replaced in tests.
+    @ObservationIgnored var pause: (Tab) -> Void = { tab in
+        guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
+        Task { await webView.pauseAllMediaPlayback() }
+    }
     /// The content controllers that have the channel.
     @ObservationIgnored private let channels = NSHashTable<WKUserContentController>.weakObjects()
 
@@ -126,20 +138,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         tab === popout ? nil : tab
     }
 
-    /// Gives the controller the script and its channel, or neither, as the setting is now: when a
-    /// configuration is made and before each page. The channel changes only with the setting:
-    /// the page still shown when a navigation turns into a download keeps the one it took.
+    /// Gives the controller the script, when a configuration is made and before each page, and
+    /// the channel once.
     func install(on controller: WKUserContentController) {
-        if Self.isEnabled != channels.contains(controller) {
-            if Self.isEnabled {
-                controller.add(self, contentWorld: .page, name: Self.name)
-                channels.add(controller)
-            } else {
-                controller.removeScriptMessageHandler(forName: Self.name, contentWorld: .page)
-                channels.remove(controller)
-            }
+        if !channels.contains(controller) {
+            controller.add(self, contentWorld: .page, name: Self.name)
+            channels.add(controller)
         }
-        if Self.isEnabled { controller.addUserScript(Self.script) }
+        controller.addUserScript(Self.script)
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -155,13 +161,29 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// the player is free; the frame in it updates it, muted too, or leaves it with nothing to play.
     /// An iframe takes it only if WebKit hears the tab too: any page, or an ad in it, may say it
     /// plays. The page itself is taken at its word; it is the site the user went to.
+    /// One sound at a time: a tab taking the player from another that was heard pauses it once
+    /// WebKit hears it as well, unless that one is in a call, whose participants it would silence.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let claims = { (media: Media) in
             !media.isPaused && media.isAudible && (!frame.isSubframe || self.isHeard(tab) != false)
         }
         if let media, holds || claims(media) || media.isRestored && self.tab == nil {
-            if !holds { expected = nil }
+            if !holds {
+                expected = nil
+                unpaused = nil
+                if let previous = self.tab, previous !== tab, let heard = self.media, !heard.isPaused, heard.isAudible {
+                    unpaused = previous
+                }
+            }
+            if let previous = unpaused, !media.isPaused, media.isAudible {
+                if isHeard(tab) != false {
+                    unpaused = nil
+                    if !isInCall(previous) { pause(previous) }
+                }
+            } else {
+                unpaused = nil
+            }
             self.tab = tab
             self.frame = frame
             reported = media
@@ -173,8 +195,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     /// The tab closed, fell asleep, or went to another page.
     func discard(_ tab: Tab) {
+        if tab === unpaused { unpaused = nil }
         guard tab === self.tab else { return }
         self.tab = nil
+        unpaused = nil
         frame = nil
         media = nil
         reported = nil

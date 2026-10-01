@@ -73,7 +73,7 @@ struct BrowserCommands: Commands {
         }
         CommandGroup(before: .sidebar) {
             Button(browser.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
-                withAnimation(.snappy(duration: 0.2)) { browser.isSidebarVisible.toggle() }
+                withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
             }
             .keyboardShortcut("b")
             Button("Reload Page") { browser.selectedTab?.reload() }

@@ -278,6 +278,10 @@ extension Extensions: WKWebExtensionControllerDelegate {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         } else if let content = NSApp.keyWindow?.contentView {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
+        } else {
+            // WebKit counts a popup it asked for as open until it is closed, and refuses the
+            // extension's `action.openPopup()` meanwhile: 1Password's Unlock button did nothing.
+            action.closePopup()
         }
     }
 

@@ -197,7 +197,7 @@ private struct SidebarPeek: View {
         }
         .onChange(of: zone) { update() }
         .onChange(of: browser.renamingTabID) { update() }
-        .onChange(of: browser.selectedTabID) {
+        .onChange(of: browser.tabPickToken) {
             guard browser.renamingTabID == nil else { return }
             pending?.cancel()
             setShown(false)

@@ -26,8 +26,13 @@ struct ExtensionCompatibilityTests {
             const policy = chrome.storage.managed.get(null);
             chrome.runtime.onMessage.addListener((message, sender, respond) => { policy.then((managed) => respond(`pong ${JSON.stringify(managed)}`)); return true; });
             """,
+        // Asked again until the background has started.
         "content.js": """
-            chrome.runtime.sendMessage('ping', {}, (reply) => document.documentElement.setAttribute('data-reply', reply ?? chrome.runtime.lastError?.message ?? 'nothing'));
+            const ask = () => chrome.runtime.sendMessage({ name: 'ping' }, {}, (reply) => {
+                document.documentElement.setAttribute('data-reply', reply ?? chrome.runtime.lastError?.message ?? 'nothing');
+                if (!reply) setTimeout(ask, 200);
+            });
+            ask();
             """,
     ]
 
@@ -62,7 +67,7 @@ struct ExtensionCompatibilityTests {
         var reply: String?
         for _ in 0..<100 {
             reply = try? await tab.webView.callAsyncJavaScript("return document.documentElement.getAttribute('data-reply')", contentWorld: .page) as? String
-            if reply != nil { break }
+            if reply?.hasPrefix("pong") == true { break }
             try await Task.sleep(for: .milliseconds(100))
         }
         #expect(reply == "pong {}")

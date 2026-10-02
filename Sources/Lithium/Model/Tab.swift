@@ -134,6 +134,8 @@ final class Tab: NSObject, Identifiable {
 
     func load(_ request: URLRequest) {
         guard let url = request.url else { return }
+        // Dropped as when sleeping, the web view is made again, with the address's configuration.
+        if let browser, needsNewWebView(for: url) { sleep(configuration: browser.makeConfiguration(for: url)) }
         self.url = url
         isAsleep = false
         sleepingState = nil
@@ -146,6 +148,24 @@ final class Tab: NSObject, Identifiable {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
             webView.load(request)
+        }
+    }
+
+    /// WebKit shows an extension's pages only in a web view made with its configuration, and
+    /// nothing else in one: it drops the load without a word. Going between them takes a new
+    /// web view, without the old page's history.
+    private func needsNewWebView(for url: URL) -> Bool {
+        guard let shown = loadedWebView?.url, let current = Self.owner(of: shown), let next = Self.owner(of: url) else { return false }
+        return current != next
+    }
+
+    /// The extension whose configuration a page loads in, "" for Lithium's; nil for addresses
+    /// that load in whichever they are opened from (about:, blob:, data:).
+    private static func owner(of url: URL) -> String? {
+        switch url.scheme?.lowercased() {
+        case Extensions.scheme: url.host()
+        case "http", "https", "file", Internal.scheme: ""
+        default: nil
         }
     }
 
@@ -539,7 +559,12 @@ extension Tab: WKNavigationDelegate {
             if isMainFrame { goToAddressAfterWaking() }
             return (.cancel, preferences)
         }
-
+        // An extension's page sending its tab to a website (1Password's Sign In button) goes on
+        // in a new web view. Only that way round: a website may not open an extension's pages.
+        if isMainFrame, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
+            Task { self.load(action.request) }
+            return (.cancel, preferences)
+        }
 
         // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
         // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in

@@ -20,7 +20,7 @@ enum ExtensionCompatibility {
               var background = manifest["background"] as? [String: Any],
               let original = background["service_worker"] as? String else { return }
         let script = folder.appending(path: Self.script)
-        if (try? Data(contentsOf: script)) != source { try source.write(to: script) }
+        if (try? Data(contentsOf: script)) != source { try source.write(to: script, options: .atomic) }
 
         let directory = (original as NSString).deletingLastPathComponent
         let name = (original as NSString).lastPathComponent
@@ -29,9 +29,9 @@ enum ExtensionCompatibility {
         let load = background["type"] as? String == "module"
             ? "import \"/\(Self.script)\";\nimport \"./\(name)\";\n"
             : "importScripts(\"/\(Self.script)\", \"\(name)\");\n"
-        try Data(load.utf8).write(to: folder.appending(path: directory).appending(path: worker))
+        try Data(load.utf8).write(to: folder.appending(path: directory).appending(path: worker), options: .atomic)
         background["service_worker"] = (directory as NSString).appendingPathComponent(worker)
         manifest["background"] = background
-        try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes]).write(to: file)
+        try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes]).write(to: file, options: .atomic)
     }
 }

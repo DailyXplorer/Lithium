@@ -58,8 +58,12 @@ tests=$!
     kill -- -"$tests"
 ) &
 watchdog=$!
-# Out of the terminal's process group, the tests would outlive a ⌃C.
-trap 'kill -- -"$tests" -"$watchdog" 2>/dev/null; exit 130' INT TERM
+# Out of the terminal's process group, the tests would outlive a ⌃C or a closed terminal.
+# Exits 128 + the signal number, as if the signal had killed the script.
+stop() { kill -- -"$tests" -"$watchdog" 2>/dev/null; exit $((128 + $1)); }
+trap 'stop 1' HUP
+trap 'stop 2' INT
+trap 'stop 15' TERM
 
 wait "$tests"
 status=$?

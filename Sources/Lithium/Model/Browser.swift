@@ -20,7 +20,7 @@ final class Browser {
         }
     }
     private(set) var addressFocusToken = 0
-    /// Moves when the user switches to another tab, not when closing one moves the selection, so
+    /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection, so
     /// the peeked sidebar can slide back on a pick yet stay out while tabs close in a row.
     private(set) var tabPickToken = 0
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
@@ -299,6 +299,7 @@ final class Browser {
         find.hide()
         // Left for the address bar: it counts as used until now.
         selectedTab?.markActive()
+        if selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
         requestAddressFocus()
     }

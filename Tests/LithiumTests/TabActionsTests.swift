@@ -113,6 +113,24 @@ struct TabActionsTests {
         #expect(browser.tabPickToken == picks)
     }
 
+    @Test func leavingATabForTheStartPageCountsAsAPick() {
+        let browser = browser(with: ["a"])
+        browser.select(tab("a", in: browser))
+        var picks = browser.tabPickToken
+
+        browser.newTabFocusingAddress()
+        #expect(browser.selectedTab == nil)
+        #expect(browser.tabPickToken == picks + 1)
+        browser.newTabFocusingAddress()
+        #expect(browser.tabPickToken == picks + 1, "already on the start page")
+
+        browser.select(tab("a", in: browser))
+        picks = browser.tabPickToken
+        browser.closeSelectedTab()
+        #expect(browser.selectedTab == nil, "the start page")
+        #expect(browser.tabPickToken == picks)
+    }
+
     @Test func closingTabsBelowTheSelectionIsNotAPick() {
         let browser = browser(with: ["a", "b", "c"])
         browser.select(tab("c", in: browser))

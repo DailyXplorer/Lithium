@@ -20,6 +20,9 @@ final class Browser {
         }
     }
     private(set) var addressFocusToken = 0
+    /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection, so
+    /// the peeked sidebar can slide back on a pick yet stay out while tabs close in a row.
+    private(set) var tabPickToken = 0
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
@@ -296,6 +299,7 @@ final class Browser {
         find.hide()
         // Left for the address bar: it counts as used until now.
         selectedTab?.markActive()
+        if selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
         requestAddressFocus()
     }
@@ -333,9 +337,10 @@ final class Browser {
         }
     }
 
-    func select(_ tab: Tab) {
+    func select(_ tab: Tab, picked: Bool = true) {
         let previous = selectedTab
         if tab.id != selectedTabID {
+            if picked { tabPickToken &+= 1 }
             find.hide()
             previous?.markActive()
         }
@@ -380,14 +385,14 @@ final class Browser {
     /// Favorites' pages stay open, as Chrome keeps pinned tabs. Tabs close bottom up, so ⇧⌘T
     /// brings them back top down, each where it was.
     func closeOtherTabs(than tab: Tab) {
-        select(tab)
+        select(tab, picked: false)
         regularTabs.reversed().filter { $0 !== tab }.forEach(close)
     }
 
     func closeTabs(below tab: Tab) {
         let below = tabs(below: tab)
         // Selected first, so the selection doesn't walk through (and wake) the tabs about to close.
-        if below.contains(where: { $0.id == selectedTabID }) { select(tab) }
+        if below.contains(where: { $0.id == selectedTabID }) { select(tab, picked: false) }
         below.reversed().forEach(close)
     }
 

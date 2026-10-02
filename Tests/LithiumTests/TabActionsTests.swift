@@ -88,6 +88,58 @@ struct TabActionsTests {
         #expect(names(browser) == ["a", "b", "c"])
     }
 
+    /// The peeked sidebar slides back when `tabPickToken` moves.
+    @Test func onlyPickingAnotherTabCountsAsAPick() {
+        let browser = browser(with: ["a", "b", "c", "d", "e"])
+        browser.select(tab("a", in: browser))
+        var picks = browser.tabPickToken
+
+        browser.select(tab("a", in: browser))
+        #expect(browser.tabPickToken == picks, "the tab already shown")
+        browser.select(tab("b", in: browser))
+        #expect(browser.tabPickToken == picks + 1)
+        browser.selectAdjacentTab(1)
+        #expect(name(browser.selectedTab) == "c")
+        #expect(browser.tabPickToken == picks + 2)
+        picks = browser.tabPickToken
+
+        browser.close(tab("c", in: browser))
+        #expect(name(browser.selectedTab) == "d")
+        browser.closeSelectedTab()
+        browser.closeOtherTabs(than: tab("a", in: browser))
+        #expect(names(browser) == ["a"])
+        browser.closeSelectedTab()
+        #expect(browser.selectedTab == nil, "the start page")
+        #expect(browser.tabPickToken == picks)
+    }
+
+    @Test func leavingATabForTheStartPageCountsAsAPick() {
+        let browser = browser(with: ["a"])
+        browser.select(tab("a", in: browser))
+        var picks = browser.tabPickToken
+
+        browser.newTabFocusingAddress()
+        #expect(browser.selectedTab == nil)
+        #expect(browser.tabPickToken == picks + 1)
+        browser.newTabFocusingAddress()
+        #expect(browser.tabPickToken == picks + 1, "already on the start page")
+
+        browser.select(tab("a", in: browser))
+        picks = browser.tabPickToken
+        browser.closeSelectedTab()
+        #expect(browser.selectedTab == nil, "the start page")
+        #expect(browser.tabPickToken == picks)
+    }
+
+    @Test func closingTabsBelowTheSelectionIsNotAPick() {
+        let browser = browser(with: ["a", "b", "c"])
+        browser.select(tab("c", in: browser))
+        let picks = browser.tabPickToken
+        browser.closeTabs(below: tab("a", in: browser))
+        #expect(name(browser.selectedTab) == "a")
+        #expect(browser.tabPickToken == picks)
+    }
+
     @Test func canReopenOnlyWhatWasClosed() {
         let browser = Browser()
         #expect(!browser.canReopenClosedTab)

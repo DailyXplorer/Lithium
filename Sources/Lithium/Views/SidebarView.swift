@@ -98,7 +98,7 @@ private struct PinGrid: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isTargeted ? palette.ink.opacity(0.08) : .clear)
+                .fill(isTargeted ? palette.tile : .clear)
                 .padding(-4)
         )
         // Space around the tiles: a tab is pinned at the end, a favorite moves to the end.
@@ -140,8 +140,7 @@ private struct PinTile: View {
         let live = browser.liveTab(for: pin)
         let isSelected = live != nil && live?.id == browser.selectedTabID
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(isSelected ? palette.selection : palette.tile)
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(isHovered && !isSelected ? palette.hover : .clear))
+            .fill(palette.tileFill(isSelected: isSelected, isHovered: isHovered))
             .frame(height: 48)
             .overlay {
                 Favicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, size: 20)
@@ -303,7 +302,7 @@ private struct SidebarRow<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? palette.selection : (isHovered ? palette.hover : .clear))
+                    .fill(palette.rowFill(isSelected: isSelected, isHovered: isHovered))
             )
             .contentShape(Rectangle())
             .onTapGesture(perform: action)

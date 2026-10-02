@@ -116,23 +116,64 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
 }
 
 /// Colors for everything drawn on the sidebar background (sidebar, toolbar, window margins).
+/// Surfaces are black laid over that background: the chosen color, only darker, in Solid and
+/// Translucent alike. White washed a colored sidebar out to grey. A near-black sidebar has no
+/// darker left, so there the surfaces are the same color lighter: a dark grey of its hue.
 struct SidebarPalette {
     let ink: Color
     let isDark: Bool
+    private let overlay: Color
+    private let steps: (tile: Double, tileHover: Double, selection: Double)
 
-    var selection: Color { isDark ? .white.opacity(0.16) : .white.opacity(0.85) }
-    var tile: Color { isDark ? .white.opacity(0.08) : .white.opacity(0.4) }
-    var hover: Color { ink.opacity(0.07) }
-    var field: Color { ink.opacity(0.06) }
+    /// Favorites, the mini player and the address field at rest.
+    var tile: Color { overlay.opacity(steps.tile) }
+    /// A hovered tab row or button takes a favorite's color: the sidebar has one raised surface.
+    var hover: Color { tile }
+    /// A hovered favorite, one step past its resting color.
+    var tileHover: Color { overlay.opacity(steps.tileHover) }
+    /// The current tab or favorite, well past hover. A dark color needs more black for a step
+    /// the eye still sees.
+    var selection: Color { overlay.opacity(steps.selection) }
+    var field: Color { tile }
+
+    func tileFill(isSelected: Bool, isHovered: Bool) -> Color {
+        isSelected ? selection : isHovered ? tileHover : tile
+    }
+
+    /// Nothing behind a tab row at rest.
+    func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
+        isSelected ? selection : isHovered ? hover : .clear
+    }
+
+    /// Under this brightest channel a resting tile's 18 % black takes less than 0.018 off every
+    /// channel, under five 8-bit levels: the eye loses it. Luminance would call pure blue near-black.
+    /// `#1E1E24` (0.14) still darkens, `#0A0A14` (0.08) lifts.
+    private static let nearBlack = 0.1
+    /// Under this brightest channel, 12 % more black for hover takes off under five levels: dim
+    /// sidebars get wider steps.
+    private static let dim = 0.2
 
     init(style: SidebarStyle, colorHex: String, scheme: ColorScheme) {
+        var brightness = 1.0
+        var tint = Color.white
         switch style {
         case .solid:
-            isDark = Color(hex: colorHex).luminance < 0.45
+            let color = Color(hex: colorHex)
+            isDark = color.luminance < 0.45
+            brightness = color.brightness
+            tint = color.lightTint
         case .translucent:
+            // The dark material lays its own grey fill over the desktop, never near-black.
             isDark = scheme == .dark
         }
         ink = isDark ? .white : Color(white: 0.1)
+        if brightness < Self.nearBlack {
+            overlay = tint
+            steps = (0.06, 0.11, 0.17)
+        } else {
+            overlay = .black
+            steps = brightness < Self.dim ? (0.22, 0.42, 0.66) : isDark ? (0.18, 0.3, 0.5) : (0.06, 0.1, 0.17)
+        }
     }
 }
 
@@ -158,6 +199,26 @@ extension Color {
             Int((color.redComponent * 255).rounded()),
             Int((color.greenComponent * 255).rounded()),
             Int((color.blueComponent * 255).rounded())
+        )
+    }
+
+    /// The brightest channel: dark in every channel only when this is low.
+    var brightness: Double {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
+        return max(color.redComponent, color.greenComponent, color.blueComponent)
+    }
+
+    /// The same hue at full brightness, halfway to white. Laid over the color it lightens without
+    /// shifting the hue, and it is never the color itself, even a saturated one. White for black.
+    var lightTint: Color {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
+        let peak = brightness
+        guard peak > 0 else { return .white }
+        return Color(
+            .sRGB,
+            red: 0.5 + 0.5 * color.redComponent / peak,
+            green: 0.5 + 0.5 * color.greenComponent / peak,
+            blue: 0.5 + 0.5 * color.blueComponent / peak
         )
     }
 

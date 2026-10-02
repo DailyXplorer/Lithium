@@ -149,7 +149,7 @@ private struct SnapshotScene: View {
                         .frame(height: 34)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(index == 0 ? palette.selection : index == 1 ? palette.hover : .clear)
+                                .fill(palette.rowFill(isSelected: index == 0, isHovered: index == 1))
                         )
                     }
                     Spacer()

@@ -82,7 +82,7 @@ private func channelStep(_ a: (r: Double, g: Double, b: Double), _ b: (r: Double
 }
 
 private func surfaces(_ palette: SidebarPalette) -> [Color] {
-    [palette.tile, palette.hover, palette.tileHover, palette.selection, palette.field]
+    [palette.tile, palette.hover, palette.rowHover, palette.tileHover, palette.selection, palette.field]
 }
 
 @MainActor
@@ -149,11 +149,28 @@ struct SidebarPaletteTests {
         }
     }
 
+    /// The current tab keeps a resting favorite's color, hovered or not. Another hovered tab lies
+    /// between the sidebar and the current tab, so the pointer never makes a second row look current.
     @Test(arguments: Backdrop.all)
-    fileprivate func hoveredRowMatchesARestingFavorite(_ backdrop: Backdrop) {
+    fileprivate func hoveredRowLiesBetweenTheSidebarAndTheCurrentTab(_ backdrop: Backdrop) {
         let palette = backdrop.palette
-        #expect(palette.rowFill(isSelected: false, isHovered: true) == palette.tileFill(isSelected: false, isHovered: false))
+        let resting = palette.tileFill(isSelected: false, isHovered: false)
+        #expect(palette.rowFill(isSelected: true, isHovered: false) == resting)
+        #expect(palette.rowFill(isSelected: true, isHovered: true) == resting)
+        #expect(palette.rowFill(isSelected: false, isHovered: true) == palette.rowHover)
         #expect(palette.rowFill(isSelected: false, isHovered: false) == .clear)
+
+        let sidebar = composite(.clear, over: backdrop.hex)
+        let hovered = composite(palette.rowHover, over: backdrop.hex)
+        let current = composite(resting, over: backdrop.hex)
+        #expect((luminance(hovered) - luminance(sidebar)) * (luminance(current) - luminance(hovered)) > 0, "\(backdrop.name) hovered row is not between")
+        // On very-dark and translucent-dark a resting favorite is under ten levels from the sidebar:
+        // no hover leaves five on each side, so halfway is the widest both steps can be.
+        let floor = min(5, channelStep(sidebar, current) * 255 / 2) - 0.01
+        for (state, (before, after)) in [("hovered", (sidebar, hovered)), ("current", (hovered, current))] {
+            let levels = channelStep(before, after) * 255
+            #expect(levels >= floor, "\(backdrop.name) \(state) row is \(levels) levels from the step before")
+        }
     }
 
     /// Resting, hovered and selected each a visible step darker than the one before.
@@ -167,7 +184,6 @@ struct SidebarPaletteTests {
         #expect(resting < sidebar * 0.95, "\(backdrop.name) resting")
         #expect(hovered < resting * 0.97, "\(backdrop.name) hovered")
         #expect(selected < hovered * 0.93, "\(backdrop.name) selected")
-        #expect(palette.rowFill(isSelected: true, isHovered: false) == palette.tileFill(isSelected: true, isHovered: false))
     }
 
     @Test func darkSidebarsKeepWhiteInk() {

@@ -52,4 +52,10 @@ struct PopupAnchorTests {
         anchor.removeFromSuperview()
         #expect(!Extensions.isOnScreen(anchor))
     }
+
+    @Test func thePopupGoesToTheFirstViewOnScreen() {
+        let offScreen = NSView(frame: container.frame)
+        #expect(Extensions.firstOnScreen([nil, offScreen, container, anchor]) === container)
+        #expect(Extensions.firstOnScreen([nil, offScreen]) == nil)
+    }
 }

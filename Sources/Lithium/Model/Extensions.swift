@@ -274,16 +274,20 @@ extension Extensions: WKWebExtensionControllerDelegate {
         for context: WKWebExtensionContext
     ) async throws {
         guard let popover = action.popupPopover else { return }
-        let window = NSApp.keyWindow ?? NSApp.mainWindow ?? browser?.selectedTab?.webView.window
         if let anchor = popupAnchor, Self.isOnScreen(anchor) {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
-        } else if let content = window?.contentView, Self.isOnScreen(content) {
+        } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.selectedTab?.webView.window?.contentView]) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
         } else {
             // WebKit counts a popup it asked for as open until it is closed, and refuses the
             // extension's `action.openPopup()` meanwhile: 1Password's Unlock button did nothing.
+            // Throwing here wouldn't help: WebKit resolves that call whatever this returns.
             action.closePopup()
         }
+    }
+
+    static func firstOnScreen(_ views: [NSView?]) -> NSView? {
+        views.lazy.compactMap { $0 }.first(where: isOnScreen)
     }
 
     /// A popover shown from a view nobody can see still counts as open, so it must be on screen.

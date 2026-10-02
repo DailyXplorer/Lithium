@@ -134,6 +134,12 @@ final class Tab: NSObject, Identifiable {
 
     func load(_ request: URLRequest) {
         guard let url = request.url else { return }
+        // Dropped as when sleeping, the web view is made again, with the address's configuration.
+        // A sleeping tab has none to drop, only the configuration it would wake with.
+        if let browser, needsNewWebView(for: url) {
+            let configuration = browser.makeConfiguration(for: url)
+            if isAsleep { self.configuration = configuration } else { sleep(configuration: configuration) }
+        }
         self.url = url
         isAsleep = false
         sleepingState = nil
@@ -146,6 +152,25 @@ final class Tab: NSObject, Identifiable {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         } else {
             webView.load(request)
+        }
+    }
+
+    /// WebKit shows an extension's pages only in a web view made with its configuration, and
+    /// nothing else in one: it drops the load without a word. Going between them takes a new
+    /// web view, without the old page's history. A tab without a page shown (asleep) has the
+    /// configuration made for its address.
+    private func needsNewWebView(for url: URL) -> Bool {
+        guard let shown = loadedWebView?.url ?? self.url, let current = Self.owner(of: shown), let next = Self.owner(of: url) else { return false }
+        return current != next
+    }
+
+    /// The extension whose configuration a page loads in, "" for Lithium's; nil for addresses
+    /// that load in whichever they are opened from (about:, blob:, data:).
+    private static func owner(of url: URL) -> String? {
+        switch url.scheme?.lowercased() {
+        case Extensions.scheme: url.host()
+        case "http", "https", "file", Internal.scheme: ""
+        default: nil
         }
     }
 
@@ -540,7 +565,6 @@ extension Tab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
-
         // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
         // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
         // front only; a frame's form too (an embedded payment check or sign-in), which refused
@@ -566,13 +590,19 @@ extension Tab: WKNavigationDelegate {
         }
         // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
-        setInternalBridge(false)
-        setWebstoreBridge(ChromeWebStore.isStore(url))
 
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) {
             browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
             return (.cancel, preferences)
         }
+        // An extension's page sending its tab to a website (1Password's Sign In button) goes on
+        // in a new web view. Only that way round: a website may not open an extension's pages.
+        if ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
+            Task { self.load(action.request) }
+            return (.cancel, preferences)
+        }
+        setInternalBridge(false)
+        setWebstoreBridge(ChromeWebStore.isStore(url))
 
         if action.request.httpMethod == "GET", let clean = TrackingParameters.stripped(url) {
             Task { webView.load(URLRequest(url: clean)) }
@@ -716,6 +746,12 @@ extension Tab: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard let browser else { return nil }
+        // WebKit hands an extension's page its own configuration for the new one, which a website
+        // won't load in. It opens as a plain tab instead, without a way back to its opener.
+        if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
+            browser.newTab(url: url)
+            return nil
+        }
         browser.prepare(popup: configuration)
         let popup = browser.newTab(configuration: configuration)
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
@@ -877,10 +913,11 @@ extension Tab: WKWebExtensionTab {
     /// and goes straight on to the address: the old page's load is superseded rather than waited
     /// for. Without (a tab restored asleep from the last session), it wakes onto its old page first,
     /// and goes on once that is shown or has failed to be.
-    /// Sent to the page it slept on, it just wakes, which loads that page.
+    /// Sent to the page it slept on, it just wakes, which loads that page. Sent between an
+    /// extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         lastActive = Date()
-        guard isAsleep, let old = self.url else {
+        guard isAsleep, let old = self.url, !needsNewWebView(for: url) else {
             load(url)
             return
         }

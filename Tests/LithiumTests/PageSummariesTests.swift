@@ -114,17 +114,17 @@ struct PageReaderTests {
         </body>
         """
 
-    private func load(_ html: String) async -> WKWebView {
+    private func load(_ html: String) async throws -> WKWebView {
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 800), configuration: WKWebViewConfiguration())
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString(html, baseURL: URL(string: "https://journal.example/"))
-        await loaded.wait()
+        try await loaded.wait()
         return webView
     }
 
     @Test func readsTheArticleWithoutMenusAsidesAndFooters() async throws {
-        let webView = await load(Self.page)
+        let webView = try await load(Self.page)
         let content = try #require(await PageReader.read(webView))
         #expect(content.title == "Tour Eiffel")
         #expect(content.selection == "")
@@ -142,7 +142,7 @@ struct PageReaderTests {
     }
 
     @Test func readsTheSelectedText() async throws {
-        let webView = await load(Self.page)
+        let webView = try await load(Self.page)
         _ = try await webView.evaluateJavaScript("""
             const range = document.createRange();
             range.selectNodeContents(document.querySelector('article > p'));
@@ -154,27 +154,27 @@ struct PageReaderTests {
     }
 
     @Test func readsTheSelectionInsideATextField() async throws {
-        let webView = await load(Self.page)
+        let webView = try await load(Self.page)
         _ = try await webView.evaluateJavaScript("const f = document.getElementById('field'); f.focus(); f.setSelectionRange(3, 15);")
         let content = try #require(await PageReader.read(webView))
         #expect(content.selection == "champ de sai")
     }
 
     @Test func fallsBackToTheWholePageWithoutAnArticle() async throws {
-        let webView = await load("<title>Notes</title><body><nav>Menu</nav><div><p>Première note.</p><p>Deuxième note.</p></div></body>")
+        let webView = try await load("<title>Notes</title><body><nav>Menu</nav><div><p>Première note.</p><p>Deuxième note.</p></div></body>")
         let content = try #require(await PageReader.read(webView))
         #expect(content.text == "Première note.\nDeuxième note.")
     }
 
     @Test func keepsTheTextOfAPageMadeOnlyOfExcludedElements() async throws {
-        let webView = await load("<title>App</title><body><dialog open><p>Tout le contenu est dans une boîte de dialogue.</p></dialog></body>")
+        let webView = try await load("<title>App</title><body><dialog open><p>Tout le contenu est dans une boîte de dialogue.</p></dialog></body>")
         let content = try #require(await PageReader.read(webView))
         #expect(content.text == "Tout le contenu est dans une boîte de dialogue.")
     }
 
     @Test func cutsVeryLongPages() async throws {
         let paragraph = "<p>" + String(repeating: "a", count: 999) + "</p>"
-        let webView = await load("<title>Long</title><body>" + String(repeating: paragraph, count: 210) + "</body>")
+        let webView = try await load("<title>Long</title><body>" + String(repeating: paragraph, count: 210) + "</body>")
         let content = try #require(await PageReader.read(webView))
         #expect(content.isTruncated)
         #expect(content.text.count == SummaryText.maximumLength)
@@ -223,11 +223,4 @@ func modelSummarizesRealPages() async throws {
         #expect(!written.contains("://"))
         #expect(!written.contains("PWNED"))
     }
-}
-
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

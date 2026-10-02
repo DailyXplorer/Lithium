@@ -29,17 +29,11 @@ func downloadsAndCompilesTheRealLists() async throws {
 @MainActor
 @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_NETWORK_TESTS"] == "1"))
 func readsTheCertificateOfARealPage() async throws {
-    final class Loaded: NSObject, WKNavigationDelegate {
-        var continuation: CheckedContinuation<Void, Never>?
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { continuation?.resume(); continuation = nil }
-    }
     let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
-    let loaded = Loaded()
+    let loaded = PageLoad()
     webView.navigationDelegate = loaded
-    await withCheckedContinuation { continuation in
-        loaded.continuation = continuation
-        webView.load(URLRequest(url: URL(string: "https://github.com/")!))
-    }
+    webView.load(URLRequest(url: URL(string: "https://github.com/")!))
+    try await loaded.wait()
     let info = SiteInfo(url: try #require(webView.url), trust: webView.serverTrust)
     print("certificate:", info.isSecure, info.certificate as Any)
     #expect(info.isSecure)

@@ -7,9 +7,11 @@ A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView)
 ```sh
 ./scripts/build-app.sh --run        # builds .build/Lithium.app and opens it
 ./scripts/build-app.sh --install    # installs it in /Applications
-swift test                          # unit and end-to-end tests
-CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests   # a whole Browser, in a throwaway home
+./scripts/test                      # unit and end-to-end tests
+./scripts/test --filter BrowserTests   # one suite
 ```
+
+`scripts/test` runs the tests one at a time, in a throwaway home folder (the suites running a whole Browser only run in one), and stops them if they still run after 20 minutes (`LITHIUM_TEST_MINUTES`). Run side by side, as plain `swift test` does, the Browser suites share settings and break each other. A page a test waits for that fails or never loads fails the test after 30 seconds (`Tests/LithiumTests/Support/PageLoad.swift`) instead of waiting forever.
 
 On the first build, `scripts/update-filters.py` downloads the filter lists and converts them (into `Sources/Lithium/Resources/Filters`, not versioned). Run it again to refresh the lists, then rebuild.
 

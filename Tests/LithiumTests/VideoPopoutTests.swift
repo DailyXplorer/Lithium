@@ -144,9 +144,9 @@ struct VideoPopoutTests {
               const find = () => document.querySelector('video') ? resolve(document.querySelector('video')) : setTimeout(find, 50);
               find();
             });
-            await video.play();
-            while (video.readyState < 3 || video.currentTime === 0) await new Promise((r) => setTimeout(r, 50));
-            return true;
+            await Promise.race([video.play(), new Promise((r) => setTimeout(r, 5000))]);
+            for (let i = 0; i < 200 && (video.readyState < 3 || video.currentTime === 0); i++) await new Promise((r) => setTimeout(r, 50));
+            return video.readyState >= 3 && video.currentTime > 0;
             """, contentWorld: .page) as? Bool
         #expect(started == true)
         return (webView, window)

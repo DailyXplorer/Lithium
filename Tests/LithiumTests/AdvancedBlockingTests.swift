@@ -131,7 +131,7 @@ struct AdvancedBlockingTests {
             <div class="card" id="ad"><span class="sponsored">ad</span></div>
             <div class="card" id="content"><span>article</span></div>
             """, baseURL: URL(string: "https://example.org/")!)
-        await loaded.wait()
+        try await loaded.wait()
         try await Task.sleep(for: .milliseconds(300))
 
         let result = try await webView.evaluateJavaScript("""
@@ -159,7 +159,7 @@ private final class FakeYouTube: NSObject, WKURLSchemeHandler {
         let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.load(URLRequest(url: URL(string: "lithium-test://www.youtube.com/watch")!))
-        await loaded.wait()
+        try await loaded.wait()
         return try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? String
     }
 
@@ -175,21 +175,4 @@ private final class FakeYouTube: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
-}
-
-@MainActor
-private final class PageLoad: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var finished = false
-
-    func wait() async {
-        if finished { return }
-        await withCheckedContinuation { continuation = $0 }
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        finished = true
-        continuation?.resume()
-        continuation = nil
-    }
 }

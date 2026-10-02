@@ -48,10 +48,10 @@ struct PageFontTests {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addUserScript(PageStyle.fontScript)
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString(Self.page, baseURL: URL(string: "https://example.com/")!)
-        await loaded.wait()
+        try await loaded.wait()
 
         let fonts = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String: String])
         #expect(fonts["loaded"] == "yes")
@@ -123,10 +123,10 @@ struct PageFontTests {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addUserScript(PageStyle.fontScript)
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
-        await loaded.wait()
+        try await loaded.wait()
 
         let fonts = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: String])
         #expect(fonts["monoRow"] == "Menlo")
@@ -138,12 +138,4 @@ struct PageFontTests {
         #expect(fonts["icon"] == "Font Awesome 6 Free")
         #expect(fonts["lateShadow"] == "Lithium DM Sans")
     }
-}
-
-@MainActor
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

@@ -145,28 +145,34 @@ struct SidebarPalette {
         isSelected ? selection : isHovered ? hover : .clear
     }
 
-    /// Under this luminance a resting tile's 18 % black takes less than 0.016 off the sidebar,
-    /// about four 8-bit levels: the eye loses it. `#1E1E24` (0.12) still darkens, `#111111` (0.07) lifts.
-    private static let nearBlack = 0.09
+    /// Under this brightest channel a resting tile's 18 % black takes less than 0.018 off every
+    /// channel, under five 8-bit levels: the eye loses it. Luminance would call pure blue near-black.
+    /// `#1E1E24` (0.14) still darkens, `#0A0A14` (0.08) lifts.
+    private static let nearBlack = 0.1
+    /// Under this brightest channel, 12 % more black for hover takes off under five levels: dim
+    /// sidebars get wider steps.
+    private static let dim = 0.2
 
     init(style: SidebarStyle, colorHex: String, scheme: ColorScheme) {
-        var lift: Color?
+        var brightness = 1.0
+        var tint = Color.white
         switch style {
         case .solid:
             let color = Color(hex: colorHex)
             isDark = color.luminance < 0.45
-            if color.luminance < Self.nearBlack { lift = color.brightest }
+            brightness = color.brightness
+            tint = color.lightTint
         case .translucent:
             // The dark material lays its own grey fill over the desktop, never near-black.
             isDark = scheme == .dark
         }
         ink = isDark ? .white : Color(white: 0.1)
-        if let lift {
-            overlay = lift
+        if brightness < Self.nearBlack {
+            overlay = tint
             steps = (0.06, 0.11, 0.17)
         } else {
             overlay = .black
-            steps = isDark ? (0.18, 0.3, 0.5) : (0.06, 0.1, 0.17)
+            steps = brightness < Self.dim ? (0.22, 0.42, 0.66) : isDark ? (0.18, 0.3, 0.5) : (0.06, 0.1, 0.17)
         }
     }
 }
@@ -196,13 +202,24 @@ extension Color {
         )
     }
 
-    /// The same hue at full brightness, so laying it over the color lightens without shifting
-    /// the hue. White for black, which has none.
-    var brightest: Color {
+    /// The brightest channel: dark in every channel only when this is low.
+    var brightness: Double {
         let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
-        let peak = max(color.redComponent, color.greenComponent, color.blueComponent)
+        return max(color.redComponent, color.greenComponent, color.blueComponent)
+    }
+
+    /// The same hue at full brightness, halfway to white. Laid over the color it lightens without
+    /// shifting the hue, and it is never the color itself, even a saturated one. White for black.
+    var lightTint: Color {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
+        let peak = brightness
         guard peak > 0 else { return .white }
-        return Color(.sRGB, red: color.redComponent / peak, green: color.greenComponent / peak, blue: color.blueComponent / peak)
+        return Color(
+            .sRGB,
+            red: 0.5 + 0.5 * color.redComponent / peak,
+            green: 0.5 + 0.5 * color.greenComponent / peak,
+            blue: 0.5 + 0.5 * color.blueComponent / peak
+        )
     }
 
     var luminance: Double {

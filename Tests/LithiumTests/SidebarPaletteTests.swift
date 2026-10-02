@@ -21,6 +21,13 @@ private struct Backdrop {
         Backdrop(name: "very-dark", style: .solid, hex: "#1E1E24", scheme: .dark),
         Backdrop(name: "translucent-light", style: .translucent, hex: "#E7E5EA", scheme: .light),
         Backdrop(name: "translucent-dark", style: .translucent, hex: "#2C2B30", scheme: .dark),
+        // Saturated: luminance calls the blues near-black, yet each has a channel to darken.
+        Backdrop(name: "blue", style: .solid, hex: "#0000FF", scheme: .dark),
+        Backdrop(name: "violet-blue", style: .solid, hex: "#1500FF", scheme: .dark),
+        Backdrop(name: "medium-blue", style: .solid, hex: "#0000C0", scheme: .dark),
+        Backdrop(name: "navy", style: .solid, hex: "#000080", scheme: .dark),
+        Backdrop(name: "maroon", style: .solid, hex: "#800000", scheme: .dark),
+        Backdrop(name: "dark-green", style: .solid, hex: "#006400", scheme: .dark),
     ]
     /// Too dark for black to show: these lift instead.
     static let lifted = [
@@ -51,8 +58,27 @@ private func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
 /// nothing. Black has no hue: its surfaces must be neutral grey.
 private func keepsHue(_ c: (r: Double, g: Double, b: Double), of hex: String) -> Bool {
     let bg = rgba(Color(hex: hex))
+    return proportional(c, (bg.r, bg.g, bg.b))
+}
+
+private func proportional(_ c: (r: Double, g: Double, b: Double), _ bg: (r: Double, g: Double, b: Double)) -> Bool {
     if max(bg.r, bg.g, bg.b) == 0 { return abs(c.r - c.g) < 0.001 && abs(c.g - c.b) < 0.001 }
     return abs(c.r * bg.g - c.g * bg.r) < 0.001 && abs(c.g * bg.b - c.b * bg.g) < 0.001 && abs(c.r * bg.b - c.b * bg.r) < 0.001
+}
+
+/// The hue alone, once each side's grey part (its lowest channel) is set aside: a light tint
+/// greys the color but keeps its hue. A grey sidebar's surfaces stay grey.
+private func sameHue(_ c: (r: Double, g: Double, b: Double), of hex: String) -> Bool {
+    let bg = rgba(Color(hex: hex))
+    let low = min(c.r, c.g, c.b), bgLow = min(bg.r, bg.g, bg.b)
+    let hue = (r: bg.r - bgLow, g: bg.g - bgLow, b: bg.b - bgLow)
+    if max(hue.r, hue.g, hue.b) == 0 { return max(c.r, c.g, c.b) - low < 0.001 }
+    return proportional((c.r - low, c.g - low, c.b - low), hue)
+}
+
+/// The largest change in any one channel: a step in blue counts as much as one in green.
+private func channelStep(_ a: (r: Double, g: Double, b: Double), _ b: (r: Double, g: Double, b: Double)) -> Double {
+    max(abs(a.r - b.r), abs(a.g - b.g), abs(a.b - b.b))
 }
 
 private func surfaces(_ palette: SidebarPalette) -> [Color] {
@@ -80,7 +106,7 @@ struct SidebarPaletteTests {
             let c = composite(surface, over: backdrop.hex)
             #expect(luminance(c) > sidebar, "\(backdrop.name) surface is not lighter")
             #expect(luminance(c) < 0.25, "\(backdrop.name) surface reads as light grey")
-            #expect(keepsHue(c, of: backdrop.hex), "\(backdrop.name) surface shifts the hue")
+            #expect(sameHue(c, of: backdrop.hex), "\(backdrop.name) surface shifts the hue")
         }
     }
 
@@ -95,6 +121,32 @@ struct SidebarPaletteTests {
         #expect(resting - sidebar > 0.02, "\(backdrop.name) resting")
         #expect(hovered - resting > 0.02, "\(backdrop.name) hovered")
         #expect(selected - hovered > 0.02, "\(backdrop.name) selected")
+    }
+
+    /// Sidebar, resting, hovered, selected: each at least five 8-bit levels from the one before in
+    /// some channel, whatever the color. Luminance alone is blind to a step in blue.
+    @Test(arguments: Backdrop.all)
+    fileprivate func everyStateIsAVisibleStep(_ backdrop: Backdrop) {
+        let palette = backdrop.palette
+        let shown = [
+            Color.clear,
+            palette.tileFill(isSelected: false, isHovered: false),
+            palette.tileFill(isSelected: false, isHovered: true),
+            palette.tileFill(isSelected: true, isHovered: true),
+        ].map { composite($0, over: backdrop.hex) }
+        for (state, (before, after)) in zip(["resting", "hovered", "selected"], zip(shown, shown.dropFirst())) {
+            let levels = channelStep(before, after) * 255
+            #expect(levels >= 5, "\(backdrop.name) \(state) is \(levels) levels from the step before")
+        }
+    }
+
+    /// The lifting tint is never the color itself: even over pure blue, 6 % of it shows.
+    @Test func lightTintShowsOverASaturatedColor() {
+        for hex in ["#0000FF", "#FF0000", "#00FF00"] {
+            let tinted = composite(Color(hex: hex).lightTint.opacity(0.06), over: hex)
+            #expect(channelStep(tinted, composite(.clear, over: hex)) * 255 >= 5, "\(hex)")
+            #expect(sameHue(tinted, of: hex), "\(hex)")
+        }
     }
 
     @Test(arguments: Backdrop.all)

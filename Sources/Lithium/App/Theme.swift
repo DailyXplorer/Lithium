@@ -116,14 +116,33 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
 }
 
 /// Colors for everything drawn on the sidebar background (sidebar, toolbar, window margins).
+/// Surfaces are black laid over that background: the chosen color, only darker, in Solid and
+/// Translucent alike. White washed a colored sidebar out to grey.
 struct SidebarPalette {
     let ink: Color
     let isDark: Bool
 
-    var selection: Color { isDark ? .white.opacity(0.16) : .white.opacity(0.85) }
-    var tile: Color { isDark ? .white.opacity(0.08) : .white.opacity(0.4) }
-    var hover: Color { ink.opacity(0.07) }
-    var field: Color { ink.opacity(0.06) }
+    /// Favorites, the mini player and the address field at rest.
+    var tile: Color { shade(isDark ? 0.18 : 0.06) }
+    /// A hovered tab row or button takes a favorite's color: the sidebar has one raised surface.
+    var hover: Color { tile }
+    /// A hovered favorite, one step past its resting color.
+    var tileHover: Color { shade(isDark ? 0.3 : 0.1) }
+    /// The current tab or favorite, well past hover. A dark color needs more black for a step
+    /// the eye still sees.
+    var selection: Color { shade(isDark ? 0.5 : 0.17) }
+    var field: Color { tile }
+
+    func tileFill(isSelected: Bool, isHovered: Bool) -> Color {
+        isSelected ? selection : isHovered ? tileHover : tile
+    }
+
+    /// Nothing behind a tab row at rest.
+    func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
+        isSelected ? selection : isHovered ? hover : .clear
+    }
+
+    private func shade(_ opacity: Double) -> Color { .black.opacity(opacity) }
 
     init(style: SidebarStyle, colorHex: String, scheme: ColorScheme) {
         switch style {

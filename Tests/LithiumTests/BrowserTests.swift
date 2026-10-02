@@ -342,7 +342,7 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(tab) && loaded(other) })
         let started = await run(tab, """
             const v = document.querySelector('video');
-            await v.play();
+            await Promise.race([v.play(), new Promise((r) => setTimeout(r, 5000))]);
             for (let i = 0; i < 100 && v.currentTime === 0; i++) await new Promise((r) => setTimeout(r, 50));
             return v.currentTime > 0;
             """)

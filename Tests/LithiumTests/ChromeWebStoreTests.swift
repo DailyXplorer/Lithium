@@ -209,10 +209,10 @@ struct ChromeWebStoreTests {
         configuration.userContentController.addUserScript(ChromeWebStore.script)
         configuration.userContentController.addScriptMessageHandler(extensions.webstoreBridge, contentWorld: .page, name: WebstoreBridge.name)
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        let navigation = Navigation()
+        let navigation = PageLoad()
         webView.navigationDelegate = navigation
         webView.loadHTMLString("<title>Page</title>", baseURL: URL(string: address))
-        await navigation.wait()
+        try await navigation.wait()
         return webView
     }
 
@@ -228,21 +228,5 @@ struct ChromeWebStoreTests {
         #expect(webExtension.displayName?.contains("SponsorBlock") == true)
         #expect(webExtension.manifestVersion == 3)
         #expect(webExtension.errors.isEmpty)
-    }
-}
-
-@MainActor
-private final class Navigation: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-
-    func wait() async {
-        if !done { await withCheckedContinuation { continuation = $0 } }
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        done = true
-        continuation?.resume()
-        continuation = nil
     }
 }

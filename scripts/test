@@ -1,0 +1,35 @@
+#!/bin/bash
+# Runs the tests the way they pass every time: one test at a time, in a throwaway home folder,
+# and never for longer than LITHIUM_TEST_MINUTES (20 by default). Arguments go to `swift test`:
+#   scripts/test
+#   scripts/test --filter BrowserTests
+#
+# One at a time, because the suites that run a whole Browser share its settings and home
+# folder (one sets tabs to fall asleep after 2 ms), and run side by side they slow and break
+# each other.
+set -u -m
+cd "$(dirname "$0")/.."
+
+swift build --build-tests || exit $?
+
+home=$(mktemp -d)
+trap 'rm -rf "$home"' EXIT
+
+# Each in a process group of its own (set -m), so the watchdog can stop the whole test run.
+CFFIXED_USER_HOME="$home" swift test --skip-build --no-parallel "$@" &
+tests=$!
+minutes=${LITHIUM_TEST_MINUTES:-20}
+(
+    sleep $((minutes * 60))
+    echo "scripts/test: still running after $minutes minutes, stopped. The last test started above is stuck." >&2
+    kill -- -"$tests"
+) &
+watchdog=$!
+# Out of the terminal's process group, the tests would outlive a ⌃C.
+trap 'kill -- -"$tests" -"$watchdog" 2>/dev/null; exit 130' INT TERM
+
+wait "$tests"
+status=$?
+kill -- -"$watchdog" 2>/dev/null
+wait "$watchdog" 2>/dev/null
+exit "$status"

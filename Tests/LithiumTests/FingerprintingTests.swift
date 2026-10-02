@@ -46,10 +46,10 @@ struct FingerprintingTests {
             configuration.userContentController.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString("<body></body>", baseURL: URL(string: "https://example.com/")!)
-        await loaded.wait()
+        try await loaded.wait()
         let json = try #require(try await webView.evaluateJavaScript(probe) as? String)
         return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: AnyHashable])
     }
@@ -72,12 +72,4 @@ struct FingerprintingTests {
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
     }
-}
-
-@MainActor
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

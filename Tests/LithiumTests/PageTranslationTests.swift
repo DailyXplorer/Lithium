@@ -51,10 +51,10 @@ struct PageTranslationMenuTests {
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = webView
         window.orderFrontRegardless()
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString(Self.page, baseURL: URL(string: "https://example.com/")!)
-        await loaded.wait()
+        try await loaded.wait()
         return (webView, translation, window)
     }
 
@@ -100,11 +100,4 @@ struct PageTranslationMenuTests {
         let reachable = try await webView.callAsyncJavaScript("return typeof window.webkit?.messageHandlers?.lithiumTranslate", contentWorld: .page) as? String
         #expect(reachable == "undefined")
     }
-}
-
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

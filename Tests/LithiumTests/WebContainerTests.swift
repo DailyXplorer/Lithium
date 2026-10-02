@@ -14,13 +14,13 @@ struct WebContainerTests {
         window.contentView = container
         let webView = WKWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
         container.addSubview(webView)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString("""
             <p style="height: 3000px">video</p>
             <script>window.seeks = 0; addEventListener('keydown', (event) => { if (event.key === 'ArrowRight') seeks += 1; });</script>
             """, baseURL: URL(string: "https://example.com/")!)
-        await loaded.wait()
+        try await loaded.wait()
         // Off screen, WebKit never returns keys to AppKit.
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(webView)
@@ -78,11 +78,4 @@ private final class BeepCountingWindow: NSWindow {
     override func noResponder(for eventSelector: Selector) {
         if eventSelector == #selector(NSResponder.keyDown(with:)) { unhandledKeyDowns += 1 }
     }
-}
-
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

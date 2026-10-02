@@ -32,10 +32,10 @@ struct MarkdownReaderTests {
         let configuration = WKWebViewConfiguration()
         if MarkdownReader.handles(file) { configuration.userContentController.addUserScript(MarkdownReader.script) }
         let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadFileURL(file, allowingReadAccessTo: folder)
-        await loaded.wait()
+        try await loaded.wait()
         return webView
     }
 
@@ -72,19 +72,11 @@ struct MarkdownReaderTests {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addUserScript(MarkdownReader.script)
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        let loaded = Loaded()
+        let loaded = PageLoad()
         webView.navigationDelegate = loaded
         webView.loadHTMLString("<title>Repo</title><h1>README.md</h1>", baseURL: URL(string: "https://example.com/blob/README.md")!)
-        await loaded.wait()
+        try await loaded.wait()
         #expect(try await value("document.title", in: webView) == "Repo")
         #expect(try await value("String(document.querySelector('article'))", in: webView) == "null")
     }
-}
-
-@MainActor
-private final class Loaded: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var done = false
-    func wait() async { if !done { await withCheckedContinuation { continuation = $0 } } }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { done = true; continuation?.resume() }
 }

@@ -14,7 +14,7 @@ private struct Backdrop {
 
     var palette: SidebarPalette { SidebarPalette(style: style, colorHex: hex, scheme: scheme) }
 
-    static let all = [
+    static let darkened = [
         Backdrop(name: "default", style: .solid, hex: Theme.defaultSidebarHex, scheme: .light),
         Backdrop(name: "lavender", style: .solid, hex: "#D9DCF2", scheme: .light),
         Backdrop(name: "red", style: .solid, hex: "#C0392B", scheme: .light),
@@ -22,6 +22,14 @@ private struct Backdrop {
         Backdrop(name: "translucent-light", style: .translucent, hex: "#E7E5EA", scheme: .light),
         Backdrop(name: "translucent-dark", style: .translucent, hex: "#2C2B30", scheme: .dark),
     ]
+    /// Too dark for black to show: these lift instead.
+    static let lifted = [
+        Backdrop(name: "black", style: .solid, hex: "#000000", scheme: .dark),
+        Backdrop(name: "near-black", style: .solid, hex: "#0A0A0A", scheme: .dark),
+        Backdrop(name: "near-black-grey", style: .solid, hex: "#111111", scheme: .dark),
+        Backdrop(name: "near-black-navy", style: .solid, hex: "#0A0A14", scheme: .dark),
+    ]
+    static let all = darkened + lifted
 }
 
 private func rgba(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
@@ -39,19 +47,54 @@ private func luminance(_ c: (r: Double, g: Double, b: Double)) -> Double {
     0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
 }
 
+/// Channels in the same proportions as the sidebar's, compared crosswise so black divides by
+/// nothing. Black has no hue: its surfaces must be neutral grey.
+private func keepsHue(_ c: (r: Double, g: Double, b: Double), of hex: String) -> Bool {
+    let bg = rgba(Color(hex: hex))
+    if max(bg.r, bg.g, bg.b) == 0 { return abs(c.r - c.g) < 0.001 && abs(c.g - c.b) < 0.001 }
+    return abs(c.r * bg.g - c.g * bg.r) < 0.001 && abs(c.g * bg.b - c.b * bg.g) < 0.001 && abs(c.r * bg.b - c.b * bg.r) < 0.001
+}
+
+private func surfaces(_ palette: SidebarPalette) -> [Color] {
+    [palette.tile, palette.hover, palette.tileHover, palette.selection, palette.field]
+}
+
 @MainActor
 struct SidebarPaletteTests {
     /// Same hue, darker: every channel shrinks by the same factor, so nothing turns white or grey.
-    @Test(arguments: Backdrop.all)
+    @Test(arguments: Backdrop.darkened)
     fileprivate func surfacesAreTheSidebarColorDarker(_ backdrop: Backdrop) {
-        let palette = backdrop.palette
-        let bg = rgba(Color(hex: backdrop.hex))
-        for surface in [palette.tile, palette.hover, palette.tileHover, palette.selection, palette.field] {
+        let sidebar = luminance(composite(.clear, over: backdrop.hex))
+        for surface in surfaces(backdrop.palette) {
             let c = composite(surface, over: backdrop.hex)
-            let factor = c.r / bg.r
-            #expect(factor < 1, "\(backdrop.name) surface is not darker")
-            #expect(abs(c.g - bg.g * factor) < 0.001 && abs(c.b - bg.b * factor) < 0.001, "\(backdrop.name) surface shifts the hue")
+            #expect(luminance(c) < sidebar, "\(backdrop.name) surface is not darker")
+            #expect(keepsHue(c, of: backdrop.hex), "\(backdrop.name) surface shifts the hue")
         }
+    }
+
+    /// Same hue, lighter, and still a dark grey: the selected tab never reads as light grey.
+    @Test(arguments: Backdrop.lifted)
+    fileprivate func nearBlackSurfacesAreTheSidebarColorLighter(_ backdrop: Backdrop) {
+        let sidebar = luminance(composite(.clear, over: backdrop.hex))
+        for surface in surfaces(backdrop.palette) {
+            let c = composite(surface, over: backdrop.hex)
+            #expect(luminance(c) > sidebar, "\(backdrop.name) surface is not lighter")
+            #expect(luminance(c) < 0.25, "\(backdrop.name) surface reads as light grey")
+            #expect(keepsHue(c, of: backdrop.hex), "\(backdrop.name) surface shifts the hue")
+        }
+    }
+
+    /// Resting, hovered and selected each a visible step lighter than the one before.
+    @Test(arguments: Backdrop.lifted)
+    fileprivate func nearBlackStatesGetLighterInVisibleSteps(_ backdrop: Backdrop) {
+        let palette = backdrop.palette
+        let sidebar = luminance(composite(.clear, over: backdrop.hex))
+        let resting = luminance(composite(palette.tileFill(isSelected: false, isHovered: false), over: backdrop.hex))
+        let hovered = luminance(composite(palette.tileFill(isSelected: false, isHovered: true), over: backdrop.hex))
+        let selected = luminance(composite(palette.tileFill(isSelected: true, isHovered: true), over: backdrop.hex))
+        #expect(resting - sidebar > 0.02, "\(backdrop.name) resting")
+        #expect(hovered - resting > 0.02, "\(backdrop.name) hovered")
+        #expect(selected - hovered > 0.02, "\(backdrop.name) selected")
     }
 
     @Test(arguments: Backdrop.all)
@@ -62,7 +105,7 @@ struct SidebarPaletteTests {
     }
 
     /// Resting, hovered and selected each a visible step darker than the one before.
-    @Test(arguments: Backdrop.all)
+    @Test(arguments: Backdrop.darkened)
     fileprivate func statesGetDarkerInVisibleSteps(_ backdrop: Backdrop) {
         let palette = backdrop.palette
         let sidebar = luminance(composite(.clear, over: backdrop.hex))

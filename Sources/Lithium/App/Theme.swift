@@ -117,20 +117,23 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
 
 /// Colors for everything drawn on the sidebar background (sidebar, toolbar, window margins).
 /// Surfaces are black laid over that background: the chosen color, only darker, in Solid and
-/// Translucent alike. White washed a colored sidebar out to grey.
+/// Translucent alike. White washed a colored sidebar out to grey. A near-black sidebar has no
+/// darker left, so there the surfaces are the same color lighter: a dark grey of its hue.
 struct SidebarPalette {
     let ink: Color
     let isDark: Bool
+    private let overlay: Color
+    private let steps: (tile: Double, tileHover: Double, selection: Double)
 
     /// Favorites, the mini player and the address field at rest.
-    var tile: Color { shade(isDark ? 0.18 : 0.06) }
+    var tile: Color { overlay.opacity(steps.tile) }
     /// A hovered tab row or button takes a favorite's color: the sidebar has one raised surface.
     var hover: Color { tile }
     /// A hovered favorite, one step past its resting color.
-    var tileHover: Color { shade(isDark ? 0.3 : 0.1) }
+    var tileHover: Color { overlay.opacity(steps.tileHover) }
     /// The current tab or favorite, well past hover. A dark color needs more black for a step
     /// the eye still sees.
-    var selection: Color { shade(isDark ? 0.5 : 0.17) }
+    var selection: Color { overlay.opacity(steps.selection) }
     var field: Color { tile }
 
     func tileFill(isSelected: Bool, isHovered: Bool) -> Color {
@@ -142,16 +145,29 @@ struct SidebarPalette {
         isSelected ? selection : isHovered ? hover : .clear
     }
 
-    private func shade(_ opacity: Double) -> Color { .black.opacity(opacity) }
+    /// Under this luminance a resting tile's 18 % black takes less than 0.016 off the sidebar,
+    /// about four 8-bit levels: the eye loses it. `#1E1E24` (0.12) still darkens, `#111111` (0.07) lifts.
+    private static let nearBlack = 0.09
 
     init(style: SidebarStyle, colorHex: String, scheme: ColorScheme) {
+        var lift: Color?
         switch style {
         case .solid:
-            isDark = Color(hex: colorHex).luminance < 0.45
+            let color = Color(hex: colorHex)
+            isDark = color.luminance < 0.45
+            if color.luminance < Self.nearBlack { lift = color.brightest }
         case .translucent:
+            // The dark material lays its own grey fill over the desktop, never near-black.
             isDark = scheme == .dark
         }
         ink = isDark ? .white : Color(white: 0.1)
+        if let lift {
+            overlay = lift
+            steps = (0.06, 0.11, 0.17)
+        } else {
+            overlay = .black
+            steps = isDark ? (0.18, 0.3, 0.5) : (0.06, 0.1, 0.17)
+        }
     }
 }
 
@@ -178,6 +194,15 @@ extension Color {
             Int((color.greenComponent * 255).rounded()),
             Int((color.blueComponent * 255).rounded())
         )
+    }
+
+    /// The same hue at full brightness, so laying it over the color lightens without shifting
+    /// the hue. White for black, which has none.
+    var brightest: Color {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
+        let peak = max(color.redComponent, color.greenComponent, color.blueComponent)
+        guard peak > 0 else { return .white }
+        return Color(.sRGB, red: color.redComponent / peak, green: color.greenComponent / peak, blue: color.blueComponent / peak)
     }
 
     var luminance: Double {

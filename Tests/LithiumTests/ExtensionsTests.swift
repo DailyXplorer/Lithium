@@ -79,6 +79,67 @@ struct ExtensionsTests {
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "\(id).zip").path))
     }
 
+    private func prepared(manifest: String, worker: String? = nil) throws -> (folder: URL, manifest: [String: Any]) {
+        let folder = folder()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(manifest.utf8).write(to: folder.appending(path: "manifest.json"))
+        if let worker {
+            let file = folder.appending(path: worker)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: file)
+        }
+        try ExtensionCompatibility.apply(to: folder)
+        let data = try Data(contentsOf: folder.appending(path: "manifest.json"))
+        return (folder, try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any]))
+    }
+
+    private func text(_ file: URL) throws -> String {
+        String(decoding: try Data(contentsOf: file), as: UTF8.self)
+    }
+
+    /// The module service worker becomes one, next to it, that imports the compatibility script first.
+    @Test func aModuleServiceWorkerLoadsTheCompatibilityScriptFirst() throws {
+        let (folder, manifest) = try prepared(manifest: #"""
+            {"manifest_version": 3, "name": "Tiny", "version": "1.0",
+             // A comment, as Chrome allows.
+             "background": {"service_worker": "background/background.js", "type": "module"}}
+            """#, worker: "background/background.js")
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        #expect(manifest["background"] as? [String: String] == ["service_worker": "background/lithium-background.js", "type": "module"])
+        #expect(manifest["name"] as? String == "Tiny")
+        #expect(try text(folder.appending(path: "background/lithium-background.js")) == "import \"/lithium-compat.js\";\nimport \"./background.js\";\n")
+        #expect(try text(folder.appending(path: "lithium-compat.js")).contains("onCreatedNavigationTarget"))
+    }
+
+    @Test func aClassicServiceWorkerImportsTheCompatibilityScriptFirst() throws {
+        let (folder, manifest) = try prepared(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "background": {"service_worker": "worker.js"}}"#)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        #expect(manifest["background"] as? [String: String] == ["service_worker": "lithium-background.js"])
+        #expect(try text(folder.appending(path: "lithium-background.js")) == "importScripts(\"/lithium-compat.js\", \"worker.js\");\n")
+    }
+
+    /// Loaded again at the next launch, a prepared extension stays as it is.
+    @Test func preparingTwiceChangesNothing() throws {
+        let (folder, _) = try prepared(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "background": {"service_worker": "worker.js"}}"#)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let before = try text(folder.appending(path: "manifest.json"))
+
+        try ExtensionCompatibility.apply(to: folder)
+        #expect(try text(folder.appending(path: "manifest.json")) == before)
+        #expect(try text(folder.appending(path: "lithium-background.js")) == "importScripts(\"/lithium-compat.js\", \"worker.js\");\n")
+    }
+
+    @Test func anExtensionWithoutAServiceWorkerIsLeftAlone() throws {
+        let original = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#
+        let (folder, _) = try prepared(manifest: original)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        #expect(try text(folder.appending(path: "manifest.json")) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["manifest.json"])
+    }
+
     /// An earlier build that updates the extension writes a new archive; it replaces the old files.
     @Test func aNewerArchiveIsUnpackedAgain() async throws {
         let folder = folder()

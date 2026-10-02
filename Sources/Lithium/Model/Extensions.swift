@@ -105,10 +105,21 @@ final class Extensions: NSObject {
         guard contexts[entry.id] == nil else { return }
         do {
             try await unpackIfNeeded(entry.id)
-            try activate(try await WKWebExtension(resourceBaseURL: files(entry.id)), id: entry.id)
+            try activate(try await open(entry.id), id: entry.id)
         } catch {
             NSLog("Lithium: couldn’t load extension %@: %@", entry.id, error.localizedDescription)
         }
+    }
+
+    /// Prepares the files (`ExtensionCompatibility`) before WebKit opens them; an extension installed
+    /// by an earlier build is prepared the first time this one loads it.
+    private func open(_ id: String) async throws -> WKWebExtension {
+        do {
+            try ExtensionCompatibility.apply(to: files(id))
+        } catch {
+            NSLog("Lithium: couldn’t prepare extension %@: %@", id, error.localizedDescription)
+        }
+        return try await WKWebExtension(resourceBaseURL: files(id))
     }
 
     private func activate(_ webExtension: WKWebExtension, id: String) throws {
@@ -168,7 +179,7 @@ final class Extensions: NSObject {
         try FileManager.default.moveItem(at: package, to: self.archive(id))
         try FileManager.default.moveItem(at: staging, to: files(id))
         // WebKit reads an extension's files from where it opened them, so it opens the final folder.
-        let webExtension = try await WKWebExtension(resourceBaseURL: files(id))
+        let webExtension = try await open(id)
         try activate(webExtension, id: id)
 
         let entry = InstalledExtension(id: id, name: webExtension.displayName ?? id, version: webExtension.version ?? "", isEnabled: true)

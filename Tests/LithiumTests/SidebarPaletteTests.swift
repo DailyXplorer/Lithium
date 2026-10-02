@@ -153,6 +153,8 @@ struct SidebarPaletteTests {
     fileprivate func hoveredRowMatchesARestingFavorite(_ backdrop: Backdrop) {
         let palette = backdrop.palette
         #expect(palette.rowFill(isSelected: false, isHovered: true) == palette.tileFill(isSelected: false, isHovered: false))
+        #expect(palette.rowFill(isSelected: true, isHovered: false) == palette.tileFill(isSelected: false, isHovered: false))
+        #expect(palette.rowFill(isSelected: true, isHovered: true) == palette.tileFill(isSelected: false, isHovered: false))
         #expect(palette.rowFill(isSelected: false, isHovered: false) == .clear)
     }
 
@@ -167,7 +169,6 @@ struct SidebarPaletteTests {
         #expect(resting < sidebar * 0.95, "\(backdrop.name) resting")
         #expect(hovered < resting * 0.97, "\(backdrop.name) hovered")
         #expect(selected < hovered * 0.93, "\(backdrop.name) selected")
-        #expect(palette.rowFill(isSelected: true, isHovered: false) == palette.tileFill(isSelected: true, isHovered: false))
     }
 
     @Test func darkSidebarsKeepWhiteInk() {

@@ -131,7 +131,7 @@ struct SidebarPalette {
     var hover: Color { tile }
     /// A hovered favorite, one step past its resting color.
     var tileHover: Color { overlay.opacity(steps.tileHover) }
-    /// The current tab or favorite, well past hover. A dark color needs more black for a step
+    /// The current favorite, well past hover. A dark color needs more black for a step
     /// the eye still sees.
     var selection: Color { overlay.opacity(steps.selection) }
     var field: Color { tile }
@@ -140,9 +140,10 @@ struct SidebarPalette {
         isSelected ? selection : isHovered ? tileHover : tile
     }
 
-    /// Nothing behind a tab row at rest.
+    /// Nothing behind a tab row at rest. The current tab takes a resting favorite's color: it
+    /// only marks which tab is current, it need not stand out.
     func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
-        isSelected ? selection : isHovered ? hover : .clear
+        isSelected ? tile : isHovered ? hover : .clear
     }
 
     /// Under this brightest channel a resting tile's 18 % black takes less than 0.018 off every

@@ -36,14 +36,14 @@ struct ExtensionCompatibilityTests {
             """,
     ]
 
-    private func archive() throws -> Data {
+    private func archive(_ files: [String: String] = Self.files) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         let zip = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID()).zip")
         defer {
             try? FileManager.default.removeItem(at: source)
             try? FileManager.default.removeItem(at: zip)
         }
-        for (path, text) in Self.files {
+        for (path, text) in files {
             let file = source.appending(path: path)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(text.utf8).write(to: file)
@@ -71,5 +71,48 @@ struct ExtensionCompatibilityTests {
             try await Task.sleep(for: .milliseconds(100))
         }
         #expect(reply == "pong {}")
+    }
+
+    /// Its background opens its popup twice, as 1Password's does each time its Unlock button is
+    /// clicked. WebKit refuses `action.openPopup()` while the popup it last asked Lithium to show
+    /// is open; with no window to show it in, as here, Lithium closes that one.
+    @Test func anExtensionCanOpenItsPopupAgainWhenItCouldNotBeShown() async throws {
+        let id = "ppqqrrssttuuvvwwxxyyzzaabbccddee"
+        let files = [
+            "manifest.json": #"""
+                {"manifest_version": 3, "name": "Popup", "version": "1.0", "host_permissions": ["<all_urls>"],
+                 "action": {"default_popup": "popup.html"}, "background": {"service_worker": "background.js"},
+                 "content_scripts": [{"matches": ["<all_urls>"], "run_at": "document_start", "js": ["content.js"]}]}
+                """#,
+            "popup.html": "<!doctype html><title>Popup</title>",
+            "background.js": """
+                const open = () => chrome.action.openPopup().then(() => 'opened', (error) => error.message);
+                chrome.runtime.onMessage.addListener((message, sender, respond) => {
+                    open().then(async (first) => { await new Promise((wait) => setTimeout(wait, 1000)); respond(`${first}, ${await open()}`); });
+                    return true;
+                });
+                """,
+            "content.js": """
+                const ask = () => chrome.runtime.sendMessage({ name: 'open' }, {}, (reply) => {
+                    document.documentElement.setAttribute('data-reply', reply ?? chrome.runtime.lastError?.message ?? 'nothing');
+                    if (!reply) setTimeout(ask, 200);
+                });
+                ask();
+                """,
+        ]
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(files), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let tab = browser.newTab()
+        tab.webView.loadHTMLString("<!doctype html><title>Page</title>", baseURL: URL(string: "https://example.com/")!)
+
+        var reply: String?
+        for _ in 0..<100 {
+            reply = try? await tab.webView.callAsyncJavaScript("return document.documentElement.getAttribute('data-reply')", contentWorld: .page) as? String
+            if reply != nil { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(reply == "opened, opened")
     }
 }

@@ -32,27 +32,8 @@ struct OnePasswordTests {
     /// Signed out, as the copy is, 1Password draws nothing in pages (`inlineDisabled`): its
     /// inline menu is checked only when the copy has an account.
     @Test func answersItsContentScriptsOnASignInPage() async throws {
-        let source = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LITHIUM_1PASSWORD_DIR"]))
-        let id = source.lastPathComponent
-        let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Extensions")
-        try? FileManager.default.removeItem(at: folder)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let copy = folder.appending(path: id)
-        try FileManager.default.copyItem(at: source, to: copy)
-        try addProbe(to: copy)
-        try JSONEncoder().encode([InstalledExtension(id: id, name: "1Password", version: "", isEnabled: true)])
-            .write(to: folder.appending(path: "installed.json"))
-
-        let browser = Browser()
-        await browser.extensions.waitUntilLoaded()
-        #expect(browser.extensions.contexts[id] != nil)
-        let tab = browser.newTab()
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = tab.webView
-        window.orderFrontRegardless()
-        defer { window.orderOut(nil) }
-        tab.webView.loadHTMLString(Self.login, baseURL: URL(string: "https://login.example.com/")!)
+        let (browser, tab, window) = try await open1Password()
+        defer { withExtendedLifetime(browser) { window.orderOut(nil) } }
 
         var state: [String: Any] = [:]
         var configuration: [String: Any] = [:]
@@ -75,6 +56,58 @@ struct OnePasswordTests {
         }
     }
 
+    /// Added to the copy's background: keeps the popup 1Password sets when it has an account,
+    /// which the copy lacks, and notes how each `action.openPopup()` ends.
+    private static let backgroundProbe = """
+        const opened = [];
+        // WebKit makes a namespace's object again once nothing holds it, without what was added to it.
+        globalThis.lithiumProbe = [...new Set([globalThis.browser.action, globalThis.chrome.action])];
+        for (const action of globalThis.lithiumProbe) {
+            const setPopup = action.setPopup.bind(action);
+            const openPopup = action.openPopup.bind(action);
+            action.setPopup = (details) => setPopup({ ...details, popup: '/popup/index.html' });
+            action.openPopup = (...args) => {
+                const result = openPopup(...args);
+                result.then(() => 'opened', (error) => error.message).then((outcome) => chrome.storage.local.set({ lithiumOpened: [...opened, outcome] }, () => opened.push(outcome)));
+                return result;
+            };
+        }
+        """
+    /// What 1Password's Unlock button sends, clicked twice.
+    private static let unlockProbe = """
+        const send = (message) => new Promise((resolve) => chrome.runtime.sendMessage(message, {}, resolve));
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        (async () => {
+            while ((await send({ name: 'get-frame-manager-configuration' }))?.type !== 'Success') await wait(500);
+            const replies = [];
+            for (let click = 0; click < 2; click++) {
+                replies.push((await send({ name: 'request-managed-unlock' }))?.type ?? chrome.runtime.lastError?.message);
+                await wait(1500);
+            }
+            const { lithiumOpened } = await chrome.storage.local.get('lithiumOpened');
+            document.documentElement.setAttribute('data-lithium-unlock', JSON.stringify({ replies, opened: lithiumOpened ?? [] }));
+        })();
+        """
+
+    /// Locked, its Unlock button asks the background to open its popup; WebKit refused every
+    /// time after the first, which Lithium hadn't shown nor closed.
+    @Test func itsUnlockButtonOpensThePopupEveryTime() async throws {
+        let (browser, tab, window) = try await open1Password(probe: Self.unlockProbe, backgroundProbe: Self.backgroundProbe)
+        defer { withExtendedLifetime(browser) { window.orderOut(nil) } }
+
+        var result: [String: Any] = [:]
+        let deadline = Date().addingTimeInterval(60)
+        while Date() < deadline, result.isEmpty {
+            let text = try? await tab.webView.callAsyncJavaScript("return document.documentElement.getAttribute('data-lithium-unlock')", contentWorld: .page) as? String
+            result = text.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] } ?? [:]
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        #expect(result["replies"] as? [String] == ["Success", "Success"])
+        // Once or twice a click, depending on what the copy ran before.
+        let opened = result["opened"] as? [String] ?? []
+        #expect(opened.count >= 2 && Set(opened) == ["opened"], "\(opened)")
+    }
+
     private static let read = """
         return {
             probe: document.documentElement.getAttribute('data-lithium-probe'),
@@ -83,10 +116,44 @@ struct OnePasswordTests {
         };
         """
 
-    private func addProbe(to copy: URL) throws {
-        try Data(Self.probe.utf8).write(to: copy.appending(path: "lithium-probe.js"))
+    /// Runs a copy of the installed 1Password, with the probes added, on the sign-in page.
+    private func open1Password(probe: String = Self.probe, backgroundProbe: String? = nil) async throws -> (Browser, Tab, NSWindow) {
+        let source = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LITHIUM_1PASSWORD_DIR"]))
+        let id = source.lastPathComponent
+        let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Extensions")
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appending(path: id)
+        try FileManager.default.copyItem(at: source, to: copy)
+        try addProbes(probe, backgroundProbe, to: copy)
+        try JSONEncoder().encode([InstalledExtension(id: id, name: "1Password", version: "", isEnabled: true)])
+            .write(to: folder.appending(path: "installed.json"))
+
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        #expect(browser.extensions.contexts[id] != nil)
+        let tab = browser.newTab()
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = tab.webView
+        window.orderFrontRegardless()
+        tab.webView.loadHTMLString(Self.login, baseURL: URL(string: "https://login.example.com/")!)
+        return (browser, tab, window)
+    }
+
+    private func addProbes(_ probe: String, _ backgroundProbe: String?, to copy: URL) throws {
+        try Data(probe.utf8).write(to: copy.appending(path: "lithium-probe.js"))
+        try ExtensionCompatibility.apply(to: copy)
         let file = copy.appending(path: "manifest.json")
         var manifest = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file), options: .json5Allowed) as? [String: Any])
+        if let backgroundProbe {
+            // Run after Lithium's compatibility script, before 1Password's background.
+            let worker = copy.appending(path: try #require((manifest["background"] as? [String: Any])?["service_worker"] as? String))
+            try Data(backgroundProbe.utf8).write(to: copy.appending(path: "lithium-background-probe.js"))
+            let load = try String(contentsOf: worker, encoding: .utf8)
+            try load.replacingOccurrences(of: "\";\n", with: "\";\nimport \"/lithium-background-probe.js\";\n", options: [], range: load.range(of: "\";\n"))
+                .write(to: worker, atomically: true, encoding: .utf8)
+        }
         let scripts = manifest["content_scripts"] as? [[String: Any]] ?? []
         manifest["content_scripts"] = scripts + [["matches": ["https://login.example.com/*"], "js": ["lithium-probe.js"], "run_at": "document_idle"]]
         try JSONSerialization.data(withJSONObject: manifest).write(to: file)

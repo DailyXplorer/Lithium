@@ -81,6 +81,19 @@ struct TabHoverCardTests {
         #expect(hover.shown == nil)
     }
 
+    /// The pointer stays on the clicked row: the card waits for it to leave and come back.
+    @Test func clickedCardReturnsOnlyWhenThePointerComesBack() async throws {
+        let hover = try await opened(on: a)
+        hover.dismiss()
+        try await Task.sleep(for: TabHover.openDelay + .milliseconds(300))
+        #expect(hover.shown == nil)
+        hover.pointer(a, isInside: false)
+        try await Task.sleep(for: TabHover.closeDelay + .milliseconds(100))
+        #expect(hover.shown == nil)
+        hover.pointer(a, isInside: true)
+        #expect(try await settle(hover, on: a) == a)
+    }
+
     /// Pictures of the card beside a stand-in sidebar, for a look without launching the app:
     /// `LITHIUM_SNAPSHOT_DIR=/tmp/shots swift test --filter TabHoverCard`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] != nil))

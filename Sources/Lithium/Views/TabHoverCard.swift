@@ -93,6 +93,9 @@ private struct TabHoverTargetModifier: ViewModifier {
             }
             // A row closed or scrolled away under the pointer never hears it leave.
             .onDisappear { hover.pointer(target, isInside: false) }
+            // Any click, even on the row already selected, which changes nothing the layer watches.
+            // Simultaneous, so the row's own tap, double-click and drag still get theirs.
+            .simultaneousGesture(TapGesture().onEnded { hover.dismiss() })
             .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { value, anchor in
                 if isShown { value.row[target] = anchor }
             }

@@ -189,4 +189,91 @@ struct ExtensionCompatibilityTests {
         }
         #expect(title == "Extension page")
     }
+
+    private func waitForTitle(_ expected: String, in tab: Tab) async throws -> String? {
+        var title: String?
+        for _ in 0..<50 where title != expected {
+            title = try? await tab.webView.callAsyncJavaScript("return document.title", contentWorld: .page) as? String
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return title
+    }
+
+    /// 1Password sends its sign-in tab to its page once done, after the tab may have fallen asleep.
+    @Test func anExtensionCanSendASleepingWebsitesTabToItsPage() async throws {
+        let id = "iijjkkllmmnnooppaabbccddeeffgghh"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let context = try #require(browser.extensions.contexts[id])
+        let (server, site) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<!doctype html><title>Page</title>")])
+        defer { server.cancel() }
+        let tab = browser.newTab(url: site)
+        #expect(try await waitForTitle("Page", in: tab) == "Page")
+        // It sleeps with its history, which it wakes with when it stays on the same side.
+        #expect(tab.history != nil)
+        tab.sleep(configuration: browser.makeConfiguration(for: site))
+
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        try await tab.loadURL(page, for: context)
+        #expect(try await waitForTitle("Extension page", in: tab) == "Extension page")
+        #expect(tab.webView.backForwardList.backList.isEmpty)
+    }
+
+    @Test func aTabAsleepOnAnExtensionPageCanLoadAWebsite() async throws {
+        let id = "jjkkllmmnnooppaabbccddeeffgghhii"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        let tab = browser.newTab(url: page, configuration: browser.extensions.configuration(for: page))
+        #expect(try await waitForTitle("Extension page", in: tab) == "Extension page")
+        tab.sleep(configuration: browser.makeConfiguration(for: page))
+
+        let file = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).html")
+        try "<!doctype html><title>Page</title>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        tab.load(file)
+        #expect(try await waitForTitle("Page", in: tab) == "Page")
+    }
+
+    /// Command-clicking a link opens it in a new tab, also from an extension's page.
+    @Test func aCommandClickInAnExtensionPageOpensANewTab() async throws {
+        let id = "kkllmmnnooppaabbccddeeffgghhiijk"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        let tab = browser.newTab(url: page, configuration: browser.extensions.configuration(for: page))
+        #expect(try await waitForTitle("Extension page", in: tab) == "Extension page")
+
+        let site = URL(string: "https://example.com/")!
+        _ = try? await tab.webView.callAsyncJavaScript("""
+            document.body.style.margin = '0';
+            document.body.appendChild(Object.assign(document.createElement('a'), { href: 'https://example.com/', style: 'display: block; height: 100vh' }));
+            """, contentWorld: .page)
+        // A script's click carries no modifier keys; WebKit takes them from a real event.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.orderOut(nil) }
+        window.contentView = tab.webView
+        window.orderFrontRegardless()
+        try await Task.sleep(for: .milliseconds(300))
+        let before = browser.tabs
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            window.sendEvent(try #require(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: 20, y: 280), modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            )))
+        }
+        let opened = { browser.tabs.first { tab in !before.contains { $0 === tab } } }
+        for _ in 0..<50 where opened() == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(opened()?.url == site)
+        #expect(tab.webView.url == page)
+        #expect(tab.url == page)
+    }
 }

@@ -108,6 +108,52 @@ struct OnePasswordTests {
         #expect(opened.count >= 2 && Set(opened) == ["opened"], "\(opened)")
     }
 
+    /// Added to the copy's setup page, before 1Password's script: notes what goes wrong in it.
+    private static let errorRecorder = """
+        window.lithiumErrors = [];
+        addEventListener('error', (event) => lithiumErrors.push(event.message));
+        addEventListener('unhandledrejection', (event) => lithiumErrors.push(String(event.reason?.stack ?? event.reason)));
+        const error = console.error.bind(console);
+        console.error = (...args) => { lithiumErrors.push(args.join(' ')); error(...args); };
+        """
+
+    /// Signed out, 1Password opens its setup page in a tab. Its buttons send that tab to its pages
+    /// on the web, which WebKit dropped: they did nothing. Both in one Browser: in a Browser of
+    /// its own, after the Unlock test, the second one's page showed "Something went wrong".
+    @Test func itsSetupPageButtonsOpenItsPagesOnTheWeb() async throws {
+        var (browser, tab, window) = try await open1Password(onSetupPage: true)
+        defer { withExtendedLifetime(browser) { window.orderOut(nil) } }
+
+        // Its first screen's Continue, shown until it has been clicked once, leads to the Add account card.
+        let click = """
+            const find = (label) => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === label);
+            const button = find(label);
+            if (!button) { find('Continue')?.click(); return null; }
+            const errors = [...window.lithiumErrors];
+            button.click();
+            return errors;
+            """
+        let setup = try #require(tab.url)
+        for (button, address) in [("Sign in", "https://start.1password.com/signin/?auth-only=1"), ("Create your 1Password account", "https://1password.com/pricing")] {
+            if tab.url != setup {
+                tab = browser.newTab(url: setup, configuration: browser.extensions.configuration(for: setup))
+                window.contentView = tab.webView
+            }
+            var errors: [String]?
+            for _ in 0..<60 where errors == nil {
+                errors = try? await tab.webView.callAsyncJavaScript(click, arguments: ["label": button], contentWorld: .page) as? [String]
+                if errors == nil { try await Task.sleep(for: .milliseconds(500)) }
+            }
+            let shown = try? await tab.webView.callAsyncJavaScript("return `${location.href} ${document.body.innerText}`", contentWorld: .page) as? String
+            #expect(errors == [], "\(button) is on the page, with nothing gone wrong: \(shown ?? "nil")")
+            for _ in 0..<50 where tab.url?.absoluteString != address {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            #expect(tab.url?.absoluteString == address)
+            #expect(tab.webView.url?.absoluteString == address)
+        }
+    }
+
     private static let read = """
         return {
             probe: document.documentElement.getAttribute('data-lithium-probe'),
@@ -116,8 +162,9 @@ struct OnePasswordTests {
         };
         """
 
-    /// Runs a copy of the installed 1Password, with the probes added, on the sign-in page.
-    private func open1Password(probe: String = Self.probe, backgroundProbe: String? = nil) async throws -> (Browser, Tab, NSWindow) {
+    /// Runs a copy of the installed 1Password, with the probes added, on the sign-in page or on
+    /// the setup page it opens when signed out.
+    private func open1Password(probe: String = Self.probe, backgroundProbe: String? = nil, onSetupPage: Bool = false) async throws -> (Browser, Tab, NSWindow) {
         let source = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["LITHIUM_1PASSWORD_DIR"]))
         let id = source.lastPathComponent
         let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Extensions")
@@ -126,18 +173,24 @@ struct OnePasswordTests {
         let copy = folder.appending(path: id)
         try FileManager.default.copyItem(at: source, to: copy)
         try addProbes(probe, backgroundProbe, to: copy)
+        let setupPage = copy.appending(path: "app/app.html")
+        try Data(Self.errorRecorder.utf8).write(to: copy.appending(path: "lithium-errors.js"))
+        try (try String(contentsOf: setupPage, encoding: .utf8)).replacingOccurrences(of: "<script defer", with: "<script src=\"/lithium-errors.js\"></script><script defer")
+            .write(to: setupPage, atomically: true, encoding: .utf8)
         try JSONEncoder().encode([InstalledExtension(id: id, name: "1Password", version: "", isEnabled: true)])
             .write(to: folder.appending(path: "installed.json"))
 
         let browser = Browser()
         await browser.extensions.waitUntilLoaded()
         #expect(browser.extensions.contexts[id] != nil)
-        let tab = browser.newTab()
+        // As 1Password's background opens it (`tabs.create`).
+        let setup = URL(string: "\(Extensions.scheme)://\(id)/app/app.html#/page/welcome?language=en")!
+        let tab = onSetupPage ? browser.newTab(url: setup, configuration: browser.extensions.configuration(for: setup)) : browser.newTab()
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = tab.webView
         window.orderFrontRegardless()
-        tab.webView.loadHTMLString(Self.login, baseURL: URL(string: "https://login.example.com/")!)
+        if !onSetupPage { tab.webView.loadHTMLString(Self.login, baseURL: URL(string: "https://login.example.com/")!) }
         return (browser, tab, window)
     }
 

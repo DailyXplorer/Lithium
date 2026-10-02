@@ -115,4 +115,78 @@ struct ExtensionCompatibilityTests {
         }
         #expect(reply == "opened, opened")
     }
+
+    private static let pageFiles = [
+        "manifest.json": #"{"manifest_version": 3, "name": "Pages", "version": "1.0"}"#,
+        "page.html": "<!doctype html><title>Extension page</title>",
+    ]
+
+    private func waitForURL(_ url: URL, in tab: Tab) async throws -> URL? {
+        for _ in 0..<50 where tab.webView.url != url {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return tab.webView.url
+    }
+
+    /// 1Password's setup page sends its own tab to its sign-in page on the web. WebKit loads
+    /// nothing but the extension's pages in a web view made with its configuration.
+    @Test func anExtensionPageCanSendItsTabToAWebsite() async throws {
+        let id = "ffgghhiijjkkllmmnnooppaabbccddee"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        let tab = browser.newTab(url: page, configuration: browser.extensions.configuration(for: page))
+        #expect(try await waitForURL(page, in: tab) == page)
+        _ = try? await tab.webView.callAsyncJavaScript("await new Promise((loaded) => document.readyState === 'complete' ? loaded() : addEventListener('load', loaded))", contentWorld: .page)
+
+        let site = URL(string: "https://example.com/")!
+        _ = try? await tab.webView.callAsyncJavaScript("location.href = 'https://example.com/'", contentWorld: .page)
+        #expect(try await waitForURL(site, in: tab) == site)
+        #expect(tab.url == site)
+    }
+
+    @Test func aWebsiteCannotSendItsTabToAnExtensionsPage() async throws {
+        let id = "hhiijjkkllmmnnooppaabbccddeeffgg"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let tab = browser.newTab()
+        let site = URL(string: "https://example.com/")!
+        tab.webView.loadHTMLString("<!doctype html><title>Page</title>", baseURL: site)
+        #expect(try await waitForURL(site, in: tab) == site)
+
+        _ = try? await tab.webView.callAsyncJavaScript("location.href = 'webkit-extension://\(id)/page.html'", contentWorld: .page)
+        try await Task.sleep(for: .seconds(2))
+        let title = try? await tab.webView.callAsyncJavaScript("return document.title", contentWorld: .page) as? String
+        // WebKit refuses it, and Lithium says so.
+        #expect(title != nil && title != "Extension page")
+    }
+
+    /// And sends a tab on the web to one of its pages (`tabs.update`), as 1Password's does once
+    /// its sign-in page is done.
+    @Test func anExtensionCanSendAWebsitesTabToItsPage() async throws {
+        let id = "gghhiijjkkllmmnnooppaabbccddeeff"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let context = try #require(browser.extensions.contexts[id])
+        let tab = browser.newTab()
+        let site = URL(string: "https://example.com/")!
+        tab.webView.loadHTMLString("<!doctype html><title>Page</title>", baseURL: site)
+        #expect(try await waitForURL(site, in: tab) == site)
+
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        try await tab.loadURL(page, for: context)
+        #expect(try await waitForURL(page, in: tab) == page)
+        var title: String?
+        for _ in 0..<50 where title != "Extension page" {
+            title = try? await tab.webView.callAsyncJavaScript("return document.title", contentWorld: .page) as? String
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(title == "Extension page")
+    }
 }

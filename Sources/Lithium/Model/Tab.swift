@@ -309,6 +309,14 @@ final class Tab: NSObject, Identifiable {
         return webView.value(forKey: "_isPlayingAudio") as? Bool
     }
 
+    /// The process that runs the page, for the hover card's memory and CPU. Private API; nil
+    /// from a WebKit without it, and while the process isn't running (WebKit reports 0).
+    var webProcessIdentifier: pid_t? {
+        guard let webView = loadedWebView, webView.responds(to: Selector(("_webProcessIdentifier"))),
+              let pid = (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else { return nil }
+        return pid
+    }
+
     /// Using the camera or microphone, or sharing the screen or a window: a call, whose
     /// participants are heard through the page's media. Screen sharing is private API, absent
     /// from older WebKits.

@@ -274,15 +274,28 @@ extension Extensions: WKWebExtensionControllerDelegate {
         for context: WKWebExtensionContext
     ) async throws {
         guard let popover = action.popupPopover else { return }
-        if let anchor = popupAnchor, anchor.window != nil {
+        let window = NSApp.keyWindow ?? NSApp.mainWindow ?? browser?.selectedTab?.webView.window
+        if let anchor = popupAnchor, Self.isOnScreen(anchor) {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
-        } else if let content = NSApp.keyWindow?.contentView {
+        } else if let content = window?.contentView, Self.isOnScreen(content) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
         } else {
             // WebKit counts a popup it asked for as open until it is closed, and refuses the
             // extension's `action.openPopup()` meanwhile: 1Password's Unlock button did nothing.
             action.closePopup()
         }
+    }
+
+    /// A popover shown from a view nobody can see still counts as open, so it must be on screen.
+    static func isOnScreen(_ view: NSView) -> Bool {
+        guard let window = view.window, window.isVisible, !window.isMiniaturized, window.screen != nil, let content = window.contentView,
+              !view.isHiddenOrHasHiddenAncestor, !view.visibleRect.isEmpty else { return false }
+        var ancestor: NSView? = view
+        while let current = ancestor {
+            if current.alphaValue <= 0 { return false }
+            ancestor = current.superview
+        }
+        return view.convert(view.bounds, to: nil).intersects(content.frame)
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, didUpdate action: WKWebExtension.Action, forExtensionContext context: WKWebExtensionContext) {

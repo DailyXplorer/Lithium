@@ -51,6 +51,10 @@
       <div><div class="title">Mini player</div><div class="hint">Shows what the last tab with sound plays at the bottom of the sidebar, with play, pause, previous and next.</div></div>
       <label class="switch" for="mini-player"><input type="checkbox" id="mini-player" role="switch"><span></span></label>
     </div>
+    <div class="row">
+      <div><div class="title">Show resource usage on tab hover</div><div class="hint">The card that opens when the pointer rests on a tab also shows the memory and CPU its page uses, refreshed every second.</div></div>
+      <label class="switch" for="tab-usage"><input type="checkbox" id="tab-usage" role="switch"><span></span></label>
+    </div>
     <h3>Start page</h3>
     <div class="row">
       <div><div class="title">Background</div><div class="hint">What a new tab shows behind the address bar.</div></div>
@@ -179,6 +183,7 @@
     $('#color-hex').textContent = appearance.sidebarColor;
     document.querySelectorAll('#reveal button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarReveal));
     $('#mini-player').checked = appearance.miniPlayer;
+    $('#tab-usage').checked = appearance.tabUsage;
     $('#website-font').checked = appearance.websiteFont;
     $('#swatches').querySelectorAll('.swatch').forEach((s) => s.remove());
     [appearance.defaultColor, ...SWATCHES.filter((c) => c !== appearance.defaultColor)].forEach((color) => {
@@ -299,6 +304,7 @@
   $('#start-to').oninput = setGradient;
   $('#start-image').onclick = () => call('chooseStartImage').then(render);
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
+  $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');

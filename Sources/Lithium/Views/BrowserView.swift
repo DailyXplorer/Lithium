@@ -13,6 +13,7 @@ struct BrowserView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(Preference.sidebarStyle) private var style = SidebarStyle.solid
     @AppStorage(Preference.sidebarColor) private var colorHex = Theme.defaultSidebarHex
+    @State private var tabHover = TabHover()
 
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)
@@ -54,8 +55,10 @@ struct BrowserView: View {
                 }
             }
         }
+        .overlayPreferenceValue(TabHoverAnchors.self) { TabHoverLayer(anchors: $0) }
         .foregroundStyle(palette.ink)
         .environment(\.sidebarPalette, palette)
+        .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
         .background(WindowConfigurator())

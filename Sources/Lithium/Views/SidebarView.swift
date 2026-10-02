@@ -60,6 +60,7 @@ struct SidebarView: View {
         .padding(.top, 2)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
+        .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
     }
 
     private var playingTab: Tab? {
@@ -152,12 +153,11 @@ private struct PinTile: View {
             }
             .contentShape(Rectangle())
             .onTapGesture { browser.activate(pin) }
-            .onHover { isHovered = $0 }
+            .tabHoverTarget(.pin(pin.id), isHovered: $isHovered)
             .draggable(pinDragPrefix + pin.id.uuidString)
             .dropDestination(for: String.self) { items, _ in
                 browser.dropOnFavorites(items, at: index)
             } isTargeted: { isTargeted = $0 }
-            .help(pin.title)
             .contextMenu {
                 if let live {
                     Button("Duplicate Tab") { browser.duplicate(live) }
@@ -192,7 +192,6 @@ private struct TabRow: View {
                 Text(tab.displayTitle)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(tab.displayTitle == tab.title ? "" : tab.title)
             }
             Spacer(minLength: 0)
             if tab.isMuted {
@@ -216,7 +215,7 @@ private struct TabRow: View {
                 .help("Close Tab (⌘W)")
             }
         }
-        .onHover { isHovered = $0 }
+        .tabHoverTarget(.tab(tab.id), isHovered: $isHovered)
         // Simultaneous, so a single click still selects instantly instead of waiting for a second one.
         .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
         .draggable(tab.id.uuidString)

@@ -88,7 +88,8 @@ struct SiteInfoView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if connection == .secure {
-                        Button { withAnimation(.snappy(duration: 0.15)) { showsCertificate.toggle() } } label: {
+                        // Not animated: the popover kept its old height and cut the panel at both ends.
+                        Button { showsCertificate.toggle() } label: {
                             HStack(spacing: 3) {
                                 Text("Secure")
                                 Icon(showsCertificate ? .caretDown : .forward, size: 10)

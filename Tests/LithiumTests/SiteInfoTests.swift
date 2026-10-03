@@ -75,6 +75,40 @@ struct SiteInfoTests {
         #expect(SiteInfoView.permissionSummary([.camera: .allow, .microphone: .allow, .downloads: .deny]) == "2 allowed, 1 blocked")
     }
 
+    /// The popover takes the panel's preferred size: it has to grow with the certificate lines,
+    /// shrink back without them, and hold the whole panel each time.
+    @Test func siteInfoPanelSizeFollowsTheCertificate() async throws {
+        Theme.registerFonts()
+        let state = CertificateToggle()
+        let certificate = SiteInfo.Certificate(subject: "*.google.com", issuer: "WR2", validUntil: DateComponents(calendar: .current, year: 2026, month: 12, day: 8).date)
+        let panel = SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .found(certificate), cookieCount: 29, canClear: true, permissions: [:], showsCertificate: Binding(get: { state.isShown }, set: { state.isShown = $0 }))
+        let controller = NSHostingController(rootView: panel)
+        controller.sizingOptions = [.preferredContentSize]
+        controller.view.layoutSubtreeIfNeeded()
+
+        func settledHeight() async -> CGFloat {
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                try? await Task.sleep(for: .milliseconds(20))
+                controller.view.layoutSubtreeIfNeeded()
+            } while controller.preferredContentSize != controller.view.fittingSize && Date() < deadline
+            #expect(controller.preferredContentSize == controller.view.fittingSize, "the popover is given the size the panel needs: \(controller.preferredContentSize) \(controller.view.fittingSize)")
+            #expect(controller.preferredContentSize.width == 280)
+            return controller.preferredContentSize.height
+        }
+        let collapsed = await settledHeight()
+        state.isShown = true
+        let expanded = await settledHeight()
+        state.isShown = false
+        let collapsedAgain = await settledHeight()
+
+        // Header, divider, two rows and the button, each between 16 points of padding.
+        #expect(collapsed > 150)
+        // "Issued by WR2" and "Expires Dec 8, 2026", one line of 12 points each.
+        #expect(expanded - collapsed >= 28)
+        #expect(collapsedAgain == collapsed)
+    }
+
     /// The panel with sample values, for a look without launching the app:
     /// `LITHIUM_SNAPSHOT_DIR=/tmp/shots ./scripts/test --filter SiteInfo`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] != nil, "Writes PNGs only when LITHIUM_SNAPSHOT_DIR is set"))
@@ -103,6 +137,11 @@ struct SiteInfoTests {
             }
         }
     }
+}
+
+@MainActor
+@Observable private final class CertificateToggle {
+    var isShown = false
 }
 
 extension BrowserTests {

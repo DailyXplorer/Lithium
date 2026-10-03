@@ -1,0 +1,128 @@
+import Foundation
+import SwiftUI
+import Testing
+import WebKit
+@testable import Lithium
+
+/// The shield panel and every settings section with sample values, for a look without launching
+/// the app: `LITHIUM_SNAPSHOT_DIR=/tmp/shots ./scripts/test --filter UISnapshot`.
+@MainActor
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] != nil, "Writes PNGs only when LITHIUM_SNAPSHOT_DIR is set"))
+struct UISnapshotTests {
+    private let directory = URL(filePath: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] ?? "/tmp")
+
+    @Test func shieldSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let updated = DateComponents(calendar: .current, year: 2026, month: 10, day: 2).date
+        for isOn in [true, false] {
+            for isDark in [false, true] {
+                let view = ShieldView(host: "youtube.com", isOn: .constant(isOn), updated: updated)
+                let png = try render(view, isDark: isDark)
+                try png.write(to: directory.appending(path: "shield-\(isOn ? "on" : "off")-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    @Test func settingsSnapshots() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let configuration = WKWebViewConfiguration()
+        InternalSchemeHandler.shared.install(on: configuration)
+        configuration.userContentController.addScriptMessageHandler(SampleBridge(), contentWorld: .page, name: InternalBridge.name)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 700), configuration: configuration)
+        webView.autoresizingMask = [.width, .height]
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 960, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = webView
+        defer { window.contentView = nil }
+        webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
+        #expect(await poll(15) { (try? await webView.evaluateJavaScript("document.querySelector('#version')?.textContent ?? ''") as? String)?.isEmpty == false })
+        // A window never shown doesn't run the page's entrance animation, which starts transparent,
+        // nor the switches' transitions, which stay at their start.
+        _ = try await webView.evaluateJavaScript("document.head.append(Object.assign(document.createElement('style'), { textContent: '*, *::after { animation: none !important; transition: none !important }' }))")
+
+        let sections: [(name: String, hash: String, script: String?)] = [
+            ("appearance", "appearance", nil), ("search", "search", nil), ("privacy", "privacy", nil),
+            ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
+            ("extensions", "extensions", nil), ("max", "max", nil), ("permissions", "permissions", nil),
+            ("site", "site/www.example.com", nil), ("about", "about", nil),
+        ]
+        for section in sections {
+            _ = try await webView.evaluateJavaScript("location.hash = '\(section.hash)'; \(section.script ?? ""); 0")
+            try await Task.sleep(for: .milliseconds(100))
+            // A window never shown keeps the sticky sidebar's old paint; redrawing it shows the current section.
+            _ = try await webView.evaluateJavaScript("document.querySelector('nav').style.display = 'none'; document.body.offsetHeight; document.querySelector('nav').style.display = ''; 0")
+            for isDark in [false, true] {
+                window.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+                window.setFrame(NSRect(x: -5000, y: 0, width: 960, height: 700), display: false)
+                try await Task.sleep(for: .milliseconds(400))
+                let height = try await webView.evaluateJavaScript("document.querySelector('main').scrollHeight") as? Double ?? 700
+                window.setFrame(NSRect(x: -5000, y: 0, width: 960, height: max(700, height)), display: false)
+                try await Task.sleep(for: .milliseconds(300))
+                let image = try await webView.takeSnapshot(configuration: nil)
+                let png = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+                try png.write(to: directory.appending(path: "settings-\(section.name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
+    private func render(_ view: some View, isDark: Bool) throws -> Data {
+        let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))
+        hosting.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: hosting.frame.width, height: hosting.frame.height), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = hosting
+        defer { window.contentView = nil }
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        bitmap.size = hosting.bounds.size
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return await condition()
+    }
+}
+
+/// Answers the settings page the way `InternalBridge` does, with a fixed sample state.
+@MainActor
+private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
+        let action = (message.body as? [String: Any])?["action"] as? String
+        if action == "site" { return (["cookies": 14, "hasData": true], nil) }
+        return (Self.state, nil)
+    }
+
+    static let state: [String: Any] = [
+        "appearance": [
+            "sidebarStyle": "solid", "sidebarColor": "#D5DAF5", "defaultColor": "#D5DAF5", "sidebarReveal": "normal",
+            "miniPlayer": true, "tabUsage": true, "websiteFont": true,
+            "startPage": ["background": "gradient", "color": "#2B2D42", "gradientFrom": "#1F3A5F", "gradientTo": "#3D2C4E", "hasImage": false] as [String: Any],
+        ] as [String: Any],
+        "search": [
+            "engine": "duckduckgo",
+            "engines": [["id": "google", "name": "Google", "host": "www.google.com"], ["id": "duckduckgo", "name": "DuckDuckGo", "host": "duckduckgo.com"], ["id": "ecosia", "name": "Ecosia", "host": "www.ecosia.org"]],
+        ] as [String: Any],
+        "protections": [
+            "ruleCount": 183_402,
+            "updated": Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000,
+            "updating": false,
+            "disabledHosts": ["bank.example.com"],
+        ] as [String: Any],
+        "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],
+        "max": [
+            "tidyTitles": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
+            "summaryLanguages": [["code": "en", "name": "English"], ["code": "fr", "name": "French"]],
+            "modelAvailable": false,
+            "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",
+        ] as [String: Any],
+        "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
+        "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],
+    ]
+}

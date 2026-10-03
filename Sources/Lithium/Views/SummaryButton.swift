@@ -9,7 +9,7 @@ struct SummaryButton: View {
         @Bindable var summaries = browser.summaries
         let page = PageSummaries.page(of: tab?.url)
         if summaries.isEnabled {
-            IconButton(icon: .sparkle, help: "Summarize this page, or the selected text (⇧⌘S)", isEnabled: page != nil) {
+            IconButton(icon: .sparkle, help: "Summarize (⇧⌘S)", isEnabled: page != nil) {
                 if let tab { summaries.togglePanel(for: tab) }
             }
             .popover(isPresented: $summaries.isPanelPresented, arrowEdge: .bottom) {
@@ -105,7 +105,7 @@ private struct SummaryBody: View {
                 }
             }
             if summary.isPartial {
-                Text("This page is very long; the summary covers its first \(SummaryText.maximumLength.formatted()) characters.")
+                Text("This page is long, so the summary covers only its start.")
                     .font(Theme.font(11))
                     .foregroundStyle(.secondary)
             }

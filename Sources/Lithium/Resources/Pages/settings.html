@@ -7,20 +7,34 @@
 <style>
   section { display: none; }
   section.active { display: block; }
-  .stat { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 28px 0 8px; }
-  .stat .number { font-size: 44px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
-  .stat .label { color: var(--muted); margin-top: 8px; }
-  .sources { color: var(--muted); font-size: 13px; padding: 12px 0 0; }
+  .lead + .row { margin-top: 12px; border-top: 0; }
+  details { color: var(--muted); font-size: 13px; padding: 0 0 4px; }
+  summary { cursor: pointer; width: max-content; color: var(--faint); font-weight: 500;
+    list-style: none; display: flex; align-items: center; gap: 4px; }
+  summary::-webkit-details-marker { display: none; }
+  /* Phosphor's caret, like every other icon in Lithium, instead of the browser's triangle. */
+  summary::before { content: ""; width: 12px; height: 12px; background: currentColor;
+    -webkit-mask: url(lithium://pages/icon/caret-right) center / contain no-repeat;
+    mask: url(lithium://pages/icon/caret-right) center / contain no-repeat; transition: transform .15s; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  summary:hover { color: var(--ink); }
+  details p { margin: 6px 0 0; }
+  .cta { margin-top: 20px; }
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; padding: 0 0 8px; }
   td { padding: 12px 0; border-top: 1px solid var(--line); }
   td.host { font-weight: 550; }
+  td.host a { color: inherit; text-decoration: none; }
   .about { display: flex; align-items: center; gap: 18px; padding: 28px 0 8px; }
   .about img { width: 64px; height: 64px; }
   .about .name { font-size: 22px; font-weight: 650; }
   dl { display: grid; grid-template-columns: 140px 1fr; margin: 0; }
   dt, dd { margin: 0; padding: 14px 0; border-top: 1px solid var(--line); }
   dt { color: var(--muted); }
+  .credits { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .credits li { display: flex; justify-content: space-between; gap: 24px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .credits li:first-child { border-top: 0; }
+  .credits span:last-child { color: var(--muted); white-space: nowrap; }
   .extension .title { display: flex; align-items: center; gap: 10px; }
   .extension img { width: 24px; height: 24px; flex: none; }
   .extension .actions { display: flex; align-items: center; gap: 10px; }
@@ -33,31 +47,30 @@
 <main>
   <section id="appearance" class="page">
     <h2>Appearance</h2>
-    <p class="lead">How the sidebar, toolbar, start page and websites look.</p>
     <h3>Sidebar</h3>
     <div class="row">
-      <div><div class="title">Background</div><div class="hint">A solid color, or the frosted glass of macOS.</div></div>
-      <div class="segmented" id="style"><button data-value="solid">Solid color</button><button data-value="translucent">Translucent</button></div>
+      <div><div class="title">Background</div></div>
+      <div class="segmented" id="style"><button data-value="solid">Solid</button><button data-value="translucent">Translucent</button></div>
     </div>
     <div class="row" id="color-row">
       <div><div class="title">Color</div><div class="hint" id="color-hex"></div></div>
       <div class="swatches" id="swatches"><input type="color" id="custom-color" title="Custom color"></div>
     </div>
     <div class="row">
-      <div><div class="title">Reveal sensitivity</div><div class="hint">When the sidebar is hidden, how quickly the window’s left edge brings it out and how long it stays once the pointer leaves.</div></div>
+      <div><div class="title">Reveal sensitivity</div><div class="hint">How fast the hidden sidebar appears.</div></div>
       <div class="segmented" id="reveal"><button data-value="responsive">Responsive</button><button data-value="normal">Normal</button><button data-value="calm">Calm</button></div>
     </div>
     <div class="row">
-      <div><div class="title">Mini player</div><div class="hint">Shows what the last tab with sound plays at the bottom of the sidebar, with play, pause, previous and next.</div></div>
+      <div><div class="title">Mini player</div><div class="hint">Controls for the tab playing sound.</div></div>
       <label class="switch" for="mini-player"><input type="checkbox" id="mini-player" role="switch"><span></span></label>
     </div>
     <div class="row">
-      <div><div class="title">Show resource usage on tab hover</div><div class="hint">The card that opens when the pointer rests on a tab also shows the memory and CPU its page uses, refreshed every second.</div></div>
+      <div><div class="title">Show memory and CPU on tab hover</div></div>
       <label class="switch" for="tab-usage"><input type="checkbox" id="tab-usage" role="switch"><span></span></label>
     </div>
     <h3>Start page</h3>
     <div class="row">
-      <div><div class="title">Background</div><div class="hint">What a new tab shows behind the address bar.</div></div>
+      <div><div class="title">Background</div></div>
       <div class="segmented" id="start-kind"><button data-value="lithium">Lithium</button><button data-value="color">Color</button><button data-value="gradient">Gradient</button><button data-value="image">Picture</button><button data-value="wallpaper">Wallpaper</button></div>
     </div>
     <div class="row" id="start-color-row">
@@ -65,90 +78,107 @@
       <div class="swatches" id="start-swatches"><input type="color" id="start-custom-color" title="Custom color"></div>
     </div>
     <div class="row" id="start-gradient-row">
-      <div><div class="title">Colors</div><div class="hint">From the top left corner to the bottom right one.</div></div>
+      <div><div class="title">Colors</div></div>
       <div class="swatches"><input type="color" id="start-from" title="Top left"><input type="color" id="start-to" title="Bottom right"></div>
     </div>
     <div class="row" id="start-image-row">
-      <div><div class="title">Picture</div><div class="hint">Lithium keeps its own copy.</div></div>
+      <div><div class="title">Picture</div></div>
       <button class="button" id="start-image">Choose…</button>
     </div>
     <h3>Websites</h3>
     <div class="row">
-      <div><div class="title">DM Sans on every site</div><div class="hint">Replaces the fonts websites choose with DM Sans. Icons, code and math keep their own fonts. Applies to pages as they load.</div></div>
+      <div><div class="title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
       <label class="switch" for="website-font"><input type="checkbox" id="website-font" role="switch"><span></span></label>
     </div>
   </section>
 
   <section id="search" class="page">
     <h2>Search</h2>
-    <p class="lead">Used by the address bar.</p>
     <h3>Search engine</h3>
     <div class="rows" id="engines"></div>
   </section>
 
   <section id="privacy" class="page">
-    <h2>Privacy &amp; Security</h2>
-    <p class="lead">Ads, trackers and fingerprinting are blocked on every site by default.</p>
-    <div class="stat">
-      <div><div class="number" id="rules">—</div><div class="label" id="updated"></div></div>
-      <button class="button accent" id="update">Update now</button>
+    <h2>Privacy &amp; security</h2>
+    <p class="lead">Blocks ads, trackers and fingerprinting. Built on uBlock Origin filter lists.</p>
+    <div class="row">
+      <div><div class="title">Filter lists</div><div class="hint" id="updated"></div></div>
+      <button class="button" id="update">Update now</button>
     </div>
-    <div class="sources">uBlock Origin · uBO Privacy · uBO Badware · uBO scriptlets · EasyList · EasyPrivacy · Peter Lowe · URLhaus</div>
+    <details>
+      <summary>Details</summary>
+      <p id="rules"></p>
+      <p>uBlock Origin · uBO Privacy · uBO Badware · uBO scriptlets · EasyList · EasyPrivacy · Peter Lowe · URLhaus</p>
+    </details>
     <h3>Always on</h3>
-    <div class="row"><div><div class="title">Fingerprinting protection</div><div class="hint">WebKit’s Advanced Fingerprinting Protection, plus per-site noise on canvas, audio, WebGL and CPU count.</div></div></div>
-    <div class="row"><div><div class="title">Tracking parameters removed</div><div class="hint">utm_, fbclid, gclid and similar are stripped from links before they load.</div></div></div>
-    <div class="row"><div><div class="title">HTTPS upgrades and fraud warnings</div><div class="hint">Known sites load over HTTPS; deceptive sites show a warning first.</div></div></div>
-    <h3>Protections turned off</h3>
+    <div class="row"><div class="title">Fingerprinting protection</div></div>
+    <div class="row"><div class="title">Trackers removed from links</div></div>
+    <div class="row"><div class="title">HTTPS upgrades and fraud warnings</div></div>
+    <h3>Turned off for</h3>
     <div class="rows" id="exceptions"></div>
   </section>
 
   <section id="extensions" class="page">
     <h2>Extensions</h2>
-    <p class="lead">Extensions from the Chrome Web Store, run by the WebKit engine itself. Click Add to Chrome on an extension’s page in the store: Lithium asks first, then adds it.</p>
-    <div class="stat">
-      <div><div class="label">Most extensions work. Some rely on parts of Chrome that WebKit doesn’t have.</div></div>
-      <button class="button accent" id="web-store">Open the Chrome Web Store</button>
-    </div>
+    <p class="lead">Add extensions from the Chrome Web Store. Some may not work.</p>
+    <button class="button accent cta" id="web-store">Open Chrome Web Store</button>
     <h3>Added</h3>
     <div class="rows" id="extension-list"></div>
   </section>
 
   <section id="max" class="page">
     <h2>Max</h2>
-    <p class="lead">Intelligence features, each one optional. They run on this Mac with Apple Intelligence; nothing about your browsing is sent anywhere.</p>
+    <p class="lead">Runs on this Mac with Apple Intelligence. Your browsing stays private.</p>
     <h3>Apple Intelligence</h3>
     <div class="row"><div><div class="title status" id="max-status-title">Checking…</div><div class="hint" id="max-status"></div></div></div>
     <h3>Features</h3>
     <div class="row">
-      <div><div class="title">Tidy tab titles</div><div class="hint">Shortens long tab titles as pages load, like “WebKit project” instead of the full GitHub description. Hover a tab to see its original title. Names you give tabs always win.</div></div>
+      <div><div class="title">Tidy tab titles</div><div class="hint">Shortens long titles. Your own names stay.</div></div>
       <label class="switch" for="tidy-titles"><input type="checkbox" id="tidy-titles" role="switch"><span></span></label>
     </div>
     <div class="row">
-      <div><div class="title">Summarize pages</div><div class="hint">Adds a sparkle button to the toolbar that sums up the page in a sentence and a few key points, in your language. Select a passage first to summarize only that. Runs only when you click it.</div></div>
+      <div><div class="title">Summarize pages</div><div class="hint">Adds a toolbar button that sums up the page or selected text.</div></div>
       <label class="switch" for="summaries"><input type="checkbox" id="summaries" role="switch"><span></span></label>
     </div>
     <div class="row" id="summary-language-row">
-      <div><div class="title">Summary language</div><div class="hint">Summaries and translations are written in this language, whatever the page’s own.</div></div>
+      <div><div class="title">Summary language</div><div class="hint">Also used for translations.</div></div>
       <select id="summary-language"></select>
     </div>
   </section>
 
   <section id="permissions" class="page">
-    <h2>Site Permissions</h2>
-    <p class="lead">Sites ask the first time they need your camera, microphone or location, or a frame in them wants to download a file. Your answers live here.</p>
+    <h2>Site permissions</h2>
+    <p class="lead">What each site may use. Sites ask the first time.</p>
     <div id="permission-list" style="margin-top: 32px"></div>
+  </section>
+
+  <section id="site" class="page">
+    <h2 id="site-host"></h2>
+    <h3>Permissions</h3>
+    <div class="rows" id="site-permissions"></div>
+    <h3>Data</h3>
+    <div class="row">
+      <div><div class="title">Cookies</div><div class="hint" id="site-cookies"></div></div>
+      <button class="button" id="site-clear">Clear site data</button>
+    </div>
   </section>
 
   <section id="about" class="page">
     <h2>About Lithium</h2>
-    <p class="lead">A light, private browser built on the WebKit engine of macOS.</p>
     <div class="about"><img src="lithium://pages/app-icon" alt=""><div><div class="name">Lithium</div><div class="hint" id="version"></div></div></div>
     <dl>
       <dt>Engine</dt><dd id="engine"></dd>
       <dt>System</dt><dd id="system"></dd>
       <dt>License</dt><dd>GNU General Public License v3.0</dd>
-      <dt>Built with</dt><dd>AdGuard SafariConverterLib, Scriptlets and ExtendedCss (GPL-3.0) · uBlock Origin filter lists (GPL-3.0) · EasyList Cookie List (CC BY 3.0) · Phosphor Icons (MIT) · DM Sans (SIL OFL)</dd>
     </dl>
+    <h3>Credits</h3>
+    <ul class="credits">
+      <li><span>AdGuard SafariConverterLib, Scriptlets and ExtendedCss</span><span>GPL-3.0</span></li>
+      <li><span>uBlock Origin filter lists</span><span>GPL-3.0</span></li>
+      <li><span>EasyList Cookie List</span><span>CC BY 3.0</span></li>
+      <li><span>Phosphor Icons</span><span>MIT</span></li>
+      <li><span>DM Sans</span><span>SIL OFL</span></li>
+    </ul>
   </section>
 </main>
 
@@ -156,26 +186,54 @@
 <script>
   const SWATCHES = ['#D5DAF5', '#E6DDF6', '#F6DDE4', '#F7E7D4', '#DDEFE3', '#D8ECF3', '#E4E4E7', '#2B2D42'];
   const START_SWATCHES = ['#2B2D42', '#1F3A5F', '#3D2C4E', '#2F4A3A', '#5B3A29', '#D5DAF5', '#F6DDE4', '#E4E4E7'];
+  const KINDS = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location'], ['downloads', 'Downloads']];
   let pollTimer = null;
+  let lastState = null;
+
+  // One site's settings live at #site/<host>, under Site Permissions in the sidebar.
+  const siteHost = () => {
+    const [id, host] = location.hash.slice(1).split('/');
+    return id === 'site' && host ? decodeURIComponent(host) : '';
+  };
 
   const showSection = () => {
-    const id = (location.hash || '#appearance').slice(1);
+    const id = siteHost() ? 'site' : (location.hash || '#appearance').slice(1);
+    const navID = id === 'site' ? 'permissions' : id;
     document.querySelectorAll('section').forEach((s) => s.classList.toggle('active', s.id === id));
-    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + navID));
+    if (id === 'site') {
+      if (lastState) render(lastState);
+      call('site', siteHost()).then(renderSite);
+    }
   };
   window.addEventListener('hashchange', showSection);
 
+  const permissionSelect = (host, kind, decision) => {
+    const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
+    select.value = decision || '';
+    select.onchange = () => call('setPermission', { host, kind, decision: select.value }).then(render);
+    return select;
+  };
+
+  const renderSite = (site) => {
+    // An answer for a site left before it came in.
+    if (site.host !== siteHost()) return;
+    $('#site-cookies').textContent = site.cookies === 1 ? '1 cookie' : `${site.cookies} cookies`;
+    $('#site-clear').disabled = !site.hasData;
+  };
+
   const relative = (ms) => {
-    if (!ms) return 'Never updated';
+    if (!ms) return 'Not updated yet';
     const minutes = Math.round((Date.now() - ms) / 60000);
-    if (minutes < 1) return 'Rules active · lists updated just now';
-    if (minutes < 60) return `Rules active · lists updated ${minutes} min ago`;
+    if (minutes < 1) return 'Updated just now';
+    if (minutes < 60) return `Updated ${minutes} min ago`;
     const hours = Math.round(minutes / 60);
-    if (hours < 24) return `Rules active · lists updated ${hours} h ago`;
-    return `Rules active · lists updated ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
+    if (hours < 24) return `Updated ${hours} h ago`;
+    return `Updated ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
   };
 
   const render = (state) => {
+    lastState = state;
     const { appearance, search, protections, permissions, about } = state;
 
     document.querySelectorAll('#style button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarStyle));
@@ -221,52 +279,57 @@
       return row;
     }));
 
-    $('#rules').textContent = protections.ruleCount.toLocaleString('en');
-    $('#updated').textContent = protections.updating ? 'Downloading the latest lists…' : relative(protections.updated);
+    $('#rules').textContent = `${protections.ruleCount.toLocaleString('en')} rules from:`;
+    $('#updated').textContent = protections.updating ? 'Updating…' : relative(protections.updated);
     $('#update').disabled = protections.updating;
     $('#update').innerHTML = protections.updating ? '<span class="spin"></span>Updating' : 'Update now';
     clearTimeout(pollTimer);
     if (protections.updating) pollTimer = setTimeout(() => call('state').then(render), 1000);
 
     $('#exceptions').replaceChildren(...(protections.disabledHosts.length ? protections.disabledHosts.map((host) => {
-      const button = el('button', { className: 'button', textContent: 'Turn back on' });
+      const button = el('button', { className: 'button', textContent: 'Turn on' });
       button.onclick = () => call('enableProtections', host).then(render);
       return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
-    }) : [el('div', { className: 'empty', textContent: 'None. Turn protections off for one site from the shield in the toolbar.' })]));
+    }) : [el('div', { className: 'empty', textContent: 'No sites. Use the shield in the toolbar.' })]));
 
-    const kinds = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location'], ['downloads', 'Downloads']];
     $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
-      el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...kinds.map(([, label]) => el('th', { textContent: label }))])]),
+      el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...KINDS.map(([, label]) => el('th', { textContent: label }))])]),
       el('tbody', {}, permissions.map((entry) => el('tr', {}, [
-        el('td', { className: 'host', textContent: entry.host }),
-        ...kinds.map(([kind]) => {
-          const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
-          select.value = entry[kind] || '';
-          select.onchange = () => call('setPermission', { host: entry.host, kind, decision: select.value }).then(render);
-          return el('td', {}, [select]);
-        }),
+        el('td', { className: 'host' }, [el('a', { href: `#site/${entry.host}`, textContent: entry.host })]),
+        ...KINDS.map(([kind]) => el('td', {}, [permissionSelect(entry.host, kind, entry[kind])])),
       ]))),
     ]) : el('div', { className: 'empty', textContent: 'No site has asked yet.' }));
+
+    const host = siteHost();
+    if (host) {
+      const entry = permissions.find((e) => e.host === host) || {};
+      $('#site-host').textContent = host.replace(/^www\./, '');
+      $('#site-permissions').replaceChildren(...KINDS.map(([kind, label]) => el('div', { className: 'row' }, [
+        el('div', { className: 'title', textContent: label }),
+        permissionSelect(host, kind, entry[kind]),
+      ])));
+    }
 
     const { max } = state;
     $('#tidy-titles').checked = max.tidyTitles;
     $('#summaries').checked = max.summaries;
     $('#summary-language-row').hidden = !max.summaries || max.summaryLanguages.length === 0;
     $('#summary-language').replaceChildren(
-      el('option', { value: '', textContent: `Same as the system (${max.summarySystemLanguage})` }),
+      el('option', { value: '', textContent: `System (${max.summarySystemLanguage})` }),
       ...max.summaryLanguages.map((language) => el('option', { value: language.code, textContent: language.name })),
     );
     $('#summary-language').value = max.summaryLanguage;
     $('#max-status-title').textContent = max.modelAvailable ? 'Available' : 'Not available';
     $('#max-status-title').classList.toggle('ready', max.modelAvailable);
     $('#max-status').textContent = max.modelMessage;
+    $('#max-status').hidden = !max.modelMessage;
 
     $('#extension-list').replaceChildren(...(state.extensions.length ? state.extensions.map((extension) => {
       const toggle = el('input', { type: 'checkbox', role: 'switch', checked: extension.enabled });
       toggle.onchange = () => call('setExtensionEnabled', { id: extension.id, enabled: toggle.checked }).then(render);
       const remove = el('button', { className: 'button', textContent: 'Remove' });
       remove.onclick = () => {
-        if (confirm(`Remove “${extension.name}”? Its settings and data are removed with it.`)) call('removeExtension', extension.id).then(render);
+        if (confirm(`Remove “${extension.name}” and its data?`)) call('removeExtension', extension.id).then(render);
       };
       const actions = [remove, el('label', { className: 'switch' }, [toggle, el('span')])];
       if (extension.hasOptions) {
@@ -281,7 +344,7 @@
         ]),
         el('div', { className: 'actions' }, actions),
       ]);
-    }) : [el('div', { className: 'empty', textContent: 'None yet.' })]));
+    }) : [el('div', { className: 'empty', textContent: 'No extensions yet.' })]));
 
     $('#version').textContent = `Version ${about.version}`;
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
@@ -311,7 +374,12 @@
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state').then(render); });
+  $('#site-clear').onclick = () => call('clearSiteData', siteHost()).then(renderSite);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    call('state').then(render);
+    if (siteHost()) call('site', siteHost()).then(renderSite);
+  });
 
   showSection();
   call('state').then(render);

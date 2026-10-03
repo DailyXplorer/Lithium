@@ -1,194 +1,170 @@
 import SwiftUI
 
-/// Opened from the lock in the address bar: connection, cookies and site data, permissions.
-/// Built fresh on every opening: the certificate only exists once the page has committed.
+/// Opened from the lock in the address bar: the site's connection, cookies and permissions; the
+/// rest is in its settings.
 struct SiteInfoPanel: View {
     let tab: Tab
 
     var body: some View {
         if let url = tab.url {
-            SiteInfoContent(tab: tab, info: SiteInfo(url: url, trust: tab.webView.serverTrust))
-                .id(url.absoluteString + String(tab.webView.serverTrust != nil))
+            LiveSiteInfo(tab: tab, info: SiteInfo(url: url, loadError: tab.loadError))
+                .id("\(url.absoluteString) \(tab.connection)")
         }
     }
 }
 
-private struct SiteInfoContent: View {
+private struct LiveSiteInfo: View {
     let tab: Tab
     @State var info: SiteInfo
+    @State private var showsCertificate = false
     @Environment(Browser.self) private var browser
-    @State private var showsCookies = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        SiteInfoView(
+            host: info.host,
+            favicon: tab.favicon,
+            connection: info.connection,
+            certificate: info.certificate,
+            cookieCount: info.cookieCount,
+            canClear: info.hasData && !info.isClearing,
+            permissions: browser.permissions.decisions[info.host] ?? [:],
+            showsCertificate: $showsCertificate,
+            onClear: {
+                Task {
+                    await info.clear()
+                    tab.reload()
+                }
+            },
+            onOpenSettings: {
+                dismiss()
+                browser.openSettings(section: "site/\(info.host)")
+            }
+        )
+        .task { await info.load() }
+        // Read when asked, so it is the trust of the page committed by then.
+        .task(id: showsCertificate) {
+            if showsCertificate { await info.loadCertificate(trust: tab.loadedWebView?.serverTrust) }
+        }
+    }
+}
+
+/// The panel from plain values, so it also draws without a tab.
+struct SiteInfoView: View {
+    let host: String
+    let favicon: NSImage?
+    let connection: SiteInfo.Connection
+    let certificate: SiteInfo.CertificateLookup
+    let cookieCount: Int?
+    let canClear: Bool
+    let permissions: [PermissionKind: PermissionDecision]
+    @Binding var showsCertificate: Bool
+    var onClear: () -> Void = {}
+    var onOpenSettings: () -> Void = {}
+
+    /// "Ask" until the site has an answer; one answer is named, more are counted.
+    static func permissionSummary(_ decisions: [PermissionKind: PermissionDecision]) -> String {
+        let allowed = PermissionKind.allCases.filter { decisions[$0] == .allow }
+        let blocked = PermissionKind.allCases.filter { decisions[$0] == .deny }
+        switch (allowed.count, blocked.count) {
+        case (0, 0): return "Ask"
+        case (1, 0): return "\(allowed[0].label) allowed"
+        case (0, 1): return "\(blocked[0].label) blocked"
+        default:
+            return [(allowed.count, "allowed"), (blocked.count, "blocked")]
+                .filter { $0.0 > 0 }
+                .map { "\($0.0) \($0.1)" }
+                .joined(separator: ", ")
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Favicon(image: tab.favicon, fallback: info.host, size: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(info.host.hasPrefix("www.") ? String(info.host.dropFirst(4)) : info.host)
+            HStack(alignment: .top, spacing: 10) {
+                Favicon(image: favicon, fallback: host, size: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(host.hasPrefix("www.") ? String(host.dropFirst(4)) : host)
                         .font(Theme.font(15, .semibold))
                         .lineLimit(1)
-                    Text(info.isSecure ? "Connection is secure" : "Connection is not secure")
-                        .font(Theme.font(12))
-                        .foregroundStyle(info.isSecure ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
-                }
-            }
-            .padding(.bottom, 14)
-
-            Section(title: "Connection") {
-                if let certificate = info.certificate {
-                    Detail(label: "Issued to", value: certificate.subject)
-                    Detail(label: "Issued by", value: certificate.issuer)
-                    if let validUntil = certificate.validUntil {
-                        Detail(label: "Valid until", value: validUntil.formatted(date: .long, time: .omitted))
-                    }
-                } else {
-                    Text("Information you send or receive on this site could be read by others.")
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Section(title: "Cookies and site data") {
-                if info.isLoading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(cookieSummary)
-                            if !info.dataKinds.isEmpty {
-                                Text(info.dataKinds.joined(separator: " · "))
-                                    .font(Theme.font(12))
-                                    .foregroundStyle(.secondary)
+                        .truncationMode(.middle)
+                    if connection == .secure {
+                        Button { withAnimation(.snappy(duration: 0.15)) { showsCertificate.toggle() } } label: {
+                            HStack(spacing: 3) {
+                                Text("Secure")
+                                Icon(showsCertificate ? .caretDown : .forward, size: 10)
                             }
+                            .contentShape(Rectangle())
                         }
-                        Spacer()
-                        if !info.cookies.isEmpty {
-                            Button(showsCookies ? "Hide" : "Show") { withAnimation(.snappy(duration: 0.15)) { showsCookies.toggle() } }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(Color.accentColor)
-                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Certificate")
+                        if showsCertificate { certificateLines }
+                    } else {
+                        Text("Not secure").foregroundStyle(Color.orange)
+                        Text(connection.reason).foregroundStyle(.secondary)
                     }
-                    if showsCookies {
-                        CookieList(cookies: info.cookies)
-                    }
-                    Button {
-                        Task {
-                            await info.clear()
-                            tab.reload()
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if info.isClearing { ProgressView().controlSize(.mini) } else { Icon(.trash, size: 14) }
-                            Text("Clear cookies and site data")
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .disabled(info.isClearing || (info.cookies.isEmpty && info.dataKinds.isEmpty))
-                    .opacity(info.cookies.isEmpty && info.dataKinds.isEmpty ? 0.4 : 1)
-                    .padding(.top, 4)
                 }
-            }
-
-            Section(title: "Permissions") {
-                ForEach(PermissionKind.allCases) { kind in
-                    PermissionRow(kind: kind, host: info.host)
-                }
+                .font(Theme.font(12))
             }
 
             Divider().padding(.vertical, 12)
-            Button("Site settings") { browser.openSettings(section: "permissions") }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+
+            VStack(spacing: 8) {
+                Row(label: "Cookies") {
+                    Text(cookieCount.map(String.init) ?? "–").monospacedDigit()
+                    if canClear {
+                        Button("Clear", action: onClear)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                Row(label: "Permissions") {
+                    Text(Self.permissionSummary(permissions))
+                }
+            }
+
+            Button(action: onOpenSettings) {
+                Text("Site settings…")
+                    .frame(maxWidth: .infinity, minHeight: 28)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.primary.opacity(0.07)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 14)
         }
         .font(Theme.font(13))
-        .padding(18)
-        .frame(width: 340)
-        .task { await info.load() }
+        .padding(16)
+        .frame(width: 280)
     }
 
-    private var cookieSummary: String {
-        switch info.cookies.count {
-        case 0: "No cookies"
-        case 1: "1 cookie"
-        default: "\(info.cookies.count) cookies"
-        }
-    }
-}
-
-private struct Section<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-            Text(title.uppercased())
-                .font(Theme.font(10.5, .semibold))
-                .kerning(0.6)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 4)
-            content
-        }
-        .padding(.bottom, 12)
-    }
-}
-
-private struct Detail: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
-            Text(value).lineLimit(2).textSelection(.enabled)
-        }
-    }
-}
-
-private struct CookieList: View {
-    let cookies: [HTTPCookie]
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(cookies.sorted { $0.name < $1.name }, id: \.self) { cookie in
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(cookie.name).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text(cookie.domain)
-                            .font(Theme.font(11))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
+    @ViewBuilder private var certificateLines: some View {
+        Group {
+            switch certificate {
+            case .loading:
+                Text("Loading…")
+            case .unavailable:
+                Text("Certificate unavailable")
+            case .found(let certificate):
+                Text("Issued by \(certificate.issuer)").lineLimit(1).truncationMode(.tail)
+                if let validUntil = certificate.validUntil {
+                    Text("Expires \(validUntil.formatted(date: .abbreviated, time: .omitted))")
                 }
             }
         }
-        .frame(maxHeight: 140)
+        .foregroundStyle(.tertiary)
+        .textSelection(.enabled)
     }
 }
 
-private struct PermissionRow: View {
-    let kind: PermissionKind
-    let host: String
-    @Environment(Browser.self) private var browser
+private struct Row<Value: View>: View {
+    let label: String
+    @ViewBuilder let value: Value
 
     var body: some View {
-        let permissions = browser.permissions
-        HStack {
-            Icon(kind.icon, size: 15).opacity(0.7)
-            Text(kind.label)
-            Spacer()
-            Picker("", selection: Binding(
-                get: { permissions.decisions[host]?[kind] },
-                set: { permissions.set($0, for: kind, host: host) }
-            )) {
-                Text("Ask").tag(PermissionDecision?.none)
-                Text("Allow").tag(PermissionDecision?.some(.allow))
-                Text("Block").tag(PermissionDecision?.some(.deny))
-            }
-            .labelsHidden()
-            .fixedSize()
+        HStack(spacing: 10) {
+            Text(label).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            value
         }
     }
 }

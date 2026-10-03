@@ -46,7 +46,7 @@ private struct AddressBar: View {
     var body: some View {
         HStack(spacing: 4) {
             if !isEditing, let tab, let scheme = tab.url?.scheme, ["http", "https"].contains(scheme) {
-                ConnectionButton(tab: tab, isSecure: scheme == "https")
+                ConnectionButton(tab: tab, isSecure: tab.connection == .secure)
             } else {
                 Icon(.search, size: 15)
                     .opacity(0.5)
@@ -114,7 +114,7 @@ private struct ShieldButton: View {
         let enabled = browser.privacy.isEnabled(for: tab?.url)
         IconButton(
             icon: enabled ? .shield : .shieldOff,
-            help: enabled ? "Protections are on for this site (⇧⌘P turns them off)" : "Protections are off for this site (⇧⌘P turns them on)",
+            help: enabled ? "Protections on (⇧⌘P)" : "Protections off (⇧⌘P)",
             isEnabled: tab?.url?.scheme?.hasPrefix("http") == true
         ) {
             isPresented.toggle()
@@ -128,42 +128,63 @@ private struct ShieldButton: View {
 private struct ShieldPanel: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let privacy = browser.privacy
-        let host = Privacy.siteHost(tab?.url) ?? ""
+        ShieldView(
+            host: Privacy.siteHost(tab?.url) ?? "",
+            isOn: Binding(
+                get: { privacy.isEnabled(for: tab?.url) },
+                set: { browser.setProtections($0, for: tab) }
+            ),
+            updated: privacy.filtersUpdated,
+            onOpenSettings: {
+                dismiss()
+                browser.openSettings(section: "privacy")
+            }
+        )
+    }
+}
+
+/// The shield's panel from plain values, so it also draws without a browser.
+struct ShieldView: View {
+    let host: String
+    @Binding var isOn: Bool
+    let updated: Date?
+    var onOpenSettings: () -> Void = {}
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Protections").font(Theme.font(15, .semibold))
                 Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
             }
-            Toggle(isOn: Binding(
-                get: { privacy.isEnabled(for: tab?.url) },
-                set: { browser.setProtections($0, for: tab) }
-            )) {
+            Toggle(isOn: $isOn) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("On for this site")
-                    Text("Ad and tracker blocking, fingerprinting protection")
+                    Text("Blocks ads and trackers")
                         .font(Theme.font(11))
                         .foregroundStyle(.secondary)
                 }
             }
             .toggleStyle(.switch)
             Divider()
-            Text(summary(privacy))
-                .font(Theme.font(11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                if let updated {
+                    Text("Updated \(updated.formatted(date: .abbreviated, time: .omitted))")
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+                Button("Settings…", action: onOpenSettings)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .font(Theme.font(11))
         }
         .font(Theme.font(13))
         .padding(16)
-        .frame(width: 300)
-    }
-
-    private func summary(_ privacy: Privacy) -> String {
-        let count = privacy.ruleCount.formatted()
-        let date = privacy.filtersUpdated?.formatted(date: .abbreviated, time: .omitted) ?? "—"
-        return "\(count) rules from uBlock Origin, EasyList, EasyPrivacy, Peter Lowe and URLhaus. Lists updated \(date)."
+        .frame(width: 260)
     }
 }
 

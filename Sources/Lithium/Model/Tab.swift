@@ -69,6 +69,10 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
     @ObservationIgnored private var failedURL: URL?
     @ObservationIgnored private var errorNavigation: WKNavigation?
+    /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
+    /// another page commits.
+    private(set) var loadError: NSError?
+    var connection: SiteInfo.Connection { SiteInfo.Connection(url: url, loadError: loadError) }
     @ObservationIgnored private var lastCrashReload: Date?
     /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
@@ -525,6 +529,7 @@ final class Tab: NSObject, Identifiable {
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
         failedURL = url
+        loadError = error
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -646,6 +651,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away.
         goToAddressAfterWaking()
         // A prompt left from the page before would read as the new page's.
@@ -854,8 +860,8 @@ extension Tab: WKUIDelegate {
         let site = url.host() ?? "this site"
         alert.messageText = "Send the form again?"
         alert.informativeText = inFrame
-            ? "A part of this page, from \(site), was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
-            : "This page on \(site) was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+            ? "Part of this page sends a form to \(site) again. This can repeat an order or a payment."
+            : "This page sends a form to \(site) again. This can repeat an order or a payment."
         alert.addButton(withTitle: "Send Again")
         alert.addButton(withTitle: "Cancel")
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn

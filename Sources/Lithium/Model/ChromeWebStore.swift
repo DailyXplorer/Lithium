@@ -433,7 +433,7 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         let alert = NSAlert()
         alert.messageText = "Remove “\(entry.name)”?"
-        alert.informativeText = "Its settings and data are removed with it."
+        alert.informativeText = "Its settings and data will be deleted."
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         guard await present(alert, in: window) == .alertFirstButtonReturn else {

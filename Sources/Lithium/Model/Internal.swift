@@ -158,6 +158,16 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                let kind = entry["kind"].flatMap(PermissionKind.init(rawValue:)) {
                 browser.permissions.set(entry["decision"].flatMap(PermissionDecision.init(rawValue:)), for: kind, host: host)
             }
+        case "site", "clearSiteData":
+            guard let host = value as? String, !host.isEmpty else { return (nil, "No site") }
+            let info = SiteInfo(host: host)
+            await info.load()
+            if action == "clearSiteData" {
+                await info.clear()
+                // Its open pages would go on without the data they expect.
+                browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { $0.reload() }
+            }
+            return (["cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
         case "setTidyTitles":
             browser.tidyTitles.isEnabled = value as? Bool ?? true
             if browser.tidyTitles.isEnabled {

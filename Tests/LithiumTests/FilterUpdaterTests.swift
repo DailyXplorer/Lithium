@@ -34,11 +34,13 @@ func readsTheCertificateOfARealPage() async throws {
     webView.navigationDelegate = loaded
     webView.load(URLRequest(url: URL(string: "https://github.com/")!))
     try await loaded.wait()
-    let info = SiteInfo(url: try #require(webView.url), trust: webView.serverTrust)
-    print("certificate:", info.isSecure, info.certificate as Any)
+    let info = SiteInfo(url: try #require(webView.url))
+    await info.loadCertificate(trust: webView.serverTrust)
+    print("certificate:", info.isSecure, info.certificate)
     #expect(info.isSecure)
-    #expect(info.certificate?.subject == "github.com")
-    #expect((info.certificate?.validUntil ?? .distantPast) > Date())
+    guard case .found(let certificate) = info.certificate else { Issue.record("no certificate"); return }
+    #expect(certificate.subject == "github.com")
+    #expect((certificate.validUntil ?? .distantPast) > Date())
 }
 
 struct CookieFiltersTests {

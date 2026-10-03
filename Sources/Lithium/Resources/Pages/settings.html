@@ -15,6 +15,7 @@
   th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; padding: 0 0 8px; }
   td { padding: 12px 0; border-top: 1px solid var(--line); }
   td.host { font-weight: 550; }
+  td.host a { color: inherit; text-decoration: none; }
   .about { display: flex; align-items: center; gap: 18px; padding: 28px 0 8px; }
   .about img { width: 64px; height: 64px; }
   .about .name { font-size: 22px; font-weight: 650; }
@@ -139,6 +140,17 @@
     <div id="permission-list" style="margin-top: 32px"></div>
   </section>
 
+  <section id="site" class="page">
+    <h2 id="site-host"></h2>
+    <h3>Permissions</h3>
+    <div class="rows" id="site-permissions"></div>
+    <h3>Data</h3>
+    <div class="row">
+      <div><div class="title">Cookies</div><div class="hint" id="site-cookies"></div></div>
+      <button class="button" id="site-clear">Clear site data</button>
+    </div>
+  </section>
+
   <section id="about" class="page">
     <h2>About Lithium</h2>
     <p class="lead">A light, private browser built on the WebKit engine of macOS.</p>
@@ -156,14 +168,39 @@
 <script>
   const SWATCHES = ['#D5DAF5', '#E6DDF6', '#F6DDE4', '#F7E7D4', '#DDEFE3', '#D8ECF3', '#E4E4E7', '#2B2D42'];
   const START_SWATCHES = ['#2B2D42', '#1F3A5F', '#3D2C4E', '#2F4A3A', '#5B3A29', '#D5DAF5', '#F6DDE4', '#E4E4E7'];
+  const KINDS = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location'], ['downloads', 'Downloads']];
   let pollTimer = null;
+  let lastState = null;
+
+  // One site's settings live at #site/<host>, under Site Permissions in the sidebar.
+  const siteHost = () => {
+    const [id, host] = location.hash.slice(1).split('/');
+    return id === 'site' && host ? decodeURIComponent(host) : '';
+  };
 
   const showSection = () => {
-    const id = (location.hash || '#appearance').slice(1);
+    const id = siteHost() ? 'site' : (location.hash || '#appearance').slice(1);
+    const navID = id === 'site' ? 'permissions' : id;
     document.querySelectorAll('section').forEach((s) => s.classList.toggle('active', s.id === id));
-    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + navID));
+    if (id === 'site') {
+      if (lastState) render(lastState);
+      call('site', siteHost()).then(renderSite);
+    }
   };
   window.addEventListener('hashchange', showSection);
+
+  const permissionSelect = (host, kind, decision) => {
+    const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
+    select.value = decision || '';
+    select.onchange = () => call('setPermission', { host, kind, decision: select.value }).then(render);
+    return select;
+  };
+
+  const renderSite = (site) => {
+    $('#site-cookies').textContent = site.cookies === 1 ? '1 cookie' : `${site.cookies} cookies`;
+    $('#site-clear').disabled = !site.hasData;
+  };
 
   const relative = (ms) => {
     if (!ms) return 'Never updated';
@@ -176,6 +213,7 @@
   };
 
   const render = (state) => {
+    lastState = state;
     const { appearance, search, protections, permissions, about } = state;
 
     document.querySelectorAll('#style button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarStyle));
@@ -234,19 +272,23 @@
       return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
     }) : [el('div', { className: 'empty', textContent: 'None. Turn protections off for one site from the shield in the toolbar.' })]));
 
-    const kinds = [['camera', 'Camera'], ['microphone', 'Microphone'], ['location', 'Location'], ['downloads', 'Downloads']];
     $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
-      el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...kinds.map(([, label]) => el('th', { textContent: label }))])]),
+      el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...KINDS.map(([, label]) => el('th', { textContent: label }))])]),
       el('tbody', {}, permissions.map((entry) => el('tr', {}, [
-        el('td', { className: 'host', textContent: entry.host }),
-        ...kinds.map(([kind]) => {
-          const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
-          select.value = entry[kind] || '';
-          select.onchange = () => call('setPermission', { host: entry.host, kind, decision: select.value }).then(render);
-          return el('td', {}, [select]);
-        }),
+        el('td', { className: 'host' }, [el('a', { href: `#site/${entry.host}`, textContent: entry.host })]),
+        ...KINDS.map(([kind]) => el('td', {}, [permissionSelect(entry.host, kind, entry[kind])])),
       ]))),
     ]) : el('div', { className: 'empty', textContent: 'No site has asked yet.' }));
+
+    const host = siteHost();
+    if (host) {
+      const entry = permissions.find((e) => e.host === host) || {};
+      $('#site-host').textContent = host.replace(/^www\./, '');
+      $('#site-permissions').replaceChildren(...KINDS.map(([kind, label]) => el('div', { className: 'row' }, [
+        el('div', { className: 'title', textContent: label }),
+        permissionSelect(host, kind, entry[kind]),
+      ])));
+    }
 
     const { max } = state;
     $('#tidy-titles').checked = max.tidyTitles;
@@ -311,7 +353,12 @@
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) call('state').then(render); });
+  $('#site-clear').onclick = () => call('clearSiteData', siteHost()).then(renderSite);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    call('state').then(render);
+    if (siteHost()) call('site', siteHost()).then(renderSite);
+  });
 
   showSection();
   call('state').then(render);

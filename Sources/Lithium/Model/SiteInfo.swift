@@ -4,7 +4,7 @@ import PublicSuffixList
 import Security
 import WebKit
 
-/// What Lithium knows about the site in a tab: its connection, and the cookies and data it stored.
+/// What Lithium knows about a site: its connection, and the cookies and data it stored.
 @MainActor
 @Observable
 final class SiteInfo {
@@ -14,25 +14,39 @@ final class SiteInfo {
         let validUntil: Date?
     }
 
+    enum CertificateLookup: Equatable {
+        case loading, found(Certificate), unavailable
+    }
+
     let host: String
     /// The registrable domain (github.com for gist.github.com): cookies and data are grouped by it.
     let site: String
     let isSecure: Bool
-    let certificate: Certificate?
+    private(set) var certificate = CertificateLookup.loading
 
-    private(set) var cookies: [HTTPCookie] = []
-    private(set) var dataKinds: [String] = []
-    private(set) var isLoading = true
+    private(set) var cookieCount: Int?
+    private(set) var hasData = false
     private(set) var isClearing = false
 
+    @ObservationIgnored private var cookies: [HTTPCookie] = []
     @ObservationIgnored private var records: [WKWebsiteDataRecord] = []
     private let store = WKWebsiteDataStore.default()
 
-    init(url: URL, trust: SecTrust?) {
-        host = url.host() ?? ""
+    init(host: String, isSecure: Bool = true) {
+        self.host = host
         site = Self.registrable(host)
-        isSecure = url.scheme == "https" && trust != nil
-        certificate = trust.flatMap(Self.certificate)
+        self.isSecure = isSecure
+    }
+
+    convenience init(url: URL) {
+        self.init(host: url.host() ?? "", isSecure: Self.isSecure(url))
+    }
+
+    /// WebKit shows an https page only once its certificate checks out, and Lithium never
+    /// accepts one that doesn't. The web view's `serverTrust` can't tell: it is nil for a page a
+    /// service worker answered, or that came over a connection already open (youtube.com).
+    static func isSecure(_ url: URL?) -> Bool {
+        url?.scheme?.lowercased() == "https"
     }
 
     nonisolated static func registrable(_ host: String) -> String {
@@ -45,8 +59,8 @@ final class SiteInfo {
         cookies = allCookies.filter { Self.registrable($0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == site }
         records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
             .filter { Self.registrable($0.displayName) == site }
-        dataKinds = Set(records.flatMap(\.dataTypes)).compactMap(Self.label).sorted()
-        isLoading = false
+        cookieCount = cookies.count
+        hasData = !cookies.isEmpty || !records.isEmpty
     }
 
     /// Removes every cookie and piece of storage of the site (all its subdomains).
@@ -60,16 +74,21 @@ final class SiteInfo {
         await load()
     }
 
-    private static func label(_ type: String) -> String? {
-        switch type {
-        case WKWebsiteDataTypeCookies: nil
-        case WKWebsiteDataTypeLocalStorage, WKWebsiteDataTypeSessionStorage: "Local storage"
-        case WKWebsiteDataTypeIndexedDBDatabases, WKWebsiteDataTypeWebSQLDatabases: "Databases"
-        case WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache, WKWebsiteDataTypeFetchCache: "Cache"
-        case WKWebsiteDataTypeServiceWorkerRegistrations: "Service workers"
-        case WKWebsiteDataTypeFileSystem: "Files"
-        default: nil
+    /// The certificate of the page shown, from its web view's trust; when the web view has none
+    /// to give, asked of the site over a new connection, without cookies.
+    func loadCertificate(trust: SecTrust?) async {
+        guard isSecure, certificate == .loading else { return }
+        var trust = trust
+        if trust == nil, let url = URL(string: "https://\(host)/") {
+            let catcher = TrustCatcher()
+            let session = URLSession(configuration: .ephemeral, delegate: catcher, delegateQueue: nil)
+            defer { session.finishTasksAndInvalidate() }
+            var request = URLRequest(url: url, timeoutInterval: 10)
+            request.httpMethod = "HEAD"
+            _ = try? await session.data(for: request)
+            trust = catcher.trust
         }
+        certificate = trust.flatMap(Self.certificate).map(CertificateLookup.found) ?? .unavailable
     }
 
     private static func certificate(from trust: SecTrust) -> Certificate? {
@@ -81,5 +100,17 @@ final class SiteInfo {
         let notAfter = (values?[kSecOIDX509V1ValidityNotAfter as String]?[kSecPropertyKeyValue as String] as? NSNumber)
             .map { Date(timeIntervalSinceReferenceDate: $0.doubleValue) }
         return Certificate(subject: subject, issuer: issuer, validUntil: notAfter)
+    }
+}
+
+/// Keeps the trust the server presented, and lets the system judge it as usual.
+private final class TrustCatcher: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private(set) var trust: SecTrust?
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            trust = challenge.protectionSpace.serverTrust
+        }
+        return (.performDefaultHandling, nil)
     }
 }

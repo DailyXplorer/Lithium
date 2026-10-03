@@ -46,7 +46,7 @@ private struct AddressBar: View {
     var body: some View {
         HStack(spacing: 4) {
             if !isEditing, let tab, let scheme = tab.url?.scheme, ["http", "https"].contains(scheme) {
-                ConnectionButton(tab: tab, isSecure: scheme == "https")
+                ConnectionButton(tab: tab, isSecure: SiteInfo.isSecure(tab.url))
             } else {
                 Icon(.search, size: 15)
                     .opacity(0.5)

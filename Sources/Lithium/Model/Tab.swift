@@ -69,6 +69,10 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
     @ObservationIgnored private var failedURL: URL?
     @ObservationIgnored private var errorNavigation: WKNavigation?
+    /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
+    /// another page commits.
+    private(set) var loadError: NSError?
+    var connection: SiteInfo.Connection { SiteInfo.Connection(url: url, loadError: loadError) }
     @ObservationIgnored private var lastCrashReload: Date?
     /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
@@ -525,6 +529,7 @@ final class Tab: NSObject, Identifiable {
         let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
         guard !ignored else { return }
         failedURL = url
+        loadError = error
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -646,6 +651,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away.
         goToAddressAfterWaking()
         // A prompt left from the page before would read as the new page's.

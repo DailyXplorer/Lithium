@@ -216,6 +216,8 @@
   };
 
   const renderSite = (site) => {
+    // An answer for a site left before it came in.
+    if (site.host !== siteHost()) return;
     $('#site-cookies').textContent = site.cookies === 1 ? '1 cookie' : `${site.cookies} cookies`;
     $('#site-clear').disabled = !site.hasData;
   };

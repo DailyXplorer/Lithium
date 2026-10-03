@@ -18,11 +18,42 @@ final class SiteInfo {
         case loading, found(Certificate), unavailable
     }
 
+    /// What the lock in the address bar and the panel say of the page shown.
+    enum Connection: Equatable {
+        case secure, notEncrypted, certificateNotValid, notLoaded
+
+        /// WebKit shows an https page only once its certificate checks out, and Lithium never
+        /// accepts one that doesn't. The web view's `serverTrust` can't tell: it is nil for a page a
+        /// service worker answered, or that came over a connection already open (youtube.com).
+        /// Lithium's error page keeps the address that failed, https or not: the error decides.
+        init(url: URL?, loadError: NSError?) {
+            if let loadError {
+                let isCertificate = loadError.domain == NSURLErrorDomain
+                    && (NSURLErrorClientCertificateRequired...NSURLErrorSecureConnectionFailed).contains(loadError.code)
+                self = isCertificate ? .certificateNotValid : .notLoaded
+            } else {
+                self = url?.scheme?.lowercased() == "https" ? .secure : .notEncrypted
+            }
+        }
+
+        var reason: String {
+            switch self {
+            case .secure: ""
+            case .notEncrypted: "Connection isn’t encrypted"
+            case .certificateNotValid: "Certificate not valid"
+            case .notLoaded: "Page didn’t load"
+            }
+        }
+    }
+
     let host: String
     /// The registrable domain (github.com for gist.github.com): cookies and data are grouped by it.
     let site: String
-    let isSecure: Bool
+    let connection: Connection
     private(set) var certificate = CertificateLookup.loading
+    /// Where the certificate is asked for when the web view has none: the page's server.
+    @ObservationIgnored private var certificateURL: URL?
+    @ObservationIgnored var fetchTrust: (URL) async -> SecTrust? = SiteInfo.fetchTrust
 
     private(set) var cookieCount: Int?
     private(set) var hasData = false
@@ -32,21 +63,26 @@ final class SiteInfo {
     @ObservationIgnored private var records: [WKWebsiteDataRecord] = []
     private let store = WKWebsiteDataStore.default()
 
-    init(host: String, isSecure: Bool = true) {
+    init(host: String, connection: Connection = .secure) {
         self.host = host
         site = Self.registrable(host)
-        self.isSecure = isSecure
+        self.connection = connection
     }
 
-    convenience init(url: URL) {
-        self.init(host: url.host() ?? "", isSecure: Self.isSecure(url))
+    convenience init(url: URL, loadError: NSError? = nil) {
+        self.init(host: url.host() ?? "", connection: Connection(url: url, loadError: loadError))
+        certificateURL = Self.certificateURL(for: url)
     }
 
-    /// WebKit shows an https page only once its certificate checks out, and Lithium never
-    /// accepts one that doesn't. The web view's `serverTrust` can't tell: it is nil for a page a
-    /// service worker answered, or that came over a connection already open (youtube.com).
-    static func isSecure(_ url: URL?) -> Bool {
-        url?.scheme?.lowercased() == "https"
+    /// The page's server (scheme, host and port) without the rest of its address.
+    nonisolated static func certificateURL(for url: URL) -> URL? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.host?.isEmpty == false else { return nil }
+        components.user = nil
+        components.password = nil
+        components.path = "/"
+        components.query = nil
+        components.fragment = nil
+        return components.url
     }
 
     nonisolated static func registrable(_ host: String) -> String {
@@ -77,18 +113,24 @@ final class SiteInfo {
     /// The certificate of the page shown, from its web view's trust; when the web view has none
     /// to give, asked of the site over a new connection, without cookies.
     func loadCertificate(trust: SecTrust?) async {
-        guard isSecure, certificate == .loading else { return }
+        guard connection == .secure, certificate == .loading else { return }
         var trust = trust
-        if trust == nil, let url = URL(string: "https://\(host)/") {
-            let catcher = TrustCatcher()
-            let session = URLSession(configuration: .ephemeral, delegate: catcher, delegateQueue: nil)
-            defer { session.finishTasksAndInvalidate() }
-            var request = URLRequest(url: url, timeoutInterval: 10)
-            request.httpMethod = "HEAD"
-            _ = try? await session.data(for: request)
-            trust = catcher.trust
+        if trust == nil, let certificateURL {
+            trust = await fetchTrust(certificateURL)
+            // Closed before the answer: still to load, so opening the certificate again asks again.
+            guard !Task.isCancelled else { return }
         }
         certificate = trust.flatMap(Self.certificate).map(CertificateLookup.found) ?? .unavailable
+    }
+
+    private nonisolated static func fetchTrust(_ url: URL) async -> SecTrust? {
+        let catcher = TrustCatcher()
+        let session = URLSession(configuration: .ephemeral, delegate: catcher, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "HEAD"
+        _ = try? await session.data(for: request)
+        return catcher.trust
     }
 
     private static func certificate(from trust: SecTrust) -> Certificate? {

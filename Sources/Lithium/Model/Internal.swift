@@ -167,7 +167,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 // Its open pages would go on without the data they expect.
                 browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { $0.reload() }
             }
-            return (["cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
+            return (["host": host, "cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
         case "setTidyTitles":
             browser.tidyTitles.isEnabled = value as? Bool ?? true
             if browser.tidyTitles.isEnabled {

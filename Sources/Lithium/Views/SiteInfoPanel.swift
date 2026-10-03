@@ -7,8 +7,8 @@ struct SiteInfoPanel: View {
 
     var body: some View {
         if let url = tab.url {
-            LiveSiteInfo(tab: tab, info: SiteInfo(url: url))
-                .id(url.absoluteString)
+            LiveSiteInfo(tab: tab, info: SiteInfo(url: url, loadError: tab.loadError))
+                .id("\(url.absoluteString) \(tab.connection)")
         }
     }
 }
@@ -24,7 +24,7 @@ private struct LiveSiteInfo: View {
         SiteInfoView(
             host: info.host,
             favicon: tab.favicon,
-            isSecure: info.isSecure,
+            connection: info.connection,
             certificate: info.certificate,
             cookieCount: info.cookieCount,
             canClear: info.hasData && !info.isClearing,
@@ -53,7 +53,7 @@ private struct LiveSiteInfo: View {
 struct SiteInfoView: View {
     let host: String
     let favicon: NSImage?
-    let isSecure: Bool
+    let connection: SiteInfo.Connection
     let certificate: SiteInfo.CertificateLookup
     let cookieCount: Int?
     let canClear: Bool
@@ -87,7 +87,7 @@ struct SiteInfoView: View {
                         .font(Theme.font(15, .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if isSecure {
+                    if connection == .secure {
                         Button { withAnimation(.snappy(duration: 0.15)) { showsCertificate.toggle() } } label: {
                             HStack(spacing: 3) {
                                 Text("Secure")
@@ -101,7 +101,7 @@ struct SiteInfoView: View {
                         if showsCertificate { certificateLines }
                     } else {
                         Text("Not secure").foregroundStyle(Color.orange)
-                        Text("Connection isn’t encrypted").foregroundStyle(.secondary)
+                        Text(connection.reason).foregroundStyle(.secondary)
                     }
                 }
                 .font(Theme.font(12))

@@ -36,8 +36,8 @@ func readsTheCertificateOfARealPage() async throws {
     try await loaded.wait()
     let info = SiteInfo(url: try #require(webView.url))
     await info.loadCertificate(trust: webView.serverTrust)
-    print("certificate:", info.isSecure, info.certificate)
-    #expect(info.isSecure)
+    print("certificate:", info.connection, info.certificate)
+    #expect(info.connection == .secure)
     guard case .found(let certificate) = info.certificate else { Issue.record("no certificate"); return }
     #expect(certificate.subject == "github.com")
     #expect((certificate.validUntil ?? .distantPast) > Date())

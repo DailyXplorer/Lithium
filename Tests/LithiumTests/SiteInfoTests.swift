@@ -9,11 +9,62 @@ struct SiteInfoTests {
     /// The panel and the lock in the address bar both go by the address: WebKit commits an https
     /// page only with a valid certificate, whether or not its web view has the trust to show.
     @Test func siteInfoIsSecureForHTTPSOnly() {
-        #expect(SiteInfo(url: URL(string: "https://www.youtube.com/watch?v=x")!).isSecure)
-        #expect(SiteInfo(url: URL(string: "HTTPS://example.com/")!).isSecure)
-        #expect(!SiteInfo(url: URL(string: "http://example.com/")!).isSecure)
-        #expect(!SiteInfo.isSecure(nil))
+        #expect(SiteInfo(url: URL(string: "https://www.youtube.com/watch?v=x")!).connection == .secure)
+        #expect(SiteInfo(url: URL(string: "HTTPS://example.com/")!).connection == .secure)
+        #expect(SiteInfo(url: URL(string: "http://example.com/")!).connection == .notEncrypted)
+        #expect(SiteInfo.Connection(url: nil, loadError: nil) == .notEncrypted)
         #expect(SiteInfo(url: URL(string: "https://gist.github.com/")!).site == "github.com")
+    }
+
+    /// Lithium's error page keeps the https address that failed; it is never secure.
+    @Test func siteInfoOfAnErrorPageIsNotSecure() {
+        let url = URL(string: "https://expired.badssl.com/")!
+        let expired = NSError(domain: NSURLErrorDomain, code: NSURLErrorServerCertificateHasBadDate)
+        let refused = NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed)
+        let offline = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+        #expect(SiteInfo(url: url, loadError: expired).connection == .certificateNotValid)
+        #expect(SiteInfo(url: url, loadError: refused).connection == .certificateNotValid)
+        #expect(SiteInfo(url: url, loadError: offline).connection == .notLoaded)
+        #expect(SiteInfo.Connection.certificateNotValid.reason == "Certificate not valid")
+        #expect(SiteInfo.Connection.notLoaded.reason == "Page didn’t load")
+    }
+
+    /// No lookup for a page that isn't secure: it would show the certificate WebKit refused.
+    @Test func siteInfoOfAnErrorPageLooksUpNoCertificate() async {
+        let info = SiteInfo(url: URL(string: "https://expired.badssl.com/")!, loadError: NSError(domain: NSURLErrorDomain, code: NSURLErrorServerCertificateUntrusted))
+        var asked = false
+        info.fetchTrust = { _ in asked = true; return nil }
+        await info.loadCertificate(trust: nil)
+        #expect(!asked)
+        #expect(info.certificate == .loading)
+    }
+
+    @Test func siteInfoAsksTheCertificateOfThePageServer() {
+        #expect(SiteInfo.certificateURL(for: URL(string: "https://example.com:8443/a/b?q=1#top")!)?.absoluteString == "https://example.com:8443/")
+        #expect(SiteInfo.certificateURL(for: URL(string: "https://[::1]/page")!)?.absoluteString == "https://[::1]/")
+        #expect(SiteInfo.certificateURL(for: URL(string: "https://[::1]:8443/")!)?.absoluteString == "https://[::1]:8443/")
+        #expect(SiteInfo.certificateURL(for: URL(string: "https://user:pw@example.com/")!)?.absoluteString == "https://example.com/")
+    }
+
+    /// Collapsing the certificate mid-lookup cancels it; expanding again asks again.
+    @Test func siteInfoRetriesACancelledLookup() async {
+        let info = SiteInfo(url: URL(string: "https://example.com:8443/page")!)
+        var asked: [URL] = []
+        info.fetchTrust = { url in
+            asked.append(url)
+            try? await Task.sleep(for: .seconds(30))
+            return nil
+        }
+        let lookup = Task { await info.loadCertificate(trust: nil) }
+        while asked.isEmpty { await Task.yield() }
+        lookup.cancel()
+        await lookup.value
+        #expect(info.certificate == .loading)
+
+        info.fetchTrust = { url in asked.append(url); return nil }
+        await info.loadCertificate(trust: nil)
+        #expect(asked.map(\.absoluteString) == ["https://example.com:8443/", "https://example.com:8443/"])
+        #expect(info.certificate == .unavailable)
     }
 
     @Test func siteInfoSummarizesPermissions() {
@@ -33,10 +84,11 @@ struct SiteInfoTests {
         Theme.registerFonts()
         let certificate = SiteInfo.Certificate(subject: "*.google.com", issuer: "WR2", validUntil: DateComponents(calendar: .current, year: 2026, month: 12, day: 8).date)
         let shots: [(String, SiteInfoView)] = [
-            ("secure", SiteInfoView(host: "www.youtube.com", favicon: nil, isSecure: true, certificate: .loading, cookieCount: 29, canClear: true, permissions: [:], showsCertificate: .constant(false))),
-            ("secure-certificate", SiteInfoView(host: "www.youtube.com", favicon: nil, isSecure: true, certificate: .found(certificate), cookieCount: 29, canClear: true, permissions: [:], showsCertificate: .constant(true))),
-            ("http", SiteInfoView(host: "neverssl.com", favicon: nil, isSecure: false, certificate: .loading, cookieCount: 0, canClear: false, permissions: [:], showsCertificate: .constant(false))),
-            ("camera", SiteInfoView(host: "meet.google.com", favicon: nil, isSecure: true, certificate: .loading, cookieCount: 12, canClear: true, permissions: [.camera: .allow], showsCertificate: .constant(false))),
+            ("secure", SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 29, canClear: true, permissions: [:], showsCertificate: .constant(false))),
+            ("secure-certificate", SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .found(certificate), cookieCount: 29, canClear: true, permissions: [:], showsCertificate: .constant(true))),
+            ("http", SiteInfoView(host: "neverssl.com", favicon: nil, connection: .notEncrypted, certificate: .loading, cookieCount: 0, canClear: false, permissions: [:], showsCertificate: .constant(false))),
+            ("certificate-not-valid", SiteInfoView(host: "expired.badssl.com", favicon: nil, connection: .certificateNotValid, certificate: .loading, cookieCount: 0, canClear: false, permissions: [:], showsCertificate: .constant(false))),
+            ("camera", SiteInfoView(host: "meet.google.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 12, canClear: true, permissions: [.camera: .allow], showsCertificate: .constant(false))),
         ]
         for (name, view) in shots {
             for isDark in [false, true] {
@@ -65,11 +117,32 @@ extension BrowserTests {
         let trust = tab.loadedWebView?.serverTrust
         print("youtube.com serverTrust:", trust as Any)
         let info = SiteInfo(url: try #require(tab.url))
-        #expect(info.isSecure)
+        #expect(info.connection == .secure)
         await info.loadCertificate(trust: trust)
         guard case .found(let certificate) = info.certificate else { Issue.record("no certificate: \(info.certificate)"); return }
         #expect(certificate.subject.hasSuffix("google.com"))
         #expect((certificate.validUntil ?? .distantPast) > Date())
+    }
+
+    /// A page refused for its certificate shows Lithium's error page at the https address: the
+    /// lock and the panel say it isn't secure until another page commits.
+    @Test func siteInfoOfACertificateErrorPage() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "about:blank")!)
+        defer { browser.close(tab) }
+        #expect(await siteInfoPoll(10) { tab.loadedWebView?.isLoading == false })
+        let url = URL(string: "https://expired.badssl.com/")!
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorServerCertificateHasBadDate, userInfo: [NSURLErrorFailingURLErrorKey: url])
+        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
+        #expect(await siteInfoPoll(10) { tab.title == "Can’t open this page" })
+        #expect(tab.url == url)
+        #expect(tab.connection == .certificateNotValid)
+        #expect(SiteInfo(url: try #require(tab.url), loadError: tab.loadError).connection == .certificateNotValid)
+
+        tab.webView.loadHTMLString("<title>Fine</title>", baseURL: url)
+        #expect(await siteInfoPoll(10) { tab.title == "Fine" })
+        #expect(tab.connection == .secure)
+        #expect(tab.loadError == nil)
     }
 
     /// Site settings… opens one site's settings: its permissions and its cookies.
@@ -104,6 +177,16 @@ extension BrowserTests {
         #expect(values["cookies"] as? String == "0 cookies")
         #expect(values["clear"] as? String == "Clear site data")
         #expect(values["nav"] as? String == "Site permissions")
+
+        // An answer for another site, come in late, leaves this one's alone.
+        let late = try await tab.webView.callAsyncJavaScript("""
+            renderSite({ host: 'other.example', cookies: 7, hasData: true });
+            const late = [document.querySelector('#site-cookies').textContent, document.querySelector('#site-clear').disabled];
+            renderSite({ host: 'www.example.com', cookies: 1, hasData: true });
+            return [...late, document.querySelector('#site-cookies').textContent, document.querySelector('#site-clear').disabled];
+            """, contentWorld: .page) as? [Any]
+        #expect(late?.compactMap { $0 as? String } == ["0 cookies", "1 cookie"])
+        #expect(late?.compactMap { $0 as? Bool } == [true, false])
 
         if let path = ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] {
             let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 900, height: 560), styleMask: [.borderless], backing: .buffered, defer: false)

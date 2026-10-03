@@ -145,14 +145,19 @@ final class SiteInfo {
     }
 }
 
-/// Keeps the trust the server presented, and lets the system judge it as usual.
+/// Keeps the trust the server presented, and lets the system judge it as usual. Redirects are
+/// not followed: the root of a site can redirect to another host, whose certificate isn't this one's.
 private final class TrustCatcher: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private(set) var trust: SecTrust?
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust, trust == nil {
             trust = challenge.protectionSpace.serverTrust
         }
         return (.performDefaultHandling, nil)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        nil
     }
 }

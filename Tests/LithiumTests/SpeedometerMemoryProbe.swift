@@ -7,10 +7,12 @@ import WebKit
 
 /// Not a test: where a heavy page's memory goes (Lithium, the page's process, the GPU process)
 /// during and after Speedometer, and what putting its tab to sleep gives back. The window is off
-/// screen. Runs only when /tmp/lithium-memory-probe exists, and writes to /tmp/lithium-memory-probe.log:
-/// `touch /tmp/lithium-memory-probe; CFFIXED_USER_HOME=$(mktemp -d) scripts/test --filter SpeedometerMemoryProbe`.
+/// screen. Runs only when asked, in a throwaway home, and writes to /tmp/lithium-memory-probe.log
+/// (outside the home, which scripts/test deletes):
+/// `LITHIUM_MEMORY_PROBE=1 scripts/test --filter SpeedometerMemoryProbe`.
 @MainActor
-@Suite(.serialized,.enabled(if: FileManager.default.fileExists(atPath: "/tmp/lithium-memory-probe")))
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["LITHIUM_MEMORY_PROBE"] == "1"
+    && ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct SpeedometerMemoryProbe {
     @Test func probe() async throws {
         NSApplication.shared.setActivationPolicy(.accessory)

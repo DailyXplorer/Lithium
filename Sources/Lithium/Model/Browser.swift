@@ -63,12 +63,12 @@ final class Browser {
         let history: Any?
     }
 
-    /// 30 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot), as in
-    /// Orion. `defaults write app.lithium.browser tabIdleSeconds N` overrides both.
+    /// 10 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot).
+    /// `defaults write app.lithium.browser tabIdleSeconds N` overrides both.
     static var tabIdleInterval: TimeInterval {
         let custom = UserDefaults.standard.double(forKey: "tabIdleSeconds")
         if custom > 0 { return custom }
-        return isSavingEnergy ? shortIdleInterval : 30 * 60
+        return isSavingEnergy ? shortIdleInterval : 10 * 60
     }
     static let shortIdleInterval: TimeInterval = 5 * 60
 

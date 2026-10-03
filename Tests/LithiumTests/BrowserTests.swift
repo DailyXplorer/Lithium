@@ -74,6 +74,12 @@ struct BrowserTests {
         #expect(Browser().isSidebarVisible == false)
     }
 
+    /// A background tab sleeps after 10 minutes, or 5 while the Mac saves energy, which a test can't control.
+    @Test func backgroundTabsSleepAfterTenMinutes() {
+        UserDefaults.standard.removeObject(forKey: "tabIdleSeconds")
+        #expect(Browser.tabIdleInterval == 10 * 60 || Browser.tabIdleInterval == Browser.shortIdleInterval)
+    }
+
     /// Switching tabs quickly while tabs fall asleep every few milliseconds never puts the selected one to sleep.
     @Test func selectedTabNeverFallsAsleep() async throws {
         UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")

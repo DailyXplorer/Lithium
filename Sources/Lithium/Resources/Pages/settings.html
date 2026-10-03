@@ -9,7 +9,14 @@
   section.active { display: block; }
   .lead + .row { margin-top: 12px; border-top: 0; }
   details { color: var(--muted); font-size: 13px; padding: 0 0 4px; }
-  summary { cursor: pointer; width: max-content; color: var(--faint); font-weight: 500; }
+  summary { cursor: pointer; width: max-content; color: var(--faint); font-weight: 500;
+    list-style: none; display: flex; align-items: center; gap: 4px; }
+  summary::-webkit-details-marker { display: none; }
+  /* Phosphor's caret, like every other icon in Lithium, instead of the browser's triangle. */
+  summary::before { content: ""; width: 12px; height: 12px; background: currentColor;
+    -webkit-mask: url(lithium://pages/icon/caret-right) center / contain no-repeat;
+    mask: url(lithium://pages/icon/caret-right) center / contain no-repeat; transition: transform .15s; }
+  details[open] > summary::before { transform: rotate(90deg); }
   summary:hover { color: var(--ink); }
   details p { margin: 6px 0 0; }
   .cta { margin-top: 20px; }

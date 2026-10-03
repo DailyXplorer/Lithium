@@ -131,16 +131,32 @@ private struct ShieldPanel: View {
 
     var body: some View {
         let privacy = browser.privacy
-        let host = Privacy.siteHost(tab?.url) ?? ""
+        ShieldView(
+            host: Privacy.siteHost(tab?.url) ?? "",
+            isOn: Binding(
+                get: { privacy.isEnabled(for: tab?.url) },
+                set: { browser.setProtections($0, for: tab) }
+            ),
+            ruleCount: privacy.ruleCount,
+            updated: privacy.filtersUpdated
+        )
+    }
+}
+
+/// The shield's panel from plain values, so it also draws without a browser.
+struct ShieldView: View {
+    let host: String
+    @Binding var isOn: Bool
+    let ruleCount: Int
+    let updated: Date?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Protections").font(Theme.font(15, .semibold))
                 Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
             }
-            Toggle(isOn: Binding(
-                get: { privacy.isEnabled(for: tab?.url) },
-                set: { browser.setProtections($0, for: tab) }
-            )) {
+            Toggle(isOn: $isOn) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("On for this site")
                     Text("Ad and tracker blocking, fingerprinting protection")
@@ -150,7 +166,7 @@ private struct ShieldPanel: View {
             }
             .toggleStyle(.switch)
             Divider()
-            Text(summary(privacy))
+            Text(summary)
                 .font(Theme.font(11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -160,9 +176,9 @@ private struct ShieldPanel: View {
         .frame(width: 300)
     }
 
-    private func summary(_ privacy: Privacy) -> String {
-        let count = privacy.ruleCount.formatted()
-        let date = privacy.filtersUpdated?.formatted(date: .abbreviated, time: .omitted) ?? "—"
+    private var summary: String {
+        let count = ruleCount.formatted()
+        let date = updated?.formatted(date: .abbreviated, time: .omitted) ?? "—"
         return "\(count) rules from uBlock Origin, EasyList, EasyPrivacy, Peter Lowe and URLhaus. Lists updated \(date)."
     }
 }

@@ -2,17 +2,25 @@ import AppKit
 import WebKit
 
 /// Finds a site's icon and normalizes it to a 64 px PNG that is known to contain visible pixels.
-/// Icons are kept per host in memory and on disk, so history and suggestions show them across launches.
+/// Icons are kept per host on disk, so history and suggestions show them across launches, and in
+/// memory for the hosts last asked about: the history page and suggestions go through thousands.
 @MainActor
 final class Favicons {
     static let shared = Favicons()
 
-    private var cache: [String: Data] = [:]
+    private var cache: [String: (data: Data, lastUse: Int)] = [:]
+    private var uses = 0
     private var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
     private let session = URLSession(configuration: .ephemeral)
-    private let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Favicons")
+    private let folder: URL
+    private let cacheLimit: Int
     nonisolated private static let side = 64
+
+    init(folder: URL = .applicationSupportDirectory.appending(path: "Lithium/Favicons"), cacheLimit: Int = 500) {
+        self.folder = folder
+        self.cacheLimit = cacheLimit
+    }
 
     private static let collectScript = """
         return [...document.querySelectorAll('link[rel~="icon"], link[rel~="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]')]
@@ -34,10 +42,25 @@ final class Favicons {
         """
 
     func cachedData(host: String) -> Data? {
-        if let data = cache[host] { return data }
+        if let entry = cache[host] {
+            uses += 1
+            cache[host]?.lastUse = uses
+            return entry.data
+        }
         guard let data = try? Data(contentsOf: file(for: host)) else { return nil }
-        cache[host] = data
+        remember(data, for: host)
         return data
+    }
+
+    /// Past the limit, drops only the least recently used icon. The scan is linear, but it only
+    /// runs on a miss and the cache holds a few hundred entries.
+    private func remember(_ data: Data, for host: String) {
+        if cache[host] == nil, cache.count >= cacheLimit,
+           let oldest = cache.min(by: { $0.value.lastUse < $1.value.lastUse })?.key {
+            cache[oldest] = nil
+        }
+        uses += 1
+        cache[host] = (data, uses)
     }
 
     func cached(host: String?) -> NSImage? {
@@ -93,7 +116,7 @@ final class Favicons {
     }
 
     private func store(_ png: Data, for host: String) {
-        cache[host] = png
+        remember(png, for: host)
         missing.remove(host)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? png.write(to: file(for: host), options: .atomic)

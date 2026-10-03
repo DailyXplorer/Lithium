@@ -103,19 +103,35 @@ struct TabMemoryTests {
 
 @MainActor
 struct FaviconCacheTests {
-    /// Past its limit, the memory cache starts over; icons dropped from it are read from disk again.
-    @Test func memoryCacheIsBounded() throws {
+    /// Past its limit, the memory cache drops the least recently used icon, which is read from disk again.
+    @Test func memoryCacheEvictsLeastRecentlyUsed() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "lithium-favicons-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let favicons = Favicons(folder: folder, cacheLimit: 2)
         let hosts = ["a.example", "b.example", "c.example"]
         for host in hosts { try Data(host.utf8).write(to: folder.appending(path: "\(host).png")) }
-        for host in hosts { #expect(favicons.cachedData(host: host) == Data(host.utf8)) }
+        #expect(favicons.cachedData(host: "a.example") == Data("a.example".utf8))
+        #expect(favicons.cachedData(host: "b.example") == Data("b.example".utf8))
+        #expect(favicons.cachedData(host: "a.example") == Data("a.example".utf8))
+        #expect(favicons.cachedData(host: "c.example") == Data("c.example".utf8))
 
         for host in hosts { try FileManager.default.removeItem(at: folder.appending(path: "\(host).png")) }
-        #expect(favicons.cachedData(host: "c.example") == Data("c.example".utf8), "the last icon is still in memory")
-        #expect(favicons.cachedData(host: "a.example") == nil, "the first one was dropped from memory")
-        #expect(favicons.cachedData(host: "b.example") == nil)
+        #expect(favicons.cachedData(host: "a.example") == Data("a.example".utf8), "a recent read kept it in memory")
+        #expect(favicons.cachedData(host: "c.example") == Data("c.example".utf8), "the newest icon is in memory")
+        #expect(favicons.cachedData(host: "b.example") == nil, "the least recently used icon was dropped")
+    }
+
+    @Test func memoryCacheNeverExceedsItsLimit() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "lithium-favicons-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder, cacheLimit: 2)
+        let hosts = (0..<10).map { "\($0).example" }
+        for host in hosts { try Data(host.utf8).write(to: folder.appending(path: "\(host).png")) }
+        for host in hosts { _ = favicons.cachedData(host: host) }
+
+        for host in hosts { try FileManager.default.removeItem(at: folder.appending(path: "\(host).png")) }
+        #expect(hosts.filter { favicons.cachedData(host: $0) != nil } == ["8.example", "9.example"])
     }
 }

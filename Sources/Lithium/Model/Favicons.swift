@@ -8,7 +8,8 @@ import WebKit
 final class Favicons {
     static let shared = Favicons()
 
-    private var cache: [String: Data] = [:]
+    private var cache: [String: (data: Data, lastUse: Int)] = [:]
+    private var uses = 0
     private var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
     private let session = URLSession(configuration: .ephemeral)
@@ -41,15 +42,25 @@ final class Favicons {
         """
 
     func cachedData(host: String) -> Data? {
-        if let data = cache[host] { return data }
+        if let entry = cache[host] {
+            uses += 1
+            cache[host]?.lastUse = uses
+            return entry.data
+        }
         guard let data = try? Data(contentsOf: file(for: host)) else { return nil }
         remember(data, for: host)
         return data
     }
 
+    /// Past the limit, drops only the least recently used icon. The scan is linear, but it only
+    /// runs on a miss and the cache holds a few hundred entries.
     private func remember(_ data: Data, for host: String) {
-        if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
-        cache[host] = data
+        if cache[host] == nil, cache.count >= cacheLimit,
+           let oldest = cache.min(by: { $0.value.lastUse < $1.value.lastUse })?.key {
+            cache[oldest] = nil
+        }
+        uses += 1
+        cache[host] = (data, uses)
     }
 
     func cached(host: String?) -> NSImage? {

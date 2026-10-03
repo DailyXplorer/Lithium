@@ -854,8 +854,8 @@ extension Tab: WKUIDelegate {
         let site = url.host() ?? "this site"
         alert.messageText = "Send the form again?"
         alert.informativeText = inFrame
-            ? "A part of this page, from \(site), was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
-            : "This page on \(site) was the result of a form. Showing it again sends the form a second time, which can repeat an order or a payment."
+            ? "Part of this page sends a form to \(site) again. This can repeat an order or a payment."
+            : "This page sends a form to \(site) again. This can repeat an order or a payment."
         alert.addButton(withTitle: "Send Again")
         alert.addButton(withTitle: "Cancel")
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn

@@ -11,10 +11,10 @@ const el = (tag, props = {}, children = []) => {
 const NAV = [
   ['appearance', 'paint-brush', 'Appearance'],
   ['search', 'magnifying-glass', 'Search'],
-  ['privacy', 'shield-check', 'Privacy & Security'],
+  ['privacy', 'shield-check', 'Privacy & security'],
   ['extensions', 'puzzle-piece', 'Extensions'],
   ['max', 'sparkle', 'Max'],
-  ['permissions', 'video-camera', 'Site Permissions'],
+  ['permissions', 'video-camera', 'Site permissions'],
   ['history', 'clock-counter-clockwise', 'History', 'lithium://history'],
   ['about', 'info', 'About Lithium'],
 ];

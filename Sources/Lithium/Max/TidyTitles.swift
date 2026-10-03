@@ -31,19 +31,19 @@ final class TidyTitles {
     /// What the settings page shows about Apple Intelligence on this Mac.
     var modelStatus: (available: Bool, message: String) {
         guard #available(macOS 26.0, *), let model = model as? ModelTitles else {
-            return (false, "Requires macOS 26 or later. Rule-based tidying still works.")
+            return (false, "Requires macOS 26 or later. Basic tidying still works.")
         }
         switch model.availability {
         case .available:
-            return (true, "Apple Intelligence is ready. Everything runs on this Mac.")
+            return (true, "")
         case .unavailable(.appleIntelligenceNotEnabled):
-            return (false, "Turn on Apple Intelligence in System Settings to shorten long titles. Rule-based tidying still works.")
+            return (false, "Turn on Apple Intelligence in System Settings. Basic tidying still works.")
         case .unavailable(.modelNotReady):
-            return (false, "Apple Intelligence is still downloading its model. Rule-based tidying works meanwhile.")
+            return (false, "Still downloading. Basic tidying works meanwhile.")
         case .unavailable(.deviceNotEligible):
-            return (false, "This Mac doesn't support Apple Intelligence. Rule-based tidying still works.")
+            return (false, "Not supported on this Mac. Basic tidying still works.")
         case .unavailable:
-            return (false, "Apple Intelligence isn't available right now. Rule-based tidying still works.")
+            return (false, "Not available right now. Basic tidying still works.")
         }
     }
 

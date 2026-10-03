@@ -339,7 +339,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
 
     private func confirm(_ context: WKWebExtensionContext, wants access: [String]) async -> Bool {
         let alert = NSAlert()
-        alert.messageText = "“\(context.webExtension.displayName ?? "An extension")” wants more access"
+        alert.messageText = "Allow “\(context.webExtension.displayName ?? "this extension")” more access?"
         alert.informativeText = access.map { "• \($0)" }.joined(separator: "\n")
         alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Don’t Allow")

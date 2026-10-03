@@ -103,7 +103,7 @@ extension BrowserTests {
         #expect(values["rows"] as? [String] == ["Camera:allow", "Microphone:", "Location:", "Downloads:"])
         #expect(values["cookies"] as? String == "0 cookies")
         #expect(values["clear"] as? String == "Clear site data")
-        #expect(values["nav"] as? String == "Site Permissions")
+        #expect(values["nav"] as? String == "Site permissions")
 
         if let path = ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] {
             let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 900, height: 560), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -118,6 +118,45 @@ extension BrowserTests {
                 try png.write(to: URL(filePath: path).appending(path: "site-settings-\(isDark ? "dark" : "light").png"))
             }
             window.contentView = nil
+        }
+    }
+
+    /// The rule count and the list sources wait behind Details; the update action stays up front.
+    @Test func settingsKeepsRuleCountBehindDetails() async throws {
+        let browser = Browser()
+        browser.openSettings(section: "privacy")
+        let tab = try #require(browser.selectedTab)
+        defer { browser.close(tab) }
+        var page: [String: Any]?
+        let deadline = Date().addingTimeInterval(15)
+        while page == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+            page = try? await tab.webView.callAsyncJavaScript("""
+                const rules = document.querySelector('#rules')?.textContent;
+                if (!rules) return null;
+                const details = document.querySelector('#privacy details');
+                return {
+                    rules,
+                    inDetails: details.contains(document.querySelector('#rules')),
+                    open: details.open,
+                    updated: document.querySelector('#updated').textContent,
+                    update: document.querySelector('#update').textContent,
+                    active: document.querySelector('section.active')?.id,
+                };
+                """, contentWorld: .page) as? [String: Any]
+        }
+        let values = try #require(page)
+        #expect(values["active"] as? String == "privacy")
+        #expect(values["rules"] as? String == "\(browser.privacy.ruleCount.formatted(.number.locale(Locale(identifier: "en")))) rules from:")
+        #expect(values["inDetails"] as? Bool == true)
+        #expect(values["open"] as? Bool == false)
+        // With no lists bundled in tests, the browser may be downloading them.
+        let updated = try #require(values["updated"] as? String)
+        if values["update"] as? String == "Updating" {
+            #expect(updated == "Updating…")
+        } else {
+            #expect(values["update"] as? String == "Update now")
+            #expect(updated.hasPrefix("Updated ") || updated == "Not updated yet", "\(updated)")
         }
     }
 

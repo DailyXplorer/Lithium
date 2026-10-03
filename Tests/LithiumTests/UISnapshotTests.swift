@@ -17,7 +17,7 @@ struct UISnapshotTests {
         let updated = DateComponents(calendar: .current, year: 2026, month: 10, day: 2).date
         for isOn in [true, false] {
             for isDark in [false, true] {
-                let view = ShieldView(host: "youtube.com", isOn: .constant(isOn), ruleCount: 183_402, updated: updated)
+                let view = ShieldView(host: "youtube.com", isOn: .constant(isOn), updated: updated)
                 let png = try render(view, isDark: isDark)
                 try png.write(to: directory.appending(path: "shield-\(isOn ? "on" : "off")-\(isDark ? "dark" : "light").png"))
             }
@@ -36,8 +36,9 @@ struct UISnapshotTests {
         defer { window.contentView = nil }
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         #expect(await poll(15) { (try? await webView.evaluateJavaScript("document.querySelector('#version')?.textContent ?? ''") as? String)?.isEmpty == false })
-        // A window never shown doesn't run the page's entrance animation, which starts transparent.
-        _ = try await webView.evaluateJavaScript("document.head.append(Object.assign(document.createElement('style'), { textContent: '* { animation: none !important }' }))")
+        // A window never shown doesn't run the page's entrance animation, which starts transparent,
+        // nor the switches' transitions, which stay at their start.
+        _ = try await webView.evaluateJavaScript("document.head.append(Object.assign(document.createElement('style'), { textContent: '*, *::after { animation: none !important; transition: none !important }' }))")
 
         let sections: [(name: String, hash: String, script: String?)] = [
             ("appearance", "appearance", nil), ("search", "search", nil), ("privacy", "privacy", nil),
@@ -119,7 +120,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "tidyTitles": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
             "summaryLanguages": [["code": "en", "name": "English"], ["code": "fr", "name": "French"]],
             "modelAvailable": false,
-            "modelMessage": "Turn on Apple Intelligence in System Settings to shorten long titles. Rule-based tidying still works.",
+            "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",
         ] as [String: Any],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],

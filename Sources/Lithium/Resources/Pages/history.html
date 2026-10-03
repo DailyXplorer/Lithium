@@ -29,7 +29,7 @@
 <main>
   <div class="page">
     <div class="header">
-      <div><h2>History</h2><p class="lead">Stays on this Mac. Nothing is synced or sent anywhere.</p></div>
+      <div><h2>History</h2><p class="lead">Stays on this Mac.</p></div>
       <button class="button danger" id="clear">Clear history…</button>
     </div>
     <div class="search">
@@ -95,7 +95,7 @@
   let timer = null;
   $('#query').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
   $('#clear').onclick = () => {
-    if (confirm('Clear all browsing history? Every visit Lithium has recorded on this Mac will be deleted.')) call('clearHistory').then(load);
+    if (confirm('Clear all browsing history? This can’t be undone.')) call('clearHistory').then(load);
   };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
   load();

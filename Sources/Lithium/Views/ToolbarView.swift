@@ -114,7 +114,7 @@ private struct ShieldButton: View {
         let enabled = browser.privacy.isEnabled(for: tab?.url)
         IconButton(
             icon: enabled ? .shield : .shieldOff,
-            help: enabled ? "Protections are on for this site (⇧⌘P turns them off)" : "Protections are off for this site (⇧⌘P turns them on)",
+            help: enabled ? "Protections on (⇧⌘P)" : "Protections off (⇧⌘P)",
             isEnabled: tab?.url?.scheme?.hasPrefix("http") == true
         ) {
             isPresented.toggle()
@@ -128,6 +128,7 @@ private struct ShieldButton: View {
 private struct ShieldPanel: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let privacy = browser.privacy
@@ -137,8 +138,11 @@ private struct ShieldPanel: View {
                 get: { privacy.isEnabled(for: tab?.url) },
                 set: { browser.setProtections($0, for: tab) }
             ),
-            ruleCount: privacy.ruleCount,
-            updated: privacy.filtersUpdated
+            updated: privacy.filtersUpdated,
+            onOpenSettings: {
+                dismiss()
+                browser.openSettings(section: "privacy")
+            }
         )
     }
 }
@@ -147,8 +151,8 @@ private struct ShieldPanel: View {
 struct ShieldView: View {
     let host: String
     @Binding var isOn: Bool
-    let ruleCount: Int
     let updated: Date?
+    var onOpenSettings: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -159,27 +163,28 @@ struct ShieldView: View {
             Toggle(isOn: $isOn) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("On for this site")
-                    Text("Ad and tracker blocking, fingerprinting protection")
+                    Text("Blocks ads and trackers")
                         .font(Theme.font(11))
                         .foregroundStyle(.secondary)
                 }
             }
             .toggleStyle(.switch)
             Divider()
-            Text(summary)
-                .font(Theme.font(11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                if let updated {
+                    Text("Updated \(updated.formatted(date: .abbreviated, time: .omitted))")
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 8)
+                Button("Settings…", action: onOpenSettings)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .font(Theme.font(11))
         }
         .font(Theme.font(13))
         .padding(16)
-        .frame(width: 300)
-    }
-
-    private var summary: String {
-        let count = ruleCount.formatted()
-        let date = updated?.formatted(date: .abbreviated, time: .omitted) ?? "—"
-        return "\(count) rules from uBlock Origin, EasyList, EasyPrivacy, Peter Lowe and URLhaus. Lists updated \(date)."
+        .frame(width: 260)
     }
 }
 

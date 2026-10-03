@@ -61,7 +61,7 @@ final class ScreenCapture {
         } catch {
             phase = .idle
             let alert = NSAlert()
-            alert.messageText = "Couldn't capture the window"
+            alert.messageText = "Couldn’t capture the window"
             alert.informativeText = error.localizedDescription
             alert.beginSheetModal(for: window) { _ in }
         }

@@ -15,10 +15,10 @@ struct AgentServerTests {
         let suite = "agent-tests-\(UUID().uuidString)"
         let hub: AgentHub
 
-        init(tools: [AgentTool] = [], preferredPort: Int? = nil) async throws {
+        init(tools: [AgentTool] = [], preferredPort: Int? = nil, now: @escaping @MainActor () -> Date = Date.init) async throws {
             let defaults = try #require(UserDefaults(suiteName: suite))
             if let preferredPort { defaults.set(preferredPort, forKey: Preference.agentPort) }
-            hub = AgentHub(folder: folder, defaults: defaults, tools: tools)
+            hub = AgentHub(folder: folder, defaults: defaults, tools: tools, now: now)
             await hub.start()
             try #require(hub.state == .listening)
         }
@@ -229,6 +229,42 @@ struct AgentServerTests {
         #expect(try await fixture.post(["jsonrpc": "2.0", "id": 1, "method": "ping"], session: idle).status == 404)
     }
 
+    @MainActor private final class Clock {
+        var now = Date()
+    }
+
+    /// A call that outlasts the idle timeout keeps its session, which then counts as seen when the call ends.
+    @Test(.timeLimit(.minutes(1))) func aCallLongerThanTheIdleTimeoutKeepsItsSession() async throws {
+        let clock = Clock()
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let hold = AgentTool(name: "hold", description: "", inputSchema: ["type": "object"]) { _, _, _ in
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            try Task.checkCancellation()
+            return ["done": true]
+        }
+        let fixture = try await Fixture(tools: [hold], now: { clock.now })
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let pending = Task { try await fixture.post(Self.call("hold"), session: session) }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+
+        clock.now += AgentHub.idleTimeout + 60
+        fixture.hub.dropIdleSessions(now: clock.now)
+        let other = try await fixture.initialize()
+        #expect(fixture.hub.sessions.count == 2)
+
+        release.continuation.yield()
+        let reply = try await pending.value
+        #expect(reply.json?["result"]?["structuredContent"] == ["done": true])
+        fixture.hub.dropIdleSessions(now: clock.now + AgentHub.idleTimeout - 60)
+        #expect(fixture.hub.sessions.map(\.id) == [session, other])
+        fixture.hub.dropIdleSessions(now: clock.now + AgentHub.idleTimeout + 60)
+        #expect(fixture.hub.sessions.isEmpty)
+    }
+
     @Test func limitsToolCallsPerSecond() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
@@ -315,6 +351,25 @@ struct AgentServerTests {
         #expect(replies.map(\.status) == [403, 401, 200])
         #expect(replies.last?.headers["connection"] == "close")
         #expect(fixture.hub.sessions.count == 1)
+    }
+
+    /// A client that half-closes right after its requests still reads every refusal before EOF.
+    /// Enough refusals that some are still queued in the server when its EOF arrives.
+    @Test(.timeLimit(.minutes(1))) func answersRefusedRequestsBeforeAHalfClose() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        func request(_ authorization: String, body: String) -> String {
+            "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\nAuthorization: \(authorization)\r\n"
+                + "Content-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+        }
+        let refused = 2000
+        let data = try await RawHTTP.halfClosedExchange(port: fixture.port, request: Data((
+            String(repeating: request("Bearer wrong", body: "{}"), count: refused) + request("Bearer \(fixture.endpoint.token)", body: "{")
+        ).utf8))
+        let replies = try RawHTTP.parseAll(data)
+        #expect(replies.map(\.status) == Array(repeating: 401, count: refused) + [400])
+        #expect(replies.first?.headers["www-authenticate"] == "Bearer")
+        #expect(replies.last?.json == ["jsonrpc": "2.0", "id": .null, "error": ["code": -32700, "message": "Parse error"]])
     }
 
     @Test func refusesBodiesOverOneMegabyte() async throws {
@@ -552,6 +607,13 @@ struct AgentServerTests {
         #expect(message.hasSuffix("Turn agent access off and on to retry."))
         #expect(fixture.hub.server == nil)
         #expect(fixture.hub.sessions.isEmpty)
+        #expect(fixture.hub.url == nil)
+        let file = fixture.folder.appending(path: AgentEndpoint.fileName)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        fixture.hub.resetToken()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(fixture.hub.state == .failed(message))
     }
 
     // MARK: Backpressure
@@ -747,6 +809,40 @@ enum RawHTTP {
         var data = Data()
         for try await chunk in chunks.stream { data.append(chunk) }
         return data
+    }
+
+    /// Over a BSD socket: writes the request, `shutdown(SHUT_WR)`, then reads to EOF. A reset
+    /// throws instead of passing for EOF, unlike in `exchange`.
+    static func halfClosedExchange(port: UInt16, request: Data) async throws -> Data {
+        try await Task.detached {
+            let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+            guard socket >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            defer { Darwin.close(socket) }
+            // A blocking read ignores the test's time limit.
+            var timeout = timeval(tv_sec: 10, tv_usec: 0)
+            setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            // Answers back up in the server while this client is still writing.
+            var buffer: Int32 = 4096
+            setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
+            var address = sockaddr_in()
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = port.bigEndian
+            address.sin_addr.s_addr = inet_addr("127.0.0.1")
+            let connected = withUnsafePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            guard connected == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            let written = request.withUnsafeBytes { write(socket, $0.baseAddress, $0.count) }
+            guard written == request.count, shutdown(socket, SHUT_WR) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            var data = Data()
+            var chunk = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let count = read(socket, &chunk, chunk.count)
+                guard count >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+                if count == 0 { return data }
+                data.append(contentsOf: chunk[..<count])
+            }
+        }.value
     }
 
     private static func parse(_ data: Data) throws -> HTTPReply {

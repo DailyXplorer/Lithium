@@ -58,6 +58,7 @@ final class AgentHub {
     private(set) var calls: [CallKey: Call] = [:]
 
     var isActing: Bool { !calls.isEmpty }
+    private var busySessions: Set<String> { Set(calls.keys.map(\.session)) }
     var url: String? { port.map { "http://127.0.0.1:\($0)/mcp" } }
 
     struct CallKey: Hashable {
@@ -87,8 +88,11 @@ final class AgentHub {
     /// A client that crashed sends no DELETE; without this its session would show as connected
     /// until some other request came in.
     @ObservationIgnored private var idleSweep: Task<Void, Never>?
+    /// What `lastSeen` and the idle timeout read; tests move it forward.
+    @ObservationIgnored private let now: @MainActor () -> Date
 
-    init(folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = []) {
+    init(folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
+        self.now = now
         self.folder = folder
         self.defaults = defaults
         self.tools = [Self.statusTool] + tools
@@ -114,14 +118,13 @@ final class AgentHub {
             idleSweep = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(60))
-                    self?.dropIdleSessions(now: Date())
+                    guard let self else { return }
+                    self.dropIdleSessions(now: self.now())
                 }
             }
         } catch {
             guard !isShutDown else { return }
-            server.stop()
-            self.server = nil
-            state = .failed("Lithium couldn’t start the agent server (\(error.localizedDescription)).")
+            fail("Lithium couldn’t start the agent server (\(error.localizedDescription)). Turn agent access off and on to retry.")
         }
         await log.prune()
     }
@@ -164,12 +167,20 @@ final class AgentHub {
             }
         }
         guard !isShutDown, self.server === server else { return }
+        let reason = lastError.map { " (\($0.localizedDescription))" } ?? ""
+        fail("Lithium’s agent server stopped listening\(reason). Turn agent access off and on to retry.")
+    }
+
+    /// Nothing is left that points at a server that isn’t listening: no endpoint file, no
+    /// address in Settings, no sessions. Turning access off and on starts over.
+    private func fail(_ message: String) {
         idleSweep?.cancel()
         endAllSessions()
-        server.stop()
-        self.server = nil
-        let reason = lastError.map { " (\($0.localizedDescription))" } ?? ""
-        state = .failed("Lithium’s agent server stopped listening\(reason). Turn agent access off and on to retry.")
+        server?.stop()
+        server = nil
+        port = nil
+        AgentEndpoint.delete(in: folder)
+        state = .failed(message)
     }
 
     /// Access turned off: the server goes away with the endpoint file, and with it the token.
@@ -194,8 +205,10 @@ final class AgentHub {
         if state == .stopped { state = .listening }
     }
 
-    /// A new token in the endpoint file; clients holding the old one are disconnected.
+    /// A new token in the endpoint file; clients holding the old one are disconnected. Does
+    /// nothing once access failed, so no endpoint file names a dead server.
     func resetToken() {
+        guard server != nil else { return }
         token = AgentEndpoint.makeToken()
         server?.setToken(token)
         endAllSessions()
@@ -214,8 +227,10 @@ final class AgentHub {
         recentCalls[session.id] = nil
     }
 
+    /// A session running a call is not idle, however long the call takes.
     func dropIdleSessions(now: Date) {
-        for session in sessions where now.timeIntervalSince(lastSeen[session.id] ?? now) > Self.idleTimeout {
+        let busy = busySessions
+        for session in sessions where !busy.contains(session.id) && now.timeIntervalSince(lastSeen[session.id] ?? now) > Self.idleTimeout {
             end(session)
         }
     }
@@ -230,7 +245,7 @@ final class AgentHub {
     }
 
     func handle(_ request: AgentRequest) async -> AgentReply {
-        dropIdleSessions(now: Date())
+        dropIdleSessions(now: now())
         switch request {
         case .endSession(let id):
             guard let id else { return AgentReply(status: 400) }
@@ -261,7 +276,7 @@ final class AgentHub {
         if let protocolVersion, !Self.protocolVersions.contains(protocolVersion) {
             return Self.error(.invalidRequest, "Unsupported MCP-Protocol-Version \(protocolVersion).", id: id ?? .null, status: 400)
         }
-        lastSeen[sessionID] = Date()
+        lastSeen[sessionID] = now()
         guard let id else {
             if method == "notifications/cancelled", let request = params["requestId"] {
                 calls[CallKey(session: sessionID, request: request)]?.task.cancel()
@@ -286,7 +301,7 @@ final class AgentHub {
         // timeout, so at the cap the least recently used session with no call in flight makes room.
         var evicted: MCPSession?
         if sessions.count >= Self.maxSessions {
-            let busy = Set(calls.keys.map(\.session))
+            let busy = busySessions
             evicted = sessions.filter { !busy.contains($0.id) }.min { (lastSeen[$0.id] ?? .distantPast) < (lastSeen[$1.id] ?? .distantPast) }
             guard let evicted else {
                 return Self.error(.server, "Lithium already has \(Self.maxSessions) agent sessions, each running a tool call.", id: id)
@@ -306,7 +321,7 @@ final class AgentHub {
             protocolVersion: version
         )
         sessions.append(session)
-        lastSeen[session.id] = Date()
+        lastSeen[session.id] = now()
         if let evicted {
             await log.append(["event": "session_evicted", "session": Self.logged(evicted), "for": Self.logged(session)])
         }
@@ -350,6 +365,8 @@ final class AgentHub {
             // The server cancels the request when the client's connection fails.
             let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             calls[key] = nil
+            // The idle timeout counts from the answer, not from the request a long call began with.
+            if lastSeen[session.id] != nil { lastSeen[session.id] = now() }
             if let outcome {
                 result = outcome
             } else {

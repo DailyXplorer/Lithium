@@ -176,11 +176,11 @@ final class AgentServer: @unchecked Sendable {
         }
     }
 
-    /// Ends every connection; one waiting on `AgentHub` closes once its answer is out.
+    /// Ends every connection once its answers are out, including one still waiting on `AgentHub`.
     func closeConnections() {
         queue.sync {
             for entry in connections.values {
-                if entry.isBusy { entry.closesAfterReply = true } else { close(entry) }
+                if entry.isBusy { entry.closesAfterReply = true } else { closeAfterSending(entry) }
             }
         }
     }
@@ -218,7 +218,8 @@ final class AgentServer: @unchecked Sendable {
             if let data { entry.buffer.append(data) }
             self.process(entry)
             if isComplete || error != nil {
-                if !entry.isBusy { self.close(entry) } else { entry.closesAfterReply = true }
+                // Answers to what the client sent before its EOF may still be queued.
+                if !entry.isBusy { self.closeAfterSending(entry) } else { entry.closesAfterReply = true }
                 return
             }
             self.resumeReceiving(entry)
@@ -236,6 +237,15 @@ final class AgentServer: @unchecked Sendable {
         guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
         entry.request?.cancel()
         entry.connection.cancel()
+    }
+
+    /// Like `close`, but sends are ordered, so the cancel waits for every answer already queued.
+    private func closeAfterSending(_ entry: Connection) {
+        guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
+        let connection = entry.connection
+        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
     }
 
     // MARK: Requests
@@ -347,11 +357,8 @@ final class AgentServer: @unchecked Sendable {
         for (name, value) in headers { head += "\(name): \(value)\r\n" }
         if closes { head += "Connection: close\r\n" }
         head += "\r\n"
-        let connection = entry.connection
-        connection.send(content: Data(head.utf8) + (body ?? Data()), completion: .contentProcessed { _ in
-            if closes { connection.cancel() }
-        })
-        if closes { connections[ObjectIdentifier(entry)] = nil }
+        entry.connection.send(content: Data(head.utf8) + (body ?? Data()), completion: .contentProcessed { _ in })
+        if closes { closeAfterSending(entry) }
     }
 
     /// Spelled out: `HTTPURLResponse.localizedString` follows the user's language.

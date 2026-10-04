@@ -14,6 +14,7 @@ const NAV = [
   ['privacy', 'shield-check', 'Privacy & security'],
   ['extensions', 'puzzle-piece', 'Extensions'],
   ['max', 'sparkle', 'Max'],
+  ['agents', 'robot', 'Agents'],
   ['permissions', 'video-camera', 'Site permissions'],
   ['history', 'clock-counter-clockwise', 'History', 'lithium://history'],
   ['about', 'info', 'About Lithium'],

@@ -5,12 +5,13 @@ import WebKit
 struct LithiumApp: App {
     /// SwiftUI may build the App value more than once; the browser (and its background
     /// filter updates and tab sleeping) must exist exactly once.
-    @MainActor private static let sharedBrowser: Browser = {
+    @MainActor static let sharedBrowser: Browser = {
         Theme.registerFonts()
         return Browser()
     }()
 
     private let browser = LithiumApp.sharedBrowser
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         Window("Lithium", id: "browser") {
@@ -25,6 +26,24 @@ struct LithiumApp: App {
     }
 }
 
+/// The Dock menu, which SwiftUI has no scene API for: Stop Agent, reachable even when the
+/// window is hidden behind other apps.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        guard LithiumApp.sharedBrowser.agent?.state == .listening else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Stop Agent", action: #selector(stopAgent), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func stopAgent() {
+        LithiumApp.sharedBrowser.agent?.stop()
+    }
+}
+
 struct BrowserCommands: Commands {
     let browser: Browser
 
@@ -32,6 +51,11 @@ struct BrowserCommands: Commands {
         CommandGroup(replacing: .appSettings) {
             Button("Settings…") { browser.openSettings() }
                 .keyboardShortcut(",")
+        }
+        CommandGroup(after: .appSettings) {
+            Button("Stop Agent") { browser.agent?.stop() }
+                .keyboardShortcut(".", modifiers: [.control, .command])
+                .disabled(browser.agent?.state != .listening)
         }
         CommandGroup(replacing: .newItem) {
             Button("New Tab") { browser.newTabFocusingAddress() }

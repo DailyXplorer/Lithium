@@ -26,6 +26,9 @@ struct ToolbarView: View {
             AddressBar(tab: tab)
                 .frame(maxWidth: 560)
             Spacer(minLength: 16)
+            if let agent = browser.agent {
+                AgentButton(agent: agent)
+            }
             ExtensionsButton(tab: tab)
             DownloadsButton()
             SummaryButton(tab: tab)

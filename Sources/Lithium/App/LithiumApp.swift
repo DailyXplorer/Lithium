@@ -101,7 +101,7 @@ struct BrowserCommands: Commands {
                 withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
             }
             .keyboardShortcut("b")
-            Button("Reload Page") { browser.selectedTab?.reload() }
+            Button("Reload Page") { browser.navigate(browser.selectedTab, .reload) }
                 .keyboardShortcut("r")
             Divider()
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
@@ -135,9 +135,9 @@ struct BrowserCommands: Commands {
             Button("Show All History") { browser.openHistory() }
                 .keyboardShortcut("y")
             Divider()
-            Button("Back") { browser.selectedTab?.webView.goBack() }
+            Button("Back") { browser.navigate(browser.selectedTab, .back) }
                 .keyboardShortcut("[")
-            Button("Forward") { browser.selectedTab?.webView.goForward() }
+            Button("Forward") { browser.navigate(browser.selectedTab, .forward) }
                 .keyboardShortcut("]")
         }
         CommandMenu("Tabs") {

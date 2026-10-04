@@ -127,8 +127,10 @@ final class Browser {
                 paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)])
             }
         }
+        // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
         for tab in tabs where tab.id != selectedTabID && tab !== videoPopout.tab
-            && !paired.contains(ObjectIdentifier(tab)) && tab.canSleep(idleFor: interval) {
+            && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
+            && tab.canSleep(idleFor: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
         }
     }
@@ -195,11 +197,13 @@ final class Browser {
 
     func openHistory() { openInternal(Internal.historyURL) }
 
+    func openAgentLog() { openInternal(Internal.agentsURL) }
+
     /// Settings › Agents. Off by default; the choice outlives the app.
     func setAgentAccess(_ enabled: Bool) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub()
+            let hub = AgentHub(browser: self, tools: AgentHub.tabTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {
@@ -282,7 +286,9 @@ final class Browser {
     }
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
-    var regularTabs: [Tab] { tabs.filter { $0.pinID == nil } }
+    /// The tab list. Tabs an agent opened sit apart, in the Agent group below it.
+    var regularTabs: [Tab] { tabs.filter { $0.pinID == nil && $0.openedByAgent == nil } }
+    var agentTabs: [Tab] { tabs.filter { $0.pinID == nil && $0.openedByAgent != nil } }
 
     func liveTab(for pin: Pin) -> Tab? { tabs.first { $0.pinID == pin.id } }
 
@@ -315,6 +321,21 @@ final class Browser {
         return tab
     }
 
+    /// At the end of the Agent group, empty and unselected: the user's tab list and selection
+    /// stay as they were. Agents open only web pages, which load in Lithium's own configuration.
+    func newAgentTab(session: String) -> Tab {
+        let tab = Tab(browser: self, configuration: makeConfiguration())
+        tab.openedByAgent = session
+        tabs.append(tab)
+        extensions.didOpen(tab)
+        return tab
+    }
+
+    /// Dragged or moved by the user into the tab list, a tab the agent opened becomes theirs.
+    func keep(_ tab: Tab) {
+        tab.openedByAgent = nil
+    }
+
     func newTabFocusingAddress() {
         find.hide()
         // Left for the address bar: it counts as used until now.
@@ -330,7 +351,27 @@ final class Browser {
     }
 
     private func open(_ url: URL) {
-        if let tab = selectedTab { tab.load(url) } else { newTab(url: url) }
+        if let tab = selectedTab {
+            agent?.userNavigated(tab)
+            tab.load(url)
+        } else {
+            newTab(url: url)
+        }
+    }
+
+    enum Step { case back, forward, reload, stop }
+
+    /// Back, Forward, Reload and Stop from Lithium's toolbar, menus and sidebar: the user's own
+    /// navigation, which wins over an agent waiting on that tab.
+    func navigate(_ tab: Tab?, _ step: Step) {
+        guard let tab else { return }
+        agent?.userNavigated(tab)
+        switch step {
+        case .back: tab.webView.goBack()
+        case .forward: tab.webView.goForward()
+        case .reload: tab.reload()
+        case .stop: tab.stopLoading()
+        }
     }
 
     func addressTextChanged(_ text: String) {
@@ -391,6 +432,7 @@ final class Browser {
             selectedTab?.markActive()
         }
         tab.unpair()
+        agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
         summaries.discard(tab)
         tab.tearDown()
@@ -464,9 +506,10 @@ final class Browser {
         addressFocusToken &+= 1
     }
 
-    /// Live favorites first (in grid order), then the tab list, which is how the sidebar reads top to bottom.
+    /// Live favorites first (in grid order), then the tab list and the Agent group, which is how
+    /// the sidebar reads top to bottom.
     var navigationOrder: [Tab] {
-        pins.compactMap(liveTab(for:)) + regularTabs
+        pins.compactMap(liveTab(for:)) + regularTabs + agentTabs
     }
 
     func selectAdjacentTab(_ offset: Int) {

@@ -83,6 +83,15 @@ final class Tab: NSObject, Identifiable {
 
     /// A name the user gave the tab; it wins over the page's own title until cleared.
     var customTitle: String?
+    /// The agent session ("s1") that opened the tab, which puts it in the sidebar's Agent group.
+    /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
+    var openedByAgent: String?
+    /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
+    /// tell its page from the one before.
+    private(set) var commits = 0
+    /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
+    /// that have none (Lithium's error page, local files).
+    @ObservationIgnored private(set) var httpStatus: Int?
     /// A shorter name for the page's title (Max, Tidy tab titles).
     private(set) var tidyTitle: String?
     /// Silenced by the user. WebKit keeps it per web view, so each new one (waking) is muted again.
@@ -620,6 +629,7 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
@@ -647,10 +657,12 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
+        httpStatus = nil
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        commits += 1
         if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away.
         goToAddressAfterWaking()
@@ -922,6 +934,12 @@ extension Tab: WKWebExtensionTab {
     /// Sent to the page it slept on, it just wakes, which loads that page. Sent between an
     /// extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
+        go(to: url)
+    }
+
+    /// Sends the tab to an address on someone else's behalf (an extension, an agent), keeping a
+    /// sleeping tab's history as `loadURL(_:for:)` describes.
+    func go(to url: URL) {
         lastActive = Date()
         guard isAsleep, let old = self.url, !needsNewWebView(for: url) else {
             load(url)
@@ -947,21 +965,21 @@ extension Tab: WKWebExtensionTab {
 
     /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.
     func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
-        if isAsleep { wakeForExtension() } else { reload() }
+        if isAsleep { wake() } else { reload() }
     }
 
     func goBack(for context: WKWebExtensionContext) async throws {
-        wakeForExtension()
+        wake()
         webView.goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
-        wakeForExtension()
+        wake()
         webView.goForward()
     }
 
-    /// What an extension sends a tab to counts as using it, so the next sleep pass leaves it be.
-    private func wakeForExtension() {
+    /// What an extension or an agent does in a tab counts as using it, so the next sleep pass leaves it be.
+    func wake() {
         lastActive = Date()
         wakeIfAsleep()
     }

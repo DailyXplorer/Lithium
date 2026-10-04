@@ -34,6 +34,36 @@ actor AgentLog {
         }
     }
 
+    /// The newest `limit` entries, newest first, for `lithium://agents`.
+    func entries(limit: Int) -> [JSONValue] {
+        var entries: [JSONValue] = []
+        for name in dayFiles().reversed() {
+            let text = (try? String(contentsOf: folder.appending(path: name), encoding: .utf8)) ?? ""
+            for line in text.split(separator: "\n").reversed() {
+                guard let entry = try? JSONValue.decode(Data(line.utf8)) else { continue }
+                entries.append(entry)
+                if entries.count == limit { return entries }
+            }
+        }
+        return entries
+    }
+
+    /// Every day file, oldest first, as one JSON Lines document.
+    func export() -> Data {
+        dayFiles().reduce(into: Data()) { data, name in
+            data += (try? Data(contentsOf: folder.appending(path: name))) ?? Data()
+        }
+    }
+
+    func clear() {
+        for name in dayFiles() { try? FileManager.default.removeItem(at: folder.appending(path: name)) }
+    }
+
+    /// Names sort by date.
+    private func dayFiles() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".jsonl") }.sorted()
+    }
+
     /// Deletes day files older than the retention period.
     func prune(now: Date = Date()) {
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -Self.retentionDays, to: now) else { return }
@@ -49,4 +79,19 @@ actor AgentLog {
         let day = Calendar.current.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d.jsonl", day.year ?? 0, day.month ?? 0, day.day ?? 0)
     }
+
+    /// Where the log lives, also while access is off: the page still shows and clears it.
+    static let folder = AgentFiles.folder.appending(path: "log")
+}
+
+/// A call as the toolbar panel lists it.
+struct AgentLogLine: Identifiable, Equatable {
+    let id = UUID()
+    let date: Date
+    let session: String
+    let tool: String
+    let tab: String?
+    let host: String?
+    /// The error code; nil when the call succeeded.
+    let error: String?
 }

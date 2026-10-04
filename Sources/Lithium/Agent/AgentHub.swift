@@ -74,6 +74,19 @@ final class AgentHub {
         let task: Task<Result<JSONValue, AgentToolError>?, Never>
     }
 
+    /// Tabs an agent acted in (opened, navigated, selected), which carry a badge until they close.
+    private(set) var touchedTabs: Set<Tab.ID> = []
+    /// The last few calls, newest last, for the toolbar panel. Hosts only, never full addresses.
+    private(set) var recentLog: [AgentLogLine] = []
+    static let recentLogLength = 10
+    /// Tabs with an agent call running in them: one at a time per tab (`exclusive`).
+    private(set) var busyTabs: Set<Tab.ID> = []
+    /// Bumped when the user navigates a tab an agent call is running in, which ends that call.
+    private(set) var userNavigations: [Tab.ID: Int] = [:]
+
+    @ObservationIgnored weak var browser: Browser?
+    @ObservationIgnored private var tabIDs = AgentTabIDs()
+    @ObservationIgnored private var lastAction: [Tab.ID: Date] = [:]
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog
     @ObservationIgnored private let defaults: UserDefaults
@@ -91,7 +104,8 @@ final class AgentHub {
     /// What `lastSeen` and the idle timeout read; tests move it forward.
     @ObservationIgnored private let now: @MainActor () -> Date
 
-    init(folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
+    init(browser: Browser? = nil, folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
+        self.browser = browser
         self.now = now
         self.folder = folder
         self.defaults = defaults
@@ -400,18 +414,98 @@ final class AgentHub {
             }
         }
         let ms = Int(Date().timeIntervalSince(started) * 1000)
-        let logged: JSONValue = switch result {
-        case .success: ["ok": true]
-        case .failure(let error): ["ok": false, "error": .string(error.code)]
-        }
-        await log.append([
+        // Reads are logged without what they returned; the tab a call opened is named.
+        var logged: [String: JSONValue] = ["ok": .bool((try? result.get()) != nil)]
+        if case .failure(let error) = result { logged["error"] = .string(error.code) }
+        let tabID = arguments["tab"]?.string ?? (try? result.get())?["tab"]?.string
+        var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": arguments,
-            "result": logged,
+            "params": AgentURLs.redacted(arguments),
+            "result": .object(logged),
             "ms": .int(ms),
-        ], at: started)
+        ]
+        let tab = tabID.map(loggedTab)
+        if let tab { entry["tab"] = tab }
+        recentLog.append(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
+        if recentLog.count > Self.recentLogLength { recentLog.removeFirst(recentLog.count - Self.recentLogLength) }
+        await log.append(entry, at: started)
         return Self.result(Self.toolResult(result), id: id)
+    }
+
+    /// The tab as the log names it: its id, and its host and redacted address while it is open.
+    private func loggedTab(_ id: String) -> JSONValue {
+        var fields: [String: JSONValue] = ["id": .string(id)]
+        if let tabID = tabIDs.tabID(for: id), let url = browser?.tabs.first(where: { $0.id == tabID })?.url {
+            fields["host"] = .string(url.host() ?? "")
+            fields["url"] = .string(AgentURLs.redacted(url.absoluteString))
+        }
+        return .object(fields)
+    }
+
+    /// The log page's Clear also empties the panel's lines, which repeat the log.
+    func clearRecentLog() {
+        recentLog = []
+    }
+
+    // MARK: Tabs
+
+    /// The id agents know `tab` by, given the first time any agent sees it.
+    func id(for tab: Tab) -> String {
+        tabIDs.id(for: tab.id)
+    }
+
+    /// The open tab an agent named, or the reason it can't be used.
+    func tab(named id: String) throws -> Tab {
+        if let closed = tabIDs.closed[id] {
+            throw AgentToolError(code: "tab_closed", message: "\(id) was closed at \(closed.formatted(date: .omitted, time: .standard)).")
+        }
+        guard let tabID = tabIDs.tabID(for: id), let tab = browser?.tabs.first(where: { $0.id == tabID }) else {
+            throw AgentToolError(code: "unknown_tab", message: "There is no tab \(id). Call tabs_list for the open tabs.")
+        }
+        return tab
+    }
+
+    func isTouched(_ tab: Tab) -> Bool {
+        touchedTabs.contains(tab.id)
+    }
+
+    /// Marks an agent action in `tab`: its badge, and ten minutes during which it doesn't sleep.
+    func touch(_ tab: Tab) {
+        if !touchedTabs.contains(tab.id) { touchedTabs.insert(tab.id) }
+        lastAction[tab.id] = now()
+    }
+
+    /// An agent acted in the tab in the last 10 minutes; the sleep pass leaves it be.
+    func holds(_ tab: Tab) -> Bool {
+        guard let last = lastAction[tab.id] else { return false }
+        return now().timeIntervalSince(last) < 10 * 60
+    }
+
+    /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
+    /// waiting on the tab ends with the same error as it sees the tab gone.
+    func didClose(_ tab: Tab) {
+        tabIDs.retire(tab.id, at: now())
+        touchedTabs.remove(tab.id)
+        lastAction[tab.id] = nil
+    }
+
+    /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins over an
+    /// agent call running in it.
+    func userNavigated(_ tab: Tab) {
+        guard busyTabs.contains(tab.id) else { return }
+        userNavigations[tab.id, default: 0] += 1
+    }
+
+    /// Runs `body` once no other agent call runs in `tab`: one action at a time per tab, in turn.
+    func exclusive<Value>(_ tab: Tab, _ body: () async throws -> Value) async throws -> Value {
+        _ = try await AgentWait.until(.now + .seconds(24 * 3600)) { self.busyTabs.contains(tab.id) ? nil : true }
+        busyTabs.insert(tab.id)
+        defer {
+            busyTabs.remove(tab.id)
+            userNavigations[tab.id] = nil
+        }
+        return try await body()
     }
 
     private func isRateLimited(_ sessionID: String, at now: Date) -> Bool {
@@ -455,7 +549,7 @@ final class AgentHub {
 
     // MARK: Tools
 
-    /// The one tool of this version; page tools come in the next ones.
+    /// Always listed; the tab tools (`AgentTabTools.swift`) come with a browser.
     static let statusTool = AgentTool(
         name: "lithium_status",
         description: "Reports Lithium’s version and this agent session. Lithium is the user’s own browser: the user sees and can stop every agent action.",

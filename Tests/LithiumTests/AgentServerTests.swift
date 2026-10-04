@@ -679,6 +679,122 @@ struct AgentServerTests {
         #expect(try await fixture.post(["jsonrpc": "2.0", "id": 1, "method": "ping"], session: session).status == 200)
     }
 
+    // MARK: Connections
+
+    /// A server with token `t` whose `hold` calls wait for `release`; every message is answered
+    /// with its id.
+    private static func holdingServer(timeouts: AgentServer.Timeouts = .init(), arrived: AsyncStream<Void>.Continuation, release: AsyncStream<Void>) -> AgentServer {
+        AgentServer(token: "t", timeouts: timeouts) { request in
+            guard case .message(let message, _, _) = request else { return AgentReply() }
+            if message["method"] == "hold" {
+                arrived.yield()
+                for await _ in release { break }
+            }
+            return AgentReply(body: ["id": message["id"] ?? .null])
+        }
+    }
+
+    private static func request(_ method: String, id: Int, port: UInt16) -> Data {
+        let body = #"{"jsonrpc":"2.0","id":\#(id),"method":"\#(method)"}"#
+        return Data(("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer t\r\n"
+            + "Content-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)").utf8)
+    }
+
+    /// While call 1 is held, the client sends call 2 and a ping, then half-closes. The server
+    /// reads those and the EOF together once call 1 is answered, so the EOF lands while call 2
+    /// is held: the ping behind it still gets its answer, and only that last answer closes.
+    @Test(.timeLimit(.minutes(1))) func answersEveryRequestPipelinedBeforeAHalfClose() async throws {
+        let arrived = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let server = Self.holdingServer(arrived: arrived.continuation, release: release.stream)
+        defer { server.stop() }
+        let port = try await server.start(port: 0)
+        let socket = try RawHTTP.connectedSocket(port: port)
+        defer { Darwin.close(socket) }
+        var iterator = arrived.stream.makeAsyncIterator()
+        try RawHTTP.write(Self.request("hold", id: 1, port: port), to: socket)
+        await iterator.next()
+        try RawHTTP.write(Self.request("hold", id: 2, port: port) + Self.request("ping", id: 3, port: port), to: socket)
+        #expect(shutdown(socket, SHUT_WR) == 0)
+        try await Task.sleep(for: .milliseconds(200))
+
+        release.continuation.yield()
+        await iterator.next()
+        release.continuation.yield()
+        let data = try await Task.detached { try RawHTTP.readToEOF(socket) }.value
+        let replies = try RawHTTP.parseAll(data)
+        #expect(replies.map(\.json) == [["id": 1], ["id": 2], ["id": 3]])
+        #expect(replies.map { $0.headers["connection"] } == [nil, nil, "close"])
+    }
+
+    /// Local processes that take every slot without sending a request can't lock a client out:
+    /// the client's connection evicts the oldest, and the head deadline closes the rest.
+    @Test(.timeLimit(.minutes(1))) func strangersHoldingEverySlotDontLockAClientOut() async throws {
+        let server = AgentServer(token: "t", timeouts: .init(head: 2, body: 2, idle: 60)) { _ in AgentReply(status: 202) }
+        defer { server.stop() }
+        let port = try await server.start(port: 0)
+        var strangers: [Int32] = []
+        defer { strangers.forEach { Darwin.close($0) } }
+        for index in 0..<AgentServer.maxConnections {
+            let socket = try RawHTTP.connectedSocket(port: port)
+            strangers.append(socket)
+            if index.isMultiple(of: 2) { try RawHTTP.write(Data("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1".utf8), to: socket) }
+        }
+        #expect(await Self.eventually { server.connectionCount == AgentServer.maxConnections })
+
+        let reply = try await RawHTTP.send(port: port, method: "POST", headers: ["Authorization": "Bearer t", "Content-Type": "application/json"], body: Data("{}".utf8))
+        #expect(reply.status == 202)
+        #expect(server.connectionCount == AgentServer.maxConnections - 1)
+        let closed = await Task.detached { [strangers] in strangers.map { (try? RawHTTP.readToEOF($0)) == Data() } }.value
+        #expect(closed == Array(repeating: true, count: AgentServer.maxConnections))
+        #expect(server.connectionCount == 0)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func closesAKeepAliveConnectionLeftIdle() async throws {
+        let server = AgentServer(token: "t", timeouts: .init(head: 30, body: 30, idle: 0.5)) { _ in AgentReply(status: 202) }
+        defer { server.stop() }
+        let port = try await server.start(port: 0)
+        let request = Self.request("ping", id: 1, port: port)
+        let start = ContinuousClock.now
+        let data = try await Task.detached {
+            let socket = try RawHTTP.connectedSocket(port: port)
+            defer { Darwin.close(socket) }
+            try RawHTTP.write(request, to: socket)
+            return try RawHTTP.readToEOF(socket)
+        }.value
+        let elapsed = ContinuousClock.now - start
+        let replies = try RawHTTP.parseAll(data)
+        #expect(replies.map(\.status) == [202])
+        #expect(replies.first?.headers["connection"] == nil)
+        #expect(elapsed >= .milliseconds(500))
+        #expect(elapsed < .seconds(5))
+    }
+
+    /// Every deadline is far shorter than the call; the connection waits for it, then for idle.
+    @Test(.timeLimit(.minutes(1))) func aCallInFlightOutlastsEveryDeadline() async throws {
+        let arrived = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let server = Self.holdingServer(timeouts: .init(head: 0.3, body: 0.3, idle: 0.3), arrived: arrived.continuation, release: release.stream)
+        defer { server.stop() }
+        let port = try await server.start(port: 0)
+        let request = Self.request("hold", id: 1, port: port)
+        let exchange = Task.detached {
+            let socket = try RawHTTP.connectedSocket(port: port)
+            defer { Darwin.close(socket) }
+            try RawHTTP.write(request, to: socket)
+            return try RawHTTP.readToEOF(socket)
+        }
+        var iterator = arrived.stream.makeAsyncIterator()
+        await iterator.next()
+        try await Task.sleep(for: .seconds(1))
+        #expect(server.connectionCount == 1)
+
+        release.continuation.yield()
+        let replies = try RawHTTP.parseAll(try await exchange.value)
+        #expect(replies.map(\.json) == [["id": 1]])
+        #expect(server.connectionCount == 0)
+    }
+
     // MARK: Log
 
     @Test func logsToolCallsWithoutTheSessionSecret() async throws {
@@ -815,34 +931,53 @@ enum RawHTTP {
     /// throws instead of passing for EOF, unlike in `exchange`.
     static func halfClosedExchange(port: UInt16, request: Data) async throws -> Data {
         try await Task.detached {
-            let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-            guard socket >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            let socket = try connectedSocket(port: port)
             defer { Darwin.close(socket) }
-            // A blocking read ignores the test's time limit.
-            var timeout = timeval(tv_sec: 10, tv_usec: 0)
-            setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
             // Answers back up in the server while this client is still writing.
             var buffer: Int32 = 4096
             setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &buffer, socklen_t(MemoryLayout<Int32>.size))
-            var address = sockaddr_in()
-            address.sin_family = sa_family_t(AF_INET)
-            address.sin_port = port.bigEndian
-            address.sin_addr.s_addr = inet_addr("127.0.0.1")
-            let connected = withUnsafePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-            }
-            guard connected == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
-            let written = request.withUnsafeBytes { write(socket, $0.baseAddress, $0.count) }
-            guard written == request.count, shutdown(socket, SHUT_WR) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
-            var data = Data()
-            var chunk = [UInt8](repeating: 0, count: 65_536)
-            while true {
-                let count = read(socket, &chunk, chunk.count)
-                guard count >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
-                if count == 0 { return data }
-                data.append(contentsOf: chunk[..<count])
-            }
+            try write(request, to: socket)
+            guard shutdown(socket, SHUT_WR) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            return try readToEOF(socket)
         }.value
+    }
+
+    /// A blocking BSD socket connected to the server; reads give up after `timeout` seconds,
+    /// since a blocking read ignores the test's time limit.
+    static func connectedSocket(port: UInt16, timeout: Int = 10) throws -> Int32 {
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard socket >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        var limit = timeval(tv_sec: timeout, tv_usec: 0)
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &limit, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else {
+            Darwin.close(socket)
+            throw POSIXError(.init(rawValue: errno) ?? .EIO)
+        }
+        return socket
+    }
+
+    static func write(_ data: Data, to socket: Int32) throws {
+        let written = data.withUnsafeBytes { Darwin.write(socket, $0.baseAddress, $0.count) }
+        guard written == data.count else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+    }
+
+    /// Everything the server sends until it closes; a reset or the read timeout throws.
+    static func readToEOF(_ socket: Int32) throws -> Data {
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            let count = read(socket, &chunk, chunk.count)
+            guard count >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+            if count == 0 { return data }
+            data.append(contentsOf: chunk[..<count])
+        }
     }
 
     private static func parse(_ data: Data) throws -> HTTPReply {

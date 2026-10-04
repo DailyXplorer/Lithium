@@ -29,12 +29,30 @@ final class AgentServer: @unchecked Sendable {
     /// MCP clients keep one or two connections; more is a runaway local process.
     static let maxConnections = 16
 
+    /// How long a connection may stay in one `Phase`. Without them, a local process that opens
+    /// sockets and sends nothing would hold the 16 slots for good.
+    struct Timeouts: Sendable {
+        /// From the accept, or from the first byte after an answer, to the end of the request head.
+        var head: TimeInterval = 10
+        /// From the end of the head to the end of the body.
+        var body: TimeInterval = 30
+        /// Between an answer and the next request, on a connection that presented the token.
+        var idle: TimeInterval = 60
+    }
+
+    /// Where a connection stands; each phase but `busy` closes the connection when it lasts too long.
+    private enum Phase {
+        case head, body, idle, busy
+    }
+
     private let queue = DispatchQueue(label: "app.lithium.agent-server")
+    private let timeouts: Timeouts
     private let handler: Handler
     private var listener: NWListener?
     private var token: [UInt8]
     private var port: UInt16 = 0
     private var connections: [ObjectIdentifier: Connection] = [:]
+    private var acceptedCount = 0
     /// The listener a pending `start` waits on; only its own events may settle that start.
     private var starting: (listener: NWListener, continuation: CheckedContinuation<UInt16, any Error>)?
     private var isStopped = false
@@ -48,7 +66,15 @@ final class AgentServer: @unchecked Sendable {
     /// Confined to `queue`, like the server.
     private final class Connection: @unchecked Sendable {
         let connection: NWConnection
+        /// Accept order, so eviction takes the oldest.
+        let serial: Int
         var buffer = Data()
+        /// Sent the token at least once: a client rather than a stranger holding a slot.
+        var isAuthenticated = false
+        /// The client's EOF arrived: the whole requests in `buffer` are the last to answer.
+        var inputEnded = false
+        var phase: Phase?
+        var deadline: DispatchWorkItem?
         /// A request is with `AgentHub`; answers go out in order, so the next one waits.
         var isBusy = false
         /// Off while a request is with `AgentHub`: what the client sends meanwhile stays in the
@@ -58,11 +84,15 @@ final class AgentServer: @unchecked Sendable {
         /// The request with `AgentHub`, cancelled when the connection fails under it.
         var request: Task<Void, Never>?
 
-        init(_ connection: NWConnection) { self.connection = connection }
+        init(_ connection: NWConnection, serial: Int) {
+            self.connection = connection
+            self.serial = serial
+        }
     }
 
-    init(token: String, listenerDidFail: @escaping @Sendable (NWError?) -> Void = { _ in }, handler: @escaping Handler) {
+    init(token: String, timeouts: Timeouts = Timeouts(), listenerDidFail: @escaping @Sendable (NWError?) -> Void = { _ in }, handler: @escaping Handler) {
         self.token = Array(token.utf8)
+        self.timeouts = timeouts
         self.listenerDidFail = listenerDidFail
         self.handler = handler
     }
@@ -188,11 +218,12 @@ final class AgentServer: @unchecked Sendable {
     // MARK: Connections
 
     private func accept(_ connection: NWConnection) {
-        guard connections.count < Self.maxConnections else {
+        guard connections.count < Self.maxConnections || evictOne() else {
             connection.cancel()
             return
         }
-        let entry = Connection(connection)
+        acceptedCount += 1
+        let entry = Connection(connection, serial: acceptedCount)
         connections[ObjectIdentifier(entry)] = entry
         connection.stateUpdateHandler = { [weak self, weak entry] state in
             guard let self, let entry else { return }
@@ -200,6 +231,51 @@ final class AgentServer: @unchecked Sendable {
         }
         connection.start(queue: queue)
         receive(on: entry)
+        updateDeadline(entry)
+    }
+
+    /// Makes room at the cap so strangers can't lock a client out: the oldest connection that
+    /// never sent the token goes first, then the oldest idle client, which reconnects. A call in
+    /// flight or a client partway through a request is never cut.
+    private func evictOne() -> Bool {
+        let candidates = connections.values.filter { !$0.isAuthenticated || $0.phase == .idle }
+        guard let victim = candidates.min(by: { ($0.isAuthenticated ? 1 : 0, $0.serial) < ($1.isAuthenticated ? 1 : 0, $1.serial) }) else {
+            return false
+        }
+        close(victim)
+        return true
+    }
+
+    /// Arms the deadline of the phase the connection just entered. Staying in a phase keeps the
+    /// deadline it had, so a client dribbling bytes can't push it back.
+    private func updateDeadline(_ entry: Connection) {
+        guard connections[ObjectIdentifier(entry)] != nil else { return }
+        let phase: Phase
+        if entry.isBusy {
+            phase = .busy
+        } else if entry.buffer.firstRange(of: Data("\r\n\r\n".utf8)) != nil {
+            // `process` leaves no whole request behind, so a head here waits on its body.
+            phase = .body
+        } else {
+            phase = entry.buffer.isEmpty && entry.isAuthenticated ? .idle : .head
+        }
+        guard phase != entry.phase else { return }
+        entry.phase = phase
+        entry.deadline?.cancel()
+        entry.deadline = nil
+        let timeout: TimeInterval
+        switch phase {
+        case .head: timeout = timeouts.head
+        case .body: timeout = timeouts.body
+        case .idle: timeout = timeouts.idle
+        case .busy: return
+        }
+        let deadline = DispatchWorkItem { [weak self, weak entry] in
+            guard let self, let entry else { return }
+            self.close(entry)
+        }
+        entry.deadline = deadline
+        queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
     }
 
     /// Network.framework holds a failed connection's resources until it is cancelled. Every
@@ -216,10 +292,12 @@ final class AgentServer: @unchecked Sendable {
             guard let self, let entry else { return }
             entry.isReceiving = false
             if let data { entry.buffer.append(data) }
+            if isComplete || error != nil { entry.inputEnded = true }
+            // Every whole request sent before the EOF gets its answer, the last one with
+            // `Connection: close` (see `respond`); a request cut by the EOF is dropped.
             self.process(entry)
-            if isComplete || error != nil {
-                // Answers to what the client sent before its EOF may still be queued.
-                if !entry.isBusy { self.closeAfterSending(entry) } else { entry.closesAfterReply = true }
+            if entry.inputEnded {
+                if !entry.isBusy { self.closeAfterSending(entry) }
                 return
             }
             self.resumeReceiving(entry)
@@ -227,7 +305,7 @@ final class AgentServer: @unchecked Sendable {
     }
 
     private func resumeReceiving(_ entry: Connection) {
-        guard !entry.isBusy, !entry.isReceiving, connections[ObjectIdentifier(entry)] != nil else { return }
+        guard !entry.isBusy, !entry.isReceiving, !entry.inputEnded, connections[ObjectIdentifier(entry)] != nil else { return }
         receive(on: entry)
     }
 
@@ -235,6 +313,7 @@ final class AgentServer: @unchecked Sendable {
     /// once its last answer is sent.
     private func close(_ entry: Connection) {
         guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
+        entry.deadline?.cancel()
         entry.request?.cancel()
         entry.connection.cancel()
     }
@@ -242,6 +321,7 @@ final class AgentServer: @unchecked Sendable {
     /// Like `close`, but sends are ordered, so the cancel waits for every answer already queued.
     private func closeAfterSending(_ entry: Connection) {
         guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
+        entry.deadline?.cancel()
         let connection = entry.connection
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
             connection.cancel()
@@ -262,31 +342,49 @@ final class AgentServer: @unchecked Sendable {
     /// stops it until `finish`, and a malformed one closes the connection.
     private func process(_ entry: Connection) {
         while !entry.isBusy, connections[ObjectIdentifier(entry)] != nil, processNext(entry) {}
+        updateDeadline(entry)
     }
 
     /// Takes one request off the buffer; false when the buffer doesn't hold a whole one yet.
     private func processNext(_ entry: Connection) -> Bool {
-        guard let end = entry.buffer.firstRange(of: Data("\r\n\r\n".utf8)) else {
-            guard entry.buffer.count > Self.maxHeaderBytes else { return false }
-            respond(entry, status: 431, closing: true)
-            return true
+        switch Self.frame(entry.buffer) {
+        case .partial:
+            return false
+        case .malformed(let status):
+            respond(entry, status: status, closing: true)
+        case .request(let head, let body):
+            let content = Data(entry.buffer[body])
+            entry.buffer = Data(entry.buffer[body.upperBound...])
+            if head.version != "HTTP/1.1" || head.headers["connection"]?.lowercased() == "close" { entry.closesAfterReply = true }
+            handle(head, body: content, on: entry)
         }
-        guard end.lowerBound <= Self.maxHeaderBytes else { respond(entry, status: 431, closing: true); return true }
-        guard let head = Self.parseHead(entry.buffer[..<end.lowerBound]) else { respond(entry, status: 400, closing: true); return true }
-        if head.headers["transfer-encoding"] != nil { respond(entry, status: 411, closing: true); return true }
+        return true
+    }
+
+    private enum Frame {
+        /// Not a whole request yet.
+        case partial
+        /// Answered with this status, then the connection closes.
+        case malformed(Int)
+        case request(Head, body: Range<Data.Index>)
+    }
+
+    /// The first request in `buffer`, without taking it off.
+    private static func frame(_ buffer: Data) -> Frame {
+        guard let end = buffer.firstRange(of: Data("\r\n\r\n".utf8)) else {
+            return buffer.count > maxHeaderBytes ? .malformed(431) : .partial
+        }
+        guard end.lowerBound - buffer.startIndex <= maxHeaderBytes else { return .malformed(431) }
+        guard let head = parseHead(buffer[..<end.lowerBound]) else { return .malformed(400) }
+        if head.headers["transfer-encoding"] != nil { return .malformed(411) }
         var length = 0
         if let header = head.headers["content-length"] {
-            guard let value = Int(header), value >= 0 else { respond(entry, status: 400, closing: true); return true }
+            guard let value = Int(header), value >= 0 else { return .malformed(400) }
             length = value
         }
-        guard length <= Self.maxBodyBytes else { respond(entry, status: 413, closing: true); return true }
-        let bodyStart = end.upperBound
-        guard entry.buffer.count - (bodyStart - entry.buffer.startIndex) >= length else { return false }
-        let body = Data(entry.buffer[bodyStart..<(bodyStart + length)])
-        entry.buffer = Data(entry.buffer[(bodyStart + length)...])
-        if head.version != "HTTP/1.1" || head.headers["connection"]?.lowercased() == "close" { entry.closesAfterReply = true }
-        handle(head, body: body, on: entry)
-        return true
+        guard length <= maxBodyBytes else { return .malformed(413) }
+        guard buffer.endIndex - end.upperBound >= length else { return .partial }
+        return .request(head, body: end.upperBound..<(end.upperBound + length))
     }
 
     /// Checks in order of what a stranger could learn: a web page (Origin) or a rebound DNS
@@ -298,6 +396,7 @@ final class AgentServer: @unchecked Sendable {
         guard isAuthorized(head.headers["authorization"]) else {
             return respond(entry, status: 401, headers: [("WWW-Authenticate", "Bearer")])
         }
+        entry.isAuthenticated = true
         guard head.target == "/mcp" else { return respond(entry, status: 404) }
         let session = head.headers["mcp-session-id"]
         let request: AgentRequest
@@ -345,7 +444,10 @@ final class AgentServer: @unchecked Sendable {
     }
 
     private func respond(_ entry: Connection, status: Int, headers: [(String, String)] = [], body: Data? = nil, closing: Bool = false) {
-        let closes = closing || entry.closesAfterReply
+        // After the client's EOF, the answer to the last whole request it sent closes.
+        let isLast: Bool
+        if entry.inputEnded, case .partial = Self.frame(entry.buffer) { isLast = true } else { isLast = false }
+        let closes = closing || entry.closesAfterReply || isLast
         var head = "HTTP/1.1 \(status) \(Self.reasons[status] ?? "Error")\r\n"
         if let body {
             head += "Content-Type: application/json\r\n"

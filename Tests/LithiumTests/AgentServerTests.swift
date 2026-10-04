@@ -718,14 +718,16 @@ struct AgentServerTests {
         let port = try await server.start(port: 0)
         let call = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer t\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
         let flood = Data(repeating: 0x20, count: 16 << 20)
-        let exchange = Task { try await RawHTTP.exchange(port: port, request: Data(call.utf8) + flood) }
+        // After the 202, the spaces are a head over the limit: a 431 closes the connection with
+        // input unread, which resets it while this client may still be sending.
+        let exchange = Task { try await RawHTTP.exchangeUntilReset(port: port, request: Data(call.utf8) + flood) }
         var iterator = arrived.stream.makeAsyncIterator()
         await iterator.next()
         try await Task.sleep(for: .seconds(1))
         #expect(server.bufferedBytes <= 65_536)
 
         release.continuation.yield()
-        let replies = try RawHTTP.parseAll(try await exchange.value)
+        let replies = try await exchange.value
         #expect(replies.first?.status == 202)
         #expect(server.bufferedBytes == 0)
     }
@@ -1011,6 +1013,48 @@ enum RawHTTP {
         var data = Data()
         for try await chunk in chunks.stream { data.append(chunk) }
         return data
+    }
+
+    /// The whole answers received before the server closed or reset the connection. A server
+    /// that closes with input still unread resets it, maybe while the request is still being
+    /// sent; the answers before the reset count, and a reset before any whole answer throws.
+    static func exchangeUntilReset(port: UInt16, request: Data) async throws -> [HTTPReply] {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        defer { connection.cancel() }
+        let chunks = AsyncThrowingStream<Data, any Error>.makeStream()
+        // Only the receive path ends the stream: a failed connection completes the pending
+        // receive with its error, after every byte it already read.
+        @Sendable func receive() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, isComplete, error in
+                if let data { chunks.continuation.yield(data) }
+                if let error { chunks.continuation.finish(throwing: error) } else if isComplete { chunks.continuation.finish() } else { receive() }
+            }
+        }
+        connection.start(queue: .global())
+        connection.send(content: request, completion: .contentProcessed { _ in })
+        receive()
+        var data = Data()
+        do {
+            for try await chunk in chunks.stream { data.append(chunk) }
+        } catch NWError.posix(.ECONNRESET) {
+            let replies = wholeReplies(data)
+            guard !replies.isEmpty else { throw NWError.posix(.ECONNRESET) }
+            return replies
+        }
+        return try parseAll(data)
+    }
+
+    /// The answers at the start of `data` whose head and body arrived in full.
+    private static func wholeReplies(_ data: Data) -> [HTTPReply] {
+        var rest = data
+        var replies: [HTTPReply] = []
+        while let reply = try? parse(rest) {
+            let length = Int(reply.headers["content-length"] ?? "") ?? 0
+            guard reply.body.count >= length else { break }
+            replies.append(HTTPReply(status: reply.status, headers: reply.headers, body: Data(reply.body.prefix(length))))
+            rest = Data(reply.body.dropFirst(length))
+        }
+        return replies
     }
 
     /// Over a BSD socket: writes the request, `shutdown(SHUT_WR)`, then reads to EOF. A reset

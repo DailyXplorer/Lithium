@@ -108,7 +108,8 @@ Today only the selected tab's web view is in a window (`PageContainer` in `Views
 
 ### 2.8 Concurrency
 
-- One action at a time per tab. Each `AgentTab` has a FIFO queue. Reads (snapshot, screenshot) go through the same queue, so a snapshot never interleaves with half a drag.
+- One action at a time per tab. Each `AgentTab` has a FIFO queue. Reads (snapshot, screenshot) go through the same queue, so a snapshot never interleaves with half a drag. Time spent in the queue counts against the call's own `timeoutMs`: a call whose turn doesn't come answers `timeout`, and one whose tab closes while it waits answers `tab_closed`. The `stop` tool alone skips the queue: it stops the page at once and ends the call running in the tab, which answers `stopped`.
+- A call names its tab by the id it was called with until it ends. A closed tab is never given a new id, nor counted as touched.
 - Tabs run independently. Two agents, or one agent with parallel calls, can act in two tabs at once. Their steps interleave on the main actor.
 - Several agents may connect (cap: 4 sessions). Nothing is owned. Each action is logged with its session. Tabs record which session opened them.
 
@@ -347,9 +348,9 @@ Every tool that acts in a page takes `tab`. Element tools take `ref`, or `x` and
 | `tab_select` | `tab` | shows the tab in Lithium's window, waking it; never activates the app | no |
 | `navigate` | `tab`, `url`, `wait` (`none`, `commit`, `domcontentloaded`, `load` = default, `networkidle`), `timeoutMs` = 15000 (max 60000) | `tab`, `url`, `title`, `loading`, `state` (how far the page got), `status` (HTTP, when known), `diff` (PR 3) | `file:` URLs |
 | `go_back`, `go_forward`, `reload` | `tab`, `wait`, `timeoutMs` | same as `navigate` | no |
-| `stop` | `tab` | same as `navigate`, without `state` | no |
+| `stop` | `tab` | same as `navigate`, without `state`; doesn't queue, and the call running in the tab ends with `stopped` | no |
 
-`tab_open` always opens in the background: the user's selection changes only through `tab_select`, so there is no `background` parameter. Until PR 4 brings confirmations, `file:` URLs are refused with `unsupported` rather than opened. `networkidle` needs the resource load delegate and answers `unsupported` until PR 6. A navigation waits for the next document the tab commits, never the one before; Lithium's error page standing in for it is `navigation_failed` with the error's description. A sleeping tab wakes through `Tab.go(to:)`, the path extensions use, so it keeps its history.
+`tab_open` always opens in the background: the user's selection changes only through `tab_select`, so there is no `background` parameter. Until PR 4 brings confirmations, `file:` URLs are refused with `unsupported` rather than opened. `networkidle` needs the resource load delegate and answers `unsupported` until PR 6. A navigation waits for the next document the tab commits, never the one before; Lithium's error page standing in for it is `navigation_failed` with the error's description. A sleeping tab wakes through `Tab.go(to:)`, the path extensions use, so it keeps its history. A tab restored asleep without its history wakes onto its old page first, so that page stays one Back away; that commit isn't counted (`Tab.commits`), so the navigation still waits for the page it asked for.
 
 Favorites (pins) are not exposed: they are the user's saved layout. Ephemeral tabs use a non-persistent data store, are never saved in the session or history, and are dropped on close; they are new to Lithium (PR 8). Until then `ephemeral: true` answers `unsupported`.
 
@@ -403,7 +404,7 @@ There are no tools for cookie values, `localStorage`, `IndexedDB`, settings, fav
 
 ### 6.6 Errors
 
-`unknown_tab`, `tab_closed`, `blocked_page`, `blocked_extension_ui`, `stale_ref`, `frame_gone`, `not_visible`, `not_in_viewport`, `unstable`, `covered`, `disabled`, `not_editable`, `readonly`, `use_select_option`, `unsupported`, `clipboard_disabled`, `dialog_open`, `file_chooser_opened`, `navigation_failed` (with the `NSError` description), `timeout`, `denied_by_user`, `confirmation_timeout`, `challenge_requires_user`, `user_interrupted`, `user_busy`, `agent_stopped`, `rate_limited`, `invalid_params`. Messages name the element by ref, role, and name, and say what to do next when Lithium knows.
+`unknown_tab`, `tab_closed`, `blocked_page`, `blocked_extension_ui`, `stale_ref`, `frame_gone`, `not_visible`, `not_in_viewport`, `unstable`, `covered`, `disabled`, `not_editable`, `readonly`, `use_select_option`, `unsupported`, `clipboard_disabled`, `dialog_open`, `file_chooser_opened`, `navigation_failed` (with the `NSError` description), `timeout`, `denied_by_user`, `confirmation_timeout`, `challenge_requires_user`, `user_interrupted`, `user_busy`, `stopped` (an agent's `stop` ended the call), `agent_stopped`, `rate_limited`, `invalid_params`. Messages name the element by ref, role, and name, and say what to do next when Lithium knows.
 
 ### 6.7 Performance targets
 

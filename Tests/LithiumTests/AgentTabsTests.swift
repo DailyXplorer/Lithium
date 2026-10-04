@@ -87,8 +87,9 @@ struct AgentTabsTests {
             return ToolResult(isError: result?["isError"] == true, content: result?["structuredContent"] ?? reply.body?["error"] ?? .null)
         }
 
+        /// Looked up as the tools do, without giving ids to the tabs it passes.
         func tab(_ id: String) -> Lithium.Tab? {
-            browser.tabs.first { browser.agent?.id(for: $0) == id }
+            try? hub.tab(named: id).tab
         }
     }
 
@@ -206,6 +207,30 @@ struct AgentTabsTests {
             let next = await client.call("tab_open")
             #expect(next["tab"] != nil)
             #expect(next["tab"] != .string(id))
+        }
+    }
+
+    /// A tab from the last session sleeps without its history: it wakes onto its old page first,
+    /// and the navigation answers with the page it was sent to, not that one.
+    @Test func navigatingATabRestoredAsleepAnswersWithTheTarget() async throws {
+        try await withAgent { client, base in
+            let two = base.appending(path: "two")
+            for wait: JSONValue in ["commit", "domcontentloaded"] {
+                let tab = client.browser.newTab(selecting: false)
+                tab.restore(url: base.appending(path: "one"), title: "One")
+                #expect(tab.isAsleep)
+                let id = client.hub.id(for: tab)
+                let result = await client.call("navigate", ["tab": .string(id), "url": .string(two.absoluteString), "wait": wait])
+                #expect(!result.isError, "\(wait): \(result.message)")
+                #expect(result["url"] == .string(two.absoluteString), "\(wait)")
+                #expect(result["state"] == wait)
+                if wait == "domcontentloaded" {
+                    let shown = try await tab.webView.evaluateJavaScript("location.pathname") as? String
+                    #expect(shown == "/two")
+                }
+                // Its old page is still one Back away.
+                #expect((await client.call("go_back", ["tab": .string(id)]))["url"] == .string(base.appending(path: "one").absoluteString))
+            }
         }
     }
 
@@ -368,7 +393,7 @@ struct AgentTabsTests {
             let result = await call.value
             #expect(result.code == "user_interrupted")
             // Over: the user's next navigation doesn't count against the agent's next call.
-            #expect(client.hub.userNavigations.isEmpty)
+            #expect(client.hub.interruptions.isEmpty)
         }
     }
 
@@ -382,6 +407,77 @@ struct AgentTabsTests {
             #expect(result.code == "agent_stopped")
             #expect(client.hub.busyTabs.isEmpty)
             client.hub.allowAgain()
+        }
+    }
+
+    @Test func closingATabKeepsItsIDInEveryAnswer() async throws {
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
+            let number = try #require(Int(id.dropFirst()))
+            let tab = try #require(client.tab(id))
+            let waiting = Task { await client.call("wait_for", ["tab": .string(id), "url": "*/never", "timeoutMs": 20_000]) }
+            #expect(await waitUntil(10) { client.hub.busyTabs.contains(tab.id) })
+            let queued = Task { await client.call("reload", ["tab": .string(id), "timeoutMs": 20_000]) }
+            try await Task.sleep(for: .milliseconds(100))
+            client.browser.close(tab)
+
+            let waited = await waiting.value
+            #expect(waited.code == "tab_closed")
+            #expect(waited.message == "\(id) was closed while the agent waited on it.")
+            let reloaded = await queued.value
+            #expect(reloaded.code == "tab_closed")
+            #expect(reloaded.message == "\(id) was closed while the agent waited on it.")
+            let stopped = await client.call("stop", ["tab": .string(id)])
+            #expect(stopped.code == "tab_closed")
+            #expect(stopped.message.hasPrefix("\(id) was closed at "))
+            #expect(!client.hub.isTouched(tab))
+            #expect(!client.hub.holds(tab))
+            // No id was given to the closed tab: the next one is the next number.
+            #expect((await client.call("tab_open"))["tab"] == .string("t\(number + 1)"))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stopDoesntWaitItsTurnAndEndsTheCallInFlight() async throws {
+        let hanging = try await HangingHTTP()
+        defer { hanging.stop() }
+        // Shown at once, but never done loading: its image never comes.
+        let (listener, slow) = try await LocalHTTP.serve(["/slow": ("Content-Type: text/html", "<title>Slow</title><img src=\"\(hanging.url.absoluteString)\">")])
+        defer { listener.cancel() }
+        try await withAgent { client, _ in
+            let id = try #require((await client.call("tab_open"))["tab"]?.string)
+            let tab = try #require(client.tab(id))
+            let navigating = Task { await client.call("navigate", ["tab": .string(id), "url": .string(slow.appending(path: "slow").absoluteString), "wait": "load", "timeoutMs": 20_000]) }
+            #expect(await waitUntil(15) { tab.title == "Slow" && tab.isLoading })
+            #expect(client.hub.busyTabs.contains(tab.id))
+
+            let started = ContinuousClock.now
+            let stopped = await client.call("stop", ["tab": .string(id)])
+            #expect(!stopped.isError, "\(stopped.message)")
+            #expect(stopped["tab"] == .string(id))
+            let navigated = await navigating.value
+            #expect(navigated.code == "stopped")
+            #expect(navigated.message == "A stop call stopped \(id) while this call waited on it.")
+            #expect(ContinuousClock.now - started < .seconds(5))
+            #expect(client.hub.interruptions.isEmpty)
+            #expect(client.hub.busyTabs.isEmpty)
+        }
+    }
+
+    @Test func aQueuedCallTimesOutWaitingItsTurn() async throws {
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
+            let tab = try #require(client.tab(id))
+            let waiting = Task { await client.call("wait_for", ["tab": .string(id), "url": "*/never", "timeoutMs": 30_000]) }
+            #expect(await waitUntil(10) { client.hub.busyTabs.contains(tab.id) })
+
+            let started = ContinuousClock.now
+            let reloaded = await client.call("reload", ["tab": .string(id), "timeoutMs": 300])
+            #expect(reloaded.code == "timeout")
+            #expect(reloaded.message == "\(id) after 300 ms: another agent call was still running in it.")
+            #expect(ContinuousClock.now - started < .seconds(5))
+
+            #expect(!(await client.call("stop", ["tab": .string(id)])).isError)
+            #expect((await waiting.value).code == "stopped")
         }
     }
 

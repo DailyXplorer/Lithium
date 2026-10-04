@@ -30,6 +30,26 @@ struct AgentTabIDs {
     }
 }
 
+/// A tab with the id the agent named it by, kept for the whole call: once the tab closes its id
+/// is retired, and every message about it still names the id the agent knows.
+@MainActor
+struct NamedTab {
+    let tab: Tab
+    let id: String
+
+    var closedError: AgentToolError {
+        AgentToolError(code: "tab_closed", message: "\(id) was closed while the agent waited on it.")
+    }
+}
+
+/// What ends an agent call running in a tab before it is done.
+enum AgentInterruption {
+    /// The user navigated the tab (address bar, Back, Forward, Reload, Stop).
+    case user
+    /// An agent called `stop` on the tab.
+    case agentStop
+}
+
 /// How far a navigation has to get before the tool answers.
 enum LoadWait: String, Comparable, CaseIterable {
     case none, commit, domcontentloaded, load
@@ -153,12 +173,14 @@ extension AgentHub {
         if let url { try hub.checkOpenable(url) }
         let wait = try arguments.wait(default: .commit)
         let timeout = try arguments.timeout(default: 15_000)
+        let deadline = ContinuousClock.now + timeout
         guard let browser = hub.browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
         let tab = browser.newAgentTab(session: session.label)
+        let named = NamedTab(tab: tab, id: hub.id(for: tab))
         hub.touch(tab)
-        guard let url else { return hub.page(tab, reached: .load) }
-        return try await hub.exclusive(tab) {
-            try await hub.navigation(in: tab, wait: wait, timeout: timeout) { tab.go(to: url) }
+        guard let url else { return hub.page(named, reached: .load) }
+        return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+            try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { tab.go(to: url) }
         }
     }
 
@@ -167,10 +189,9 @@ extension AgentHub {
         description: "Closes a tab. The user can reopen it with ⇧⌘T, as any closed tab.",
         inputSchema: schema(["tab": tabParam], required: ["tab"])
     ) { arguments, _, hub in
-        let id = try Arguments(value: arguments).string("tab")
-        let tab = try hub.tab(named: id)
-        hub.browser?.close(tab)
-        return ["closed": .string(id)]
+        let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
+        hub.browser?.close(named.tab)
+        return ["closed": .string(named.id)]
     }
 
     static let tabSelect = AgentTool(
@@ -178,10 +199,10 @@ extension AgentHub {
         description: "Shows a tab in Lithium’s window, waking it if it sleeps. Lithium stays where it is among the user’s apps: it is never brought to the front.",
         inputSchema: schema(["tab": tabParam], required: ["tab"])
     ) { arguments, _, hub in
-        let tab = try hub.tab(named: try Arguments(value: arguments).string("tab"))
-        hub.browser?.select(tab)
-        hub.touch(tab)
-        return hub.page(tab, reached: nil)
+        let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
+        hub.browser?.select(named.tab)
+        hub.touch(named.tab)
+        return hub.page(named, reached: nil)
     }
 
     // MARK: Navigation
@@ -192,14 +213,15 @@ extension AgentHub {
         inputSchema: schema(["tab": tabParam, "url": ["type": "string"], "wait": waitParam, "timeoutMs": timeoutParam], required: ["tab", "url"])
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)
-        let tab = try hub.tab(named: try arguments.string("tab"))
+        let named = try hub.tab(named: try arguments.string("tab"))
         let url = try arguments.url("url")
         try hub.checkOpenable(url)
         let wait = try arguments.wait(default: .load)
         let timeout = try arguments.timeout(default: 15_000)
-        return try await hub.exclusive(tab) {
-            try hub.checkDrivable(tab)
-            return try await hub.navigation(in: tab, wait: wait, timeout: timeout) { tab.go(to: url) }
+        let deadline = ContinuousClock.now + timeout
+        return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+            try hub.checkDrivable(named)
+            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { named.tab.go(to: url) }
         }
     }
 
@@ -209,20 +231,22 @@ extension AgentHub {
     private static func historyTool(name: String, description: String, forward: Bool) -> AgentTool {
         AgentTool(name: name, description: description, inputSchema: schema(["tab": tabParam, "wait": waitParam, "timeoutMs": timeoutParam], required: ["tab"])) { arguments, _, hub in
             let arguments = Arguments(value: arguments)
-            let tab = try hub.tab(named: try arguments.string("tab"))
+            let named = try hub.tab(named: try arguments.string("tab"))
             let wait = try arguments.wait(default: .load)
             let timeout = try arguments.timeout(default: 15_000)
-            return try await hub.exclusive(tab) {
-                try hub.checkDrivable(tab)
+            let deadline = ContinuousClock.now + timeout
+            return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+                try hub.checkDrivable(named)
+                let tab = named.tab
                 tab.wake()
                 let list = tab.webView.backForwardList
                 guard let item = forward ? list.forwardItem : list.backItem else {
-                    throw AgentToolError(code: "navigation_failed", message: "\(hub.id(for: tab)) has no page to go \(forward ? "forward" : "back") to.")
+                    throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to go \(forward ? "forward" : "back") to.")
                 }
                 if AgentURLs.isBlocked(item.url) {
                     throw AgentToolError(code: "blocked_page", message: "That page is one of Lithium’s own or an extension’s, out of reach for agents.")
                 }
-                return try await hub.navigation(in: tab, wait: wait, timeout: timeout) { tab.webView.go(to: item) }
+                return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { tab.webView.go(to: item) }
             }
         }
     }
@@ -233,30 +257,32 @@ extension AgentHub {
         inputSchema: schema(["tab": tabParam, "wait": waitParam, "timeoutMs": timeoutParam], required: ["tab"])
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)
-        let tab = try hub.tab(named: try arguments.string("tab"))
+        let named = try hub.tab(named: try arguments.string("tab"))
         let wait = try arguments.wait(default: .load)
         let timeout = try arguments.timeout(default: 15_000)
-        return try await hub.exclusive(tab) {
-            try hub.checkDrivable(tab)
-            guard tab.url != nil else { throw AgentToolError(code: "navigation_failed", message: "\(hub.id(for: tab)) has no page to reload.") }
-            return try await hub.navigation(in: tab, wait: wait, timeout: timeout) {
+        let deadline = ContinuousClock.now + timeout
+        return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+            try hub.checkDrivable(named)
+            let tab = named.tab
+            guard tab.url != nil else { throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to reload.") }
+            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) {
                 if tab.isAsleep { tab.wake() } else { tab.reload() }
             }
         }
     }
 
+    /// Doesn't wait its turn behind the call it is there to interrupt.
     static let stopTool = AgentTool(
         name: "stop",
-        description: "Stops a tab’s page loading. It keeps whatever has loaded.",
+        description: "Stops a tab’s page loading at once, and ends the agent call waiting on it (that call answers stopped). It keeps whatever has loaded.",
         inputSchema: schema(["tab": tabParam], required: ["tab"])
     ) { arguments, _, hub in
-        let tab = try hub.tab(named: try Arguments(value: arguments).string("tab"))
-        return try await hub.exclusive(tab) {
-            try hub.checkDrivable(tab)
-            if !tab.isAsleep { tab.stopLoading() }
-            hub.touch(tab)
-            return hub.page(tab, reached: nil)
-        }
+        let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
+        try hub.checkDrivable(named)
+        hub.agentStopped(named.tab)
+        if !named.tab.isAsleep { named.tab.stopLoading() }
+        hub.touch(named.tab)
+        return hub.page(named, reached: nil)
     }
 
     // MARK: Waiting
@@ -272,7 +298,8 @@ extension AgentHub {
         ], required: ["tab"])
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)
-        let tab = try hub.tab(named: try arguments.string("tab"))
+        let named = try hub.tab(named: try arguments.string("tab"))
+        let tab = named.tab
         let timeout = try arguments.timeout(default: 10_000)
         for key in ["ref", "text", "networkIdle"] where arguments.value[key] != nil {
             throw AgentToolError(code: "unsupported", message: "wait_for \(key) isn’t available in this version of Lithium. Wait for load or url.")
@@ -281,22 +308,23 @@ extension AgentHub {
         let pattern = try arguments.optionalString("url")
         guard (load == nil) != (pattern == nil) else { throw Arguments.invalid("Give exactly one condition: load or url.") }
         let started = ContinuousClock.now
-        return try await hub.exclusive(tab) {
-            try hub.checkDrivable(tab)
+        let deadline = started + timeout
+        return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+            try hub.checkDrivable(named)
             if let pattern {
                 let matches: (String) -> Bool
                 do { matches = try AgentURLs.matcher(for: pattern) } catch { throw Arguments.invalid("url is not a valid pattern: \(error.localizedDescription)") }
-                let met = try await hub.watch(tab, until: started + timeout) { matches(tab.url?.absoluteString ?? "") ? true : nil }
+                let met = try await hub.watch(named, until: deadline) { matches(tab.url?.absoluteString ?? "") ? true : nil }
                 guard met != nil else {
-                    throw hub.timedOut(tab, after: timeout, "its address \(tab.url?.absoluteString ?? "none") doesn’t match \(pattern)")
+                    throw hub.timedOut(named, after: timeout, "its address \(tab.url?.absoluteString ?? "none") doesn’t match \(pattern)")
                 }
             } else {
                 guard let state = load.flatMap(LoadWait.init(rawValue:)), state >= .domcontentloaded else {
                     throw Arguments.invalid("load must be domcontentloaded or load.")
                 }
-                try await hub.waitForLoad(of: tab, state, deadline: started + timeout, timeout: timeout)
+                try await hub.waitForLoad(of: named, state, deadline: deadline, timeout: timeout)
             }
-            var result = hub.page(tab, reached: nil).object ?? [:]
+            var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true
             result["elapsedMs"] = .int(Int((ContinuousClock.now - started) / .milliseconds(1)))
             return .object(result)
@@ -318,15 +346,16 @@ extension AgentHub {
     }
 
     /// A tab showing Lithium's or an extension's page can be listed, selected and closed, nothing more.
-    private func checkDrivable(_ tab: Tab) throws {
-        guard AgentURLs.isBlocked(tab.url) else { return }
-        throw AgentToolError(code: "blocked_page", message: "\(id(for: tab)) shows one of Lithium’s own or an extension’s pages, out of reach for agents.")
+    private func checkDrivable(_ named: NamedTab) throws {
+        guard AgentURLs.isBlocked(named.tab.url) else { return }
+        throw AgentToolError(code: "blocked_page", message: "\(named.id) shows one of Lithium’s own or an extension’s pages, out of reach for agents.")
     }
 
     /// What every navigation tool returns: where the tab is now and how far its page got.
-    private func page(_ tab: Tab, reached: LoadWait?) -> JSONValue {
+    private func page(_ named: NamedTab, reached: LoadWait?) -> JSONValue {
+        let tab = named.tab
         var fields: [String: JSONValue] = [
-            "tab": .string(id(for: tab)),
+            "tab": .string(named.id),
             "url": .string(tab.url?.absoluteString ?? ""),
             "title": .string(tab.displayTitle),
             "loading": .bool(tab.isLoading),
@@ -336,64 +365,68 @@ extension AgentHub {
         return .object(fields)
     }
 
-    /// Re-checks `check` as the tab changes, inside `exclusive`. The tab closing, or the user
-    /// navigating it, ends the wait with the error the agent reads.
-    private func watch<Value>(_ tab: Tab, until deadline: ContinuousClock.Instant, _ check: @escaping @MainActor () throws -> Value?) async throws -> Value? {
+    /// Re-checks `check` as the tab changes, inside `exclusive`. The tab closing, the user
+    /// navigating it, or an agent's `stop`, ends the wait with the error the agent reads.
+    private func watch<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, _ check: @escaping @MainActor () throws -> Value?) async throws -> Value? {
         try await AgentWait.until(deadline) {
-            try self.checkStillWaitable(tab)
+            try self.checkStillWaitable(named)
             return try check()
         }
     }
 
-    private func checkStillWaitable(_ tab: Tab) throws {
-        guard browser?.tabs.contains(where: { $0 === tab }) == true else {
-            throw AgentToolError(code: "tab_closed", message: "\(id(for: tab)) was closed while the agent waited on it.")
-        }
-        // `exclusive` clears the count when the call ends, so any count is this call's.
-        guard userNavigations[tab.id] == nil else {
-            throw AgentToolError(code: "user_interrupted", message: "The user navigated \(id(for: tab)) while the agent waited on it.")
+    private func checkStillWaitable(_ named: NamedTab) throws {
+        guard isOpen(named.tab) else { throw named.closedError }
+        // `exclusive` clears it when the call ends, so any interruption is this call's.
+        switch interruptions[named.tab.id] {
+        case nil: return
+        case .user: throw AgentToolError(code: "user_interrupted", message: "The user navigated \(named.id) while the agent waited on it.")
+        case .agentStop: throw AgentToolError(code: "stopped", message: "A stop call stopped \(named.id) while this call waited on it.")
         }
     }
 
     /// Starts a navigation, then waits until the page it leads to (the next document the tab
     /// commits, never the one before) gets as far as `wait`.
-    private func navigation(in tab: Tab, wait: LoadWait, timeout: Duration, _ start: () -> Void) async throws -> JSONValue {
-        let deadline = ContinuousClock.now + timeout
+    private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, _ start: () -> Void) async throws -> JSONValue {
+        let tab = named.tab
         let before = tab.commits
         start()
         touch(tab)
-        guard wait > .none else { return page(tab, reached: nil) }
-        let committed = try await watch(tab, until: deadline) { tab.commits > before ? true : nil }
-        guard committed != nil else { throw timedOut(tab, after: timeout, "no page had started to show") }
-        if wait > .commit { try await waitForLoad(of: tab, wait, deadline: deadline, timeout: timeout) }
-        return page(tab, reached: wait)
+        guard wait > .none else { return page(named, reached: nil) }
+        let committed = try await watch(named, until: deadline) { tab.commits > before ? true : nil }
+        guard committed != nil else { throw timedOut(named, after: timeout, "no page had started to show") }
+        if wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
+        return page(named, reached: wait)
     }
 
     /// The tab's current document reaching `state`. Lithium's error page standing in for the
     /// page is `navigation_failed`.
-    private func waitForLoad(of tab: Tab, _ state: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
-        let id = id(for: tab)
+    private func waitForLoad(of named: NamedTab, _ state: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
+        let tab = named.tab
         let failed: @MainActor () throws -> Void = {
-            if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(id)’s page stopped working and the tab went to sleep.") }
+            if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id)’s page stopped working and the tab went to sleep.") }
             if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: error.localizedDescription) }
         }
         if state == .domcontentloaded {
             // No delegate call marks DOMContentLoaded: the page is asked, in short rounds so Stop and the deadline still apply.
             while ContinuousClock.now < deadline {
-                try checkStillWaitable(tab)
+                try checkStillWaitable(named)
                 try failed()
                 if !tab.isLoading { return }
-                if await documentIsReady(tab, within: min(.milliseconds(250), deadline - .now)) { return }
+                if await documentIsReady(tab, within: min(.milliseconds(250), deadline - .now)) {
+                    // What happened while the page was asked counts first.
+                    try checkStillWaitable(named)
+                    return
+                }
                 // A page between documents answers at once, with an error.
                 try await Task.sleep(for: .milliseconds(20))
             }
-            throw timedOut(tab, after: timeout, "the page was still loading")
+            throw timedOut(named, after: timeout, "the page was still loading")
         }
-        let loaded = try await watch(tab, until: deadline) { () -> Bool? in
+        let loaded = try await watch(named, until: deadline) { () -> Bool? in
             try failed()
             return tab.isLoading ? nil : true
         }
-        guard loaded != nil else { throw timedOut(tab, after: timeout, "the page was still loading") }
+        guard loaded != nil else { throw timedOut(named, after: timeout, "the page was still loading") }
     }
 
     /// Asked in a content world of Lithium's own, which the page can't see or touch.
@@ -411,7 +444,7 @@ extension AgentHub {
 
     static let agentWorld = WKContentWorld.world(name: "lithium-agent")
 
-    private func timedOut(_ tab: Tab, after timeout: Duration, _ state: String) -> AgentToolError {
-        AgentToolError(code: "timeout", message: "\(id(for: tab)) after \(Int(timeout / .milliseconds(1))) ms: \(state).")
+    private func timedOut(_ named: NamedTab, after timeout: Duration, _ state: String) -> AgentToolError {
+        AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: \(state).")
     }
 }

@@ -87,7 +87,8 @@ final class Tab: NSObject, Identifiable {
     /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
     var openedByAgent: String?
     /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
-    /// tell its page from the one before.
+    /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
+    /// address it was sent to (`go(to:)`), isn't counted.
     private(set) var commits = 0
     /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
     /// that have none (Lithium's error page, local files).
@@ -662,10 +663,10 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        commits += 1
         if navigation !== errorNavigation { loadError = nil }
-        // The old page is now in the history, one Back away.
-        goToAddressAfterWaking()
+        // The old page is now in the history, one Back away. Only on its way out, it isn't the
+        // document an agent's navigation waits for.
+        if !goToAddressAfterWaking() { commits += 1 }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.

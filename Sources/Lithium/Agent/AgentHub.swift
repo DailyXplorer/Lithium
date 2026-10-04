@@ -81,8 +81,9 @@ final class AgentHub {
     static let recentLogLength = 10
     /// Tabs with an agent call running in them: one at a time per tab (`exclusive`).
     private(set) var busyTabs: Set<Tab.ID> = []
-    /// Bumped when the user navigates a tab an agent call is running in, which ends that call.
-    private(set) var userNavigations: [Tab.ID: Int] = [:]
+    /// Set when the user navigates a tab an agent call is running in, or an agent stops it,
+    /// which ends that call.
+    private(set) var interruptions: [Tab.ID: AgentInterruption] = [:]
 
     @ObservationIgnored weak var browser: Browser?
     @ObservationIgnored private var tabIDs = AgentTabIDs()
@@ -450,20 +451,25 @@ final class AgentHub {
 
     // MARK: Tabs
 
-    /// The id agents know `tab` by, given the first time any agent sees it.
+    /// The id agents know `tab` by, given the first time any agent sees it. Only for open tabs
+    /// (listing, opening): a call already holding a tab names it by the `NamedTab` it started with.
     func id(for tab: Tab) -> String {
         tabIDs.id(for: tab.id)
     }
 
     /// The open tab an agent named, or the reason it can't be used.
-    func tab(named id: String) throws -> Tab {
+    func tab(named id: String) throws -> NamedTab {
         if let closed = tabIDs.closed[id] {
             throw AgentToolError(code: "tab_closed", message: "\(id) was closed at \(closed.formatted(date: .omitted, time: .standard)).")
         }
         guard let tabID = tabIDs.tabID(for: id), let tab = browser?.tabs.first(where: { $0.id == tabID }) else {
             throw AgentToolError(code: "unknown_tab", message: "There is no tab \(id). Call tabs_list for the open tabs.")
         }
-        return tab
+        return NamedTab(tab: tab, id: id)
+    }
+
+    func isOpen(_ tab: Tab) -> Bool {
+        browser?.tabs.contains { $0 === tab } == true
     }
 
     func isTouched(_ tab: Tab) -> Bool {
@@ -472,6 +478,8 @@ final class AgentHub {
 
     /// Marks an agent action in `tab`: its badge, and ten minutes during which it doesn't sleep.
     func touch(_ tab: Tab) {
+        // A closed tab's entries would outlive it: `didClose` has already cleared them.
+        guard isOpen(tab) else { return }
         if !touchedTabs.contains(tab.id) { touchedTabs.insert(tab.id) }
         lastAction[tab.id] = now()
     }
@@ -494,16 +502,31 @@ final class AgentHub {
     /// agent call running in it.
     func userNavigated(_ tab: Tab) {
         guard busyTabs.contains(tab.id) else { return }
-        userNavigations[tab.id, default: 0] += 1
+        interruptions[tab.id] = .user
     }
 
-    /// Runs `body` once no other agent call runs in `tab`: one action at a time per tab, in turn.
-    func exclusive<Value>(_ tab: Tab, _ body: () async throws -> Value) async throws -> Value {
-        _ = try await AgentWait.until(.now + .seconds(24 * 3600)) { self.busyTabs.contains(tab.id) ? nil : true }
+    /// An agent's `stop`, which doesn't queue: it ends the call running in the tab, unless the
+    /// user already did.
+    func agentStopped(_ tab: Tab) {
+        guard busyTabs.contains(tab.id), interruptions[tab.id] == nil else { return }
+        interruptions[tab.id] = .agentStop
+    }
+
+    /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
+    /// turn. Waiting in line counts against the call's own deadline.
+    func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {
+        let tab = named.tab
+        let free = try await AgentWait.until(deadline) { () -> Bool? in
+            guard self.isOpen(tab) else { throw named.closedError }
+            return self.busyTabs.contains(tab.id) ? nil : true
+        }
+        guard free != nil else {
+            throw AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: another agent call was still running in it.")
+        }
         busyTabs.insert(tab.id)
         defer {
             busyTabs.remove(tab.id)
-            userNavigations[tab.id] = nil
+            interruptions[tab.id] = nil
         }
         return try await body()
     }

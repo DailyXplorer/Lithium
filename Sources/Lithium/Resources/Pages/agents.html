@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent log</title>
+<link rel="stylesheet" href="lithium://pages/style.css">
+<style>
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+  .actions { display: flex; gap: 8px; }
+  .actions .button { display: inline-flex; align-items: center; gap: 8px; }
+  .actions .icon { width: 15px; height: 15px; }
+  .day { margin-top: 36px; }
+  .entry { display: flex; gap: 14px; padding: 10px 8px; margin: 0 -8px; border-radius: 9px; transition: background .12s; }
+  .entry:hover { background: var(--hover); }
+  .entry > .icon { width: 16px; height: 16px; margin-top: 3px; color: var(--faint); }
+  .entry.failed > .icon { color: var(--danger); }
+  .entry .text { min-width: 0; flex: 1; }
+  .entry .line { display: flex; align-items: baseline; gap: 10px; }
+  .entry .tool { font-weight: 600; }
+  .entry .where { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry .error { color: var(--danger); font-size: 13px; }
+  .entry .details { color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; margin-top: 2px; }
+  .entry time { margin-left: auto; color: var(--faint); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+</style>
+</head>
+<body>
+<nav></nav>
+
+<main>
+  <div class="page">
+    <div class="header">
+      <div><h2>Agent log</h2><p class="lead">Every agent action, kept on this Mac for 30 days. Addresses are saved without passwords or tokens.</p></div>
+      <div class="actions">
+        <button class="button" id="export"><div class="icon" style="--src: url(lithium://pages/icon/download-simple)"></div>Export…</button>
+        <button class="button danger" id="clear"><div class="icon" style="--src: url(lithium://pages/icon/trash)"></div>Clear…</button>
+      </div>
+    </div>
+    <div id="list"></div>
+  </div>
+</main>
+
+<script src="lithium://pages/pages.js"></script>
+<script>
+  const dayLabel = (date) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(date); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 86400000);
+    if (diff === 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return day.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  const icon = (name) => {
+    const image = el('div', { className: 'icon' });
+    image.style.setProperty('--src', `url(lithium://pages/icon/${name})`);
+    return image;
+  };
+
+  // Parameters as `name: value`, as the log kept them: secrets in addresses already redacted.
+  const details = (params) => Object.entries(params || {})
+    .map(([name, value]) => `${name}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join(' · ');
+
+  const describe = (entry) => {
+    if (entry.event === 'session_evicted') {
+      return { tool: 'Session replaced', where: `${entry.session?.client ?? ''} ${entry.session?.id ?? ''} made room for ${entry.for?.client ?? ''} ${entry.for?.id ?? ''}` };
+    }
+    const session = entry.session ? `${entry.session.client} ${entry.session.id}` : '';
+    const tab = entry.tab ? [entry.tab.id, entry.tab.host].filter(Boolean).join(' · ') : '';
+    return { tool: entry.tool, where: [session, tab].filter(Boolean).join(' — ') };
+  };
+
+  const render = (entries) => {
+    if (!entries.length) {
+      $('#list').replaceChildren(el('div', { className: 'empty', style: 'margin-top: 24px', textContent: 'No agent actions yet.' }));
+      return;
+    }
+    const groups = new Map();
+    for (const entry of entries) {
+      const label = dayLabel(entry.ts);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(entry);
+    }
+    $('#list').replaceChildren(...[...groups].map(([label, items]) => el('div', { className: 'day' }, [
+      el('h3', { textContent: label, style: 'margin-top: 0' }),
+      ...items.map((entry) => {
+        const { tool, where } = describe(entry);
+        const failed = entry.result && !entry.result.ok;
+        const text = el('div', { className: 'text' }, [
+          el('div', { className: 'line' }, [
+            el('span', { className: 'tool', textContent: tool }),
+            el('span', { className: 'where', textContent: where }),
+            el('time', { textContent: new Date(entry.ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }),
+          ]),
+        ]);
+        if (failed) text.append(el('div', { className: 'error', textContent: entry.result.error }));
+        const shown = details(entry.params);
+        if (shown) text.append(el('div', { className: 'details', textContent: shown }));
+        return el('div', { className: `entry${failed ? ' failed' : ''}` }, [icon(failed ? 'x' : 'robot'), text]);
+      }),
+    ])));
+  };
+
+  const load = () => call('agentLog').then((text) => render(JSON.parse(text)));
+  $('#export').onclick = () => call('exportAgentLog');
+  $('#clear').onclick = () => {
+    if (confirm('Clear the agent log? This can’t be undone.')) call('clearAgentLog').then((text) => render(JSON.parse(text)));
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  load();
+</script>
+</body>
+</html>

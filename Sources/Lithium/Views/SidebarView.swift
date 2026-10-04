@@ -45,12 +45,25 @@ struct SidebarView: View {
                     ForEach(browser.regularTabs) { tab in
                         TabRow(tab: tab)
                     }
+                    let agentTabs = browser.agentTabs
+                    if !agentTabs.isEmpty {
+                        AgentGroupHeader()
+                        ForEach(agentTabs) { tab in
+                            TabRow(tab: tab)
+                        }
+                    }
                 }
             }
             .scrollIndicators(.never)
             // The empty space below the tabs too; a row's own menu wins over this one.
             .contentShape(Rectangle())
             .contextMenu { ReopenClosedTabButton() }
+            // A tab from the Agent group dropped on the list becomes one of the user's own.
+            .dropDestination(for: String.self) { items, _ in
+                guard let tab = browser.agentTabs.first(where: { $0.id.uuidString == items.first }) else { return false }
+                withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) }
+                return true
+            }
             if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
                 MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -185,6 +198,9 @@ private struct TabRow: View {
                 }
             }
             .frame(width: 16, height: 16)
+            .overlay(alignment: .bottomTrailing) {
+                if browser.agent?.isTouched(tab) == true { AgentBadge() }
+            }
             if browser.renamingTabID == tab.id {
                 TabNameField(tab: tab)
             } else {
@@ -219,7 +235,7 @@ private struct TabRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
         .draggable(tab.id.uuidString)
         .contextMenu {
-            Button("Reload Tab") { tab.reload() }
+            Button("Reload Tab") { browser.navigate(tab, .reload) }
                 .disabled(tab.url == nil)
             Button("Duplicate Tab") { browser.duplicate(tab) }
                 .disabled(tab.url == nil)
@@ -234,6 +250,9 @@ private struct TabRow: View {
             }
             Button("Pin Tab") { browser.pin(tab) }
                 .disabled(tab.url == nil)
+            if tab.openedByAgent != nil {
+                Button("Move to Tab List") { withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) } }
+            }
             Divider()
             Button("Close Tab") { browser.close(tab) }
             Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
@@ -243,6 +262,35 @@ private struct TabRow: View {
             Divider()
             ReopenClosedTabButton()
         }
+    }
+}
+
+/// Above the tabs agents opened, which sit apart from the user's own until the user keeps one.
+private struct AgentGroupHeader: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Icon(.robot, size: 12)
+            Text("Agent tabs")
+        }
+        .font(Theme.font(11.5, .medium))
+        .opacity(0.55)
+        .padding(.horizontal, 10)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// On the favicon of a tab an agent acted in, until the tab closes.
+struct AgentBadge: View {
+    @Environment(\.sidebarPalette) private var palette
+
+    var body: some View {
+        Icon(.robotFill, size: 8)
+            .frame(width: 11, height: 11)
+            .background(Circle().fill(palette.isDark ? Color(white: 0.17) : .white))
+            .offset(x: 4, y: 4)
+            .help("Used by an agent")
     }
 }
 

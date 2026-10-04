@@ -139,7 +139,7 @@ private struct LiveTabHoverCard: View {
 
     var body: some View {
         if let page {
-            TabHoverCard(title: page.title, host: page.host, usage: showsUsage ? usage : nil)
+            TabHoverCard(title: page.title, host: page.host, usage: showsUsage ? usage : nil, agent: page.tab.flatMap { agentNote(for: $0) })
                 .task(id: showsUsage) {
                     usage = nil
                     guard showsUsage else { return }
@@ -167,6 +167,12 @@ private struct LiveTabHoverCard: View {
         }
     }
 
+    /// Whether an agent had a hand in the tab, which the sidebar's badge only hints at.
+    private func agentNote(for tab: Tab) -> String? {
+        if tab.openedByAgent != nil { return "Opened by an agent" }
+        return browser.agent?.isTouched(tab) == true ? "Used by an agent" : nil
+    }
+
     private static func host(of url: URL?) -> String {
         let host = url?.host() ?? ""
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -187,6 +193,8 @@ struct TabHoverCard: View {
     let title: String
     let host: String
     let usage: TabUsage?
+    /// "Opened by an agent" or "Used by an agent"; nil for a tab no agent touched.
+    var agent: String?
     @Environment(\.sidebarPalette) private var palette
 
     var body: some View {
@@ -201,6 +209,15 @@ struct TabHoverCard: View {
                     .lineLimit(1)
                     .opacity(0.6)
                     .padding(.top, 2)
+            }
+            if let agent {
+                HStack(spacing: 5) {
+                    Icon(.robot, size: 12)
+                    Text(agent)
+                }
+                .font(Theme.font(11.5))
+                .opacity(0.6)
+                .padding(.top, 6)
             }
             if let usage {
                 Rectangle()

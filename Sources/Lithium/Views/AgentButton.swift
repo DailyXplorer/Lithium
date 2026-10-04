@@ -47,9 +47,17 @@ private struct AgentPanel: View {
                     }
                 }
             }
+            if !agent.recentLog.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(agent.recentLog.reversed()) { line in
+                        LogLineRow(line: line)
+                    }
+                }
+            }
             Divider()
-            HStack {
+            HStack(spacing: 14) {
                 Button("Settings") { browser.openSettings(section: "agents") }
+                Button("Open Log") { browser.openAgentLog() }
                 Spacer()
                 if agent.state == .stopped {
                     Button("Allow Agents Again") { agent.allowAgain() }
@@ -85,6 +93,26 @@ private struct SessionRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+    }
+}
+
+/// "12:03:05  s1 navigate t3 example.com", with the error code when the call failed.
+private struct LogLineRow: View {
+    let line: AgentLogLine
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(line.date.formatted(date: .omitted, time: .standard))
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+            Text([line.session, line.tool, line.tab, line.host].compactMap { $0 }.joined(separator: " "))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let error = line.error {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+        .font(Theme.font(11))
     }
 }
 

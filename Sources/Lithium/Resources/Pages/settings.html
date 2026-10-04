@@ -161,6 +161,10 @@
       <div><div class="title">Address</div><div class="hint" id="agent-url"></div></div>
       <button class="button" id="agent-reset">Reset Token</button>
     </div>
+    <div class="row">
+      <div><div class="title">Agent log</div><div class="hint">Every agent action, kept on this Mac for 30 days.</div></div>
+      <button class="button" id="agent-log">Show Agent Log</button>
+    </div>
     <details id="agent-details">
       <summary>Details</summary>
       <p>Only apps on this Mac can connect, with the token in ~/Library/Application Support/Lithium/Agent/endpoint.json, which only your account can read. Turning access off deletes it; turning it on again makes a new token.</p>
@@ -405,6 +409,7 @@
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
   $('#agent-access').onchange = (event) => call('setAgentAccess', event.target.checked).then(render);
   $('#agent-allow').onclick = () => call('allowAgents').then(render);
+  $('#agent-log').onclick = () => call('openAgentLog');
   $('#agent-reset').onclick = () => {
     if (confirm('Make a new token? Connected agents are disconnected.')) call('resetAgentToken').then(render);
   };

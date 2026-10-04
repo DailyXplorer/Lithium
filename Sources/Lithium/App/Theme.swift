@@ -61,6 +61,8 @@ enum Preference {
     static let videoPopoutWidth = "videoPopoutWidth"
     static let videoPopoutInsetX = "videoPopoutInsetX"
     static let videoPopoutInsetY = "videoPopoutInsetY"
+    static let agentAccess = "agentAccess"
+    static let agentPort = "agentPort"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

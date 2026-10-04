@@ -146,6 +146,27 @@
     </div>
   </section>
 
+  <section id="agents" class="page">
+    <h2>Agents</h2>
+    <p class="lead">Lets AI agents on this Mac, such as Claude Code, use Lithium. A robot in the toolbar shows while access is on, and Stop Agent ends every session.</p>
+    <div class="row">
+      <div><div class="title">Allow agents</div><div class="hint" id="agent-status"></div></div>
+      <label class="switch" for="agent-access"><input type="checkbox" id="agent-access" role="switch"><span></span></label>
+    </div>
+    <div class="row" id="agent-allow-row">
+      <div><div class="title">Stopped</div><div class="hint">Agents you stopped can’t reconnect until you allow them.</div></div>
+      <button class="button" id="agent-allow">Allow Again</button>
+    </div>
+    <div class="row" id="agent-endpoint-row">
+      <div><div class="title">Address</div><div class="hint" id="agent-url"></div></div>
+      <button class="button" id="agent-reset">Reset Token</button>
+    </div>
+    <details id="agent-details">
+      <summary>Details</summary>
+      <p>Only apps on this Mac can connect, with the token in ~/Library/Application Support/Lithium/Agent/endpoint.json, which only your account can read. Turning access off deletes it; turning it on again makes a new token.</p>
+    </details>
+  </section>
+
   <section id="permissions" class="page">
     <h2>Site permissions</h2>
     <p class="lead">What each site may use. Sites ask the first time.</p>
@@ -324,6 +345,14 @@
     $('#max-status').textContent = max.modelMessage;
     $('#max-status').hidden = !max.modelMessage;
 
+    const { agents } = state;
+    $('#agent-access').checked = agents.enabled;
+    $('#agent-status').textContent = agents.status;
+    $('#agent-allow-row').style.display = agents.stopped ? '' : 'none';
+    $('#agent-endpoint-row').style.display = agents.url ? '' : 'none';
+    $('#agent-details').style.display = agents.url ? '' : 'none';
+    $('#agent-url').textContent = agents.url;
+
     $('#extension-list').replaceChildren(...(state.extensions.length ? state.extensions.map((extension) => {
       const toggle = el('input', { type: 'checkbox', role: 'switch', checked: extension.enabled });
       toggle.onchange = () => call('setExtensionEnabled', { id: extension.id, enabled: toggle.checked }).then(render);
@@ -374,7 +403,12 @@
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
-  $('#site-clear').onclick = () => call('clearSiteData', siteHost()).then(renderSite);
+  $('#agent-access').onchange = (event) => call('setAgentAccess', event.target.checked).then(render);
+  $('#agent-allow').onclick = () => call('allowAgents').then(render);
+  $('#agent-reset').onclick = () => {
+    if (confirm('Make a new token? Connected agents are disconnected.')) call('resetAgentToken').then(render);
+  };
+  $('#site-clear').onclick =() => call('clearSiteData', siteHost()).then(renderSite);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     call('state').then(render);

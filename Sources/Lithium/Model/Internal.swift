@@ -180,6 +180,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             let code = value as? String ?? ""
             let known = browser.summaries.languageChoices.languages.contains { $0.code == code }
             browser.summaries.language = known ? code : nil
+        case "setAgentAccess":
+            await browser.setAgentAccess(value as? Bool ?? false)
+        case "resetAgentToken":
+            browser.agent?.resetToken()
+        case "allowAgents":
+            browser.agent?.allowAgain()
         case "setExtensionEnabled":
             if let entry = value as? [String: Any], let id = entry["id"] as? String {
                 await browser.extensions.setEnabled(entry["enabled"] as? Bool ?? true, id: id)
@@ -267,6 +273,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "modelAvailable": browser.tidyTitles.modelStatus.available,
                 "modelMessage": browser.tidyTitles.modelStatus.message,
             ],
+            "agents": [
+                "enabled": browser.agent != nil,
+                "stopped": browser.agent?.state == .stopped,
+                "status": AgentStatus.text(browser.agent),
+                "url": browser.agent?.url ?? "",
+            ] as [String: Any],
             "extensions": browser.extensions.installed.map { entry in
                 let context = browser.extensions.contexts[entry.id]
                 return [

@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 import Testing
 @testable import Lithium
 
@@ -653,6 +654,52 @@ struct AgentServerTests {
         fixture.hub.resetToken()
         #expect(!FileManager.default.fileExists(atPath: file.path))
         #expect(fixture.hub.state == .failed(message))
+    }
+
+    /// The first listener reports `.ready`, then dies before the hub has resumed from starting it.
+    @Test(.timeLimit(.minutes(1))) func aListenerThatDiesWhileTheHubStartsIsReplaced() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-\(UUID().uuidString)")
+        let defaults = try #require(UserDefaults(suiteName: "agent-tests-\(UUID().uuidString)"))
+        let hub = AgentHub(folder: folder, defaults: defaults)
+        defer { hub.shutdown() }
+        let starts = OSAllocatedUnfairLock(initialState: 0)
+        hub.listenerDidStart = { server, listener in
+            guard starts.withLock({ $0 += 1; return $0 }) == 1 else { return }
+            server.listener(listener, changedTo: .ready, port: 0)
+            server.listener(listener, changedTo: .failed(.posix(.ENETDOWN)), port: 0)
+        }
+        await hub.start()
+
+        #expect(await Self.eventually {
+            guard starts.withLock({ $0 }) >= 2, hub.state == .listening, let port = hub.port, port != 0 else { return false }
+            return await RawHTTP.canConnect(host: "127.0.0.1", port: port)
+        })
+        #expect(AgentEndpoint.read(in: folder)?.url == hub.url)
+    }
+
+    /// The listener a relisten started reports `.ready`, then dies before the hub has resumed.
+    @Test(.timeLimit(.minutes(1))) func aListenerThatDiesWhileTheHubRelistensIsReplaced() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let server = try #require(fixture.hub.server)
+        let starts = OSAllocatedUnfairLock(initialState: 0)
+        server.listenerDidStart = { server, listener in
+            guard starts.withLock({ $0 += 1; return $0 }) == 1 else { return }
+            server.listener(listener, changedTo: .ready, port: 0)
+            server.listener(listener, changedTo: .failed(.posix(.ENETDOWN)), port: 0)
+        }
+        server.failListener(.posix(.ENETDOWN))
+
+        let ping: JSONValue = ["jsonrpc": "2.0", "id": 1, "method": "ping"]
+        // The faked `.ready` comes before the listener has a port, so the dead one is recorded as port 0.
+        #expect(await Self.eventually {
+            guard starts.withLock({ $0 }) >= 2, fixture.hub.port != 0 else { return false }
+            return (try? await fixture.post(ping, session: session))?.status == 200
+        })
+        #expect(starts.withLock { $0 } >= 2)
+        #expect(fixture.hub.state == .listening)
+        #expect(fixture.endpoint.url == fixture.hub.url)
     }
 
     // MARK: Backpressure

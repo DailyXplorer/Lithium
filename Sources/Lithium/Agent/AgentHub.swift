@@ -106,10 +106,11 @@ final class AgentHub {
     func start() async {
         token = AgentEndpoint.read(in: folder)?.token ?? AgentEndpoint.makeToken()
         let server = AgentServer(token: token, listenerDidFail: { [weak self] error in
-            Task { @MainActor in await self?.relisten(after: error) }
+            Task { @MainActor in await self?.listenerDied(error) }
         }) { [weak self] request in
             await self?.handle(request) ?? AgentReply(status: 503)
         }
+        server.listenerDidStart = listenerDidStart
         self.server = server
         do {
             try await listen(on: server, preferring: UInt16(clamping: max(0, defaults.integer(forKey: Preference.agentPort))))
@@ -122,6 +123,8 @@ final class AgentHub {
                     self.dropIdleSessions(now: self.now())
                 }
             }
+            // The listener may have died between `.ready` and here, while the hub was not yet listening.
+            await relisten()
         } catch {
             guard !isShutDown else { return }
             fail("Lithium couldn’t start the agent server (\(error.localizedDescription)). Turn agent access off and on to retry.")
@@ -147,28 +150,47 @@ final class AgentHub {
     static let relistenAttempts = 3
     static let relistenDelay: Duration = .milliseconds(500)
     @ObservationIgnored private var isRelistening = false
+    /// Set by every death of the live listener, whatever the hub is doing at the time, and
+    /// cleared only by an attempt to listen again: a death that lands while the hub is starting
+    /// or already relistening is handled once that finishes instead of being dropped.
+    @ObservationIgnored private var listenerIsDead = false
+    @ObservationIgnored private var listenerError: (any Error)?
+    /// Tests only: handed to the server `start()` creates.
+    @ObservationIgnored var listenerDidStart: (@Sendable (AgentServer, NWListener) -> Void)?
+
+    private func listenerDied(_ error: NWError?) async {
+        listenerIsDead = true
+        if let error { listenerError = error }
+        await relisten()
+    }
 
     /// The listener died after it was ready, typically across sleep or a network change: listen
     /// again with the same token, on the same port when it is free. Sessions and open
-    /// connections are unaffected. After `relistenAttempts` failures, access shows as failed.
-    private func relisten(after error: NWError?) async {
-        guard let server, !isRelistening, state == .listening || state == .stopped else { return }
+    /// connections are unaffected. A listener that dies again, before or after it was ready,
+    /// takes another attempt; after `relistenAttempts`, access shows as failed.
+    private func relisten() async {
+        guard let server, listenerIsDead, !isRelistening, state == .listening || state == .stopped else { return }
         isRelistening = true
         defer { isRelistening = false }
-        var lastError: (any Error)? = error
-        for attempt in 1...Self.relistenAttempts {
-            if attempt > 1 { try? await Task.sleep(for: Self.relistenDelay) }
+        var attempts = 0
+        while listenerIsDead {
+            guard attempts < Self.relistenAttempts else {
+                guard !isShutDown, self.server === server else { return }
+                let reason = listenerError.map { " (\($0.localizedDescription))" } ?? ""
+                fail("Lithium’s agent server stopped listening\(reason). Turn agent access off and on to retry.")
+                return
+            }
+            if attempts > 0 { try? await Task.sleep(for: Self.relistenDelay) }
+            attempts += 1
             guard !isShutDown, self.server === server else { return }
+            listenerIsDead = false
             do {
                 try await listen(on: server, preferring: port ?? 0)
-                return
             } catch {
-                lastError = error
+                listenerError = error
+                listenerIsDead = true
             }
         }
-        guard !isShutDown, self.server === server else { return }
-        let reason = lastError.map { " (\($0.localizedDescription))" } ?? ""
-        fail("Lithium’s agent server stopped listening\(reason). Turn agent access off and on to retry.")
     }
 
     /// Nothing is left that points at a server that isn’t listening: no endpoint file, no

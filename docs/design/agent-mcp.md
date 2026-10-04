@@ -1,6 +1,6 @@
 # Agent access over MCP
 
-Status: design, no product code yet. Written 2026-10-04 against `main` at `c07fafb`.
+Status: design, no product code yet. Written 2026-10-04 against `main` at `c07fafb`. The owner's decisions are in section 12.
 
 This document describes how AI agents (Claude Code, a personal assistant, any MCP client) drive Lithium: open tabs, read pages, and act in them with the same input a person gives. It records the decisions, the evidence behind the hard ones, the tool catalogue, the security model, and the order of the pull requests that build it.
 
@@ -8,12 +8,12 @@ This document describes how AI agents (Claude Code, a personal assistant, any MC
 
 - **One server, two doors.** Lithium embeds an MCP server that speaks Streamable HTTP on `127.0.0.1` with a bearer token. A small `lithium-mcp` executable inside the app bundle speaks stdio and forwards to that same HTTP endpoint. There is no second transport inside Lithium.
 - **Off by default.** Settings › Agents turns it on. A toolbar indicator shows whenever an agent is connected, and a Stop button ends every session and cancels every action in flight.
-- **Agents act everywhere.** They can use the user's own tabs (same cookies) and open their own. Tabs an agent touched carry a badge.
+- **Agents act everywhere.** They can use the user's own tabs (same cookies) and open their own, which go into a separate "Agent" group in the sidebar. Tabs an agent touched carry a badge.
 - **Native input only.** Clicks, keys, wheel, and drags are `NSEvent`s handed straight to the tab's `WKWebView`. Pages see trusted events. The system cursor never moves, no event is posted to the window server, and Lithium needs no Accessibility permission.
 - **Background tabs act in a stage.** A background tab's web view has no window today, so WebKit throttles it and it cannot receive events. While an agent acts in it, Lithium parks the web view in an off-screen window (the stage). Focus is never taken from the user's window.
 - **Perception is a compact snapshot.** A script in a private content world lists interactive and meaningful elements with refs, roles, names, state, redacted values, and geometry. Refs stay stable while the element lives. Diffs are cheap.
-- **Guardrails live in Lithium, not in the agent.** Lithium asks the user (Allow or Deny, in its own UI) before a payment, before typing into or submitting a password field, before a download, and before a file upload. Password values, cookie values, the clipboard, extension UI, and Lithium's own pages are out of reach.
-- **Nothing is hidden.** Lithium does not mask automation from websites and does not try to pass CAPTCHAs. When a site challenges the agent, the agent stops and asks the user.
+- **Guardrails live in Lithium, not in the agent.** Lithium asks the user (Allow or Deny, in its own UI) before a payment, before typing into or submitting a password field, before a download, before a file upload, and before opening a `file:` URL. The user can allow a site until the agent stops, except for payments, which always ask. Password values, cookie and storage values, the clipboard, extension UI, and Lithium's own pages are out of reach, with no switch to change that.
+- **Normal browser toward sites, transparent toward the user.** Lithium neither masks nor announces automation to websites: `navigator.webdriver` stays `false` and nothing else changes. Transparency is toward the user (indicator, badges, log, Stop). Lithium does not try to pass CAPTCHAs: when a site challenges the agent, the agent stops and asks the user.
 - **No JavaScript tool.** There is no eval tool in the page's world or in an isolated world. Section 7.5 explains why.
 - **Private WebKit API, two new calls.** Network capture uses `_setResourceLoadDelegate:` and the stage uses `_setWindowOcclusionDetectionEnabled:`. Both are checked with `responds(to:)` and degrade to a public fallback, like Lithium's existing private calls (`_setPageMuted:`, `_isPlayingAudio`, `_isDisplayingPDF`).
 
@@ -73,13 +73,14 @@ off ──enable──▶ listening ──initialize──▶ connected ──to
 | `Tab` alert, confirm, prompt | routed to the agent for staged tabs (section 5.6). |
 | `PageWebView` (in `Model/PageTranslation.swift`) | `mouseDown`, `keyDown`, `scrollWheel` overrides note real user input (user input wins, section 2.8); `willOpenMenu` cancels the native menu for agent right clicks. |
 | `ScreenCapture` | excludes the stage window from Lithium's own window captures. |
-| `ToolbarView`, `SidebarView`, `TabHoverCard`, `ContentCard` | indicator, tab badge, confirmation banner, acting border. |
+| `ToolbarView`, `SidebarView`, `TabHoverCard`, `ContentCard` | indicator, "Agent" tab group (section 2.5), tab badge, confirmation banner, acting border. |
 
 ### 2.5 Addressing tabs
 
 - An agent sees tabs as short ids, `t1`, `t2`, …, assigned by `AgentHub` the first time any agent sees a tab and mapped to `Tab.id` (a `UUID`). Ids are never reused during an app run. A `Tab` object survives sleep, so the id does too. Tabs restored at the next launch are new objects with new ids.
 - Lithium has one browser window. `tabs_list` reports it as `w1` with its size. There are no window tools beyond that.
 - A popup that a page opens from an agent action appears in the action result as a new tab with `openedBy: "t3"`.
+- Tabs an agent opens (`tab_open`, and popups from agent actions) go into an "Agent" group in the sidebar, below the tab list, unselected. The group shows while it holds tabs. Its tabs stay after Stop until the user closes them or drags them into the tab list, which makes them ordinary tabs. A session restore brings them back as ordinary tabs, since agent tab ids do not survive a launch. `Tab` gains `openedByAgent` (the session that opened it); the group is the regular tabs with that flag set.
 
 ### 2.6 The stage: acting in background tabs
 
@@ -429,7 +430,13 @@ Section 2.3 has the states. Settings › Agents holds: the switch, connection sn
 
 ### 7.3 Confirmations
 
-A confirmation is a banner in Lithium's window, outside any web content. It names the agent (its self-reported `clientInfo.name`, marked as such, and the session number), the action, the element ("Click “Pay €42.00”"), the site, and the tab, with **Show Tab**, **Deny**, and **Allow**. Deny is the default; Escape denies; Return does nothing. When Lithium is not frontmost, it calls `NSApp.requestUserAttention(.informationalRequest)`. Unanswered after 2 minutes, it denies (`confirmation_timeout`). Agents cannot answer: their events reach only web views, and the key guard swallows their keys. Allow covers one action, except that typing into the fields of one form is covered for 2 minutes after the first Allow on that form (card number, expiry, and CVC ask once). Submits always ask.
+A confirmation is a banner in Lithium's window, outside any web content. It names the agent (its self-reported `clientInfo.name`, marked as such, and the session number), the action, the element ("Click “Pay €42.00”"), the site, and the tab, with **Show Tab**, **Deny**, and **Allow**. Deny is the default; Escape denies; Return does nothing. When Lithium is not frontmost, it calls `NSApp.requestUserAttention(.informationalRequest)`. Unanswered after 2 minutes, it denies (`confirmation_timeout`). Agents cannot answer: their events reach only web views, and the key guard swallows their keys.
+
+The banner offers **Allow once** and **Allow on this site until the agent stops**, except for payments, which only offer **Allow once**.
+
+- **Allow once** covers one action, except that typing into the fields of one form is covered for 2 minutes after the first Allow on that form (card number, expiry, and CVC ask once). Payment submits always ask.
+- **Allow on this site until the agent stops** covers every later non-payment confirmation (password fields, downloads, uploads) in tabs whose top-level site (registrable domain) is the same, for every session. It ends on Stop, when access is turned off, and when Lithium quits; `AgentConfirmations` holds the grants in memory only. The agent sees `"grant": "site"` in the result, the log records which grant covered each action, and the indicator lists active grants with a Revoke button. An upload under a site grant still shows the files in the action log; a misled agent could upload any readable file to that site without another prompt, which is the cost of the wider grant.
+- `file:` URLs have no site, so each one asks.
 
 **Payment.** Definitions, evaluated by `agent.js` per frame and combined in `Guardrails`:
 
@@ -452,9 +459,9 @@ The heuristic errs toward asking. Known misses: a site that takes card numbers i
 
 **Downloads.** Before a download starts in a tab whose last input came from an agent (an agent event in the last 5 seconds and no user input since), from `decidePolicyFor` (attachment or unshowable MIME type) or `shouldPerformDownload`, and for `download_url`. The banner shows the suggested file name, the size when known, and the host. Deny cancels the response.
 
-**Uploads.** Always, with the list of files (section 5.4).
+**Uploads.** Always, with the list of files (section 5.4), unless a site grant covers them.
 
-**`file:` navigation.** Confirmation, since a local page gives read access to its folder.
+**`file:` navigation.** Confirmation for every `file:` URL an agent opens (`tab_open`, `navigate`), since a local page gives read access to its folder. Not blocked outright, so an agent can work on local files the user approves.
 
 ### 7.4 Blocked outright
 
@@ -473,8 +480,8 @@ The heuristic errs toward asking. Known misses: a site that takes card numbers i
 | Screenshots | Password fields already render as bullets. Lithium paints solid boxes over fields that were ever passwords, card fields, payment frames, and extension frames, from rects `agent.js` returns; the result lists the masked regions. A full-page screenshot does the same in PDF space. |
 | Network headers | Values of `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, and any header whose name matches `auth|token|secret|key|session|cookie|csrf|xsrf|signature` become `[redacted]`. |
 | URLs in the network log and the action log | Query values whose names match `token|secret|password|passwd|pwd|session|sig|signature|key|code|auth` become `[redacted]`. URLs the agent navigates itself are not rewritten. |
-| Bodies (opt-in) | JSON values under keys matching the header pattern plus `password|card|cvc|iban` become `[redacted]`. Form-encoded bodies the same. |
-| Cookies | Names and attributes only. |
+| Bodies (in v1, off by default: **Capture response bodies** in Settings) | JSON values under keys matching the header pattern plus `password|passwd|pwd|card|cvc|cvv|iban` become `[redacted]`; form-encoded bodies the same. In any text body, digit runs of 13 to 19 digits (spaces and dashes allowed) that pass the Luhn check become `[card]`, `Bearer …` and JWT-shaped strings (`eyJ…`, three base64url parts) become `[redacted]`, and `Authorization`, `Cookie`, and `Set-Cookie` lines (an echoed request, a debug page) have their values redacted. |
+| Cookie and storage values | Never readable, with no opt-in: cookies show names, domains, attributes, and counts only where a tool needs them; `localStorage`, `sessionStorage`, and `IndexedDB` are not exposed at all. |
 
 Why no JavaScript tool, even a read-only isolated-world eval behind a switch: the agent world can read `input.value` of a password field and any text the page holds, so one eval tool would bypass every rule in this table and the cookie and storage exclusions (`document.cookie` is readable there). The snapshot, `read_text`, `forms`, and `find_text` cover reading. The switch would be a standing way to turn the guarantees off, so it does not exist.
 
@@ -512,7 +519,8 @@ Lithium does not guarantee: that the payment heuristic catches every payment; th
 - **Tab badges.** A small robot glyph on the favicon of every tab an agent touched, until the tab closes. An accent ring while an action runs in it. The hover card says "Used by claude-code (self-reported), last action 12 s ago" and whether an agent opened it.
 - **In the page.** While an agent acts in the visible tab: the accent border, the caption, and the agent pointer dot (section 5.7).
 - **Log.** Section 7.6. Stop is reachable from the indicator, the Lithium menu (⌃⌘.), and the Dock menu.
-- **Toward websites.** Lithium does not change `navigator.webdriver`, the user agent, or any fingerprint for agents, and does not hide the signals below. It does not solve or bypass CAPTCHAs or bot checks. `agent.js` recognizes reCAPTCHA, hCaptcha, Cloudflare Turnstile and challenge pages, Arkose, DataDome, PerimeterX "press and hold", and AWS WAF challenges by frame origin and page markers. The snapshot reports `challenge`, actions inside a challenge fail with `challenge_requires_user`, and the indicator shows "The agent needs you" with **Show Tab**.
+- **Agent tab group.** Tabs an agent opens sit in the sidebar's "Agent" group (section 2.5), so the user's own tab list never fills with them.
+- **Toward websites.** Lithium behaves as a normal browser: it does not set `navigator.webdriver`, change the user agent or any fingerprint, or otherwise announce automation, and it does not hide the signals below. It does not solve or bypass CAPTCHAs or bot checks. `agent.js` recognizes reCAPTCHA, hCaptcha, Cloudflare Turnstile and challenge pages, Arkose, DataDome, PerimeterX "press and hold", and AWS WAF challenges by frame origin and page markers. The snapshot reports `challenge`, actions inside a challenge fail with `challenge_requires_user`, and the indicator shows "The agent needs you" with **Show Tab**.
 
 What a page can observe about agent input (verified items from section 3):
 
@@ -557,9 +565,9 @@ The rules of the existing suites hold: no GUI launch, offscreen borderless windo
 Each PR is reviewable alone, ships behind the Settings switch (off), and ends with its tests green. Sizes are rough, in lines including tests.
 
 1. **Server core.** Settings › Agents switch, token, port, endpoint file, `AgentServer` with every check in section 7.1, JSON-RPC, `initialize`, `ping`, `tools/list` (empty), `AgentHub` states, Stop (menu, Dock, indicator stub), `AgentLog` with the `lithium://agents` page. Tests: server and protocol. ~1100.
-2. **Tabs and navigation.** Tab ids, `tabs_list`, `tab_open` (background), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `Browser.close` and sleep hooks, tab badges, hover card line. ~800.
+2. **Tabs and navigation.** Tab ids, `tabs_list`, `tab_open` (background, into the "Agent" group), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `Browser.close` and sleep hooks, tab badges, hover card line. ~800.
 3. **Perception.** Bootstrap and `agent.js` (frame registry and paths, refs, roles and names, redaction, password tracker, extension exclusions, challenge detection), `snapshot` text and JSON with diffs, `read_text`, `links`, `forms`, `find_text`, `element_info`, `wait_for` DOM conditions, `screenshot` with masks, `pdf`. Verifies items 24 and 25. ~1600 (about 700 of JavaScript).
-4. **Confirmations and guardrails.** `AgentConfirmations` and the banner, `Guardrails` and `PaymentProviders`, download hook, file chooser hook, dialog routing, `dialog_respond`. No input yet, so nothing can act before the guard exists. ~1100.
+4. **Confirmations and guardrails.** `AgentConfirmations` and the banner with site grants, `Guardrails` and `PaymentProviders`, download hook, file chooser hook, dialog routing, `dialog_respond`. No input yet, so nothing can act before the guard exists. ~1100.
 5. **Native input and the stage.** `NativeInput`, key guard, `AgentStage` with occlusion handling and the fallback, actionability checks, settling, user-input-wins, `user_busy`, context menu suppression, agent border, caption, and pointer dot; tools `click`, `hover`, `drag`, `type`, `press`, `select_option`, `set_checked`, `scroll`, `focus`, `upload_files`; benchmarks. Verifies item 26. ~1500.
 6. **Network and console.** `ResourceLoadSpy` with the `PerformanceObserver` fallback, console script, redaction, `network_log`, `console_log`, opt-in bodies and `network_body`. ~800.
 7. **`lithium-mcp`.** Executable target, packaging and signing in `build-app.sh`, discovery and background launch, Settings snippets, README section. ~450.
@@ -567,13 +575,13 @@ Each PR is reviewable alone, ships behind the Settings switch (off), and ends wi
 
 PR 2 and PR 3 can go in parallel after PR 1. PR 7 can land any time after PR 1.
 
-## 12. Open questions for the owner
+## 12. Decisions
 
-These are the calls that change the design. Everything else above is decided.
+The owner settled the open questions on 2026-10-04. The sections above reflect them.
 
-1. **Cookie and storage values.** The design never exposes them. Do you want a separate opt-in switch (off by default) for agents that debug sites, knowing it lets an agent copy a session out of Lithium?
-2. **Announcing automation.** Lithium neither hides nor announces agents. Setting `navigator.webdriver = true` in agent-touched tabs would be honest toward sites but gets many sites to block the page. Keep it unchanged?
-3. **Scope of Allow.** One Allow per action, plus one per form for typing card fields. Do you also want "Allow for this site until the agent stops" on the banner, which means fewer prompts in long checkouts and a wider grant?
-4. **Where agent-opened tabs go.** At the top of your tab list, unselected, with a badge, or in a separate "Agent" group in the sidebar?
-5. **`file:` URLs.** Confirmation (designed), or blocked outright?
-6. **Response bodies.** Keep the opt-in switch in v1, or drop bodies from v1 and save PR 6 about 250 lines?
+1. **Cookie and storage values are never readable by an agent.** There is no opt-in switch. Tools see cookie names, domains, attributes, and counts only where they need them (sections 6.5 and 7.5).
+2. **No announcement to websites.** Lithium does not set `navigator.webdriver` or otherwise signal automation; it behaves as a normal browser. Transparency is toward the user: indicator, badges, log, Stop. On a CAPTCHA or challenge, the agent stops and asks the user (section 8).
+3. **"Allow on this site until the agent stops"** is on the confirmation banner for everything except payments, which always ask (section 7.3).
+4. **Agent-opened tabs go into a separate "Agent" group** in the sidebar (section 2.5).
+5. **`file:` URLs opened by an agent need Allow or Deny** (section 7.3).
+6. **Network response bodies are in v1**, off by default behind a setting, and redacted: tokens, passwords, card numbers, and `Authorization`, `Cookie`, and `Set-Cookie` values (sections 5.8 and 7.5).

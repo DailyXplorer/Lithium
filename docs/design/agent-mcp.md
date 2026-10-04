@@ -1,6 +1,6 @@
 # Agent access over MCP
 
-Status: design; PR 1 (server core, section 11) implemented. Written 2026-10-04 against `main` at `c07fafb`. The owner's decisions are in section 12.
+Status: design; PR 1 (server core) and PR 2 (tabs and navigation, section 11) implemented. Written 2026-10-04 against `main` at `c07fafb`. The owner's decisions are in section 12.
 
 This document describes how AI agents (Claude Code, a personal assistant, any MCP client) drive Lithium: open tabs, read pages, and act in them with the same input a person gives. It records the decisions, the evidence behind the hard ones, the tool catalogue, the security model, and the order of the pull requests that build it.
 
@@ -30,7 +30,7 @@ All new code lives in `Sources/Lithium/Agent/` plus one script, `Sources/Lithium
 | `AgentEndpoint` | struct | The endpoint file: token generation, 0700 folder, 0600 file. |
 | `MCPSession` | struct | One connected client: session id, `clientInfo` (self-reported name and version), negotiated protocol version, counters. |
 | `AgentHub` | `@MainActor @Observable` final class, owned by `Browser` | State (off, listening, stopped), sessions, tool dispatch, per-tab queues, the stop switch. The UI observes it. |
-| `AgentTab` | `@MainActor` final class, one per tab an agent touched | Short tab id, action queue, frame registry, issued refs, last snapshot per session, network and console buffers, pending dialog, grants. |
+| `AgentTab` | `@MainActor` final class, one per tab an agent touched | Frame registry, issued refs, last snapshot per session, network and console buffers, pending dialog, grants. Arrives with PR 3; until then `AgentHub` holds the short ids (`AgentTabIDs`), the touched set, and the per-tab queue (`exclusive`). |
 | `PageProbe` | `@MainActor` struct | Talks to `agent.js` in a tab's frames through `callAsyncJavaScript(_:arguments:in:contentWorld:)` in the `lithium-agent` world. |
 | `NativeInput` | `@MainActor` struct | Builds `NSEvent`s and delivers them to a web view. Owns the key-equivalent guard. |
 | `AgentStage` | `@MainActor` final class | The off-screen window that hosts background tabs while an agent acts in them. |
@@ -67,7 +67,9 @@ off ──enable──▶ listening ──initialize──▶ connected ──to
 | Where | Hook |
 | --- | --- |
 | `Browser.close(_:)` | `agent?.didClose(tab)`: fails that tab's queue with `tab_closed`, retires its id. |
-| `Browser.sleepIdleTabs` | skips tabs where `agent?.holds(tab)` (an action in the last 10 minutes). |
+| `Browser.sleepIdleTabs` | skips tabs where `agent?.holds(tab)` (an action in the last 10 minutes), except when memory is critical. |
+| `Browser.open(_:)` (address bar) and `Browser.navigate(_:_:)` (Back, Forward, Reload, Stop from the toolbar, menus, and sidebar) | `agent?.userNavigated(tab)`: an agent call running in that tab ends with `user_interrupted` (section 2.7). |
+| `Tab.webView(_:didCommit:)`, `decidePolicyFor response` | count commits (`Tab.commits`, observed) and keep the main document's HTTP status, so a navigation tool waits for its own page and reports `status`. |
 | `Tab.attach(_:)` | `agent?.didAttach(webView, to: self)`: sets the resource load delegate on tabs the agent touched. |
 | `Tab.applyProtections(for:)` | adds the agent bootstrap script (and the console script for touched tabs) after `removeAllUserScripts()`. |
 | `Tab.webView(_:decidePolicyFor response:)` and `shouldPerformDownload` | asks `agent?.confirmDownload(...)` when the agent gave the tab its last input. |
@@ -82,7 +84,7 @@ off ──enable──▶ listening ──initialize──▶ connected ──to
 - An agent sees tabs as short ids, `t1`, `t2`, …, assigned by `AgentHub` the first time any agent sees a tab and mapped to `Tab.id` (a `UUID`). Ids are never reused during an app run. A `Tab` object survives sleep, so the id does too. Tabs restored at the next launch are new objects with new ids.
 - Lithium has one browser window. `tabs_list` reports it as `w1` with its size. There are no window tools beyond that.
 - A popup that a page opens from an agent action appears in the action result as a new tab with `openedBy: "t3"`.
-- Tabs an agent opens (`tab_open`, and popups from agent actions) go into an "Agent" group in the sidebar, below the tab list, unselected. The group shows while it holds tabs. Its tabs stay after Stop until the user closes them or drags them into the tab list, which makes them ordinary tabs. A session restore brings them back as ordinary tabs, since agent tab ids do not survive a launch. `Tab` gains `openedByAgent` (the session that opened it); the group is the regular tabs with that flag set.
+- Tabs an agent opens (`tab_open`, and popups from agent actions) go into an "Agent" group in the sidebar, below the tab list, under an "Agent tabs" header, unselected. The group shows while it holds tabs. Its tabs stay after Stop (and after access is turned off) until the user closes them, drags them into the tab list, or picks **Move to Tab List** in the row's menu, which makes them ordinary tabs. A session restore brings them back as ordinary tabs, since agent tab ids do not survive a launch. `Tab` gains `openedByAgent` (the label of the session that opened it, such as `s1`); the group is the unpinned tabs with that flag set, and `Browser.regularTabs` (the tab list) the ones without.
 
 ### 2.6 The stage: acting in background tabs
 
@@ -98,7 +100,8 @@ Today only the selected tab's web view is in a window (`PageContainer` in `Views
 
 ### 2.7 When the user changes things under the agent
 
-- **User closes a tab the agent uses.** The in-flight action fails with `tab_closed`. Later calls fail with `unknown_tab: t4 was closed at 12:03:05`.
+- **User closes a tab the agent uses.** The in-flight action fails with `tab_closed`. Later calls fail with `tab_closed: t4 was closed at 12:03:05`; `unknown_tab` is kept for ids no agent was ever given.
+- **User navigates a tab while an agent call runs in it** (address bar, Back, Forward, Reload, Stop). The call fails with `user_interrupted`. Navigations the user starts inside the page (a link click) are told apart from the page's own once PR 5 notes real user input.
 - **User selects or leaves the tab mid-action.** `NativeInput` checks `webView.window` before every event. If it changed, the action stops between events, releases held buttons and keys, and retries once in the new window.
 - **User clicks or types in a tab while an agent action runs there.** User input wins. `PageWebView` sees an event that `NativeInput` is not delivering, and the action fails with `user_interrupted`. The agent decides whether to retry.
 - **A tab the agent holds would sleep.** It doesn't. Held means an agent action in the last 10 minutes.
@@ -338,18 +341,21 @@ Every tool that acts in a page takes `tab`. Element tools take `ref`, or `x` and
 
 | Tool | Params | Result | Confirm |
 | --- | --- | --- | --- |
-| `tabs_list` | none | window `w1` size; tabs: `tab`, `title`, `url`, `selected`, `favorite`, `asleep`, `loading`, `ephemeral`, `agentTouched`, `openedBy`, `dialog` | no |
-| `tab_open` | `url?`, `background` = true, `ephemeral` = false, `wait` = `commit` | `tab`, `url`, `status` | no |
-| `tab_close` | `tab` | closed; reopenable with ⇧⌘T like any tab | no |
-| `tab_select` | `tab` | shows the tab in Lithium's window; never activates the app | no |
-| `navigate` | `tab`, `url`, `wait` (`none`, `commit`, `domcontentloaded`, `load`, `networkidle`), `timeoutMs` = 15000 | `url`, `status`, `title`, `diff` | `file:` URLs |
-| `go_back`, `go_forward`, `reload`, `stop` | `tab`, `wait` | same as `navigate` | no |
+| `tabs_list` | none | window `w1` size; tabs, in sidebar order: `tab`, `title`, `url`, `selected`, `favorite`, `asleep`, `loading`, `ephemeral`, `agentTouched`, `agentGroup`, `openedBy` (the opener's tab id, for popups), `dialog` (PR 4) | no |
+| `tab_open` | `url?`, `ephemeral` = false, `wait` = `commit`, `timeoutMs` = 15000 | `tab`, `url`, `title`, `loading`, `state`, `status` | `file:` URLs |
+| `tab_close` | `tab` | `closed`; reopenable with ⇧⌘T like any tab | no |
+| `tab_select` | `tab` | shows the tab in Lithium's window, waking it; never activates the app | no |
+| `navigate` | `tab`, `url`, `wait` (`none`, `commit`, `domcontentloaded`, `load` = default, `networkidle`), `timeoutMs` = 15000 (max 60000) | `tab`, `url`, `title`, `loading`, `state` (how far the page got), `status` (HTTP, when known), `diff` (PR 3) | `file:` URLs |
+| `go_back`, `go_forward`, `reload` | `tab`, `wait`, `timeoutMs` | same as `navigate` | no |
+| `stop` | `tab` | same as `navigate`, without `state` | no |
 
-Favorites (pins) are not exposed: they are the user's saved layout. Ephemeral tabs use a non-persistent data store, are never saved in the session or history, and are dropped on close; they are new to Lithium (PR 8).
+`tab_open` always opens in the background: the user's selection changes only through `tab_select`, so there is no `background` parameter. Until PR 4 brings confirmations, `file:` URLs are refused with `unsupported` rather than opened. `networkidle` needs the resource load delegate and answers `unsupported` until PR 6. A navigation waits for the next document the tab commits, never the one before; Lithium's error page standing in for it is `navigation_failed` with the error's description. A sleeping tab wakes through `Tab.go(to:)`, the path extensions use, so it keeps its history.
+
+Favorites (pins) are not exposed: they are the user's saved layout. Ephemeral tabs use a non-persistent data store, are never saved in the session or history, and are dropped on close; they are new to Lithium (PR 8). Until then `ephemeral: true` answers `unsupported`.
 
 ### 6.2 Waiting
 
-`wait_for` takes `tab`, one condition, and `timeoutMs` (default 10000, max 60000). Conditions: `{ "load": "domcontentloaded" | "load" }`, `{ "url": "glob or /regex/" }`, `{ "ref": "e9", "state": "visible" | "hidden" | "enabled" | "attached" | "detached" }`, `{ "text": "Order confirmed", "present": true }`, `{ "networkIdle": 500 }` (no request in flight for that many ms, from the resource load delegate). `agent.js` evaluates DOM conditions with `MutationObserver` and animation frames inside the page, so waiting costs one round trip, not a polling loop. Result: `met`, `elapsedMs`, `diff`. Error: `timeout` with the last observed state.
+`wait_for` takes `tab`, one condition, and `timeoutMs` (default 10000, max 60000). Conditions: `{ "load": "domcontentloaded" | "load" }`, `{ "url": "glob or /regex/" }`, `{ "ref": "e9", "state": "visible" | "hidden" | "enabled" | "attached" | "detached" }`, `{ "text": "Order confirmed", "present": true }`, `{ "networkIdle": 500 }` (no request in flight for that many ms, from the resource load delegate). `agent.js` evaluates DOM conditions with `MutationObserver` and animation frames inside the page, so waiting costs one round trip, not a polling loop. Result: `met`, `elapsedMs`, the tab's `url`, `title`, and `status`, and `diff` (PR 3). Error: `timeout` with the last observed state. PR 2 ships `load` and `url`; the other conditions answer `unsupported` until PR 3 (`ref`, `text`) and PR 6 (`networkIdle`). Load and URL waits re-check the tab's observed state (`AgentWait`, built on `withObservationTracking`) only when it changes; DOMContentLoaded, which no delegate call marks, is asked of the page in rounds of at most 250 ms. Every wait ends with `tab_closed` when the tab closes, `user_interrupted` when the user navigates it, and `agent_stopped` on Stop.
 
 ### 6.3 Reading
 
@@ -467,7 +473,7 @@ The heuristic errs toward asking. Known misses: a site that takes card numbers i
 
 ### 7.4 Blocked outright
 
-- `lithium://` pages (Settings could turn guardrails or protections off), `webkit-extension://` pages, and `javascript:` URLs: no navigation to them, no reading or acting in tabs that show them (`blocked_page`).
+- `lithium://` pages (Settings could turn guardrails or protections off), `webkit-extension://` pages, and `javascript:` URLs: no navigation to them, no reading or acting in tabs that show them (`blocked_page`). Such tabs can still be listed, selected, and closed. Agents navigate only to `http:` and `https:` addresses and `about:blank`; `data:` and `blob:` top-level documents and every other scheme are `blocked_page` too, and `file:` waits for confirmations (section 7.3).
 - Extension UI inside pages: frames with a `webkit-extension` origin and elements whose tag starts with `com-1password-` (the prefix to confirm against 1Password's current content script in PR 3) are left out of snapshots, masked in screenshots, and refused as action targets, also when hit-testing finds them over the target (`blocked_extension_ui`). Extension pop-overs are separate windows with no tab id.
 - Lithium's own prompts and dialogs: agents cannot click outside web views.
 - Clipboard actions (section 5.5).
@@ -481,7 +487,7 @@ The heuristic errs toward asking. Known misses: a site that takes card numbers i
 | Text the agent types into a guarded field | Not echoed in results; the log stores `[redacted]`. |
 | Screenshots | Password fields already render as bullets. Lithium paints solid boxes over fields that were ever passwords, card fields, payment frames, and extension frames, from rects `agent.js` returns; the result lists the masked regions. A full-page screenshot does the same in PDF space. |
 | Network headers | Values of `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, and any header whose name matches `auth|token|secret|key|session|cookie|csrf|xsrf|signature` become `[redacted]`. |
-| URLs in the network log and the action log | Query values whose names match `token|secret|password|passwd|pwd|session|sig|signature|key|code|auth` become `[redacted]`. URLs the agent navigates itself are not rewritten. |
+| URLs in the network log and the action log | User name and password removed; query values, and `key=value` fragment values (OAuth redirects), whose names contain `token|secret|password|passwd|pwd|session|sig|signature|key|code|auth` (any case) become `[redacted]`. The action log applies this to every string in a tool's arguments. URLs the agent navigates itself are not rewritten, and tool results give agents the real address. |
 | Bodies (in v1, off by default: **Capture response bodies** in Settings) | JSON values under keys matching the header pattern plus `password|passwd|pwd|card|cvc|cvv|iban` become `[redacted]`; form-encoded bodies the same. In any text body, digit runs of 13 to 19 digits (spaces and dashes allowed) that pass the Luhn check become `[card]`, `Bearer …` and JWT-shaped strings (`eyJ…`, three base64url parts) become `[redacted]`, and `Authorization`, `Cookie`, and `Set-Cookie` lines (an echoed request, a debug page) have their values redacted. |
 | Cookie and storage values | Never readable, with no opt-in: cookies show names, domains, attributes, and counts only where a tool needs them; `localStorage`, `sessionStorage`, and `IndexedDB` are not exposed at all. |
 
@@ -495,7 +501,7 @@ One JSON object per line in `~/Library/Application Support/Lithium/Agent/log/YYY
 {"ts":"2026-10-04T19:09:53.412Z","seq":1834,"session":{"id":"s2","client":"claude-code","version":"2.3.1","selfReported":true},"tool":"click","tab":{"id":"t3","host":"shop.example","url":"https://shop.example/checkout"},"target":{"ref":"e9","role":"button","name":"Pay €42.00","guard":"payment"},"params":{"button":"left"},"confirmation":{"asked":true,"answer":"allow","waitedMs":4210},"result":{"ok":true,"navigated":true},"ms":4262}
 ```
 
-Typed text is kept for unguarded fields (it is what the agent wrote) and `[redacted]` for guarded ones. Reads are logged without their results. Screenshots are logged without images.
+Typed text is kept for unguarded fields (it is what the agent wrote) and `[redacted]` for guarded ones. Reads are logged without their results: `result` holds `ok` and the error code. Screenshots are logged without images. `tab` names the tab from the call's `tab` argument, or the tab it opened, with its host and redacted address while it is open. The page lists the newest 500 entries by day; **Export…** saves every day file as one JSONL file, and **Clear…** deletes them and the indicator's lines. It reads the files even while access is off.
 
 ### 7.7 Threat model
 
@@ -518,7 +524,7 @@ Lithium does not guarantee: that the payment heuristic catches every payment; th
 ## 8. Transparency
 
 - **Indicator.** A toolbar button appears while access is on. Idle: outline. Connected: filled. Acting: accent color with a pulse. Its pop-over lists sessions with their self-reported names, the current action per tab, the last 10 log lines, **Stop Agent**, and **Open Log**.
-- **Tab badges.** A small robot glyph on the favicon of every tab an agent touched, until the tab closes. An accent ring while an action runs in it. The hover card says "Used by claude-code (self-reported), last action 12 s ago" and whether an agent opened it.
+- **Tab badges.** A small robot glyph on the favicon of every tab an agent touched (opened, navigated, selected, stopped), until the tab closes or access is turned off. An accent ring while an action runs in it (PR 5). The hover card adds a line, "Opened by an agent" or "Used by an agent". It leaves out the client's self-reported name, which the indicator's panel already shows next to the session.
 - **In the page.** While an agent acts in the visible tab: the accent border, the caption, and the agent pointer dot (section 5.7).
 - **Log.** Section 7.6. Stop is reachable from the indicator, the Lithium menu (⌃⌘.), and the Dock menu.
 - **Agent tab group.** Tabs an agent opens sit in the sidebar's "Agent" group (section 2.5), so the user's own tab list never fills with them.
@@ -554,6 +560,7 @@ The rules of the existing suites hold: no GUI launch, offscreen borderless windo
 
 - **`Support/LocalServer.swift`.** An `NWListener` on port 0 serving `Tests/LithiumTests/Fixtures/Agent/`, reachable as `127.0.0.1` and `localhost` for two origins, as in the prototypes. `PaymentProviders` takes an injected list so `localhost` can stand in for a provider.
 - **Server and protocol (PR 1).** Real HTTP over a plain `NWConnection` (`URLSession` sets `Host` itself, so it could not send the forged headers): no token 401, wrong token 401, wrong `Host` 403, any `Origin` 403, preflight 403, body over 1 MB 413, listener bound to 127.0.0.1 only, `initialize` and `tools/list` shapes, session header required, Stop refuses `initialize`, endpoint file modes 0700 and 0600.
+- **Tabs and navigation (PR 2).** `AgentTabsTests` drives a whole `Browser` through the hub's JSON-RPC entry point, on pages from `LocalHTTP` and a server that never answers: each tool's result and errors, ids across sleep and wake and never reused, `tab_open` in the Agent group without changing `selectedTabID`, the user closing or navigating the tab mid-wait, Stop mid-wait, held tabs not sleeping, log redaction, the log page with export and clear, and agent tabs restored as ordinary tabs. `AgentURLsTests` covers the scheme policy, redaction, and URL patterns as table tests.
 - **Input (PR 5).** Fixture pages log events with `isTrusted`; tests assert exact sequences for click, double click, right click (and that no menu opened), hover, pointer drag, wheel, typing in input, textarea, and `contenteditable`, mixed ASCII and emoji order, Enter submit, Tab focus, `select_option`, cross-origin iframe click with border and padding, `covered` error text, and zoomed pages (`pageZoom` 1.5, magnification 2).
 - **Stage (PR 5).** A `Browser` with two tabs: acting in the background tab leaves `selectedTabID`, the key window, `NSApp.isActive`, and the main window's first responder unchanged; the page sees `visibilityState` `visible`; selecting the tab mid-action retries; closing it fails with `tab_closed`.
 - **Key guard (PR 5).** An agent ⌘W, ⌘Q, and ⌘T: the page sees `keydown`, the tab count does not change.
@@ -567,7 +574,7 @@ The rules of the existing suites hold: no GUI launch, offscreen borderless windo
 Each PR is reviewable alone, ships behind the Settings switch (off), and ends with its tests green. Sizes are rough, in lines including tests.
 
 1. **Server core.** Settings › Agents switch, token, port, endpoint file, `AgentServer` with every check in section 7.1, JSON-RPC, `initialize`, `ping`, `tools/list` with one `lithium_status` tool, `AgentHub` states, Stop (menu, Dock, toolbar indicator with its panel), `AgentLog` writing and pruning the JSONL files. Tests: server and protocol. The `lithium://agents` log page, its export, and the indicator's last log lines moved to PR 2, where tab actions first give the log something to show. ~1500.
-2. **Tabs and navigation.** The `lithium://agents` log page (view, export, clear) and **Show agent log** in Settings. Tab ids, `tabs_list`, `tab_open` (background, into the "Agent" group), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `Browser.close` and sleep hooks, tab badges, hover card line. ~800.
+2. **Tabs and navigation.** The `lithium://agents` log page (view, export, clear), **Show agent log** in Settings, and the indicator's last log lines. Tab ids, `tabs_list`, `tab_open` (background, into the "Agent" group), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `file:` refused until PR 4, `Browser.close`, sleep, and user-navigation hooks, tab badges, hover card line, redacted log arguments. ~800.
 3. **Perception.** Bootstrap and `agent.js` (frame registry and paths, refs, roles and names, redaction, password tracker, extension exclusions, challenge detection), `snapshot` text and JSON with diffs, `read_text`, `links`, `forms`, `find_text`, `element_info`, `wait_for` DOM conditions, `screenshot` with masks, `pdf`. Verifies items 24 and 25. ~1600 (about 700 of JavaScript).
 4. **Confirmations and guardrails.** `AgentConfirmations` and the banner with site grants, `Guardrails` and `PaymentProviders`, download hook, file chooser hook, dialog routing, `dialog_respond`. No input yet, so nothing can act before the guard exists. ~1100.
 5. **Native input and the stage.** `NativeInput`, key guard, `AgentStage` with occlusion handling and the fallback, actionability checks, settling, user-input-wins, `user_busy`, context menu suppression, agent border, caption, and pointer dot; tools `click`, `hover`, `drag`, `type`, `press`, `select_option`, `set_checked`, `scroll`, `focus`, `upload_files`; benchmarks. Verifies item 26. ~1500.

@@ -288,7 +288,12 @@ final class Browser {
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
     /// The tab list. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabs.filter { $0.pinID == nil && $0.openedByAgent == nil } }
-    var agentTabs: [Tab] { tabs.filter { $0.pinID == nil && $0.openedByAgent != nil } }
+    var agentTabs: [Tab] { tabs.filter(\.isInAgentGroup) }
+    /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within: the
+    /// Agent group for its tabs, the tab list for the rest.
+    func peers(of tab: Tab) -> [Tab] {
+        tab.isInAgentGroup ? agentTabs : regularTabs
+    }
 
     func liveTab(for pin: Pin) -> Tab? { tabs.first { $0.pinID == pin.id } }
 
@@ -410,24 +415,27 @@ final class Browser {
         if previous !== tab { extensions.didActivate(tab, previous: previous) }
     }
 
-    /// The selection falls back on the tab list only, never on a favorite: the tab below the
-    /// closed one (above, at the bottom), and the start page once the list is empty. Closing a
+    /// The selection falls back on the tab's group, never on a favorite: the tab below the
+    /// closed one (above, at the bottom). Once the Agent group is empty it falls on the bottom of
+    /// the tab list, just above, and once the list is empty on the start page. Closing a
     /// favorite's page selects the top of the list.
     func close(_ tab: Tab) {
-        let order = regularTabs
+        let order = peers(of: tab)
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)
         nowPlaying.discard(tab)
         if let url = tab.url {
-            let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle,
-                                   index: order.firstIndex { $0 === tab }, history: tab.history)
+            // An agent's tab comes back the user's, at the bottom of the list, next to where it was.
+            let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? regularTabs.count : order.firstIndex { $0 === tab }
+            let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle, index: place, history: tab.history)
             closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
         if tab.id == selectedTabID {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
-            selectedTabID = remaining.isEmpty ? nil : remaining[min(position, remaining.count - 1)].id
+            selectedTabID = remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
+                : remaining[min(position, remaining.count - 1)].id
             // The tab shown next may be asleep.
             selectedTab?.markActive()
         }
@@ -444,11 +452,12 @@ final class Browser {
         if let tab = selectedTab { close(tab) }
     }
 
-    /// Favorites' pages stay open, as Chrome keeps pinned tabs. Tabs close bottom up, so ⇧⌘T
-    /// brings them back top down, each where it was.
+    /// The others of its group: favorites' pages stay open, as Chrome keeps pinned tabs, and so
+    /// does the Agent group for a tab of the list, or the list for an agent's tab. Tabs close
+    /// bottom up, so ⇧⌘T brings them back top down, each where it was.
     func closeOtherTabs(than tab: Tab) {
         select(tab, picked: false)
-        regularTabs.reversed().filter { $0 !== tab }.forEach(close)
+        peers(of: tab).reversed().filter { $0 !== tab }.forEach(close)
     }
 
     func closeTabs(below tab: Tab) {
@@ -458,8 +467,9 @@ final class Browser {
         below.reversed().forEach(close)
     }
 
+    /// Below it in its group.
     func tabs(below tab: Tab) -> ArraySlice<Tab> {
-        let list = regularTabs
+        let list = peers(of: tab)
         guard let index = list.firstIndex(where: { $0 === tab }) else { return [] }
         return list[(index + 1)...]
     }
@@ -479,10 +489,12 @@ final class Browser {
     }
 
     /// Just below the original, with its history and name; a favorite's page has its copy at the
-    /// top of the list. The copy is never a favorite.
+    /// top of the list. The copy is never a favorite, nor an agent's: an agent's tab has its copy
+    /// at the bottom of the list, next to it.
     func duplicate(_ tab: Tab) {
         guard let url = tab.url else { return }
-        let index = regularTabs.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
+        let list = regularTabs
+        let index = tab.isInAgentGroup ? list.count : list.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
         let copy = insertTab(at: index, configuration: makeConfiguration(for: url))
         copy.customTitle = tab.customTitle
         copy.load(url, history: tab.history)
@@ -523,12 +535,13 @@ final class Browser {
         select(order[(current + offset + order.count) % order.count])
     }
 
-    /// ⌘1…⌘9 walk the favorites grid, then the tab list.
+    /// ⌘1…⌘9 walk the favorites grid, then the tab list and the Agent group, as the sidebar reads.
     func selectItem(at index: Int) {
+        let list = regularTabs + agentTabs
         if index < pins.count {
             activate(pins[index])
-        } else if index - pins.count < regularTabs.count {
-            select(regularTabs[index - pins.count])
+        } else if index - pins.count < list.count {
+            select(list[index - pins.count])
         }
     }
 
@@ -593,6 +606,8 @@ final class Browser {
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
         pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
         tab.pinID = pin.id
+        // The user's from now on: unpinned, it goes to the tab list.
+        tab.openedByAgent = nil
     }
 
     func pinTab(withID id: String, at index: Int? = nil) {

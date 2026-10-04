@@ -86,10 +86,18 @@ final class Tab: NSObject, Identifiable {
     /// The agent session ("s1") that opened the tab, which puts it in the sidebar's Agent group.
     /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
     var openedByAgent: String?
+    var isInAgentGroup: Bool { pinID == nil && openedByAgent != nil }
     /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
     /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
     /// address it was sent to (`go(to:)`), isn't counted.
     private(set) var commits = 0
+    /// Counts the moves within the document shown that a navigation asked for: to an anchor
+    /// (`page#section`), or Back and Forward between `pushState` entries. WebKit commits nothing
+    /// for them. The page's own `pushState` and `replaceState` aren't counted.
+    private(set) var sameDocumentNavigations = 0
+    /// From the moment a load starts until it commits a document or ends without one: the
+    /// document shown until then is the one on its way out.
+    private(set) var isAwaitingCommit = false
     /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
     /// that have none (Lithium's error page, local files).
     @ObservationIgnored private(set) var httpStatus: Int?
@@ -392,6 +400,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
+        isAwaitingCommit = false
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
@@ -429,6 +438,9 @@ final class Tab: NSObject, Identifiable {
             },
             webView.observe(\.isLoading) { [weak self] webView, _ in
                 MainActor.assumeIsolated {
+                    // WebKit reports a load from the moment it is asked for, before it calls
+                    // didStartProvisionalNavigation.
+                    if self?.isLoading != webView.isLoading { self?.isAwaitingCommit = webView.isLoading }
                     self?.isLoading = webView.isLoading
                     self?.tellExtensions(.loading)
                 }
@@ -659,10 +671,19 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
         httpStatus = nil
+        isAwaitingCommit = true
+    }
+
+    /// Private WebKit (`WKNavigationDelegatePrivate`), which calls it only on a delegate that has it.
+    /// `type` is `_WKSameDocumentNavigationType`: 0 an anchor, 1 pushState, 2 replaceState, 3 Back or Forward.
+    @objc(_webView:navigation:didSameDocumentNavigation:)
+    func webView(_ webView: WKWebView, navigation: WKNavigation?, didSameDocumentNavigation type: Int) {
+        if type == 0 || type == 3 { sameDocumentNavigations += 1 }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        isAwaitingCommit = false
         if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.

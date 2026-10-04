@@ -50,7 +50,9 @@ home=$(mktemp -d)
 trap 'rm -rf "$home"' EXIT
 
 # Each in a process group of its own (set -m), so the watchdog can stop the whole test run.
-CFFIXED_USER_HOME="$home" swift test --skip-build --no-parallel "$@" &
+# Tests use the bundled filter lists: an update would download and compile them in the middle
+# of whatever test is running then (FilterUpdaterTests downloads them on purpose).
+CFFIXED_USER_HOME="$home" LITHIUM_NO_FILTER_UPDATES=1 swift test --skip-build --no-parallel "$@" &
 tests=$!
 (
     sleep $((minutes * 60))

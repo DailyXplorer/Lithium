@@ -145,7 +145,7 @@ extension AgentHub {
                 "loading": .bool(tab.isLoading),
                 "ephemeral": false,
                 "agentTouched": .bool(hub.isTouched(tab)),
-                "agentGroup": .bool(tab.openedByAgent != nil),
+                "agentGroup": .bool(tab.isInAgentGroup),
             ]
             if let opener = tab.opener, open.contains(ObjectIdentifier(opener)) { fields["openedBy"] = .string(hub.id(for: opener)) }
             return .object(fields)
@@ -289,7 +289,7 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load) or its address matches url (a glob such as https://example.com/done* or a /regex/). Give exactly one of load and url.",
+        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load) or its address matches url (a glob such as https://example.com/done* or a /regex/). Give exactly one of load and url. A sleeping tab wakes, which loads its page.",
         inputSchema: schema([
             "tab": tabParam,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
@@ -314,6 +314,7 @@ extension AgentHub {
             if let pattern {
                 let matches: (String) -> Bool
                 do { matches = try AgentURLs.matcher(for: pattern) } catch { throw Arguments.invalid("url is not a valid pattern: \(error.localizedDescription)") }
+                tab.wake()
                 let met = try await hub.watch(named, until: deadline) { matches(tab.url?.absoluteString ?? "") ? true : nil }
                 guard met != nil else {
                     throw hub.timedOut(named, after: timeout, "its address \(tab.url?.absoluteString ?? "none") doesn’t match \(pattern)")
@@ -322,7 +323,12 @@ extension AgentHub {
                 guard let state = load.flatMap(LoadWait.init(rawValue:)), state >= .domcontentloaded else {
                     throw Arguments.invalid("load must be domcontentloaded or load.")
                 }
-                try await hub.waitForLoad(of: named, state, deadline: deadline, timeout: timeout)
+                // A sleeping tab loads its page once woken: that load is the one to wait for.
+                if tab.isAsleep {
+                    _ = try await hub.navigation(in: named, wait: state, deadline: deadline, timeout: timeout) { tab.wake() }
+                } else {
+                    try await hub.waitForLoad(of: named, state, deadline: deadline, timeout: timeout)
+                }
             }
             var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true
@@ -385,16 +391,20 @@ extension AgentHub {
     }
 
     /// Starts a navigation, then waits until the page it leads to (the next document the tab
-    /// commits, never the one before) gets as far as `wait`.
+    /// commits, never the one before) gets as far as `wait`. A move within the document shown
+    /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded.
     private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, _ start: () -> Void) async throws -> JSONValue {
         let tab = named.tab
-        let before = tab.commits
+        let (commits, moves) = (tab.commits, tab.sameDocumentNavigations)
         start()
         touch(tab)
         guard wait > .none else { return page(named, reached: nil) }
-        let committed = try await watch(named, until: deadline) { tab.commits > before ? true : nil }
-        guard committed != nil else { throw timedOut(named, after: timeout, "no page had started to show") }
-        if wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
+        let newDocument = try await watch(named, until: deadline) { () -> Bool? in
+            if tab.commits > commits { return true }
+            return tab.sameDocumentNavigations > moves ? false : nil
+        }
+        guard let newDocument else { throw timedOut(named, after: timeout, "no page had started to show") }
+        if newDocument, wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
         return page(named, reached: wait)
     }
 
@@ -403,7 +413,8 @@ extension AgentHub {
     private func waitForLoad(of named: NamedTab, _ state: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
         let tab = named.tab
         let failed: @MainActor () throws -> Void = {
-            if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id)’s page stopped working and the tab went to sleep.") }
+            // Lithium put it to sleep (its page stopped working, or memory ran short): nothing is loading in it any more.
+            if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id) went to sleep before its page loaded. Call navigate or reload to load it again.") }
             if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: error.localizedDescription) }
         }
         if state == .domcontentloaded {
@@ -412,6 +423,11 @@ extension AgentHub {
                 try checkStillWaitable(named)
                 try failed()
                 if !tab.isLoading { return }
+                if tab.isAwaitingCommit {
+                    // The document shown is on its way out, and long since ready.
+                    _ = try await watch(named, until: deadline) { tab.isAwaitingCommit ? nil : true }
+                    continue
+                }
                 if await documentIsReady(tab, within: min(.milliseconds(250), deadline - .now)) {
                     // What happened while the page was asked counts first.
                     try checkStillWaitable(named)

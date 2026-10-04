@@ -71,8 +71,8 @@ struct AgentTabsTests {
             session = try #require(reply.sessionID)
         }
 
-        /// Navigations get a minute unless the test says otherwise: in a throwaway home each test's
-        /// browser downloads and compiles the filter lists, which holds page loads up for a while.
+        /// Navigations get a minute unless the test says otherwise, so a slow machine fails a
+        /// test on what it checks rather than on a timeout.
         func call(_ tool: String, _ arguments: JSONValue = [:]) async -> ToolResult {
             var arguments = arguments
             if ["tab_open", "navigate", "go_back", "go_forward", "reload"].contains(tool), arguments["timeoutMs"] == nil, var fields = arguments.object {
@@ -98,6 +98,7 @@ struct AgentTabsTests {
         "/two": ("Content-Type: text/html", "<title>Two</title><p>two</p>"),
         "/three": ("Content-Type: text/html", "<title>Three</title><p>three</p>"),
         "/secret?token=abc123&page=2": ("Content-Type: text/html", "<title>Secret</title>"),
+        "/app": ("Content-Type: text/html", "<title>App</title>"),
     ]
 
     /// A browser with agent access on and one session. Afterwards its tabs close, so a dozen
@@ -287,6 +288,60 @@ struct AgentTabsTests {
             #expect((await client.call("go_forward", ["tab": tab]))["title"] == "Three")
             let none = await client.call("go_forward", ["tab": tab])
             #expect(none.code == "navigation_failed")
+        }
+    }
+
+    /// WebKit commits nothing for these, and their document has long loaded.
+    @Test func movesWithinThePageAnswerAtOnce() async throws {
+        try await withAgent { client, base in
+            let one = base.appending(path: "one").absoluteString
+            let id = try #require((await client.call("tab_open", ["url": .string(one), "wait": "load"]))["tab"]?.string)
+            let tab: JSONValue = .string(id)
+            var started = ContinuousClock.now
+            let anchor = await client.call("navigate", ["tab": tab, "url": .string(one + "#section")])
+            #expect(!anchor.isError, "\(anchor.message)")
+            #expect(anchor["url"] == .string(one + "#section"))
+            #expect(anchor["state"] == "load")
+            #expect(ContinuousClock.now - started < .seconds(5))
+
+            #expect(!(await client.call("navigate", ["tab": tab, "url": .string(base.appending(path: "app").absoluteString)])).isError)
+            // As a click in a web app would. WebKit's Back skips an entry the page added on its own.
+            _ = try await client.tab(id)?.webView.evaluateJavaScript("history.pushState({}, '', '/app/inbox'); 0")
+            #expect((await client.call("wait_for", ["tab": tab, "url": "*/app/inbox"]))["met"] == true)
+            started = ContinuousClock.now
+            let back = await client.call("go_back", ["tab": tab])
+            #expect(!back.isError, "\(back.message)")
+            #expect(back["url"] == .string(base.appending(path: "app").absoluteString))
+            let forward = await client.call("go_forward", ["tab": tab, "wait": "domcontentloaded"])
+            #expect(forward["url"] == .string(base.appending(path: "app/inbox").absoluteString))
+            #expect(ContinuousClock.now - started < .seconds(5))
+        }
+    }
+
+    @Test func waitingOnASleepingTabWakesIt() async throws {
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"])
+            let id = try #require(opened["tab"]?.string)
+            let tab = try #require(client.tab(id))
+            for (key, value) in [("load", "load"), ("load", "domcontentloaded"), ("url", "*/one")] {
+                tab.sleep(configuration: client.browser.makeConfiguration())
+                let waited = await client.call("wait_for", .object(["tab": .string(id), key: .string(value), "timeoutMs": 30_000]))
+                #expect(waited["met"] == true, "\(key) \(value): \(waited.message)")
+                #expect(!tab.isAsleep)
+            }
+            #expect(await waitUntil(30) { tab.title == "One" && !tab.isLoading })
+        }
+    }
+
+    /// The page on its way out is long since ready; the one coming hasn't arrived.
+    @Test(.timeLimit(.minutes(1))) func domContentLoadedWaitsForTheNextDocument() async throws {
+        let hanging = try await HangingHTTP()
+        defer { hanging.stop() }
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
+            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(hanging.url.absoluteString), "wait": "none"]))["state"] == nil)
+            let waited = await client.call("wait_for", ["tab": .string(id), "load": "domcontentloaded", "timeoutMs": 500])
+            #expect(waited.code == "timeout", "\(waited.content)")
         }
     }
 

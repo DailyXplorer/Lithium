@@ -256,7 +256,7 @@ private struct TabRow: View {
             Divider()
             Button("Close Tab") { browser.close(tab) }
             Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
-                .disabled(browser.regularTabs.allSatisfy { $0 === tab })
+                .disabled(browser.peers(of: tab).allSatisfy { $0 === tab })
             Button("Close Tabs Below") { browser.closeTabs(below: tab) }
                 .disabled(browser.tabs(below: tab).isEmpty)
             Divider()

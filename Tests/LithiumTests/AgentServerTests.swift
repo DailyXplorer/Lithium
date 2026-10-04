@@ -166,6 +166,17 @@ struct AgentServerTests {
         #expect(fifth.json?["error"]?["message"] == "Lithium already has 4 agent sessions.")
     }
 
+    @Test func dropsSessionsIdleForThirtyMinutes() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let idle = try await fixture.initialize()
+        fixture.hub.dropIdleSessions(now: Date().addingTimeInterval(AgentHub.idleTimeout - 60))
+        #expect(fixture.hub.sessions.count == 1)
+        fixture.hub.dropIdleSessions(now: Date().addingTimeInterval(AgentHub.idleTimeout + 60))
+        #expect(fixture.hub.sessions.isEmpty)
+        #expect(try await fixture.post(["jsonrpc": "2.0", "id": 1, "method": "ping"], session: idle).status == 404)
+    }
+
     @Test func limitsToolCallsPerSecond() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }

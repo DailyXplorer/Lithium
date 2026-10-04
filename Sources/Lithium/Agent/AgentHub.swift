@@ -81,6 +81,9 @@ final class AgentHub {
     @ObservationIgnored private var lastSeen: [String: Date] = [:]
     @ObservationIgnored private var recentCalls: [String: [Date]] = [:]
     @ObservationIgnored private var isShutDown = false
+    /// A client that crashed sends no DELETE; without this its session would show as connected
+    /// until some other request came in.
+    @ObservationIgnored private var idleSweep: Task<Void, Never>?
 
     init(folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = []) {
         self.folder = folder
@@ -113,6 +116,12 @@ final class AgentHub {
             self.port = port
             try AgentEndpoint(port: port, token: token).write(in: folder)
             state = .listening
+            idleSweep = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    self?.dropIdleSessions(now: Date())
+                }
+            }
         } catch {
             guard !isShutDown else { return }
             server.stop()
@@ -125,6 +134,7 @@ final class AgentHub {
     /// Access turned off: the server goes away with the endpoint file, and with it the token.
     func shutdown() {
         isShutDown = true
+        idleSweep?.cancel()
         endAllSessions()
         server?.stop()
         server = nil
@@ -163,7 +173,7 @@ final class AgentHub {
         recentCalls[session.id] = nil
     }
 
-    private func dropIdleSessions(now: Date) {
+    func dropIdleSessions(now: Date) {
         for session in sessions where now.timeIntervalSince(lastSeen[session.id] ?? now) > Self.idleTimeout {
             end(session)
         }

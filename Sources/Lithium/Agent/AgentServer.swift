@@ -68,6 +68,9 @@ final class AgentServer: @unchecked Sendable {
         let connection: NWConnection
         /// Accept order, so eviction takes the oldest.
         let serial: Int
+        /// The port of the listener that accepted it: a client keeps naming that port in Host
+        /// after a relisten moved the server to another one.
+        let port: UInt16
         var buffer = Data()
         /// Sent the token at least once: a client rather than a stranger holding a slot.
         var isAuthenticated = false
@@ -84,9 +87,10 @@ final class AgentServer: @unchecked Sendable {
         /// The request with `AgentHub`, cancelled when the connection fails under it.
         var request: Task<Void, Never>?
 
-        init(_ connection: NWConnection, serial: Int) {
+        init(_ connection: NWConnection, serial: Int, port: UInt16) {
             self.connection = connection
             self.serial = serial
+            self.port = port
         }
     }
 
@@ -108,7 +112,7 @@ final class AgentServer: @unchecked Sendable {
         parameters.acceptLocalOnly = true
         let listener = try NWListener(using: parameters)
         listener.stateUpdateHandler = { [weak self] state in self?.listener(listener, changedTo: state, port: requested) }
-        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection, port: listener.port?.rawValue ?? requested) }
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 // A `stop()` that ran before this block must not be undone by it.
@@ -217,13 +221,13 @@ final class AgentServer: @unchecked Sendable {
 
     // MARK: Connections
 
-    private func accept(_ connection: NWConnection) {
+    private func accept(_ connection: NWConnection, port: UInt16) {
         guard connections.count < Self.maxConnections || evictOne() else {
             connection.cancel()
             return
         }
         acceptedCount += 1
-        let entry = Connection(connection, serial: acceptedCount)
+        let entry = Connection(connection, serial: acceptedCount, port: port)
         connections[ObjectIdentifier(entry)] = entry
         connection.stateUpdateHandler = { [weak self, weak entry] state in
             guard let self, let entry else { return }
@@ -392,7 +396,7 @@ final class AgentServer: @unchecked Sendable {
     private func handle(_ head: Head, body: Data, on entry: Connection) {
         if head.headers["origin"] != nil { return respond(entry, status: 403) }
         let host = head.headers["host"]?.lowercased()
-        guard host == "127.0.0.1:\(port)" || host == "localhost:\(port)" else { return respond(entry, status: 403) }
+        guard host == "127.0.0.1:\(entry.port)" || host == "localhost:\(entry.port)" else { return respond(entry, status: 403) }
         guard isAuthorized(head.headers["authorization"]) else {
             return respond(entry, status: 401, headers: [("WWW-Authenticate", "Bearer")])
         }

@@ -588,6 +588,45 @@ struct AgentServerTests {
         #expect(fixture.endpoint.url == fixture.hub.url)
     }
 
+    /// The old port is taken when the listener comes back, so the server moves to a new one; a
+    /// connection accepted on the old port still names it in Host and still gets answers.
+    @Test(.timeLimit(.minutes(1))) func aConnectionKeepsItsPortAcrossARelistenOnAnotherPort() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let old = fixture.port
+        let server = try #require(fixture.hub.server)
+        let socket = try RawHTTP.connectedSocket(port: old)
+        defer { Darwin.close(socket) }
+        #expect(await Self.eventually { server.connectionCount == 1 })
+        server.listenerDidStart = { server, listener in
+            guard case .hostPort(_, let port) = listener.parameters.requiredLocalEndpoint, port.rawValue == old else { return }
+            server.listener(listener, changedTo: .failed(.posix(.EADDRINUSE)), port: old)
+        }
+        server.failListener(.posix(.ENETDOWN))
+        #expect(await Self.eventually { fixture.hub.state == .listening && fixture.hub.port.map { $0 != old } == true })
+        let new = try #require(fixture.hub.port)
+
+        let body = #"{"jsonrpc":"2.0","id":1,"method":"ping"}"#
+        let request = Data(("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(old)\r\nAuthorization: Bearer \(fixture.endpoint.token)\r\n"
+            + "Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\nMcp-Session-Id: \(session)\r\n"
+            + "Connection: close\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)").utf8)
+        let data = try await Task.detached {
+            try RawHTTP.write(request, to: socket)
+            return try RawHTTP.readToEOF(socket)
+        }.value
+        #expect(try RawHTTP.parseAll(data).map(\.status) == [200])
+
+        let stale = try await Task.detached {
+            let socket = try RawHTTP.connectedSocket(port: new)
+            defer { Darwin.close(socket) }
+            try RawHTTP.write(request, to: socket)
+            return try RawHTTP.readToEOF(socket)
+        }.value
+        #expect(try RawHTTP.parseAll(stale).map(\.status) == [403])
+        #expect(try await fixture.post(["jsonrpc": "2.0", "id": 2, "method": "ping"], session: session).status == 200)
+    }
+
     @Test(.timeLimit(.minutes(1))) func failsWhenListeningAgainKeepsFailing() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }

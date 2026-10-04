@@ -35,7 +35,12 @@ final class AgentServer: @unchecked Sendable {
     private var token: [UInt8]
     private var port: UInt16 = 0
     private var connections: [ObjectIdentifier: Connection] = [:]
-    private var starting: CheckedContinuation<UInt16, any Error>?
+    /// The listener a pending `start` waits on; only its own events may settle that start.
+    private var starting: (listener: NWListener, continuation: CheckedContinuation<UInt16, any Error>)?
+    private var isStopped = false
+    /// Tests only: runs on `queue` once a listener starts, before it can report `.ready`, which
+    /// is where a late event from an earlier listener lands in the race tests reproduce.
+    var listenerDidStart: (@Sendable (AgentServer) -> Void)?
 
     /// Confined to `queue`, like the server.
     private final class Connection: @unchecked Sendable {
@@ -67,41 +72,57 @@ final class AgentServer: @unchecked Sendable {
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                self.starting = continuation
+                // A `stop()` that ran before this block must not be undone by it.
+                guard !self.isStopped else { return continuation.resume(throwing: CancellationError()) }
+                self.abandonStart()
+                self.starting = (listener, continuation)
                 self.listener = listener
                 listener.start(queue: self.queue)
+                self.listenerDidStart?(self)
             }
         }
     }
 
-    private func listener(_ listener: NWListener, changedTo state: NWListener.State, port requested: UInt16) {
-        guard let starting else { return }
+    /// A listener that failed still reports `.cancelled` later, possibly while a retry on
+    /// another port is pending; the identity check keeps that late event away from the retry.
+    func listener(_ listener: NWListener, changedTo state: NWListener.State, port requested: UInt16) {
+        guard let starting, starting.listener === listener else { return }
         switch state {
         case .ready:
             self.starting = nil
             port = listener.port?.rawValue ?? requested
-            starting.resume(returning: port)
+            starting.continuation.resume(returning: port)
         case .failed(let error), .waiting(let error):
             self.starting = nil
+            self.listener = nil
             listener.cancel()
-            starting.resume(throwing: StartError.failed(error))
+            starting.continuation.resume(throwing: StartError.failed(error))
         case .cancelled:
             self.starting = nil
-            starting.resume(throwing: CancellationError())
+            starting.continuation.resume(throwing: CancellationError())
         default:
             break
         }
+    }
+
+    /// Settles a pending start and cancels the listener it waited on.
+    private func abandonStart() {
+        listener?.cancel()
+        listener = nil
+        guard let starting else { return }
+        self.starting = nil
+        starting.continuation.resume(throwing: CancellationError())
     }
 
     func setToken(_ token: String) {
         queue.sync { self.token = Array(token.utf8) }
     }
 
-    /// Closes the listener and every connection.
+    /// Closes the listener and every connection, for good: a start still pending throws.
     func stop() {
         queue.sync {
-            listener?.cancel()
-            listener = nil
+            isStopped = true
+            abandonStart()
             connections.values.forEach { $0.connection.cancel() }
             connections.removeAll()
         }
@@ -168,27 +189,36 @@ final class AgentServer: @unchecked Sendable {
         let headers: [String: String]
     }
 
+    /// Answers the requests waiting in the buffer, in order. A refused request keeps the
+    /// connection open and the loop goes on to the next one; a request that went to `AgentHub`
+    /// stops it until `finish`, and a malformed one closes the connection.
     private func process(_ entry: Connection) {
-        guard !entry.isBusy, connections[ObjectIdentifier(entry)] != nil else { return }
+        while !entry.isBusy, connections[ObjectIdentifier(entry)] != nil, processNext(entry) {}
+    }
+
+    /// Takes one request off the buffer; false when the buffer doesn't hold a whole one yet.
+    private func processNext(_ entry: Connection) -> Bool {
         guard let end = entry.buffer.firstRange(of: Data("\r\n\r\n".utf8)) else {
-            if entry.buffer.count > Self.maxHeaderBytes { respond(entry, status: 431, closing: true) }
-            return
+            guard entry.buffer.count > Self.maxHeaderBytes else { return false }
+            respond(entry, status: 431, closing: true)
+            return true
         }
-        guard end.lowerBound <= Self.maxHeaderBytes else { return respond(entry, status: 431, closing: true) }
-        guard let head = Self.parseHead(entry.buffer[..<end.lowerBound]) else { return respond(entry, status: 400, closing: true) }
-        if head.headers["transfer-encoding"] != nil { return respond(entry, status: 411, closing: true) }
+        guard end.lowerBound <= Self.maxHeaderBytes else { respond(entry, status: 431, closing: true); return true }
+        guard let head = Self.parseHead(entry.buffer[..<end.lowerBound]) else { respond(entry, status: 400, closing: true); return true }
+        if head.headers["transfer-encoding"] != nil { respond(entry, status: 411, closing: true); return true }
         var length = 0
         if let header = head.headers["content-length"] {
-            guard let value = Int(header), value >= 0 else { return respond(entry, status: 400, closing: true) }
+            guard let value = Int(header), value >= 0 else { respond(entry, status: 400, closing: true); return true }
             length = value
         }
-        guard length <= Self.maxBodyBytes else { return respond(entry, status: 413, closing: true) }
+        guard length <= Self.maxBodyBytes else { respond(entry, status: 413, closing: true); return true }
         let bodyStart = end.upperBound
-        guard entry.buffer.count - (bodyStart - entry.buffer.startIndex) >= length else { return }
+        guard entry.buffer.count - (bodyStart - entry.buffer.startIndex) >= length else { return false }
         let body = Data(entry.buffer[bodyStart..<(bodyStart + length)])
         entry.buffer = Data(entry.buffer[(bodyStart + length)...])
         if head.version != "HTTP/1.1" || head.headers["connection"]?.lowercased() == "close" { entry.closesAfterReply = true }
         handle(head, body: body, on: entry)
+        return true
     }
 
     /// Checks in order of what a stranger could learn: a web page (Origin) or a rebound DNS

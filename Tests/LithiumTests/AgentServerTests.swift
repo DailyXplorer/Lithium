@@ -245,6 +245,26 @@ struct AgentServerTests {
         #expect(fixture.hub.sessions.isEmpty)
     }
 
+    @Test(.timeLimit(.minutes(1))) func answersARequestPipelinedBehindARefusedOne() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let body = Fixture.initializeMessage().encoded()
+        func request(_ headers: [String: String]) -> Data {
+            let all = ["Host": "127.0.0.1:\(fixture.port)", "Content-Type": "application/json", "Content-Length": "\(body.count)"]
+                .merging(headers) { $1 }
+            return Data(("POST /mcp HTTP/1.1\r\n" + all.map { "\($0): \($1)\r\n" }.joined() + "\r\n").utf8) + body
+        }
+        let token = "Bearer \(fixture.endpoint.token)"
+        let data = try await RawHTTP.exchange(port: fixture.port, request:
+            request(["Authorization": token, "Origin": "https://evil.example"])
+            + request(["Authorization": "Bearer wrong"])
+            + request(["Authorization": token, "Connection": "close"]))
+        let replies = try RawHTTP.parseAll(data)
+        #expect(replies.map(\.status) == [403, 401, 200])
+        #expect(replies.last?.headers["connection"] == "close")
+        #expect(fixture.hub.sessions.count == 1)
+    }
+
     @Test func refusesBodiesOverOneMegabyte() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
@@ -314,6 +334,31 @@ struct AgentServerTests {
         defer { second.hub.shutdown() }
         #expect(second.port != first.port)
         #expect(UserDefaults(suiteName: second.suite)?.integer(forKey: Preference.agentPort) == Int(second.port))
+    }
+
+    /// The taken port's listener reports `.cancelled` after its failure, sometimes once the retry
+    /// is already pending. The hook lands those late events inside that window every time.
+    @Test func retryAfterATakenPortIgnoresTheFailedListener() async throws {
+        let occupant = AgentServer(token: "t") { _ in AgentReply() }
+        let taken = try await occupant.start(port: 0)
+        defer { occupant.stop() }
+        let server = AgentServer(token: "t") { _ in AgentReply() }
+        defer { server.stop() }
+        let failed = try NWListener(using: .tcp)
+        await #expect(throws: AgentServer.StartError.self) { try await server.start(port: taken) }
+        server.listenerDidStart = { server in
+            server.listener(failed, changedTo: .failed(.posix(.EADDRINUSE)), port: taken)
+            server.listener(failed, changedTo: .cancelled, port: taken)
+        }
+        let port = try await server.start(port: 0)
+        #expect(port != taken)
+        #expect(await RawHTTP.canConnect(host: "127.0.0.1", port: port))
+    }
+
+    @Test func aStoppedServerNeverListensAgain() async throws {
+        let server = AgentServer(token: "t") { _ in AgentReply() }
+        server.stop()
+        await #expect(throws: CancellationError.self) { try await server.start(port: 0) }
     }
 
     @Test func shutdownStopsListeningAndDeletesTheEndpoint() async throws {
@@ -487,7 +532,7 @@ enum RawHTTP {
     }
 
     /// Sends the request and reads until the server closes the connection.
-    private static func exchange(port: UInt16, request: Data) async throws -> Data {
+    static func exchange(port: UInt16, request: Data) async throws -> Data {
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
         defer { connection.cancel() }
         let chunks = AsyncThrowingStream<Data, any Error>.makeStream()
@@ -526,6 +571,19 @@ enum RawHTTP {
             headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
         return HTTPReply(status: status, headers: headers, body: Data(data[end.upperBound...]))
+    }
+
+    /// Answers sent back to back on one connection, split by their Content-Length.
+    static func parseAll(_ data: Data) throws -> [HTTPReply] {
+        var rest = data
+        var replies: [HTTPReply] = []
+        while !rest.isEmpty {
+            let reply = try parse(rest)
+            let length = Int(reply.headers["content-length"] ?? "") ?? 0
+            replies.append(HTTPReply(status: reply.status, headers: reply.headers, body: Data(reply.body.prefix(length))))
+            rest = Data(reply.body.dropFirst(length))
+        }
+        return replies
     }
 }
 

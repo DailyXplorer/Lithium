@@ -24,7 +24,7 @@ struct AgentButton: View {
     private var help: String {
         switch agent.state {
         case .stopped: "Agents stopped"
-        case .failed: "Agent access couldn’t start"
+        case .failed: "Agent access isn’t working"
         case .starting, .listening: agent.sessions.isEmpty ? "Agent access on" : "Agent connected"
         }
     }

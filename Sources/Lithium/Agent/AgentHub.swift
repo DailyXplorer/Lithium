@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Observation
 
 /// One connected MCP client.
@@ -67,14 +68,16 @@ final class AgentHub {
     struct Call {
         let tool: String
         let session: String
-        let task: Task<Result<JSONValue, AgentToolError>, Never>
+        /// Nil when the tool stopped on a cancellation; a tool that returned keeps its outcome
+        /// even if Stop came in just after.
+        let task: Task<Result<JSONValue, AgentToolError>?, Never>
     }
 
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let tools: [AgentTool]
-    @ObservationIgnored private var server: AgentServer?
+    @ObservationIgnored private(set) var server: AgentServer?
     @ObservationIgnored private var token = ""
     @ObservationIgnored private var sessionNumber = 0
     /// Kept out of `sessions` so the per-call bookkeeping doesn't redraw the indicator.
@@ -98,23 +101,15 @@ final class AgentHub {
     /// endpoint file. A token left by the last run is kept, so HTTP clients survive a relaunch.
     func start() async {
         token = AgentEndpoint.read(in: folder)?.token ?? AgentEndpoint.makeToken()
-        let server = AgentServer(token: token) { [weak self] request in
+        let server = AgentServer(token: token, listenerDidFail: { [weak self] error in
+            Task { @MainActor in await self?.relisten(after: error) }
+        }) { [weak self] request in
             await self?.handle(request) ?? AgentReply(status: 503)
         }
         self.server = server
-        let preferred = UInt16(clamping: max(0, defaults.integer(forKey: Preference.agentPort)))
         do {
-            let port: UInt16
-            do {
-                port = try await server.start(port: preferred)
-            } catch {
-                guard preferred != 0, !isShutDown else { throw error }
-                port = try await server.start(port: 0)
-            }
+            try await listen(on: server, preferring: UInt16(clamping: max(0, defaults.integer(forKey: Preference.agentPort))))
             guard !isShutDown else { return }
-            defaults.set(Int(port), forKey: Preference.agentPort)
-            self.port = port
-            try AgentEndpoint(port: port, token: token).write(in: folder)
             state = .listening
             idleSweep = Task { [weak self] in
                 while !Task.isCancelled {
@@ -129,6 +124,52 @@ final class AgentHub {
             state = .failed("Lithium couldn’t start the agent server (\(error.localizedDescription)).")
         }
         await log.prune()
+    }
+
+    /// Listens on `preferred`, else on a free port, and records the port in the endpoint file.
+    private func listen(on server: AgentServer, preferring preferred: UInt16) async throws {
+        let port: UInt16
+        do {
+            port = try await server.start(port: preferred)
+        } catch {
+            guard preferred != 0, !isShutDown else { throw error }
+            port = try await server.start(port: 0)
+        }
+        guard !isShutDown else { return }
+        defaults.set(Int(port), forKey: Preference.agentPort)
+        self.port = port
+        try AgentEndpoint(port: port, token: token).write(in: folder)
+    }
+
+    static let relistenAttempts = 3
+    static let relistenDelay: Duration = .milliseconds(500)
+    @ObservationIgnored private var isRelistening = false
+
+    /// The listener died after it was ready, typically across sleep or a network change: listen
+    /// again with the same token, on the same port when it is free. Sessions and open
+    /// connections are unaffected. After `relistenAttempts` failures, access shows as failed.
+    private func relisten(after error: NWError?) async {
+        guard let server, !isRelistening, state == .listening || state == .stopped else { return }
+        isRelistening = true
+        defer { isRelistening = false }
+        var lastError: (any Error)? = error
+        for attempt in 1...Self.relistenAttempts {
+            if attempt > 1 { try? await Task.sleep(for: Self.relistenDelay) }
+            guard !isShutDown, self.server === server else { return }
+            do {
+                try await listen(on: server, preferring: port ?? 0)
+                return
+            } catch {
+                lastError = error
+            }
+        }
+        guard !isShutDown, self.server === server else { return }
+        idleSweep?.cancel()
+        endAllSessions()
+        server.stop()
+        self.server = nil
+        let reason = lastError.map { " (\($0.localizedDescription))" } ?? ""
+        state = .failed("Lithium’s agent server stopped listening\(reason). Turn agent access off and on to retry.")
     }
 
     /// Access turned off: the server goes away with the endpoint file, and with it the token.
@@ -274,31 +315,37 @@ final class AgentHub {
         }
         let arguments = params["arguments"] ?? [:]
         let started = Date()
+        // The id is what notifications/cancelled names, so two calls in flight under one id
+        // would make cancelling ambiguous; MCP forbids reusing an id within a session anyway.
+        let key = CallKey(session: session.id, request: id)
+        guard calls[key] == nil else {
+            return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
+        }
         let result: Result<JSONValue, AgentToolError>
         if isRateLimited(session.id, at: started) {
             result = .failure(AgentToolError(code: "rate_limited", message: "More than \(Self.maxCallsPerSecond) tool calls in a second. Slow down."))
         } else {
-            let key = CallKey(session: session.id, request: id)
-            let task = Task { () -> Result<JSONValue, AgentToolError> in
+            let task = Task { () -> Result<JSONValue, AgentToolError>? in
                 do {
                     return .success(try await tool.run(arguments, session, self))
                 } catch let error as AgentToolError {
                     return .failure(error)
                 } catch {
+                    if error is CancellationError || Task.isCancelled { return nil }
                     return .failure(AgentToolError(code: "internal", message: error.localizedDescription))
                 }
             }
             calls[key] = Call(tool: name, session: session.label, task: task)
             let outcome = await task.value
             calls[key] = nil
-            if task.isCancelled {
+            if let outcome {
+                result = outcome
+            } else {
                 // Stop and DELETE end the session; a client's notifications/cancelled leaves it.
                 let stopped = !sessions.contains { $0.id == session.id }
                 result = .failure(stopped
                     ? AgentToolError(code: "agent_stopped", message: "The user stopped agents in Lithium.")
                     : AgentToolError(code: "cancelled", message: "The client cancelled this call."))
-            } else {
-                result = outcome
             }
         }
         let ms = Int(Date().timeIntervalSince(started) * 1000)

@@ -38,9 +38,12 @@ final class AgentServer: @unchecked Sendable {
     /// The listener a pending `start` waits on; only its own events may settle that start.
     private var starting: (listener: NWListener, continuation: CheckedContinuation<UInt16, any Error>)?
     private var isStopped = false
+    /// Runs on `queue` when the listener dies after it was ready (sleep, a network change), so
+    /// the hub can listen again. A listener this server cancelled itself never reports here.
+    private let listenerDidFail: @Sendable (NWError?) -> Void
     /// Tests only: runs on `queue` once a listener starts, before it can report `.ready`, which
     /// is where a late event from an earlier listener lands in the race tests reproduce.
-    var listenerDidStart: (@Sendable (AgentServer) -> Void)?
+    var listenerDidStart: (@Sendable (AgentServer, NWListener) -> Void)?
 
     /// Confined to `queue`, like the server.
     private final class Connection: @unchecked Sendable {
@@ -48,13 +51,17 @@ final class AgentServer: @unchecked Sendable {
         var buffer = Data()
         /// A request is with `AgentHub`; answers go out in order, so the next one waits.
         var isBusy = false
+        /// Off while a request is with `AgentHub`: what the client sends meanwhile stays in the
+        /// socket instead of growing `buffer` without bound.
+        var isReceiving = false
         var closesAfterReply = false
 
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
-    init(token: String, handler: @escaping Handler) {
+    init(token: String, listenerDidFail: @escaping @Sendable (NWError?) -> Void = { _ in }, handler: @escaping Handler) {
         self.token = Array(token.utf8)
+        self.listenerDidFail = listenerDidFail
         self.handler = handler
     }
 
@@ -78,7 +85,7 @@ final class AgentServer: @unchecked Sendable {
                 self.starting = (listener, continuation)
                 self.listener = listener
                 listener.start(queue: self.queue)
-                self.listenerDidStart?(self)
+                self.listenerDidStart?(self, listener)
             }
         }
     }
@@ -86,7 +93,23 @@ final class AgentServer: @unchecked Sendable {
     /// A listener that failed still reports `.cancelled` later, possibly while a retry on
     /// another port is pending; the identity check keeps that late event away from the retry.
     func listener(_ listener: NWListener, changedTo state: NWListener.State, port requested: UInt16) {
-        guard let starting, starting.listener === listener else { return }
+        guard let starting, starting.listener === listener else {
+            // A listener this server cancelled is no longer `self.listener`, so only an
+            // unexpected death of the live one gets here.
+            guard self.listener === listener else { return }
+            switch state {
+            case .failed(let error), .waiting(let error):
+                self.listener = nil
+                listener.cancel()
+                listenerDidFail(error)
+            case .cancelled:
+                self.listener = nil
+                listenerDidFail(nil)
+            default:
+                break
+            }
+            return
+        }
         switch state {
         case .ready:
             self.starting = nil
@@ -116,6 +139,20 @@ final class AgentServer: @unchecked Sendable {
 
     func setToken(_ token: String) {
         queue.sync { self.token = Array(token.utf8) }
+    }
+
+    /// Tests only: the live listener dies the way it does after sleep or a network change.
+    func failListener(_ error: NWError) {
+        queue.sync {
+            guard let listener else { return }
+            listener.cancel()
+            self.listener(listener, changedTo: .failed(error), port: port)
+        }
+    }
+
+    /// Tests only: the largest amount of unparsed input held for one connection.
+    var bufferedBytes: Int {
+        queue.sync { connections.values.map(\.buffer.count).max() ?? 0 }
     }
 
     /// Closes the listener and every connection, for good: a start still pending throws.
@@ -162,17 +199,26 @@ final class AgentServer: @unchecked Sendable {
         receive(on: entry)
     }
 
+    /// Reads only while no request is with `AgentHub`, so `buffer` never holds more than one
+    /// request (bounded by `processNext`) plus one read.
     private func receive(on entry: Connection) {
+        entry.isReceiving = true
         entry.connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self, weak entry] data, _, isComplete, error in
             guard let self, let entry else { return }
+            entry.isReceiving = false
             if let data { entry.buffer.append(data) }
             self.process(entry)
             if isComplete || error != nil {
                 if !entry.isBusy { self.close(entry) } else { entry.closesAfterReply = true }
                 return
             }
-            self.receive(on: entry)
+            self.resumeReceiving(entry)
         }
+    }
+
+    private func resumeReceiving(_ entry: Connection) {
+        guard !entry.isBusy, !entry.isReceiving, connections[ObjectIdentifier(entry)] != nil else { return }
+        receive(on: entry)
     }
 
     private func close(_ entry: Connection) {
@@ -264,6 +310,7 @@ final class AgentServer: @unchecked Sendable {
         respond(entry, status: reply.status, headers: headers, body: reply.body?.encoded())
         // A client may send its next request before reading this answer.
         process(entry)
+        resumeReceiving(entry)
     }
 
     /// Constant time, so the comparison doesn't tell a guesser how much of the token was right.

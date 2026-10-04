@@ -55,6 +55,23 @@ struct AgentServerTests {
         ["jsonrpc": "2.0", "id": .int(id), "method": "tools/call", "params": ["name": .string(tool), "arguments": [:]]]
     }
 
+    /// A tool that signals `started`, then sleeps until cancelled.
+    private static func waitTool(_ started: AsyncStream<Void>.Continuation) -> AgentTool {
+        AgentTool(name: "wait", description: "Waits.", inputSchema: ["type": "object"]) { _, _, _ in
+            started.yield()
+            try await Task.sleep(for: .seconds(30))
+            return [:]
+        }
+    }
+
+    private static func eventually(_ condition: () async -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
     // MARK: Protocol
 
     @Test func initializeOpensASession() async throws {
@@ -346,7 +363,7 @@ struct AgentServerTests {
         defer { server.stop() }
         let failed = try NWListener(using: .tcp)
         await #expect(throws: AgentServer.StartError.self) { try await server.start(port: taken) }
-        server.listenerDidStart = { server in
+        server.listenerDidStart = { server, _ in
             server.listener(failed, changedTo: .failed(.posix(.EADDRINUSE)), port: taken)
             server.listener(failed, changedTo: .cancelled, port: taken)
         }
@@ -373,12 +390,7 @@ struct AgentServerTests {
 
     @Test func stopCancelsCallsAndEndsSessions() async throws {
         let started = AsyncStream<Void>.makeStream()
-        let wait = AgentTool(name: "wait", description: "Waits.", inputSchema: ["type": "object"]) { _, _, _ in
-            started.continuation.yield()
-            try await Task.sleep(for: .seconds(30))
-            return [:]
-        }
-        let fixture = try await Fixture(tools: [wait])
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
         defer { fixture.hub.shutdown() }
         let session = try await fixture.initialize()
         let pending = Task { try await fixture.post(Self.call("wait"), session: session) }
@@ -410,12 +422,7 @@ struct AgentServerTests {
 
     @Test func clientCancellationKeepsTheSession() async throws {
         let started = AsyncStream<Void>.makeStream()
-        let wait = AgentTool(name: "wait", description: "Waits.", inputSchema: ["type": "object"]) { _, _, _ in
-            started.continuation.yield()
-            try await Task.sleep(for: .seconds(30))
-            return [:]
-        }
-        let fixture = try await Fixture(tools: [wait])
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
         defer { fixture.hub.shutdown() }
         let session = try await fixture.initialize()
         let pending = Task { try await fixture.post(Self.call("wait", id: 42), session: session) }
@@ -426,6 +433,118 @@ struct AgentServerTests {
         let reply = try await pending.value
         #expect(reply.json?["result"]?["structuredContent"]?["code"] == "cancelled")
         #expect(fixture.hub.sessions.count == 1)
+    }
+
+    @Test func refusesASecondCallUnderAnIdInFlight() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let pending = Task { try await fixture.post(Self.call("wait", id: 42), session: session) }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+
+        let duplicate = try await fixture.post(Self.call("lithium_status", id: 42), session: session)
+        #expect(duplicate.json == ["jsonrpc": "2.0", "id": 42, "error": [
+            "code": -32600, "message": "A call with this id is already in flight in this session.",
+        ]])
+        #expect(fixture.hub.isActing)
+
+        _ = try await fixture.post(["jsonrpc": "2.0", "method": "notifications/cancelled", "params": ["requestId": 42]], session: session)
+        let reply = try await pending.value
+        #expect(reply.json?["result"]?["structuredContent"]?["code"] == "cancelled")
+        #expect(!fixture.hub.isActing)
+    }
+
+    /// The tools cancel their own call as their last step, the way a Stop or a
+    /// notifications/cancelled lands just as a tool finishes; the work is done, so it reports done.
+    @Test func aCallThatFinishedIsReportedAsFinished() async throws {
+        let thenCancelled = AgentTool(name: "then_cancelled", description: "", inputSchema: ["type": "object"]) { _, _, _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return ["done": true]
+        }
+        let thenStopped = AgentTool(name: "then_stopped", description: "", inputSchema: ["type": "object"]) { _, _, hub in
+            hub.stop()
+            return ["done": true]
+        }
+        let fixture = try await Fixture(tools: [thenCancelled, thenStopped])
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        for tool in ["then_cancelled", "then_stopped"] {
+            let reply = try await fixture.post(Self.call(tool), session: session)
+            #expect(reply.json?["result"]?["isError"] == false, "\(tool)")
+            #expect(reply.json?["result"]?["structuredContent"] == ["done": true], "\(tool)")
+        }
+        #expect(fixture.hub.state == .stopped)
+        let file = fixture.folder.appending(path: "log/\(AgentLog.fileName(for: Date()))")
+        let entries = try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map { try JSONValue.decode(Data($0.utf8)) }
+        #expect(entries.map { $0["tool"] } == ["then_cancelled", "then_stopped"])
+        #expect(entries.map { $0["result"] } == [["ok": true], ["ok": true]])
+    }
+
+    // MARK: Listener
+
+    @Test(.timeLimit(.minutes(1))) func listensAgainWhenTheListenerDies() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let token = fixture.endpoint.token
+        try #require(fixture.hub.server).failListener(.posix(.ENETDOWN))
+
+        let ping: JSONValue = ["jsonrpc": "2.0", "id": 1, "method": "ping"]
+        #expect(await Self.eventually { (try? await fixture.post(ping, session: session))?.status == 200 })
+        #expect(fixture.hub.state == .listening)
+        #expect(fixture.endpoint.token == token)
+        #expect(fixture.endpoint.url == fixture.hub.url)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func failsWhenListeningAgainKeepsFailing() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        _ = try await fixture.initialize()
+        let server = try #require(fixture.hub.server)
+        server.listenerDidStart = { server, listener in
+            server.listener(listener, changedTo: .failed(.posix(.EADDRNOTAVAIL)), port: 0)
+        }
+        server.failListener(.posix(.ENETDOWN))
+
+        #expect(await Self.eventually { fixture.hub.state != .listening })
+        guard case .failed(let message) = fixture.hub.state else {
+            Issue.record("state is \(fixture.hub.state)")
+            return
+        }
+        #expect(message.hasPrefix("Lithium’s agent server stopped listening"))
+        #expect(message.hasSuffix("Turn agent access off and on to retry."))
+        #expect(fixture.hub.server == nil)
+        #expect(fixture.hub.sessions.isEmpty)
+    }
+
+    // MARK: Backpressure
+
+    /// What a client sends while its call is in flight stays in the socket: the server's buffer
+    /// holds at most the one read that carried the call.
+    @Test(.timeLimit(.minutes(1))) func readsNothingMoreWhileACallIsInFlight() async throws {
+        let arrived = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let server = AgentServer(token: "t") { _ in
+            arrived.continuation.yield()
+            for await _ in release.stream { break }
+            return AgentReply(status: 202)
+        }
+        defer { server.stop() }
+        let port = try await server.start(port: 0)
+        let call = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer t\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+        let flood = Data(repeating: 0x20, count: 16 << 20)
+        let exchange = Task { try await RawHTTP.exchange(port: port, request: Data(call.utf8) + flood) }
+        var iterator = arrived.stream.makeAsyncIterator()
+        await iterator.next()
+        try await Task.sleep(for: .seconds(1))
+        #expect(server.bufferedBytes <= 65_536)
+
+        release.continuation.yield()
+        let replies = try RawHTTP.parseAll(try await exchange.value)
+        #expect(replies.first?.status == 202)
+        #expect(server.bufferedBytes == 0)
     }
 
     // MARK: Log

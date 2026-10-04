@@ -1,6 +1,6 @@
 # Agent access over MCP
 
-Status: design, no product code yet. Written 2026-10-04 against `main` at `c07fafb`. The owner's decisions are in section 12.
+Status: design; PR 1 (server core, section 11) implemented. Written 2026-10-04 against `main` at `c07fafb`. The owner's decisions are in section 12.
 
 This document describes how AI agents (Claude Code, a personal assistant, any MCP client) drive Lithium: open tabs, read pages, and act in them with the same input a person gives. It records the decisions, the evidence behind the hard ones, the tool catalogue, the security model, and the order of the pull requests that build it.
 
@@ -26,6 +26,8 @@ All new code lives in `Sources/Lithium/Agent/` plus one script, `Sources/Lithium
 | Component | Kind | Responsibility |
 | --- | --- | --- |
 | `AgentServer` | class, own serial `DispatchQueue` | `NWListener` on `127.0.0.1`, minimal HTTP/1.1, Host, Origin, and token checks, body limits. Hands parsed JSON-RPC messages to `AgentHub`. |
+| `JSONValue` | `Sendable` enum | JSON-RPC messages as values, so they cross from the server's queue to the main actor (Foundation's `Any` cannot under strict concurrency). |
+| `AgentEndpoint` | struct | The endpoint file: token generation, 0700 folder, 0600 file. |
 | `MCPSession` | struct | One connected client: session id, `clientInfo` (self-reported name and version), negotiated protocol version, counters. |
 | `AgentHub` | `@MainActor @Observable` final class, owned by `Browser` | State (off, listening, stopped), sessions, tool dispatch, per-tab queues, the stop switch. The UI observes it. |
 | `AgentTab` | `@MainActor` final class, one per tab an agent touched | Short tab id, action queue, frame registry, issued refs, last snapshot per session, network and console buffers, pending dialog, grants. |
@@ -53,14 +55,14 @@ off ──enable──▶ listening ──initialize──▶ connected ──to
                                   stopped (refuses initialize until "Allow agents again")
 ```
 
-- **Enable** (Settings › Agents) creates the token on first use, picks a port, starts the listener, and writes the endpoint file (section 7.1).
-- **Disable** stops the listener, ends sessions, and deletes the endpoint file. The token stays unless the user resets it.
+- **Enable** (Settings › Agents) creates a token, picks a port, starts the listener, and writes the endpoint file (section 7.1). At launch with access on, Lithium keeps the token found in the endpoint file, so HTTP clients survive a relaunch.
+- **Disable** stops the listener, ends sessions, and deletes the endpoint file. The endpoint file is the only copy of the token, so the next enable makes a new one; `lithium-mcp` rereads the file and does not notice.
 - **Stop** (toolbar indicator, **Lithium › Stop Agent** ⌃⌘., Dock menu) cancels every queued and in-flight action, denies every pending confirmation, releases held mouse buttons and keys, answers pending agent dialogs with their safe default, ends all sessions, and moves to `stopped`. The listener keeps running but answers `initialize` with an error until the user clicks **Allow agents again**. Stop is idempotent.
 - The server runs only while Lithium runs. `lithium-mcp` can start Lithium in the background (section 9).
 
 ### 2.4 How it plugs into Browser and Tab
 
-`Browser` gains one property, `@ObservationIgnored private(set) var agent: AgentHub?`, created when access is enabled. Tab and Browser call into it with optional chaining, so with access off every hook is a nil check. The hooks:
+`Browser` gains one property, `private(set) var agent: AgentHub?`, created when access is enabled. It is observed (not `@ObservationIgnored`) so the toolbar indicator and the Stop menu item follow the setting. Tab and Browser call into it with optional chaining, so with access off every hook is a nil check. The hooks:
 
 | Where | Hook |
 | --- | --- |
@@ -419,10 +421,10 @@ Measured by the PR 5 benchmark on fixture pages; p50 and p95 on an Apple silicon
 
 - **Binding.** `NWListener` with `requiredLocalEndpoint` `127.0.0.1` and a port picked at first enable from the dynamic range and kept in preferences. If the port is taken at launch, Lithium picks another and rewrites the endpoint file. IPv6 and other interfaces are not served.
 - **Token.** 32 random bytes from `SecRandomCopyBytes`, base64url. Every request needs `Authorization: Bearer <token>`, compared in constant time. **Reset token** in Settings makes a new one and ends all sessions.
-- **Endpoint file.** `~/Library/Application Support/Lithium/Agent/endpoint.json`, directory mode 0700, file mode 0600, written atomically: `{ "url": "http://127.0.0.1:52817/mcp", "token": "…", "pid": 4242, "version": 1 }`. Deleted when access is turned off.
+- **Endpoint file.** `~/Library/Application Support/Lithium/Agent/endpoint.json`, directory mode 0700, file mode 0600 (set on a temporary file before the token is written, then renamed into place): `{ "url": "http://127.0.0.1:52817/mcp", "token": "…", "pid": 4242, "version": 1 }`. Deleted when access is turned off, which retires the token (section 2.3).
 - **Host and Origin.** `Host` must be `127.0.0.1:<port>` or `localhost:<port>`, else 403. Any request with an `Origin` header is refused with 403, since native MCP clients send none and browsers always send one on cross-origin requests. No CORS headers are ever sent, so preflights fail. Together these stop DNS rebinding and web pages, including pages inside Lithium.
-- **Transport.** `POST /mcp` carries JSON-RPC. A call with a `progressToken` (a confirmation may take minutes) answers as `text/event-stream` with `notifications/progress` every 10 seconds. `GET /mcp` answers 405 (no server-initiated stream in v1). `DELETE /mcp` ends the session. `initialize` returns `Mcp-Session-Id` (128 random bits), required afterwards. Lithium negotiates the protocol version in `initialize` and supports the Streamable HTTP revisions from 2025-03-26 on.
-- **Limits.** Request bodies up to 1 MB (413 beyond), headers 16 KB, 4 sessions, 50 tool calls per second per session (`rate_limited`), idle sessions dropped after 30 minutes.
+- **Transport.** `POST /mcp` carries one JSON-RPC message (`application/json`, else 415; a batch array is an Invalid Request, since the 2025-06-18 revision dropped batches). Requests answer `application/json`. Notifications and client responses answer 202 with no body. A call with a `progressToken` (a confirmation may take minutes) will answer as `text/event-stream` with `notifications/progress` every 10 seconds; that arrives with confirmations in PR 4, and until then every answer is JSON. `GET /mcp` answers 405 (no server-initiated stream in v1). `DELETE /mcp` ends the session. `initialize` returns `Mcp-Session-Id` (128 random bits), required afterwards: a request without it gets 400, an unknown or ended one 404 (the client then initializes again). An `MCP-Protocol-Version` header naming an unsupported revision gets 400. Lithium supports 2025-03-26, 2025-06-18, and 2025-11-25, echoes the client's revision when it is one of them, and answers with the newest otherwise. `notifications/cancelled` cancels that call. JSON-RPC errors (unknown method -32601, unknown tool -32602, parse error -32700) follow the spec; `initialize` while stopped or at the session cap is a -32000 error with a sentence for the user.
+- **Limits.** Request bodies up to 1 MB (413 beyond), headers 16 KB (431), `Transfer-Encoding` bodies refused (411; MCP clients send `Content-Length`), 16 connections, 4 sessions, 50 tool calls per second per session (`rate_limited`), idle sessions dropped after 30 minutes.
 
 ### 7.2 Enable, disable, stop
 
@@ -551,7 +553,7 @@ What a page can observe about agent input (verified items from section 3):
 The rules of the existing suites hold: no GUI launch, offscreen borderless windows at (−30000, −30000) as in `PageLayersTests` and `CapturePreviewTests`, `scripts/test` with its throwaway home (so the endpoint file and log land there, and a running Lithium on the same Mac is never touched), and the 30-second page-load limit of `Tests/LithiumTests/Support/PageLoad.swift`.
 
 - **`Support/LocalServer.swift`.** An `NWListener` on port 0 serving `Tests/LithiumTests/Fixtures/Agent/`, reachable as `127.0.0.1` and `localhost` for two origins, as in the prototypes. `PaymentProviders` takes an injected list so `localhost` can stand in for a provider.
-- **Server and protocol (PR 1).** Real HTTP over `URLSession`: no token 401, wrong token 401, wrong `Host` 403, any `Origin` 403, preflight 403, body over 1 MB 413, listener bound to 127.0.0.1 only, `initialize` and `tools/list` shapes, session header required, Stop refuses `initialize`, endpoint file modes 0700 and 0600.
+- **Server and protocol (PR 1).** Real HTTP over a plain `NWConnection` (`URLSession` sets `Host` itself, so it could not send the forged headers): no token 401, wrong token 401, wrong `Host` 403, any `Origin` 403, preflight 403, body over 1 MB 413, listener bound to 127.0.0.1 only, `initialize` and `tools/list` shapes, session header required, Stop refuses `initialize`, endpoint file modes 0700 and 0600.
 - **Input (PR 5).** Fixture pages log events with `isTrusted`; tests assert exact sequences for click, double click, right click (and that no menu opened), hover, pointer drag, wheel, typing in input, textarea, and `contenteditable`, mixed ASCII and emoji order, Enter submit, Tab focus, `select_option`, cross-origin iframe click with border and padding, `covered` error text, and zoomed pages (`pageZoom` 1.5, magnification 2).
 - **Stage (PR 5).** A `Browser` with two tabs: acting in the background tab leaves `selectedTabID`, the key window, `NSApp.isActive`, and the main window's first responder unchanged; the page sees `visibilityState` `visible`; selecting the tab mid-action retries; closing it fails with `tab_closed`.
 - **Key guard (PR 5).** An agent ⌘W, ⌘Q, and ⌘T: the page sees `keydown`, the tab count does not change.
@@ -564,8 +566,8 @@ The rules of the existing suites hold: no GUI launch, offscreen borderless windo
 
 Each PR is reviewable alone, ships behind the Settings switch (off), and ends with its tests green. Sizes are rough, in lines including tests.
 
-1. **Server core.** Settings › Agents switch, token, port, endpoint file, `AgentServer` with every check in section 7.1, JSON-RPC, `initialize`, `ping`, `tools/list` (empty), `AgentHub` states, Stop (menu, Dock, indicator stub), `AgentLog` with the `lithium://agents` page. Tests: server and protocol. ~1100.
-2. **Tabs and navigation.** Tab ids, `tabs_list`, `tab_open` (background, into the "Agent" group), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `Browser.close` and sleep hooks, tab badges, hover card line. ~800.
+1. **Server core.** Settings › Agents switch, token, port, endpoint file, `AgentServer` with every check in section 7.1, JSON-RPC, `initialize`, `ping`, `tools/list` with one `lithium_status` tool, `AgentHub` states, Stop (menu, Dock, toolbar indicator with its panel), `AgentLog` writing and pruning the JSONL files. Tests: server and protocol. The `lithium://agents` log page, its export, and the indicator's last log lines moved to PR 2, where tab actions first give the log something to show. ~1500.
+2. **Tabs and navigation.** The `lithium://agents` log page (view, export, clear) and **Show agent log** in Settings. Tab ids, `tabs_list`, `tab_open` (background, into the "Agent" group), `tab_close`, `tab_select`, `navigate`, back, forward, reload, stop, `wait_for` load and URL, `blocked_page` schemes, `Browser.close` and sleep hooks, tab badges, hover card line. ~800.
 3. **Perception.** Bootstrap and `agent.js` (frame registry and paths, refs, roles and names, redaction, password tracker, extension exclusions, challenge detection), `snapshot` text and JSON with diffs, `read_text`, `links`, `forms`, `find_text`, `element_info`, `wait_for` DOM conditions, `screenshot` with masks, `pdf`. Verifies items 24 and 25. ~1600 (about 700 of JavaScript).
 4. **Confirmations and guardrails.** `AgentConfirmations` and the banner with site grants, `Guardrails` and `PaymentProviders`, download hook, file chooser hook, dialog routing, `dialog_respond`. No input yet, so nothing can act before the guard exists. ~1100.
 5. **Native input and the stage.** `NativeInput`, key guard, `AgentStage` with occlusion handling and the fallback, actionability checks, settling, user-input-wins, `user_busy`, context menu suppression, agent border, caption, and pointer dot; tools `click`, `hover`, `drag`, `type`, `press`, `select_option`, `set_checked`, `scroll`, `focus`, `upload_files`; benchmarks. Verifies item 26. ~1500.

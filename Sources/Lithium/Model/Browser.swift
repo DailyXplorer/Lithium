@@ -42,6 +42,10 @@ final class Browser {
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
 
+    /// Present only while agent access is on, so with it off every agent hook is a nil check.
+    /// Observed, so the toolbar indicator appears and goes with the setting.
+    private(set) var agent: AgentHub?
+
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private var eventMonitors: [Any] = []
     /// Observed, so Reopen Closed Tab is enabled as soon as there is one. Never saved.
@@ -99,6 +103,9 @@ final class Browser {
             }
         }
         watchMemoryPressure()
+        if UserDefaults.standard.bool(forKey: Preference.agentAccess) {
+            Task { await setAgentAccess(true) }
+        }
     }
 
     deinit {
@@ -187,6 +194,19 @@ final class Browser {
     }
 
     func openHistory() { openInternal(Internal.historyURL) }
+
+    /// Settings › Agents. Off by default; the choice outlives the app.
+    func setAgentAccess(_ enabled: Bool) async {
+        UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
+        if enabled, agent == nil {
+            let hub = AgentHub()
+            agent = hub
+            await hub.start()
+        } else if !enabled, let hub = agent {
+            agent = nil
+            hub.shutdown()
+        }
+    }
 
     /// Reloads the page so its content blockers and scripts match the new setting.
     func setProtections(_ enabled: Bool, for tab: Tab?) {

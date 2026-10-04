@@ -251,7 +251,7 @@ final class AgentHub {
         // Lithium sends clients no requests, so a response from one has nothing to answer.
         guard let method = fields["method"]?.string else { return AgentReply(status: 202) }
         let params = fields["params"] ?? [:]
-        if method == "initialize" { return initialize(id: id ?? .null, params: params) }
+        if method == "initialize" { return await initialize(id: id ?? .null, params: params) }
         guard let sessionID else {
             return Self.error(.invalidRequest, "Missing Mcp-Session-Id header. Send initialize first.", id: id ?? .null, status: 400)
         }
@@ -276,14 +276,22 @@ final class AgentHub {
         }
     }
 
-    private func initialize(id: JSONValue, params: JSONValue) -> AgentReply {
+    private func initialize(id: JSONValue, params: JSONValue) async -> AgentReply {
         switch state {
         case .listening: break
         case .stopped: return Self.error(.server, "The user stopped agents in Lithium. They can click Allow Agents Again in Lithium.", id: id)
         case .starting, .failed: return Self.error(.server, "Lithium’s agent access is not ready.", id: id)
         }
-        guard sessions.count < Self.maxSessions else {
-            return Self.error(.server, "Lithium already has \(Self.maxSessions) agent sessions.", id: id)
+        // A client that quits without DELETE (Ctrl-C, a crash) keeps its session until the idle
+        // timeout, so at the cap the least recently used session with no call in flight makes room.
+        var evicted: MCPSession?
+        if sessions.count >= Self.maxSessions {
+            let busy = Set(calls.keys.map(\.session))
+            evicted = sessions.filter { !busy.contains($0.id) }.min { (lastSeen[$0.id] ?? .distantPast) < (lastSeen[$1.id] ?? .distantPast) }
+            guard let evicted else {
+                return Self.error(.server, "Lithium already has \(Self.maxSessions) agent sessions, each running a tool call.", id: id)
+            }
+            end(evicted)
         }
         let requested = params["protocolVersion"]?.string ?? ""
         let version = Self.protocolVersions.contains(requested) ? requested : Self.protocolVersions[0]
@@ -299,6 +307,9 @@ final class AgentHub {
         )
         sessions.append(session)
         lastSeen[session.id] = Date()
+        if let evicted {
+            await log.append(["event": "session_evicted", "session": Self.logged(evicted), "for": Self.logged(session)])
+        }
         var reply = Self.result([
             "protocolVersion": .string(version),
             "capabilities": ["tools": ["listChanged": false]],
@@ -336,7 +347,8 @@ final class AgentHub {
                 }
             }
             calls[key] = Call(tool: name, session: session.label, task: task)
-            let outcome = await task.value
+            // The server cancels the request when the client's connection fails.
+            let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             calls[key] = nil
             if let outcome {
                 result = outcome
@@ -354,7 +366,7 @@ final class AgentHub {
         case .failure(let error): ["ok": false, "error": .string(error.code)]
         }
         await log.append([
-            "session": ["id": .string(session.label), "client": .string(session.clientName), "version": .string(session.clientVersion), "selfReported": true],
+            "session": Self.logged(session),
             "tool": .string(name),
             "params": arguments,
             "result": logged,
@@ -371,6 +383,10 @@ final class AgentHub {
     }
 
     // MARK: Messages
+
+    private static func logged(_ session: MCPSession) -> JSONValue {
+        ["id": .string(session.label), "client": .string(session.clientName), "version": .string(session.clientVersion), "selfReported": true]
+    }
 
     /// Text content with the same data as `structuredContent`, for clients that read only text.
     private static func toolResult(_ result: Result<JSONValue, AgentToolError>) -> JSONValue {

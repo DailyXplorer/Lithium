@@ -55,6 +55,8 @@ final class AgentServer: @unchecked Sendable {
         /// socket instead of growing `buffer` without bound.
         var isReceiving = false
         var closesAfterReply = false
+        /// The request with `AgentHub`, cancelled when the connection fails under it.
+        var request: Task<Void, Never>?
 
         init(_ connection: NWConnection) { self.connection = connection }
     }
@@ -155,26 +157,30 @@ final class AgentServer: @unchecked Sendable {
         queue.sync { connections.values.map(\.buffer.count).max() ?? 0 }
     }
 
+    /// Tests only.
+    var connectionCount: Int {
+        queue.sync { connections.count }
+    }
+
+    /// Tests only: every open connection fails the way it does when the client resets it.
+    func failConnections(_ error: NWError) {
+        queue.sync { connections.values.forEach { connection($0, changedTo: .failed(error)) } }
+    }
+
     /// Closes the listener and every connection, for good: a start still pending throws.
     func stop() {
         queue.sync {
             isStopped = true
             abandonStart()
-            connections.values.forEach { $0.connection.cancel() }
-            connections.removeAll()
+            connections.values.forEach(close)
         }
     }
 
     /// Ends every connection; one waiting on `AgentHub` closes once its answer is out.
     func closeConnections() {
         queue.sync {
-            for (id, entry) in connections {
-                if entry.isBusy {
-                    entry.closesAfterReply = true
-                } else {
-                    entry.connection.cancel()
-                    connections[id] = nil
-                }
+            for entry in connections.values {
+                if entry.isBusy { entry.closesAfterReply = true } else { close(entry) }
             }
         }
     }
@@ -190,13 +196,16 @@ final class AgentServer: @unchecked Sendable {
         connections[ObjectIdentifier(entry)] = entry
         connection.stateUpdateHandler = { [weak self, weak entry] state in
             guard let self, let entry else { return }
-            switch state {
-            case .failed, .cancelled: self.connections[ObjectIdentifier(entry)] = nil
-            default: break
-            }
+            self.connection(entry, changedTo: state)
         }
         connection.start(queue: queue)
         receive(on: entry)
+    }
+
+    /// Network.framework holds a failed connection's resources until it is cancelled. Every
+    /// path that cancels a connection also drops it, so `.cancelled` has nothing left to do.
+    private func connection(_ entry: Connection, changedTo state: NWConnection.State) {
+        if case .failed = state { close(entry) }
     }
 
     /// Reads only while no request is with `AgentHub`, so `buffer` never holds more than one
@@ -221,9 +230,12 @@ final class AgentServer: @unchecked Sendable {
         receive(on: entry)
     }
 
+    /// Once per connection: a connection already dropped was already cancelled, or will be
+    /// once its last answer is sent.
     private func close(_ entry: Connection) {
+        guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
+        entry.request?.cancel()
         entry.connection.cancel()
-        connections[ObjectIdentifier(entry)] = nil
     }
 
     // MARK: Requests
@@ -296,7 +308,7 @@ final class AgentServer: @unchecked Sendable {
         }
         entry.isBusy = true
         let handler = handler
-        Task {
+        entry.request = Task {
             let reply = await handler(request)
             self.queue.async { self.finish(reply, on: entry) }
         }
@@ -304,6 +316,7 @@ final class AgentServer: @unchecked Sendable {
 
     private func finish(_ reply: AgentReply, on entry: Connection) {
         entry.isBusy = false
+        entry.request = nil
         guard connections[ObjectIdentifier(entry)] != nil else { return }
         var headers: [(String, String)] = []
         if let id = reply.sessionID { headers.append(("Mcp-Session-Id", id)) }

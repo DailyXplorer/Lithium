@@ -1,6 +1,6 @@
 import Foundation
 
-/// Every agent tool call, one JSON object per line in `log/YYYY-MM-DD.jsonl` under the agent
+/// Every agent tool call and session eviction, one JSON object per line in `log/YYYY-MM-DD.jsonl` under the agent
 /// folder, readable by the user alone and kept 30 days. Written off the main thread.
 actor AgentLog {
     static let retentionDays = 30

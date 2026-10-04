@@ -174,13 +174,48 @@ struct AgentServerTests {
         #expect(try await fixture.post(ping, session: session).status == 404)
     }
 
-    @Test func capsSessions() async throws {
+    /// Clients that quit without DELETE leave their sessions behind; past the cap, a new client
+    /// replaces the one heard from least recently.
+    @Test func aNewSessionPastTheCapReplacesTheLeastRecentlyUsedOne() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
-        for _ in 0..<AgentHub.maxSessions { _ = try await fixture.initialize() }
+        var ids: [String] = []
+        for _ in 0..<AgentHub.maxSessions { ids.append(try await fixture.initialize()) }
+        let ping: JSONValue = ["jsonrpc": "2.0", "id": 1, "method": "ping"]
+        #expect(try await fixture.post(ping, session: ids[0]).status == 200)
+
+        let fifth = try await fixture.post(Fixture.initializeMessage())
+        #expect(fifth.headers["mcp-session-id"] != nil)
+        #expect(fixture.hub.sessions.map(\.label) == ["s1", "s3", "s4", "s5"])
+        #expect(try await fixture.post(ping, session: ids[1]).status == 404)
+        #expect(try await fixture.post(ping, session: ids[0]).status == 200)
+
+        let file = fixture.folder.appending(path: "log/\(AgentLog.fileName(for: Date()))")
+        let entry = try JSONValue.decode(Data(try String(contentsOf: file, encoding: .utf8).split(separator: "\n")[0].utf8))
+        #expect(entry["event"] == "session_evicted")
+        #expect(entry["session"]?["id"] == "s2")
+        #expect(entry["for"]?["id"] == "s5")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func refusesANewSessionWhenEverySessionIsRunningACall() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
+        defer { fixture.hub.shutdown() }
+        var pending: [Task<HTTPReply, any Error>] = []
+        var iterator = started.stream.makeAsyncIterator()
+        for _ in 0..<AgentHub.maxSessions {
+            let session = try await fixture.initialize()
+            pending.append(Task { try await fixture.post(Self.call("wait"), session: session) })
+            await iterator.next()
+        }
+
         let fifth = try await fixture.post(Fixture.initializeMessage())
         #expect(fifth.headers["mcp-session-id"] == nil)
-        #expect(fifth.json?["error"]?["message"] == "Lithium already has 4 agent sessions.")
+        #expect(fifth.json?["error"]?["message"] == "Lithium already has 4 agent sessions, each running a tool call.")
+        #expect(fixture.hub.sessions.count == AgentHub.maxSessions)
+
+        fixture.hub.stop()
+        for task in pending { _ = try await task.value }
     }
 
     @Test func dropsSessionsIdleForThirtyMinutes() async throws {
@@ -545,6 +580,41 @@ struct AgentServerTests {
         let replies = try RawHTTP.parseAll(try await exchange.value)
         #expect(replies.first?.status == 202)
         #expect(server.bufferedBytes == 0)
+    }
+
+    /// A client that resets its connection mid-call gets nothing back: the server cancels the
+    /// connection, which closes the socket, and the tool's call, which keeps the session.
+    @Test(.timeLimit(.minutes(1))) func aFailedConnectionIsCancelledWithItsCall() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let pending = Task { try await fixture.post(Self.call("wait"), session: session) }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        let server = try #require(fixture.hub.server)
+        #expect(server.connectionCount == 1)
+
+        server.failConnections(.posix(.ECONNRESET))
+        #expect(server.connectionCount == 0)
+        // Awaiting a task ignores the time limit, so a socket left open fails here instead of hanging.
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return false }
+            pending.cancel()
+            return true
+        }
+        await #expect(throws: (any Error).self) { try await pending.value }
+        watchdog.cancel()
+        #expect(await watchdog.value == false, "the server closed the socket")
+        #expect(await Self.eventually { !fixture.hub.isActing })
+        #expect(fixture.hub.sessions.count == 1)
+        let file = fixture.folder.appending(path: "log/\(AgentLog.fileName(for: Date()))")
+        #expect(await Self.eventually {
+            let line = (try? String(contentsOf: file, encoding: .utf8))?.split(separator: "\n").last
+            return line.flatMap { try? JSONValue.decode(Data($0.utf8)) }?["result"] == ["ok": false, "error": "cancelled"]
+        })
+        #expect(try await fixture.post(["jsonrpc": "2.0", "id": 1, "method": "ping"], session: session).status == 200)
     }
 
     // MARK: Log

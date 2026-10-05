@@ -203,7 +203,7 @@ final class Browser {
     func setAgentAccess(_ enabled: Bool) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools)
+            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {
@@ -395,6 +395,7 @@ final class Browser {
     func navigate(_ tab: Tab?, _ step: Step) {
         guard let tab else { return }
         agent?.userNavigated(tab)
+        tab.dialogOwner?.answerDialog(in: tab)
         switch step {
         case .open(let url): tab.load(url)
         case .back: tab.webView.goBack()
@@ -465,6 +466,7 @@ final class Browser {
             selectedTab?.markActive()
         }
         tab.unpair()
+        tab.dialogOwner?.answerDialog(in: tab)
         agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
         summaries.discard(tab)

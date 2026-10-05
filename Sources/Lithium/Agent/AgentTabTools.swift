@@ -175,6 +175,7 @@ extension AgentHub {
                 "agentTouched": .bool(hub.isTouched(tab)),
                 "agentGroup": .bool(tab.isInAgentGroup),
             ]
+            if let dialog = hub.tabs[tab.id]?.dialog { fields["dialog"] = dialog.json }
             if let opener = tab.opener, open.contains(ObjectIdentifier(opener)) { fields["openedBy"] = .string(hub.id(for: opener)) }
             return .object(fields)
         }
@@ -198,11 +199,13 @@ extension AgentHub {
             throw AgentToolError(code: "unsupported", message: "Ephemeral tabs aren’t available in this version of Lithium.")
         }
         let url = try arguments.optionalString("url").map { _ in try arguments.url("url") }
-        if let url { try hub.checkOpenable(url) }
+        if let url { try hub.checkNotBlocked(url) }
         let wait = try arguments.wait(default: .commit)
         let timeout = try arguments.timeout(default: 15_000)
         let deadline = ContinuousClock.now + timeout
         guard let browser = hub.browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
+        // Asked before the tab opens: a file the user denies leaves no tab behind.
+        if let url { try await hub.checkOpenable(url, in: nil, until: deadline) }
         let tab = browser.newAgentTab(session: session.label)
         let named = NamedTab(tab: tab, id: hub.id(for: tab))
         hub.touch(tab)
@@ -229,7 +232,7 @@ extension AgentHub {
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         // Lithium's own pages are shown to the user, never to the agent: those can wake.
-        if !AgentURLs.isBlocked(named.tab.url) { try hub.checkWakeable(named) }
+        if !AgentURLs.isBlocked(named.tab.url) { try await hub.checkWakeable(named, until: .now + AgentConfirmations.timeout) }
         hub.browser?.select(named.tab)
         hub.touch(named.tab)
         return hub.page(named, reached: nil)
@@ -245,13 +248,14 @@ extension AgentHub {
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
         let url = try arguments.url("url")
-        try hub.checkOpenable(url)
+        try hub.checkNotBlocked(url)
         let wait = try arguments.wait(default: .load)
         let timeout = try arguments.timeout(default: 15_000)
         let diff = try arguments.bool("diff", default: true)
         let deadline = ContinuousClock.now + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
+            try await hub.checkOpenable(url, in: named, until: deadline)
             let tab = named.tab
             var landedWithinPage: (@MainActor () -> Bool)?
             if !tab.isAsleep, AgentURLs.isMoveWithinPage(from: tab.url, to: url) {
@@ -278,14 +282,14 @@ extension AgentHub {
             let deadline = ContinuousClock.now + timeout
             return try await hub.exclusive(named, until: deadline, timeout: timeout) {
                 try hub.checkDrivable(named)
-                try hub.checkWakeable(named)
+                try await hub.checkWakeable(named, until: deadline)
                 let tab = named.tab
                 tab.wake()
                 let list = tab.webView.backForwardList
                 guard let item = forward ? list.forwardItem : list.backItem else {
                     throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to go \(forward ? "forward" : "back") to.")
                 }
-                try hub.checkOpenable(item.url)
+                try await hub.checkOpenable(item.url, in: named, until: deadline)
                 // Only an entry of the same site can be in the document shown (an anchor, a
                 // `pushState`); the move counts once the tab is on that entry.
                 var landedWithinPage: (@MainActor () -> Bool)?
@@ -315,7 +319,7 @@ extension AgentHub {
             try hub.checkDrivable(named)
             let tab = named.tab
             guard let url = tab.url else { throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to reload.") }
-            try hub.checkOpenable(url)
+            try await hub.checkOpenable(url, in: named, until: deadline)
             let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) {
                 if tab.isAsleep { tab.wake() } else { tab.reload() }
             }
@@ -382,7 +386,7 @@ extension AgentHub {
         let deadline = started + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
-            try hub.checkWakeable(named)
+            try await hub.checkWakeable(named, until: deadline)
             if let pattern, let matches {
                 tab.wake()
                 let met = try await hub.watch(named, until: deadline) { matches(tab.url?.absoluteString ?? "") ? true : nil }
@@ -408,29 +412,17 @@ extension AgentHub {
 
     // MARK: Helpers
 
-    /// Every page an agent's call loads, whether it names it (`tab_open`, `navigate`) or not
-    /// (Back, Forward, Reload, waking a tab), is on the web; `file:` waits for confirmations.
-    func checkOpenable(_ url: URL) throws {
-        switch AgentURLs.verdict(for: url) {
-        case .allowed: return
-        case .needsConfirmation:
-            // TODO(PR 4): ask the user (Allow or Deny) through AgentConfirmations instead of refusing.
-            throw AgentToolError(code: "unsupported", message: "file: addresses need the user’s Allow, which this version of Lithium can’t ask for yet. Ask the user to open the file.")
-        case .blocked(let reason):
-            throw AgentToolError(code: "blocked_page", message: reason)
-        }
-    }
-
     /// A tab showing Lithium's or an extension's page can be listed, selected and closed, nothing more.
     func checkDrivable(_ named: NamedTab) throws {
         guard AgentURLs.isBlocked(named.tab.url) else { return }
         throw AgentToolError(code: "blocked_page", message: "\(named.id) shows one of Lithium’s own or an extension’s pages, out of reach for agents.")
     }
 
-    /// Waking a sleeping tab loads the page it slept on.
-    func checkWakeable(_ named: NamedTab) throws {
+    /// Waking a sleeping tab loads the page it slept on: every page an agent's call loads, named
+    /// or not (Back, Forward, Reload, waking), goes through `checkOpenable`.
+    func checkWakeable(_ named: NamedTab, until deadline: ContinuousClock.Instant) async throws {
         guard named.tab.isAsleep, let url = named.tab.url else { return }
-        try checkOpenable(url)
+        try await checkOpenable(url, in: named, until: deadline)
     }
 
     /// What every navigation tool returns: where the tab is now and how far its page got.
@@ -459,6 +451,8 @@ extension AgentHub {
 
     func checkStillWaitable(_ named: NamedTab) throws {
         guard isOpen(named.tab) else { throw named.closedError }
+        // The page is paused until its dialog is answered: nothing it does can end a wait.
+        if let dialog = tabs[named.tab.id]?.dialog { throw dialogOpen(named, dialog) }
         // `exclusive` clears it when the call ends, so any interruption is this call's.
         switch tabs[named.tab.id]?.interruption {
         case nil: return
@@ -472,36 +466,69 @@ extension AgentHub {
     /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded:
     /// when the call may be one, `landedWithinPage` tells it from a move the page's own script
     /// made meanwhile. Without it only a commit ends the wait. Lithium's error page committing
-    /// for it is `navigation_failed`, whatever `wait`; a load that ends without showing anything
-    /// is `download_started` or `navigation_cancelled`; `none` answers before anything is known.
+    /// for it is `navigation_failed`, whatever `wait`; a load that leads to another app's scheme
+    /// is `navigation_cancelled`; `none` answers before anything is known. A load that becomes a
+    /// download asks the user (`confirmDownload`): allowed, the result names the file instead of
+    /// a state; denied or unanswered, the call fails with the user's answer.
     func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
+        enum Outcome { case document, withinPage, download(String?) }
         let tab = named.tab
         var (commits, moves, unshown) = (tab.commits, tab.sameDocumentNavigations, tab.unshownLoads)
         // The load before may have failed with its error page still on its way: that page
         // committing is not this call's answer.
         let earlierError = tab.loadError
+        let state = agentTab(for: tab)
+        let answers = state?.downloadAnswers ?? 0
+        if let session = Self.callSession { state?.drive = AgentDrive(session: session, marks: tab.loadMarks, deadline: deadline) }
+        // A call that ends with nothing loading, however it ends, leaves no load of the agent's.
+        defer { if wait > .none, !tab.isLoading { state?.drive = nil } }
         start()
         // Laid out at the size the user would see it, not in an empty viewport.
         if !tab.isAsleep, tab.loadedWebView != nil { _ = sizedWebView(of: tab) }
         touch(tab)
         guard wait > .none else { return page(named, reached: LoadWait.none) }
-        let newDocument = try await AgentWait.until(deadline) { () -> Bool? in
+        let outcome = try await AgentWait.until(deadline) { () -> Outcome? in
             // Before the tab closing: a tab opened just for a file closes once its download starts.
-            if tab.unshownLoads > unshown, let load = tab.lastUnshownLoad { throw Self.unshownError(load, in: named) }
+            if tab.unshownLoads > unshown, let load = tab.lastUnshownLoad {
+                switch load {
+                case .download(let fileName): return .download(fileName)
+                case .refused(let scheme):
+                    throw AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s page led to a \(scheme): address, which Lithium doesn’t open in a tab.")
+                }
+            }
+            if let state, state.downloadAnswers > answers, case .failure(let error) = state.downloadAnswer { throw error }
             try self.checkStillWaitable(named)
             if tab.commits > commits {
-                guard let error = tab.loadError else { return true }
+                guard let error = tab.loadError else { return .document }
                 if error === earlierError {
                     commits = tab.commits
+                    // Still this call's load under way.
+                    state?.drive?.marks = tab.loadMarks
                     return nil
                 }
                 throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)")
             }
             guard let landedWithinPage, tab.sameDocumentNavigations > moves else { return nil }
-            return landedWithinPage() ? false : nil
+            return landedWithinPage() ? .withinPage : nil
         }
-        guard let newDocument else { throw timedOut(named, after: timeout, "no page had started to show") }
-        if newDocument, wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
+        switch outcome {
+        case nil:
+            if confirmations.isAsking(about: tab.id, .download) {
+                throw AgentToolError(code: "confirmation_timeout", message: "\(named.id)’s page became a download, and the user didn’t answer within \(Int(timeout / .seconds(1))) s. Ask the user, then try again with a longer timeoutMs.")
+            }
+            throw timedOut(named, after: timeout, "no page had started to show")
+        case .download(let fileName):
+            var fields = page(named, reached: nil).object ?? [:]
+            var download: [String: JSONValue] = ["file": fileName.map(JSONValue.string) ?? .null]
+            if let state, state.downloadAnswers > answers, case .success(let grant) = state.downloadAnswer { download["grant"] = .string(grant.rawValue) }
+            fields["download"] = .object(download)
+            fields["loading"] = false
+            return .object(fields)
+        case .document:
+            if wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
+        case .withinPage:
+            break
+        }
         return page(named, reached: wait)
     }
 
@@ -578,17 +605,6 @@ extension AgentHub {
             """
         let ready = try? await webView.callAsyncJavaScript(script, contentWorld: PageProbe.world) as? Bool
         return ready == true
-    }
-
-    private static func unshownError(_ load: UnshownLoad, in named: NamedTab) -> AgentToolError {
-        switch load {
-        case .download(let fileName):
-            // TODO(PR 4): the agent's downloads wait for the user's Allow (AgentConfirmations).
-            let file = fileName.map { " (\($0))" } ?? ""
-            return AgentToolError(code: "download_started", message: "\(named.id)’s page became a download\(file) instead of a page. Lithium handles it as the user’s own download; downloads an agent starts will need the user’s Allow in a later version.")
-        case .refused(let scheme):
-            return AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s page led to a \(scheme): address, which Lithium doesn’t open in a tab.")
-        }
     }
 
     func timedOut(_ named: NamedTab, after timeout: Duration, _ state: String) -> AgentToolError {

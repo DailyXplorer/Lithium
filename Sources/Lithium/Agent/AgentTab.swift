@@ -25,6 +25,22 @@ final class AgentTab {
     /// the main frame shows another document.
     var challenge: AgentChallenge?
     @ObservationIgnored var lastAction: Date?
+    /// The session whose call last ran in the tab or acted there.
+    @ObservationIgnored var holder: String?
+    /// The page's alert, confirm or prompt, waiting for an answer, and how to give it: nil hands
+    /// it to the user, as the page's own dialog.
+    var dialog: AgentDialog?
+    @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?
+    /// The agent gave the tab its last input: its navigation (from PR 5, its events). A download
+    /// while that load is under way is the agent's, and asks the user.
+    @ObservationIgnored var drive: AgentDrive?
+    /// The user's answers to the agent's downloads in the tab, for the call that started one.
+    var downloadAnswers = 0
+    @ObservationIgnored var downloadAnswer: Result<ConfirmationGrant, AgentToolError>?
+    /// Files the user allowed for an upload, for the next file chooser within 5 seconds.
+    @ObservationIgnored var armedUpload: (files: [URL], expires: ContinuousClock.Instant)?
+    /// File choosers the agent's action opened without allowed files, cancelled.
+    @ObservationIgnored var fileChoosersCancelled = 0
 
     /// The child frames that said hello, by document token; the main frame needs no `WKFrameInfo`.
     @ObservationIgnored private(set) var frames: [String: WKFrameInfo] = [:]
@@ -163,6 +179,22 @@ final class AgentTab {
 
     nonisolated static func isRef(_ string: String) -> Bool {
         string.wholeMatch(of: /(f\d+:)?e\d+|f\d+/) != nil
+    }
+}
+
+/// An agent's input in a tab: the session that gave it, how far the tab's loads had got then,
+/// and the deadline of the call that gave it.
+struct AgentDrive {
+    let session: MCPSession
+    var marks: Tab.LoadMarks
+    let deadline: ContinuousClock.Instant
+
+    /// Until the load it started ends: a page shown, a move within the page, a download, a
+    /// scheme refused. A load that ends without a word (cancelled), or never starts, ends it at
+    /// the call's deadline; one still loading then is still the agent's.
+    @MainActor
+    func isUnderWay(in tab: Tab) -> Bool {
+        tab.loadMarks == marks && (tab.isLoading || .now < deadline)
     }
 }
 

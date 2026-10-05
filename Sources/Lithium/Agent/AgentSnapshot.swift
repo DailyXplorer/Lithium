@@ -22,6 +22,13 @@ struct FrameReport: Decodable {
     var focusedFrame: Int?
     var challenge: String?
     var truncated: Bool?
+    /// Whether the document holds a card field or an Apple Pay or Google Pay button, in scope or not.
+    var pay: Pay?
+
+    struct Pay: Decodable {
+        var cards: Bool?
+        var wallet: Bool?
+    }
 
     struct Node: Decodable {
         let id: Int
@@ -34,6 +41,7 @@ struct FrameReport: Decodable {
         var state: [String]?
         var options: Int?
         var `guard`: String?
+        var wallet: Bool?
         var frame: Int?
         let box: [Double]
     }
@@ -249,12 +257,22 @@ struct PageSnapshot {
 extension AgentTab {
     /// Puts the frames' reports together in top-level viewport CSS pixels: each child frame's
     /// nodes follow its frame node, offset by the content boxes on its path and clipped to them.
-    func compose(tab id: String, main: FrameReport, children: [FrameReport], origins: [String: String], zoom: Double, maxNodes: Int) -> PageSnapshot {
+    /// Each node's `guard` is what `Guardrails` would ask before acting on it.
+    func compose(tab id: String, main: FrameReport, children: [FrameReport], origins: [String: String], zoom: Double, maxNodes: Int, providers: PaymentProviders = .known) -> PageSnapshot {
         let viewport = main.viewport ?? PageViewport(w: 0, h: 0, sx: 0, sy: 0, pw: 0, ph: 0, dpr: 1, vx: 0, vy: 0, vs: 1)
         var byPath: [String: FrameReport] = [:]
         for child in children {
             if let path = child.path, byPath[path] == nil { byPath[path] = child }
         }
+        let reports = [main] + children
+        let page = Guardrails.Page(
+            url: main.url.flatMap(URL.init(string:)),
+            cardField: reports.contains { $0.pay?.cards == true },
+            paymentFrame: reports.contains { ($0.frames ?? []).contains { providers.contains(address: $0.src) } }
+                || children.contains { providers.contains(address: origins[$0.token]) },
+            wallet: reports.contains { $0.pay?.wallet == true },
+            providers: providers
+        )
         var nodes: [SnapshotNode] = []
         var focused: String?
         var challenge = main.challenge.map { AgentChallenge(kind: $0, page: true) }
@@ -263,7 +281,7 @@ extension AgentTab {
         // Focus goes down from the main frame through the frames focused in their parents: a frame
         // left may keep its activeElement, as the HTML standard has it. `document.hasFocus()` can't tell:
         // it is false in every frame of a tab not shown in the key window, as agents' tabs often are.
-        func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?, focusing: Bool) {
+        func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?, focusing: Bool, inPaymentFrame: Bool) {
             let document = report.token
             let facts = Dictionary((report.frames ?? []).map { ($0.id, $0) }) { first, _ in first }
             if focusing, let element = report.focused { focused = ref(for: ElementAddress(document: document, id: element)) }
@@ -285,12 +303,14 @@ extension AgentTab {
                 let address = ElementAddress(document: document, id: raw.id)
                 var node = SnapshotNode(
                     ref: "", role: raw.role, name: raw.name, level: raw.level, href: raw.href, value: raw.value,
-                    filled: raw.filled == true, state: (raw.state ?? []).filter { focusing || $0 != "focused" }, options: raw.options, guardKind: raw.guard,
+                    filled: raw.filled == true, state: (raw.state ?? []).filter { focusing || $0 != "focused" }, options: raw.options,
                     box: [Int(rect.minX.rounded()), Int(rect.minY.rounded()), Int(rect.width.rounded()), Int(rect.height.rounded())],
                     frame: inFrame, depth: depth
                 )
                 node.off = Self.off(rect, viewport: viewport)
+                let element = Guardrails.Element(role: raw.role, name: raw.name, field: raw.guard, wallet: raw.wallet == true, inPaymentFrame: inPaymentFrame)
                 guard raw.role == "frame", let frame = facts[raw.id], frame.content.count == 5 else {
+                    node.guardKind = Guardrails.mark(element, page: page)?.rawValue
                     node.ref = ref(for: address)
                     nodes.append(node)
                     continue
@@ -298,6 +318,8 @@ extension AgentTab {
                 let childPath = Self.childPath(path, frame.index)
                 let child = frame.index >= 0 ? byPath[childPath] : nil
                 node.origin = child.flatMap { origins[$0.token] } ?? Self.origin(of: frame.src)
+                let paymentFrame = inPaymentFrame || providers.contains(address: node.origin) || providers.contains(address: frame.src)
+                node.guardKind = Guardrails.mark(Guardrails.Element(role: "frame", inPaymentFrame: paymentFrame), page: page)?.rawValue
                 guard let child else {
                     // A frame read before that didn't answer this time keeps its ref; what it showed isn't removed.
                     if let known = frameRef(at: address) {
@@ -318,10 +340,10 @@ extension AgentTab {
                 let content = frame.content
                 let origin = (x: offset.x + content[0] * scale, y: offset.y + content[1] * scale)
                 let inner = CGRect(x: origin.x, y: origin.y, width: content[2] * scale, height: content[3] * scale)
-                add(child, path: childPath, offset: origin, scale: scale * content[4], clip: depth == 0 ? inner : inner.intersection(clip), depth: depth + 1, inFrame: childRef, focusing: inFocus)
+                add(child, path: childPath, offset: origin, scale: scale * content[4], clip: depth == 0 ? inner : inner.intersection(clip), depth: depth + 1, inFrame: childRef, focusing: inFocus, inPaymentFrame: paymentFrame)
             }
         }
-        add(main, path: "", offset: (0, 0), scale: 1, clip: .infinite, depth: 0, inFrame: nil, focusing: true)
+        add(main, path: "", offset: (0, 0), scale: 1, clip: .infinite, depth: 0, inFrame: nil, focusing: true, inPaymentFrame: false)
 
         // Over the cap, the nodes nearest the viewport stay, in page order.
         var dropped = 0

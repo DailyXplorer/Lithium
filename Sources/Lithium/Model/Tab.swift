@@ -36,6 +36,8 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var sleepingState: Any?
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
+    /// The hub whose dialog the page waits on: it still answers it once agent access is off.
+    @ObservationIgnored var dialogOwner: AgentHub?
     /// When the page was last heard, so a pause between tracks or while buffering isn't taken
     /// for silence.
     @ObservationIgnored private var lastHeard: Date?
@@ -108,6 +110,13 @@ final class Tab: NSObject, Identifiable {
     /// waiting on one; `lastUnshownLoad` tells how the latest ended.
     private(set) var unshownLoads = 0
     @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
+
+    /// The three counts above: any of them moving ends the load under way.
+    struct LoadMarks: Equatable {
+        let commits, moves, unshown: Int
+    }
+
+    var loadMarks: LoadMarks { LoadMarks(commits: commits, moves: sameDocumentNavigations, unshown: unshownLoads) }
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
@@ -397,6 +406,8 @@ final class Tab: NSObject, Identifiable {
         guard !isAsleep else { return }
         browser?.videoPopout.discard(self)
         browser?.nowPlaying.discard(self)
+        browser?.agent?.pageGone(self)
+        dialogOwner?.answerDialog(in: self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -604,7 +615,12 @@ extension Tab: WKNavigationDelegate {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
         }
-        if action.shouldPerformDownload { return (.download, preferences) }
+        if action.shouldPerformDownload {
+            // A download the agent started waits for the user's Allow.
+            let name = url.lastPathComponent
+            let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url)
+            return (allowed == false ? .cancel : .download, preferences)
+        }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
@@ -670,6 +686,10 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
+        // A download the agent started waits for the user's Allow, in place of what follows.
+        if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: response.response.suggestedFilename, size: response.response.expectedContentLength, from: response.response.url) {
+            return allowed ? .download : .cancel
+        }
         if response.isForMainFrame { return .download }
         // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
         // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
@@ -780,6 +800,8 @@ extension Tab: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // The media died with the process; a reload that never commits would leave it showing as playing.
         browser?.nowPlaying.discard(self)
+        browser?.agent?.pageGone(self)
+        dialogOwner?.answerDialog(in: self)
         guard let browser else { return }
         guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
@@ -870,11 +892,16 @@ extension Tab: WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
-        _ = await present(alert(message, from: frame, buttons: ["OK"]))
+        _ = await answer(AgentDialog(.alert, message: message, host: frame.securityOrigin.host)) {
+            _ = await self.present(self.alert(message, from: frame, buttons: ["OK"]))
+            return DialogReply(accepted: true, text: nil)
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
-        await present(alert(message, from: frame, buttons: ["OK", "Cancel"])) == .alertFirstButtonReturn
+        await answer(AgentDialog(.confirm, message: message, host: frame.securityOrigin.host)) {
+            DialogReply(accepted: await self.present(self.alert(message, from: frame, buttons: ["OK", "Cancel"])) == .alertFirstButtonReturn, text: nil)
+        }.accepted
     }
 
     func webView(
@@ -883,11 +910,28 @@ extension Tab: WKUIDelegate {
         defaultText: String?,
         initiatedByFrame frame: WKFrameInfo
     ) async -> String? {
-        let alert = alert(prompt, from: frame, buttons: ["OK", "Cancel"])
-        let field = NSTextField(string: defaultText ?? "")
-        field.frame.size.width = 260
-        alert.accessoryView = field
-        return await present(alert) == .alertFirstButtonReturn ? field.stringValue : nil
+        let reply = await answer(AgentDialog(.prompt, message: prompt, defaultText: defaultText, host: frame.securityOrigin.host)) {
+            let alert = self.alert(prompt, from: frame, buttons: ["OK", "Cancel"])
+            let field = NSTextField(string: defaultText ?? "")
+            field.frame.size.width = 260
+            alert.accessoryView = field
+            return DialogReply(accepted: await self.present(alert) == .alertFirstButtonReturn, text: field.stringValue)
+        }
+        return reply.accepted ? reply.text ?? "" : nil
+    }
+
+    /// Its web view came into a window: the agent's dialog waiting in the page is the user's now.
+    func didComeIntoView() {
+        dialogOwner?.handDialogToUser(in: self)
+    }
+
+    /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to
+    /// a modal that would hold up the user, until it is handed to the user; any other is the
+    /// user's, and agents see it while it shows.
+    private func answer(_ dialog: AgentDialog, asUser: () async -> DialogReply) async -> DialogReply {
+        guard let agent = browser?.agent else { return await asUser() }
+        if let reply = await agent.agentReply(to: dialog, in: self) { return reply }
+        return await agent.whileUserAnswers(dialog, in: self, asUser)
     }
 
     func webView(
@@ -895,6 +939,12 @@ extension Tab: WKUIDelegate {
         runOpenPanelWith parameters: WKOpenPanelParameters,
         initiatedByFrame frame: WKFrameInfo
     ) async -> [URL]? {
+        // An agent never gets the user's panel: only files the user allowed for it.
+        switch browser?.agent?.openPanel(for: self) {
+        case .files(let files): return files
+        case .cancelled: return nil
+        case nil: break
+        }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories

@@ -71,6 +71,20 @@ struct FrameLayout {
         return placement
     }
 
+    /// Whether the frame at `path` lies inside a frame on its way down that answered nothing, and
+    /// so is painted over whole.
+    private func isCovered(_ path: String) -> Bool {
+        var report = main
+        var prefix = ""
+        for component in path.split(separator: ".") {
+            guard let index = Int(component), report.frames.contains(where: { $0.index == index }) else { return false }
+            prefix = prefix.isEmpty ? String(component) : "\(prefix).\(component)"
+            guard let next = children[prefix] else { return true }
+            report = next
+        }
+        return false
+    }
+
     func placement(ofDocument token: String) -> Placement? {
         if token == main.token { return Placement() }
         guard let path = children.values.first(where: { $0.token == token })?.path else { return nil }
@@ -80,13 +94,16 @@ struct FrameLayout {
     /// Every rect to mask, in top-level viewport CSS pixels: the sensitive fields of the frames
     /// that answered, and the whole box of every frame that didn't (no hello: open before agent
     /// access was on; or too slow), since Lithium can't see what is in it. Nil when a frame
-    /// answered that Lithium can't place, so it can't tell where to paint.
+    /// answered that Lithium can't place (in a shadow root, an `<embed>`), so it can't tell where to paint.
     var masks: [CGRect]? {
         if lost { return nil }
         var rects: [CGRect] = []
         for report in reports {
             let path = report.path ?? ""
-            guard let placement = placement(of: path) else { continue }
+            guard let placement = placement(of: path) else {
+                if isCovered(path) { continue }
+                return nil
+            }
             if unplaced[path, default: 0] > report.frames.count(where: { $0.index < 0 }) { return nil }
             let unknown = report.frames.filter { $0.index < 0 || children[path.isEmpty ? "\($0.index)" : "\(path).\($0.index)"] == nil }
             rects += (report.rects + unknown.map(\.box)).map { placement.place($0).intersection(placement.clip) }

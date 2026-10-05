@@ -261,7 +261,7 @@ extension AgentHub {
                 // Waking with its history would show the page it slept on first, which an agent may not open.
                 if tab.isAsleep, let old = tab.url, AgentURLs.verdict(for: old) != .allowed { tab.load(url) } else { tab.go(to: url) }
             }
-            return await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit)
+            return try await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit, until: deadline)
         }
     }
 
@@ -295,7 +295,7 @@ extension AgentHub {
                 let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: landedWithinPage) {
                     tab.webView.go(to: item)
                 }
-                return await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit)
+                return try await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit, until: deadline)
             }
         }
     }
@@ -319,7 +319,7 @@ extension AgentHub {
             let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) {
                 if tab.isAsleep { tab.wake() } else { tab.reload() }
             }
-            return await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit)
+            return try await hub.addingDiff(to: page, of: named, for: session, if: diff && wait > .commit, until: deadline)
         }
     }
 
@@ -402,7 +402,7 @@ extension AgentHub {
             var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true
             result["elapsedMs"] = .int(Int((ContinuousClock.now - started) / .milliseconds(1)))
-            return await hub.addingDiff(to: .object(result), of: named, for: session, if: diff)
+            return try await hub.addingDiff(to: .object(result), of: named, for: session, if: diff, until: deadline)
         }
     }
 
@@ -509,11 +509,7 @@ extension AgentHub {
     /// page is `navigation_failed`.
     func waitForLoad(of named: NamedTab, _ state: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
         let tab = named.tab
-        let failed: @MainActor () throws -> Void = {
-            // Lithium put it to sleep (its page stopped working, or memory ran short): nothing is loading in it any more.
-            if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id) went to sleep before its page loaded. Call navigate or reload to load it again.") }
-            if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)") }
-        }
+        let failed: @MainActor () throws -> Void = { try self.checkPageShown(named, before: "its page loaded") }
         if state == .domcontentloaded {
             // No delegate call marks DOMContentLoaded: the page is asked. A page script can keep
             // the page from answering for as long as it runs, so the answer races the deadline,
@@ -533,7 +529,7 @@ extension AgentHub {
                     return tab.isLoading ? try answer.result?.get() : true
                 }
                 guard let ready else { break }
-                if ready { return }
+                if ready { return try await waitForTitle(of: named, until: deadline) }
                 // A page between documents answers at once, with an error.
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -544,6 +540,29 @@ extension AgentHub {
             return tab.isLoading ? nil : true
         }
         guard loaded != nil else { throw timedOut(named, after: timeout, "the page was still loading") }
+        try await waitForTitle(of: named, until: deadline)
+    }
+
+    /// WebKit can report a load finished before its document's title, and the answer would name
+    /// the page by its host. A document with a title waits up to a second for WebKit to report
+    /// it. Asked as `documentIsReady` is, racing the wait, since a busy page can't answer.
+    private func waitForTitle(of named: NamedTab, until deadline: ContinuousClock.Instant) async throws {
+        let tab = named.tab
+        guard tab.title.isEmpty, !tab.isAsleep, let webView = tab.loadedWebView else { return }
+        let answer = PageAnswer<Bool>()
+        Task { answer.result = .success(((try? await webView.callAsyncJavaScript("return document.title", contentWorld: PageProbe.world)) as? String ?? "").isEmpty) }
+        _ = try await watch(named, until: min(deadline, .now + .seconds(1))) { () -> Bool? in
+            guard tab.title.isEmpty else { return true }
+            return try answer.result?.get() == true ? true : nil
+        }
+    }
+
+    /// Lithium put the tab to sleep (its page stopped working, or memory ran short) or shows its
+    /// error page: nothing is loading in it any more.
+    func checkPageShown(_ named: NamedTab, before event: String) throws {
+        let tab = named.tab
+        if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id) went to sleep before \(event). Call navigate or reload to load it again.") }
+        if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)") }
     }
 
     /// Asked in a content world of Lithium's own, which the page can't see or touch. A tab

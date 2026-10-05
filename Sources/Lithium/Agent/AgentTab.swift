@@ -31,10 +31,14 @@ final class AgentTab {
     @ObservationIgnored private(set) var mainDocument: String?
     /// Public refs: `e12` for an element, `f3` for a frame's document, `f3:e40` inside it. Numbers
     /// count up for the tab's whole life, so a ref from an old page never names an element of a new one.
-    @ObservationIgnored private var refs: [String: ElementAddress] = [:]
-    @ObservationIgnored private var issued: [ElementAddress: String] = [:]
-    @ObservationIgnored private var frameRefs: [String: String] = [:]
-    @ObservationIgnored private var frameElements: [ElementAddress: String] = [:]
+    /// The table holds the page shown; a page left takes its own along, for Back to bring back.
+    private struct RefTable {
+        var refs: [String: ElementAddress] = [:]
+        var issued: [ElementAddress: String] = [:]
+        var frameRefs: [String: String] = [:]
+        var frameElements: [ElementAddress: String] = [:]
+    }
+    @ObservationIgnored private var table = RefTable()
     @ObservationIgnored private var nextElement = 1
     @ObservationIgnored private var nextFrame = 1
     /// Each frame's last full report and the generation it had, so an unchanged frame answers
@@ -76,17 +80,25 @@ final class AgentTab {
         if mainDocument == nil { mainDocument = token } else { switchPage(to: token) }
     }
 
-    /// The frames of the pages left, by main document: a restored page's frames say hello again,
-    /// maybe before its main frame does, and the frames of a page left must never answer for it.
-    @ObservationIgnored private var framesOfPagesLeft: [String: [String: WKFrameInfo]] = [:]
+    /// The frames and refs of the pages left, by main document: a restored page's frames say hello
+    /// again, maybe before its main frame does, and the frames of a page left must never answer
+    /// for it. Its refs answer `stale_ref` until it comes back.
+    @ObservationIgnored private var pagesLeft: [String: (frames: [String: WKFrameInfo], refs: RefTable)] = [:]
 
     private func switchPage(to token: String) {
-        if let mainDocument, !frames.isEmpty {
-            if framesOfPagesLeft.count >= 8 { framesOfPagesLeft = [:] }
-            framesOfPagesLeft[mainDocument] = frames
+        if let mainDocument, !frames.isEmpty || !table.refs.isEmpty {
+            if pagesLeft.count >= 8 { pagesLeft = [:] }
+            pagesLeft[mainDocument] = (frames, table)
         }
-        frames = framesOfPagesLeft.removeValue(forKey: token) ?? [:]
+        let restored = pagesLeft.removeValue(forKey: token)
+        frames = restored?.frames ?? [:]
+        table = restored?.refs ?? RefTable()
         mainDocument = token
+    }
+
+    /// Refs held for the page shown, and for the pages left that Back may bring back.
+    var refCounts: (shown: Int, kept: Int) {
+        (table.refs.count, pagesLeft.values.reduce(0) { $0 + $1.refs.refs.count })
     }
 
     /// A child frame answered as another document (it navigated), or not at all (it is gone).
@@ -105,38 +117,38 @@ final class AgentTab {
     // MARK: Refs
 
     func ref(for address: ElementAddress) -> String {
-        if let ref = issued[address] { return ref }
+        if let ref = table.issued[address] { return ref }
         let element = "e\(nextElement)"
         nextElement += 1
         let ref = address.document == mainDocument ? element : "\(frameRef(for: address.document)):\(element)"
-        issued[address] = ref
-        refs[ref] = address
+        table.issued[address] = ref
+        table.refs[ref] = address
         return ref
     }
 
     /// `f1`, `f2`: one per frame document.
     func frameRef(for document: String) -> String {
-        if let ref = frameRefs[document] { return ref }
+        if let ref = table.frameRefs[document] { return ref }
         let ref = "f\(nextFrame)"
         nextFrame += 1
-        frameRefs[document] = ref
+        table.frameRefs[document] = ref
         return ref
     }
 
     /// The element a ref names. A frame ref names its `<iframe>` element in the parent, as last
     /// reported, so element tools work on it like on any element.
     func address(of ref: String) -> ElementAddress? {
-        refs[ref]
+        table.refs[ref]
     }
 
     func setFrameElement(_ frameRef: String, _ address: ElementAddress) {
-        refs[frameRef] = address
-        frameElements[address] = frameRef
+        table.refs[frameRef] = address
+        table.frameElements[address] = frameRef
     }
 
     /// The ref of the frame document last read in the `<iframe>` at `address`.
     func frameRef(at address: ElementAddress) -> String? {
-        frameElements[address]
+        table.frameElements[address]
     }
 
     nonisolated static func isRef(_ string: String) -> Bool {
@@ -174,15 +186,25 @@ struct AgentChallenge: Equatable {
 
     static let pageKinds: Set<String> = ["cloudflare", "datadome", "perimeterx", "aws-waf"]
 
-    /// The challenge a frame at `address` belongs to, by its host. reCAPTCHA's invisible badge
-    /// is on many pages without any challenge, so it doesn't count.
+    /// The challenge a frame at `address` belongs to, by its host. The invisible reCAPTCHA badge
+    /// and hCaptcha checkbox are on many pages without any challenge, so they don't count.
     static func kind(of address: String) -> String? {
+        kind(of: address, countingInvisible: false)
+    }
+
+    /// Whether `address` is a challenge provider's frame, invisible or not: its own address then
+    /// says whether it counts, and the origin alone, which has lost the query, must not.
+    static func isProvider(_ address: String) -> Bool {
+        kind(of: address, countingInvisible: true) != nil
+    }
+
+    private static func kind(of address: String, countingInvisible: Bool) -> String? {
         guard let url = URL(string: address), let host = url.host()?.lowercased() else { return nil }
         let within = { (domain: String) in host == domain || host.hasSuffix("." + domain) }
         if (within("google.com") && url.path().hasPrefix("/recaptcha/")) || within("recaptcha.net") {
-            return url.query()?.contains("size=invisible") == true ? nil : "recaptcha"
+            return !countingInvisible && url.query()?.contains("size=invisible") == true ? nil : "recaptcha"
         }
-        if within("hcaptcha.com") { return "hcaptcha" }
+        if within("hcaptcha.com") { return !countingInvisible && url.fragment()?.contains("invisible") == true ? nil : "hcaptcha" }
         if host == "challenges.cloudflare.com" { return "turnstile" }
         if within("arkoselabs.com") || within("funcaptcha.com") { return "arkose" }
         if within("captcha-delivery.com") { return "datadome" }

@@ -338,7 +338,7 @@
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
     if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates) {
-      return { token: frame.token, unchanged: true, gen: generation };
+      return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
     }
     frame.lastKey = key;
     const controls = [];
@@ -461,17 +461,26 @@
     const rects = [];
     const frames = [];
     const indexes = frameIndexes();
+    const claimed = new Set();
+    const embeds = [];
     const add = (element) => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) rects.push(round(rect));
     };
     for (const element of allElements(document)) {
+      const tag = element.localName;
       if (isExtensionUI(element)) add(element);
       else if (isField(element) && guardOf(element)) add(element);
-      else if (element.localName === 'iframe' || element.localName === 'frame') {
+      else if (tag === 'iframe' || tag === 'frame' || (tag === 'object' && element.contentWindow)) {
+        if (indexes.has(element.contentWindow)) claimed.add(indexes.get(element.contentWindow));
         if (isExtensionFrame(element)) add(element);
         else frames.push(frameFacts(element, getComputedStyle(element), indexes));
-      }
+      } else if (tag === 'embed') embeds.push(element);
+    }
+    // An <embed> showing a document is in window.frames but gives no way to its window: while
+    // a frame is unaccounted for, every <embed> counts as a frame that didn't answer.
+    if (claimed.size < window.length) {
+      for (const element of embeds) frames.push(frameFacts(element, getComputedStyle(element), indexes));
     }
     return { token: frame.token, path: framePath(), viewport: viewport(), rects, frames };
   };

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Testing
 import WebKit
@@ -14,6 +15,7 @@ struct AgentSnapshotModelTests {
         #expect(AgentChallenge.kind(of: "https://www.google.com/recaptcha/api2/anchor?k=abc&size=invisible") == nil)
         #expect(AgentChallenge.kind(of: "https://www.google.com/search?q=recaptcha") == nil)
         #expect(AgentChallenge.kind(of: "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html") == "hcaptcha")
+        #expect(AgentChallenge.kind(of: "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox-invisible") == nil)
         #expect(AgentChallenge.kind(of: "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0") == "turnstile")
         #expect(AgentChallenge.kind(of: "https://client-api.arkoselabs.com/fc/gc/") == "arkose")
         #expect(AgentChallenge.kind(of: "https://geo.captcha-delivery.com/captcha/?initialCid=x") == "datadome")
@@ -108,6 +110,11 @@ struct AgentSnapshotModelTests {
         let closed = MaskReport(token: "c", path: "-1", viewport: viewport, rects: [], frames: [])
         #expect(FrameLayout(main: main, children: [answered, shadowed, closed]).masks == nil)
         #expect(FrameLayout(main: main, children: [answered, MaskReport(token: "n", path: nil, viewport: viewport, rects: [], frames: [])]).masks == nil)
+        // A frame the main frame doesn't list (an <embed>'s document): nothing says where it is.
+        #expect(FrameLayout(main: main, children: [answered, MaskReport(token: "e", path: "2", viewport: viewport, rects: [[0, 0, 10, 10]], frames: [])]).masks == nil)
+        // A frame inside the second frame, which didn't answer and is painted over whole with it.
+        let inside = MaskReport(token: "i", path: "1.0", viewport: viewport, rects: [[0, 0, 10, 10]], frames: [])
+        #expect(FrameLayout(main: main, children: [answered, inside]).masks == [CGRect(x: 500, y: 50, width: 200, height: 100), CGRect(x: 0, y: 400, width: 50, height: 50)])
     }
 }
 
@@ -168,6 +175,21 @@ struct AgentReadTests {
         "/child?same": (Self.html, """
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Same</button>
             <input type="password" value="hunter2secret" style="position:absolute;left:10px;top:100px;width:120px;height:20px">
+            """),
+        "/child?new": (Self.html, """
+            <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">New</button>
+            """),
+        "/object": (Self.html, """
+            <title>Object</title><style>body { margin: 0; background: white }</style>
+            <object data="/secret-box" type="text/html" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"></object>
+            """),
+        "/embed": (Self.html, """
+            <title>Embed</title><style>body { margin: 0; background: white }</style>
+            <embed src="/secret-box" type="text/html" style="position:absolute;left:100px;top:50px;width:300px;height:200px">
+            """),
+        "/secret-box": (Self.html, """
+            <style>body { margin: 0; background: rgb(0, 0, 255) }</style>
+            <input type="password" value="hunter2secret" style="position:absolute;left:10px;top:10px;width:200px;height:30px;background:rgb(0,0,255);border:0">
             """),
         "/child?other": (Self.html, """
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Other</button>
@@ -272,6 +294,10 @@ struct AgentReadTests {
             <title>Chart</title>
             <svg width="300" height="100"><a href="one"><rect width="100" height="40" fill="red"></rect><text x="10" y="30">Bar one</text></a></svg>
             <p><a href="/help">Help</a></p>
+            """),
+        "/busy-after-load": (Self.html, """
+            <title>Busy</title><p>Loaded, then busy</p>
+            <script>addEventListener('load', () => setTimeout(() => { const end = Date.now() + 5000; while (Date.now() < end) {} }, 0));</script>
             """),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
@@ -441,6 +467,53 @@ struct AgentReadTests {
         }
     }
 
+    @Test func framesKeepTheirPlaceWhenAFrameComesBeforeThem() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            var json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "button", name: "Other") == nil || node(json, role: "button", name: "Same") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let same = try #require(node(json, role: "button", name: "Same"))
+            let other = try #require(node(json, role: "button", name: "Other"))
+            // An ad, say, put first: both frames now come one later in window.frames, their documents unchanged.
+            _ = try await client.tab(tab)?.webView.callAsyncJavaScript("""
+                const frame = document.createElement('iframe');
+                frame.src = '/child?new';
+                frame.style.cssText = 'left: 100px; top: 300px';
+                document.body.insertBefore(frame, document.getElementById('same'));
+                """, contentWorld: .page)
+            json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "button", name: "New") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let frames = nodes(json).filter { $0["role"] == "frame" }
+            try #require(frames.count == 3, "\(text(json.content))")
+            #expect(node(json, role: "button", name: "New")?["box"] == [118, 328, 80, 30], "\(text(json.content))")
+            #expect(node(json, role: "button", name: "New")?["in"] == frames[0]["ref"])
+            #expect(node(json, role: "button", name: "Same")?["box"] == [118, 78, 80, 30])
+            #expect(node(json, role: "button", name: "Same")?["ref"] == same["ref"])
+            #expect(node(json, role: "button", name: "Same")?["in"] == same["in"])
+            #expect(frames[1]["ref"] == same["in"])
+            #expect(node(json, role: "button", name: "Other")?["box"] == [468, 78, 80, 30])
+            #expect(node(json, role: "button", name: "Other")?["in"] == other["in"])
+            #expect(frames[2]["ref"] == other["in"])
+
+            // Taking the first frames away moves the last one to window.frames[0], its document unchanged.
+            _ = try await client.tab(tab)?.webView.callAsyncJavaScript("""
+                document.getElementById('same').remove();
+                document.querySelector('iframe').remove();
+                """, contentWorld: .page)
+            json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(nodes(json).filter { $0["role"] == "frame" }.map { $0["ref"] } == [other["in"]], "\(text(json.content))")
+            #expect(node(json, role: "button", name: "Other")?["box"] == [468, 78, 80, 30])
+            #expect(node(json, role: "button", name: "Other")?["ref"] == other["ref"])
+            #expect(node(json, role: "button", name: "Other")?["in"] == other["in"])
+        }
+    }
+
     @Test func openShadowRootsAreReadAndClosedOnesShowAsTheirHost() async throws {
         try await withAgent { client, base in
             let tab = try await open(client, base, "/shadow")
@@ -594,6 +667,56 @@ struct AgentReadTests {
             let arrived = await client.call("wait_for", ["tab": .string(moving), "text": "Welcome aboard"])
             #expect(!arrived.isError, "\(arrived.message)")
             #expect(arrived["title"] == "Arrived")
+        }
+    }
+
+    /// The page's process going away mid-wait puts a tab out of sight to sleep: the text wait
+    /// ends there instead of asking a page that is no more until its timeout.
+    @Test func aTextWaitEndsWhenThePageStopsWorking() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/later")
+            let shown = try await open(client, base, "/one")
+            let named = try #require(client.tab(tab))
+            client.browser.select(try #require(client.tab(shown)))
+            let started = ContinuousClock.now
+            let waiting = Task { await client.call("wait_for", ["tab": .string(tab), "text": "Never here", "timeoutMs": 10_000]) }
+            try await Task.sleep(for: .milliseconds(300))
+            // The tab's own web process, killed the way a crash would.
+            let pid = { (tab: Tab) in (tab.webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value ?? 0 }
+            let target = pid(named)
+            var name = [UInt8](repeating: 0, count: 256)
+            proc_name(target, &name, 256)
+            try #require(target > 0 && target != pid(try #require(client.tab(shown))) && String(decoding: name.prefix { $0 != 0 }, as: UTF8.self) == "com.apple.WebKit.WebContent")
+            kill(target, SIGKILL)
+            let waited = await waiting.value
+            #expect(waited.code == "navigation_failed", "\(waited.content)")
+            #expect(waited.message.contains("went to sleep"))
+            #expect(ContinuousClock.now - started < .seconds(5))
+            #expect(named.isAsleep)
+        }
+    }
+
+    /// A long session doesn't keep every page's refs: the page shown holds its own, Back's last
+    /// pages theirs, and an old page's ref answers `stale_ref`, never another element.
+    @Test func refsOfPagesLeftAreLetGo() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/many")
+            let state = try #require(client.hub.agentTab(for: try client.hub.tab(named: tab).tab))
+            let many = await client.call("snapshot", ["tab": .string(tab), "scope": "page", "maxNodes": 2000, "format": "json"])
+            let item = try #require(node(many, role: "button", name: "Item 1")?["ref"])
+            #expect(state.refCounts.shown > 1000)
+
+            #expect(!(await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "one")])).isError)
+            #expect(state.refCounts.shown < 10, "\(state.refCounts)")
+            #expect(await client.call("element_info", ["tab": .string(tab), "ref": item]).code == "stale_ref")
+            let fresh = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(!text(fresh.content).contains("\"\(item.string ?? "")\""))
+
+            for page in ["help", "one", "help", "one", "help", "one", "help", "one", "help"] {
+                #expect(!(await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + page)])).isError)
+            }
+            #expect(state.refCounts.kept < 100, "\(state.refCounts)")
+            #expect(await client.call("element_info", ["tab": .string(tab), "ref": item]).code == "stale_ref")
         }
     }
 
@@ -811,6 +934,53 @@ struct AgentReadTests {
         if let failure { throw failure }
     }
 
+    /// A document in an `<object>` is a frame too: its password is painted over when it answers,
+    /// and the whole object when it doesn't (open before access was on). An `<embed>`'s document
+    /// can't be placed: painted over whole when silent, no picture at all when it answers.
+    @Test func objectDocumentsArePaintedOverLikeFrames() async throws {
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        let (listener, base) = try await LocalHTTP.serve(Self.pages)
+        defer { listener.cancel() }
+        let browser = Browser()
+        await browser.privacy.waitUntilReady()
+        await browser.extensions.waitUntilLoaded()
+        let silent = browser.newTab(url: base.appending(path: "object"))
+        let silentEmbed = browser.newTab(url: base.appending(path: "embed"))
+        #expect(await waitUntil(20) { silent.title == "Object" && !silent.isLoading && silentEmbed.title == "Embed" && !silentEmbed.isLoading })
+        await browser.setAgentAccess(true)
+        var failure: (any Error)?
+        do {
+            let client = try await Client(browser: browser)
+            let answering = try await open(client, base, "/object")
+            let answeringEmbed = try await open(client, base, "/embed")
+            for id in [answering, answeringEmbed] {
+                let state = try #require(client.hub.agentTab(for: try client.hub.tab(named: id).tab))
+                #expect(await waitUntil(10) { !state.frames.isEmpty }, "\(id)")
+            }
+            for tool in ["screenshot", "pdf"] {
+                #expect(await client.call(tool, ["tab": .string(answeringEmbed)]).code == "unsupported", "\(tool)")
+            }
+            for (id, whole) in [(client.hub.id(for: silent), true), (client.hub.id(for: silentEmbed), true), (answering, false)] {
+                let shot = await client.call("screenshot", ["tab": .string(id)])
+                #expect(!shot.isError, "\(shot.message)")
+                let image = try #require(Self.image(shot))
+                let scale = Self.number(shot["scale"])
+                #expect(Self.near(Self.color(image, x: 210 * scale, y: 75 * scale), [128, 128, 128]), "password, \(whole ? "silent" : "answering")")
+                // Blue in the page, a little off in sRGB; gray when the whole object is painted over.
+                let inside = Self.color(image, x: 250 * scale, y: 200 * scale)
+                #expect(whole ? Self.near(inside, [128, 128, 128]) : inside.count == 3 && inside[0] < 64 && inside[2] > 200, "object, \(whole ? "silent" : "answering"): \(inside)")
+                #expect(Self.near(Self.color(image, x: 50 * scale, y: 50 * scale), [255, 255, 255]))
+                #expect(items(shot["masked"]).count == 1)
+                let pdf = await client.call("pdf", ["tab": .string(id)])
+                #expect(pdf["maskedRegions"] == 1, "\(pdf.message)")
+                #expect(pdf["pages"] == 1)
+            }
+        } catch { failure = error }
+        browser.tabs.forEach(browser.close)
+        await browser.setAgentAccess(false)
+        if let failure { throw failure }
+    }
+
     @Test func lateFramesAreLeftOutAndStopOrTheUserEndTheRead() async throws {
         try await withAgent { client, base in
             let tab = try await open(client, base, "/frames")
@@ -877,6 +1047,55 @@ struct AgentReadTests {
             #expect(state(signIn)?.challenge == AgentChallenge(kind: "turnstile", page: false))
             let shop = try await open(client, base, "/datadome")
             #expect(await client.call("read_text", ["tab": .string(shop)]).code == "challenge_requires_user")
+        }
+    }
+
+    /// The diff a navigation adds keeps to the call's deadline, and the user taking the tab back
+    /// meanwhile fails the call instead of answering with the page before.
+    @Test func diffsKeepToTheCallAndItsInterruptions() async throws {
+        try await withAgent { client, base in
+            let url = JSONValue.string(base.absoluteString + "busy-after-load")
+            let late = try #require((await client.call("tab_open"))["tab"]?.string)
+            let started = ContinuousClock.now
+            let navigated = await client.call("navigate", ["tab": .string(late), "url": url, "timeoutMs": 1000])
+            #expect(!navigated.isError, "\(navigated.message)")
+            #expect(ContinuousClock.now - started < .milliseconds(2500))
+            #expect(navigated["diff"] == nil)
+            #expect(navigated["diffNote"]?.string?.contains("didn’t answer in time") == true, "\(navigated.content)")
+
+            let taken = try #require((await client.call("tab_open"))["tab"]?.string)
+            let state = try #require(client.hub.agentTab(for: try client.hub.tab(named: taken).tab))
+            let waiting = Task { await client.call("navigate", ["tab": .string(taken), "url": url, "timeoutMs": 10_000]) }
+            #expect(await waitUntil(10) { client.tab(taken)?.title == "Busy" && client.tab(taken)?.isLoading == false })
+            try await Task.sleep(for: .milliseconds(300))
+            state.interruption = .user
+            let interrupted = await waiting.value
+            #expect(interrupted.code == "user_interrupted", "\(interrupted.content)")
+        }
+    }
+
+    /// A badge's own address says it is invisible; its origin alone, without the query, must not
+    /// make it a challenge. Served from hosts local fixtures can't be, so put together from reports.
+    @Test func invisibleBadgesAreNotChallengesWhateverTheirOrigin() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            let viewport = PageViewport(w: 1280, h: 800, sx: 0, sy: 0, pw: 1280, ph: 800, dpr: 2, vx: 0, vy: 0, vs: 1)
+            let cases: [(src: String, origin: String, kind: String?)] = [
+                ("https://www.recaptcha.net/recaptcha/api2/anchor?k=abc&size=invisible", "https://www.recaptcha.net", nil),
+                ("https://www.google.com/recaptcha/api2/anchor?k=abc&size=invisible", "https://www.google.com", nil),
+                ("https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox-invisible", "https://newassets.hcaptcha.com", nil),
+                ("https://www.recaptcha.net/recaptcha/api2/anchor?k=abc&size=normal", "https://www.recaptcha.net", "recaptcha"),
+                // A frame that moved on from its src: only its origin is known, at a size the user sees.
+                ("about:blank", "https://www.recaptcha.net", "recaptcha"),
+            ]
+            for (index, test) in cases.enumerated() {
+                let main = FrameReport(token: "m\(index)", url: "https://shop.example/", viewport: viewport, nodes: [], frames: [
+                    FrameReport.Frame(id: 1, index: 0, box: [1000, 700, 256, 60], content: [1000, 700, 256, 60, 1], src: test.src),
+                ])
+                let child = FrameReport(token: "c\(index)", path: "0", url: test.src, viewport: viewport, nodes: [], frames: [])
+                let snapshot = state.compose(tab: "t1", main: main, children: [child], origins: ["c\(index)": test.origin], zoom: 1, maxNodes: 300)
+                #expect(snapshot.challenge?.kind == test.kind, "\(test.src)")
+            }
         }
     }
 

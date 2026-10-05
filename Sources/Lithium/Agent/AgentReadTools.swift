@@ -456,7 +456,9 @@ extension AgentHub {
                 state.reports[report.token] = (scope, report)
                 return report
             }
-            guard let cached = state.reports[report.token]?.report else { throw PageProbe.Failure() }
+            guard var cached = state.reports[report.token]?.report else { throw PageProbe.Failure() }
+            // The frame's rank among its parent's frames changes when the parent adds one before it.
+            cached.path = report.path
             return cached
         }
         let mainReport = try full(try await ask(named, webView, .main, "snapshot", [:], until: deadline, answered: main))
@@ -482,12 +484,25 @@ extension AgentHub {
 
     /// What navigation tools and `wait_for` add: what the viewport shows now, as a diff from this
     /// session's last default snapshot of the tab, or whole when there was none or it was another page.
-    /// Left out, rather than failing the call, when the page doesn't answer in a few seconds.
-    func addingDiff(to page: JSONValue, of named: NamedTab, for session: MCPSession, if wanted: Bool) async -> JSONValue {
+    /// Within the call's deadline, and a few seconds at most. Left out, with a note, rather than
+    /// failing the call, when the page doesn't answer; the tab closing, the user taking it back
+    /// or `stop` fail the call, as they would have a moment earlier.
+    func addingDiff(to page: JSONValue, of named: NamedTab, for session: MCPSession, if wanted: Bool, until deadline: ContinuousClock.Instant) async throws -> JSONValue {
         guard wanted, var fields = page.object, named.tab.pdf == nil, !named.tab.isAsleep, named.tab.loadedWebView != nil,
               !AgentURLs.isBlocked(named.tab.url), let state = agentTab(for: named.tab) else { return page }
         let webView = sizedWebView(of: named.tab)
-        guard var snapshot = try? await snapshot(of: named, in: webView, scope: "viewport", maxNodes: 300, until: .now + .seconds(3)) else { return page }
+        var snapshot: PageSnapshot
+        do {
+            snapshot = try await self.snapshot(of: named, in: webView, scope: "viewport", maxNodes: 300, until: min(deadline, .now + .seconds(3)))
+        } catch let error as AgentToolError where ["tab_closed", "user_interrupted", "stopped"].contains(error.code) {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let late = (error as? AgentToolError)?.code == "timeout"
+            fields["diffNote"] = .string("No diff: the page \(late ? "didn’t answer in time" : "changed while it was read"). Call snapshot.")
+            return .object(fields)
+        }
         let previous = state.record(&snapshot, session: session.id)
         if let previous, previous.document == snapshot.document {
             fields["diff"] = snapshot.diff(since: previous)["text"] ?? .null
@@ -552,7 +567,7 @@ extension AgentHub {
     /// What a picture of the page paints over, in top-level viewport CSS pixels.
     private static func masks(_ layout: FrameLayout, of named: NamedTab) throws -> [CGRect] {
         guard let masks = layout.masks else {
-            throw AgentToolError(code: "unsupported", message: "\(named.id) has a frame Lithium can’t place (in a shadow root), so it can’t paint over the password and card fields in it. Use snapshot or read_text.")
+            throw AgentToolError(code: "unsupported", message: "\(named.id) has a frame Lithium can’t place (in a shadow root or an embed), so it can’t paint over the password and card fields in it. Use snapshot or read_text.")
         }
         return masks
     }
@@ -591,10 +606,14 @@ extension AgentHub {
             if met == false, !gone { throw await staleRefIfGone(ref, named, webView, deadline, timeout: timeout, state: state) }
             throw timedOut(named, after: timeout, "\(ref) is not \(state)")
         case .text(let text, let present):
+            let event = "“\(text)” \(present ? "showed" : "went")"
+            var pause = Duration.milliseconds(50)
             while ContinuousClock.now < deadline {
+                try checkPageShown(named, before: event)
                 let commits = tab.commits
                 let pending = start(webView, .main, "wait", ["text": text, "present": present, "timeoutMs": remaining()])
                 let outcome = try await watch(named, until: deadline) { () -> Bool? in
+                    try self.checkPageShown(named, before: event)
                     if let result = pending.result {
                         // A document between pages fails at once: ask the next one.
                         guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data) else { return false }
@@ -606,6 +625,17 @@ extension AgentHub {
                 if outcome == nil { break }
                 // The main frame moved on: wait until the next document shows, then ask it.
                 _ = try await watch(named, until: deadline) { tab.isAwaitingCommit ? nil : true }
+                guard tab.commits == commits else {
+                    pause = .milliseconds(50)
+                    continue
+                }
+                // The page failed the call with nothing moving on (its process gone, say): ask
+                // again a little later, unless the tab stops showing a page meanwhile.
+                _ = try await watch(named, until: min(deadline, .now + pause)) { () -> Bool? in
+                    try self.checkPageShown(named, before: event)
+                    return nil
+                }
+                pause = min(pause * 2, .seconds(1))
             }
             throw timedOut(named, after: timeout, present ? "no “\(text)” on the page" : "“\(text)” was still on the page")
         }

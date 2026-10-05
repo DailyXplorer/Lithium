@@ -256,7 +256,7 @@ extension AgentTab {
                 let child = frame.index >= 0 ? byPath[Self.childPath(path, frame.index)] : nil
                 let address = child.flatMap { origins[$0.token] } ?? frame.src
                 guard frame.box.count == 4, frame.box[2] >= 20, frame.box[3] >= 20,
-                      let kind = AgentChallenge.kind(of: frame.src) ?? AgentChallenge.kind(of: address) ?? child?.challenge else { continue }
+                      let kind = (AgentChallenge.isProvider(frame.src) ? AgentChallenge.kind(of: frame.src) : AgentChallenge.kind(of: address)) ?? child?.challenge else { continue }
                 let ref = child.map { self.frameRef(for: $0.token) } ?? self.ref(for: ElementAddress(document: document, id: frame.id))
                 challenge = AgentChallenge(kind: kind, ref: ref, page: AgentChallenge.pageKinds.contains(kind))
             }

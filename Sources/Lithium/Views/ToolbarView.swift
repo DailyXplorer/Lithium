@@ -10,17 +10,17 @@ struct ToolbarView: View {
                 SidebarToggle()
             }
             IconButton(icon: .back, help: "Back (⌘[)", isEnabled: tab?.canGoBack == true) {
-                tab?.webView.goBack()
+                browser.navigate(tab, .back)
             }
             IconButton(icon: .forward, help: "Forward (⌘])", isEnabled: tab?.canGoForward == true) {
-                tab?.webView.goForward()
+                browser.navigate(tab, .forward)
             }
             IconButton(
                 icon: tab?.isLoading == true ? .close : .reload,
                 help: tab?.isLoading == true ? "Stop" : "Reload (⌘R)",
                 isEnabled: tab?.url != nil
             ) {
-                if tab?.isLoading == true { tab?.stopLoading() } else { tab?.reload() }
+                browser.navigate(tab, tab?.isLoading == true ? .stop : .reload)
             }
             Spacer(minLength: 16)
             AddressBar(tab: tab)

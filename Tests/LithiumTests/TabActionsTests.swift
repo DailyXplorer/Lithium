@@ -88,6 +88,81 @@ struct TabActionsTests {
         #expect(names(browser) == ["a", "b", "c"])
     }
 
+    /// The Agent group below the tab list reads `names` top to bottom.
+    private func addAgentTabs(_ names: [String], to browser: Browser) {
+        for name in names { browser.newAgentTab(session: "s1").load(page(name)) }
+    }
+
+    private func agentNames(_ browser: Browser) -> [String] {
+        browser.agentTabs.map(name)
+    }
+
+    @Test func closeOtherTabsStaysInTheTabsGroup() {
+        let browser = browser(with: ["a", "b", "c"])
+        addAgentTabs(["x", "y", "z"], to: browser)
+        browser.closeOtherTabs(than: tab("y", in: browser))
+        #expect(agentNames(browser) == ["y"])
+        #expect(names(browser) == ["a", "b", "c"])
+        #expect(name(browser.selectedTab) == "y")
+
+        addAgentTabs(["z"], to: browser)
+        browser.closeOtherTabs(than: tab("b", in: browser))
+        #expect(names(browser) == ["b"])
+        #expect(agentNames(browser) == ["y", "z"])
+        #expect(name(browser.selectedTab) == "b")
+    }
+
+    @Test func closeTabsBelowStaysInTheTabsGroup() {
+        let browser = browser(with: ["a", "b", "c"])
+        addAgentTabs(["x", "y", "z"], to: browser)
+        #expect(browser.tabs(below: tab("c", in: browser)).isEmpty, "the Agent group isn't below the list")
+        browser.closeTabs(below: tab("x", in: browser))
+        #expect(agentNames(browser) == ["x"])
+        #expect(names(browser) == ["a", "b", "c"])
+
+        browser.closeTabs(below: tab("a", in: browser))
+        #expect(names(browser) == ["a"])
+        #expect(agentNames(browser) == ["x"])
+    }
+
+    @Test func closingAnAgentsTabSelectsItsNeighbourThenTheBottomOfTheList() {
+        let browser = browser(with: ["a", "b"])
+        addAgentTabs(["x", "y"], to: browser)
+        browser.select(tab("x", in: browser))
+        browser.closeSelectedTab()
+        #expect(name(browser.selectedTab) == "y")
+        browser.closeSelectedTab()
+        #expect(name(browser.selectedTab) == "b")
+    }
+
+    /// The copy, the reopened tab and the favorite are the user's, next to the Agent group.
+    @Test func whatTheUserMakesOfAnAgentsTabIsTheirs() {
+        let browser = browser(with: ["a", "b"])
+        addAgentTabs(["x", "y"], to: browser)
+        browser.duplicate(tab("x", in: browser))
+        #expect(names(browser) == ["a", "b", "x"])
+        #expect(agentNames(browser) == ["x", "y"])
+        #expect(browser.selectedTab?.openedByAgent == nil)
+
+        browser.close(tab("y", in: browser))
+        browser.reopenClosedTab()
+        #expect(names(browser) == ["a", "b", "x", "y"])
+        #expect(agentNames(browser) == ["x"])
+
+        let x = browser.agentTabs[0]
+        browser.pin(x)
+        defer { browser.pins.filter { $0.id == x.pinID }.forEach(browser.unpin) }
+        #expect(x.openedByAgent == nil)
+        #expect(browser.agentTabs.isEmpty)
+    }
+
+    @Test func numberShortcutsReachTheAgentGroup() {
+        let browser = browser(with: ["a", "b"])
+        addAgentTabs(["x"], to: browser)
+        browser.selectItem(at: browser.pins.count + 2)
+        #expect(name(browser.selectedTab) == "x")
+    }
+
     /// The peeked sidebar slides back when `tabPickToken` moves.
     @Test func onlyPickingAnotherTabCountsAsAPick() {
         let browser = browser(with: ["a", "b", "c", "d", "e"])

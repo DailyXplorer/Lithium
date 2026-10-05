@@ -7,7 +7,7 @@ import Testing
 /// The agent server over real sockets. Requests are written by hand rather than with URLSession,
 /// which sets Host itself and could not send the forged headers these tests need.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct AgentServerTests {
     /// A hub in a folder of its own, listening on a free port.
     @MainActor
@@ -198,7 +198,7 @@ struct AgentServerTests {
         #expect(entry["for"]?["id"] == "s5")
     }
 
-    @Test(.timeLimit(.minutes(1))) func refusesANewSessionWhenEverySessionIsRunningACall() async throws {
+    @Test func refusesANewSessionWhenEverySessionIsRunningACall() async throws {
         let started = AsyncStream<Void>.makeStream()
         let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
         defer { fixture.hub.shutdown() }
@@ -235,7 +235,7 @@ struct AgentServerTests {
     }
 
     /// A call that outlasts the idle timeout keeps its session, which then counts as seen when the call ends.
-    @Test(.timeLimit(.minutes(1))) func aCallLongerThanTheIdleTimeoutKeepsItsSession() async throws {
+    @Test func aCallLongerThanTheIdleTimeoutKeepsItsSession() async throws {
         let clock = Clock()
         let started = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
@@ -299,8 +299,9 @@ struct AgentServerTests {
         #expect(missing.status == 401)
         #expect(missing.headers["www-authenticate"] == "Bearer")
         var wrong = fixture.endpoint.token
-        wrong.removeLast()
-        wrong += "A"
+        // One character off: a different one, whatever the token ends with.
+        let last = wrong.removeLast()
+        wrong.append(last == "A" ? "B" : "A")
         for authorization in ["Bearer \(wrong)", "Bearer ", "Basic \(fixture.endpoint.token)", fixture.endpoint.token] {
             let reply = try await RawHTTP.send(port: fixture.port, method: "POST", headers: ["Content-Type": "application/json", "Authorization": authorization], body: body)
             #expect(reply.status == 401, "\(authorization)")
@@ -334,7 +335,7 @@ struct AgentServerTests {
         #expect(fixture.hub.sessions.isEmpty)
     }
 
-    @Test(.timeLimit(.minutes(1))) func answersARequestPipelinedBehindARefusedOne() async throws {
+    @Test func answersARequestPipelinedBehindARefusedOne() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         let body = Fixture.initializeMessage().encoded()
@@ -356,7 +357,7 @@ struct AgentServerTests {
 
     /// A client that half-closes right after its requests still reads every refusal before EOF.
     /// Enough refusals that some are still queued in the server when its EOF arrives.
-    @Test(.timeLimit(.minutes(1))) func answersRefusedRequestsBeforeAHalfClose() async throws {
+    @Test func answersRefusedRequestsBeforeAHalfClose() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         func request(_ authorization: String, body: String) -> String {
@@ -459,8 +460,8 @@ struct AgentServerTests {
             server.listener(failed, changedTo: .cancelled, port: taken)
         }
         let port = try await server.start(port: 0)
-        #expect(port != taken)
-        #expect(await RawHTTP.canConnect(host: "127.0.0.1", port: port))
+        #expect(port != taken && port != 0)
+        #expect(await RawHTTP.canConnect(host: "127.0.0.1", port: port), "port \(port), taken \(taken)")
     }
 
     @Test func aStoppedServerNeverListensAgain() async throws {
@@ -575,7 +576,7 @@ struct AgentServerTests {
 
     // MARK: Listener
 
-    @Test(.timeLimit(.minutes(1))) func listensAgainWhenTheListenerDies() async throws {
+    @Test func listensAgainWhenTheListenerDies() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         let session = try await fixture.initialize()
@@ -591,7 +592,7 @@ struct AgentServerTests {
 
     /// The old port is taken when the listener comes back, so the server moves to a new one; a
     /// connection accepted on the old port still names it in Host and still gets answers.
-    @Test(.timeLimit(.minutes(1))) func aConnectionKeepsItsPortAcrossARelistenOnAnotherPort() async throws {
+    @Test func aConnectionKeepsItsPortAcrossARelistenOnAnotherPort() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         let session = try await fixture.initialize()
@@ -628,7 +629,7 @@ struct AgentServerTests {
         #expect(try await fixture.post(["jsonrpc": "2.0", "id": 2, "method": "ping"], session: session).status == 200)
     }
 
-    @Test(.timeLimit(.minutes(1))) func failsWhenListeningAgainKeepsFailing() async throws {
+    @Test func failsWhenListeningAgainKeepsFailing() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         _ = try await fixture.initialize()
@@ -657,7 +658,7 @@ struct AgentServerTests {
     }
 
     /// The first listener reports `.ready`, then dies before the hub has resumed from starting it.
-    @Test(.timeLimit(.minutes(1))) func aListenerThatDiesWhileTheHubStartsIsReplaced() async throws {
+    @Test func aListenerThatDiesWhileTheHubStartsIsReplaced() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "agent-\(UUID().uuidString)")
         let defaults = try #require(UserDefaults(suiteName: "agent-tests-\(UUID().uuidString)"))
         let hub = AgentHub(folder: folder, defaults: defaults)
@@ -678,7 +679,7 @@ struct AgentServerTests {
     }
 
     /// The listener a relisten started reports `.ready`, then dies before the hub has resumed.
-    @Test(.timeLimit(.minutes(1))) func aListenerThatDiesWhileTheHubRelistensIsReplaced() async throws {
+    @Test func aListenerThatDiesWhileTheHubRelistensIsReplaced() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }
         let session = try await fixture.initialize()
@@ -706,7 +707,7 @@ struct AgentServerTests {
 
     /// What a client sends while its call is in flight stays in the socket: the server's buffer
     /// holds at most the one read that carried the call.
-    @Test(.timeLimit(.minutes(1))) func readsNothingMoreWhileACallIsInFlight() async throws {
+    @Test func readsNothingMoreWhileACallIsInFlight() async throws {
         let arrived = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let server = AgentServer(token: "t") { _ in
@@ -734,7 +735,7 @@ struct AgentServerTests {
 
     /// A client that resets its connection mid-call gets nothing back: the server cancels the
     /// connection, which closes the socket, and the tool's call, which keeps the session.
-    @Test(.timeLimit(.minutes(1))) func aFailedConnectionIsCancelledWithItsCall() async throws {
+    @Test func aFailedConnectionIsCancelledWithItsCall() async throws {
         let started = AsyncStream<Void>.makeStream()
         let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
         defer { fixture.hub.shutdown() }
@@ -791,7 +792,7 @@ struct AgentServerTests {
     /// While call 1 is held, the client sends call 2 and a ping, then half-closes. The server
     /// reads those and the EOF together once call 1 is answered, so the EOF lands while call 2
     /// is held: the ping behind it still gets its answer, and only that last answer closes.
-    @Test(.timeLimit(.minutes(1))) func answersEveryRequestPipelinedBeforeAHalfClose() async throws {
+    @Test func answersEveryRequestPipelinedBeforeAHalfClose() async throws {
         let arrived = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let server = Self.holdingServer(arrived: arrived.continuation, release: release.stream)
@@ -817,7 +818,7 @@ struct AgentServerTests {
 
     /// Local processes that take every slot without sending a request can't lock a client out:
     /// the client's connection evicts the oldest, and the head deadline closes the rest.
-    @Test(.timeLimit(.minutes(1))) func strangersHoldingEverySlotDontLockAClientOut() async throws {
+    @Test func strangersHoldingEverySlotDontLockAClientOut() async throws {
         let server = AgentServer(token: "t", timeouts: .init(head: 2, body: 2, idle: 60)) { _ in AgentReply(status: 202) }
         defer { server.stop() }
         let port = try await server.start(port: 0)
@@ -838,7 +839,7 @@ struct AgentServerTests {
         #expect(server.connectionCount == 0)
     }
 
-    @Test(.timeLimit(.minutes(1))) func closesAKeepAliveConnectionLeftIdle() async throws {
+    @Test func closesAKeepAliveConnectionLeftIdle() async throws {
         let server = AgentServer(token: "t", timeouts: .init(head: 30, body: 30, idle: 0.5)) { _ in AgentReply(status: 202) }
         defer { server.stop() }
         let port = try await server.start(port: 0)
@@ -859,7 +860,7 @@ struct AgentServerTests {
     }
 
     /// Every deadline is far shorter than the call; the connection waits for it, then for idle.
-    @Test(.timeLimit(.minutes(1))) func aCallInFlightOutlastsEveryDeadline() async throws {
+    @Test func aCallInFlightOutlastsEveryDeadline() async throws {
         let arrived = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let server = Self.holdingServer(timeouts: .init(head: 0.3, body: 0.3, idle: 0.3), arrived: arrived.continuation, release: release.stream)
@@ -927,7 +928,7 @@ struct AgentServerTests {
 /// Access off is the default, and a `Browser` with it off has no hub and no server; turning
 /// it on and off again runs and removes both.
 @MainActor
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct AgentAccessTests {
     @Test func accessIsOffUntilTurnedOn() async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
@@ -982,6 +983,8 @@ enum RawHTTP {
             }
         }
         connection.start(queue: .global())
+        // A connection still preparing after this long is as good as refused.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { result.continuation.yield(false) }
         var iterator = result.stream.makeAsyncIterator()
         return await iterator.next() ?? false
     }

@@ -33,7 +33,7 @@ private struct LiveSiteInfo: View {
             onClear: {
                 Task {
                     await info.clear()
-                    tab.reload()
+                    browser.navigate(tab, .reload)
                 }
             },
             onOpenSettings: {

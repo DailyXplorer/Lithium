@@ -14,6 +14,7 @@ enum Internal {
     static let scheme = "lithium"
     static let settingsURL = URL(string: "lithium://settings")!
     static let historyURL = URL(string: "lithium://history")!
+    static let agentsURL = URL(string: "lithium://agents")!
 
     static func isInternal(_ url: URL?) -> Bool {
         url?.scheme?.lowercased() == scheme
@@ -81,6 +82,7 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         let file: URL? = switch (url.host(), parts.first) {
         case ("settings", nil): bundle.url(forResource: "settings", withExtension: "html", subdirectory: "Pages")
         case ("history", nil): bundle.url(forResource: "history", withExtension: "html", subdirectory: "Pages")
+        case ("agents", nil): bundle.url(forResource: "agents", withExtension: "html", subdirectory: "Pages")
         case (_, "style.css"): bundle.url(forResource: "lithium", withExtension: "css", subdirectory: "Pages")
         case (_, "pages.js"): bundle.url(forResource: "pages", withExtension: "js", subdirectory: "Pages")
         case (_, "font"): bundle.url(forResource: "DMSans", withExtension: "woff2")
@@ -165,7 +167,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             if action == "clearSiteData" {
                 await info.clear()
                 // Its open pages would go on without the data they expect.
-                browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { $0.reload() }
+                browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
             }
             return (["host": host, "cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
         case "setTidyTitles":
@@ -186,6 +188,18 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.agent?.resetToken()
         case "allowAgents":
             browser.agent?.allowAgain()
+        case "openAgentLog":
+            browser.openAgentLog()
+        case "agentLog":
+            // As JSON text: the entries are `JSONValue`s, which don't cross to the page as they are.
+            let entries = await agentLog(browser).entries(limit: Self.agentLogPageLength)
+            return (String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self), nil)
+        case "clearAgentLog":
+            browser.agent?.clearRecentLog()
+            await agentLog(browser).clear()
+            return ("[]", nil)
+        case "exportAgentLog":
+            return (await exportAgentLog(browser, from: message.webView?.window), nil)
         case "setExtensionEnabled":
             if let entry = value as? [String: Any], let id = entry["id"] as? String {
                 await browser.extensions.setEnabled(entry["enabled"] as? Bool ?? true, id: id)
@@ -220,6 +234,31 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         guard let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
         return "data:image/png;base64," + png.base64EncodedString()
+    }
+
+    static let agentLogPageLength = 500
+
+    /// The hub's while access is on, so the page never writes over a line being added.
+    private func agentLog(_ browser: Browser) -> AgentLog {
+        browser.agent?.log ?? AgentLog(folder: AgentLog.folder)
+    }
+
+    /// Saves the whole log where the user picks; true once written.
+    private func exportAgentLog(_ browser: Browser, from window: NSWindow?) async -> Bool {
+        let data = await agentLog(browser).export()
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "jsonl") ?? .json]
+        panel.directoryURL = .downloadsDirectory
+        panel.nameFieldStringValue = "Lithium agent log \(Date.now.formatted(.iso8601.year().month().day())).jsonl"
+        let response = if let window { await panel.beginSheetModal(for: window) } else { panel.runModal() }
+        guard response == .OK, let url = panel.url else { return false }
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            NSAlert(error: error).runModal()
+            return false
+        }
     }
 
     private func visits(_ browser: Browser, matching query: String) -> [[String: Any]] {

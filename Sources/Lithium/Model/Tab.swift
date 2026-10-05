@@ -2,6 +2,13 @@ import AppKit
 import Observation
 import WebKit
 
+/// How a load in the page ended without showing anything.
+enum UnshownLoad {
+    case download(fileName: String?)
+    /// Lithium refused where it led: another app's scheme (`mailto:`), or its own pages.
+    case refused(scheme: String)
+}
+
 @MainActor
 @Observable
 final class Tab: NSObject, Identifiable {
@@ -83,6 +90,30 @@ final class Tab: NSObject, Identifiable {
 
     /// A name the user gave the tab; it wins over the page's own title until cleared.
     var customTitle: String?
+    /// The agent session ("s1") that opened the tab, which puts it in the sidebar's Agent group.
+    /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
+    var openedByAgent: String?
+    var isInAgentGroup: Bool { pinID == nil && openedByAgent != nil }
+    var isInTabList: Bool { pinID == nil && openedByAgent == nil }
+    /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
+    /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
+    /// address it was sent to (`go(to:)`), isn't counted.
+    private(set) var commits = 0
+    /// Counts the moves within the document shown to an anchor (`page#section`), or Back and
+    /// Forward between `pushState` entries, which WebKit commits nothing for. The page's own
+    /// script makes them too (`location.hash`, `history.back()`), not only a navigation asked for.
+    /// The page's `pushState` and `replaceState` aren't counted.
+    private(set) var sameDocumentNavigations = 0
+    /// Counts the loads in the page itself that ended without showing anything, for an agent
+    /// waiting on one; `lastUnshownLoad` tells how the latest ended.
+    private(set) var unshownLoads = 0
+    @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
+    /// From the moment a load starts until it commits a document or ends without one: the
+    /// document shown until then is the one on its way out.
+    private(set) var isAwaitingCommit = false
+    /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
+    /// that have none (Lithium's error page, local files).
+    @ObservationIgnored private(set) var httpStatus: Int?
     /// A shorter name for the page's title (Max, Tidy tab titles).
     private(set) var tidyTitle: String?
     /// Silenced by the user. WebKit keeps it per web view, so each new one (waking) is muted again.
@@ -382,6 +413,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
+        isAwaitingCommit = false
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
@@ -419,6 +451,9 @@ final class Tab: NSObject, Identifiable {
             },
             webView.observe(\.isLoading) { [weak self] webView, _ in
                 MainActor.assumeIsolated {
+                    // WebKit reports a load from the moment it is asked for, before it calls
+                    // didStartProvisionalNavigation.
+                    if self?.isLoading != webView.isLoading { self?.isAwaitingCommit = webView.isLoading }
                     self?.isLoading = webView.isLoading
                     self?.tellExtensions(.loading)
                 }
@@ -474,11 +509,18 @@ final class Tab: NSObject, Identifiable {
         return true
     }
 
-    /// A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
-    private func closeIfOnlyADownload() {
+    private func downloadStarted(_ download: WKDownload, inMainFrame: Bool, fileName: String?) {
+        Downloads.shared.track(download)
         // A tab going on to an extension's address isn't empty, though nothing is shown yet.
-        guard !goToAddressAfterWaking(), webView.backForwardList.currentItem == nil else { return }
-        browser?.close(self)
+        guard !goToAddressAfterWaking() else { return }
+        if inMainFrame { endedUnshown(.download(fileName: fileName)) }
+        // A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
+        if webView.backForwardList.currentItem == nil { browser?.close(self) }
+    }
+
+    private func endedUnshown(_ load: UnshownLoad) {
+        lastUnshownLoad = load
+        unshownLoads += 1
     }
 
     /// Applied only if the page still has the title the tidy name was made from.
@@ -566,7 +608,7 @@ extension Tab: WKNavigationDelegate {
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
             // A load refused here ends without a word from WebKit.
-            if isMainFrame { goToAddressAfterWaking() }
+            if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
             return (.cancel, preferences)
         }
 
@@ -586,7 +628,10 @@ extension Tab: WKNavigationDelegate {
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
             // Websites may not open Lithium's pages; only the app or another Lithium page can.
-            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else { return (.cancel, preferences) }
+            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else {
+                if isMainFrame { endedUnshown(.refused(scheme: Internal.scheme)) }
+                return (.cancel, preferences)
+            }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
             setWebstoreBridge(false)
@@ -620,6 +665,7 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
@@ -631,13 +677,12 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        Downloads.shared.track(download)
-        closeIfOnlyADownload()
+        let name = navigationAction.request.url?.lastPathComponent
+        downloadStarted(download, inMainFrame: navigationAction.targetFrame?.isMainFrame ?? true, fileName: ["", "/"].contains(name) ? nil : name)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        Downloads.shared.track(download)
-        closeIfOnlyADownload()
+        downloadStarted(download, inMainFrame: navigationResponse.isForMainFrame, fileName: navigationResponse.response.suggestedFilename)
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
@@ -647,13 +692,24 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
+        httpStatus = nil
+        isAwaitingCommit = true
+    }
+
+    /// Private WebKit (`WKNavigationDelegatePrivate`), which calls it only on a delegate that has it.
+    /// `type` is `_WKSameDocumentNavigationType`: 0 an anchor, 1 pushState, 2 replaceState, 3 Back or Forward.
+    @objc(_webView:navigation:didSameDocumentNavigation:)
+    func webView(_ webView: WKWebView, navigation: WKNavigation?, didSameDocumentNavigation type: Int) {
+        if type == 0 || type == 3 { sameDocumentNavigations += 1 }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        isAwaitingCommit = false
         if navigation !== errorNavigation { loadError = nil }
-        // The old page is now in the history, one Back away.
-        goToAddressAfterWaking()
+        // The old page is now in the history, one Back away. Only on its way out, it isn't the
+        // document an agent's navigation waits for.
+        if !goToAddressAfterWaking() { commits += 1 }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
@@ -922,6 +978,12 @@ extension Tab: WKWebExtensionTab {
     /// Sent to the page it slept on, it just wakes, which loads that page. Sent between an
     /// extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
+        go(to: url)
+    }
+
+    /// Sends the tab to an address on someone else's behalf (an extension, an agent), keeping a
+    /// sleeping tab's history as `loadURL(_:for:)` describes.
+    func go(to url: URL) {
         lastActive = Date()
         guard isAsleep, let old = self.url, !needsNewWebView(for: url) else {
             load(url)
@@ -947,21 +1009,21 @@ extension Tab: WKWebExtensionTab {
 
     /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.
     func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
-        if isAsleep { wakeForExtension() } else { reload() }
+        if isAsleep { wake() } else { reload() }
     }
 
     func goBack(for context: WKWebExtensionContext) async throws {
-        wakeForExtension()
+        wake()
         webView.goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
-        wakeForExtension()
+        wake()
         webView.goForward()
     }
 
-    /// What an extension sends a tab to counts as using it, so the next sleep pass leaves it be.
-    private func wakeForExtension() {
+    /// What an extension or an agent does in a tab counts as using it, so the next sleep pass leaves it be.
+    func wake() {
         lastActive = Date()
         wakeIfAsleep()
     }

@@ -30,6 +30,9 @@ struct AgentTool {
 struct AgentToolError: Error, Equatable {
     let code: String
     let message: String
+    /// The tab the failed call concerns, so the agent can still reach it: the one `tab_open`
+    /// opened stays open when its page fails to load.
+    var tab: String?
 }
 
 /// Agent access while it is on: the server, the sessions, tool calls in flight, and the Stop
@@ -74,6 +77,20 @@ final class AgentHub {
         let task: Task<Result<JSONValue, AgentToolError>?, Never>
     }
 
+    /// Tabs an agent acted in (opened, navigated, selected), which carry a badge until they close.
+    private(set) var touchedTabs: Set<Tab.ID> = []
+    /// The last few calls, newest last, for the toolbar panel. Hosts only, never full addresses.
+    private(set) var recentLog: [AgentLogLine] = []
+    static let recentLogLength = 10
+    /// Tabs with an agent call running in them: one at a time per tab (`exclusive`).
+    private(set) var busyTabs: Set<Tab.ID> = []
+    /// Set when the user navigates a tab an agent call is running in, or an agent stops it,
+    /// which ends that call.
+    private(set) var interruptions: [Tab.ID: AgentInterruption] = [:]
+
+    @ObservationIgnored weak var browser: Browser?
+    @ObservationIgnored private var tabIDs = AgentTabIDs()
+    @ObservationIgnored private var lastAction: [Tab.ID: Date] = [:]
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog
     @ObservationIgnored private let defaults: UserDefaults
@@ -91,7 +108,8 @@ final class AgentHub {
     /// What `lastSeen` and the idle timeout read; tests move it forward.
     @ObservationIgnored private let now: @MainActor () -> Date
 
-    init(folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
+    init(browser: Browser? = nil, folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
+        self.browser = browser
         self.now = now
         self.folder = folder
         self.defaults = defaults
@@ -369,7 +387,7 @@ final class AgentHub {
         guard calls[key] == nil else {
             return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
         }
-        let result: Result<JSONValue, AgentToolError>
+        var result: Result<JSONValue, AgentToolError>
         if isRateLimited(session.id, at: started) {
             result = .failure(AgentToolError(code: "rate_limited", message: "More than \(Self.maxCallsPerSecond) tool calls in a second. Slow down."))
         } else {
@@ -400,18 +418,132 @@ final class AgentHub {
             }
         }
         let ms = Int(Date().timeIntervalSince(started) * 1000)
-        let logged: JSONValue = switch result {
-        case .success: ["ok": true]
-        case .failure(let error): ["ok": false, "error": .string(error.code)]
+        if case .failure(var error) = result, error.tab == nil, let id = arguments["tab"]?.string, tabIDs.tabID(for: id) != nil || tabIDs.closed[id] != nil {
+            error.tab = id
+            result = .failure(error)
         }
-        await log.append([
+        // Reads are logged without what they returned; the tab a call opened is named.
+        var logged: [String: JSONValue] = ["ok": .bool((try? result.get()) != nil)]
+        if case .failure(let error) = result { logged["error"] = .string(error.code) }
+        let tabID: String? = switch result {
+        case .success(let value): arguments["tab"]?.string ?? value["tab"]?.string
+        case .failure(let error): error.tab ?? arguments["tab"]?.string
+        }
+        var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": arguments,
-            "result": logged,
+            "params": AgentURLs.redacted(arguments),
+            "result": .object(logged),
             "ms": .int(ms),
-        ], at: started)
+        ]
+        let tab = tabID.map(loggedTab)
+        if let tab { entry["tab"] = tab }
+        recentLog.append(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
+        if recentLog.count > Self.recentLogLength { recentLog.removeFirst(recentLog.count - Self.recentLogLength) }
+        await log.append(entry, at: started)
         return Self.result(Self.toolResult(result), id: id)
+    }
+
+    /// The tab as the log names it: its id, and its host and redacted address while it is open.
+    private func loggedTab(_ id: String) -> JSONValue {
+        var fields: [String: JSONValue] = ["id": .string(id)]
+        if let tabID = tabIDs.tabID(for: id), let url = browser?.tabs.first(where: { $0.id == tabID })?.url {
+            fields["host"] = .string(url.host() ?? "")
+            fields["url"] = .string(AgentURLs.redacted(url.absoluteString))
+        }
+        return .object(fields)
+    }
+
+    /// The log page's Clear also empties the panel's lines, which repeat the log.
+    func clearRecentLog() {
+        recentLog = []
+    }
+
+    // MARK: Tabs
+
+    /// The id agents know `tab` by, given the first time any agent sees it. Only for open tabs
+    /// (listing, opening): a call already holding a tab names it by the `NamedTab` it started with.
+    func id(for tab: Tab) -> String {
+        tabIDs.id(for: tab.id)
+    }
+
+    /// The open tab an agent named, or the reason it can't be used.
+    func tab(named id: String) throws -> NamedTab {
+        if let closed = tabIDs.closed[id] {
+            throw AgentToolError(code: "tab_closed", message: "\(id) was closed at \(closed.formatted(date: .omitted, time: .standard)).")
+        }
+        guard let tabID = tabIDs.tabID(for: id), let tab = browser?.tabs.first(where: { $0.id == tabID }) else {
+            throw AgentToolError(code: "unknown_tab", message: "There is no tab \(id). Call tabs_list for the open tabs.")
+        }
+        return NamedTab(tab: tab, id: id)
+    }
+
+    func isOpen(_ tab: Tab) -> Bool {
+        browser?.tabs.contains { $0 === tab } == true
+    }
+
+    func isTouched(_ tab: Tab) -> Bool {
+        touchedTabs.contains(tab.id)
+    }
+
+    /// Marks an agent action in `tab`: its badge, and ten minutes during which it doesn't sleep.
+    func touch(_ tab: Tab) {
+        // A closed tab's entries would outlive it: `didClose` has already cleared them.
+        guard isOpen(tab) else { return }
+        if !touchedTabs.contains(tab.id) { touchedTabs.insert(tab.id) }
+        lastAction[tab.id] = now()
+    }
+
+    /// An agent acted in the tab in the last 10 minutes; the sleep pass leaves it be.
+    func holds(_ tab: Tab) -> Bool {
+        guard let last = lastAction[tab.id] else { return false }
+        return now().timeIntervalSince(last) < 10 * 60
+    }
+
+    /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
+    /// waiting on the tab ends with the same error as it sees the tab gone.
+    func didClose(_ tab: Tab) {
+        tabIDs.retire(tab.id, at: now())
+        touchedTabs.remove(tab.id)
+        lastAction[tab.id] = nil
+    }
+
+    /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins over an
+    /// agent call running in it.
+    func userNavigated(_ tab: Tab) {
+        guard busyTabs.contains(tab.id) else { return }
+        interruptions[tab.id] = .user
+    }
+
+    /// An agent's `stop`, which doesn't queue: it ends the call running in the tab, unless the
+    /// user already did.
+    func agentStopped(_ tab: Tab) {
+        guard busyTabs.contains(tab.id), interruptions[tab.id] == nil else { return }
+        interruptions[tab.id] = .agentStop
+    }
+
+    /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
+    /// turn. Waiting in line counts against the call's own deadline. Its errors name the tab.
+    func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {
+        do {
+            let tab = named.tab
+            let free = try await AgentWait.until(deadline) { () -> Bool? in
+                guard self.isOpen(tab) else { throw named.closedError }
+                return self.busyTabs.contains(tab.id) ? nil : true
+            }
+            guard free != nil else {
+                throw AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: another agent call was still running in it.")
+            }
+            busyTabs.insert(tab.id)
+            defer {
+                busyTabs.remove(tab.id)
+                interruptions[tab.id] = nil
+            }
+            return try await body()
+        } catch var error as AgentToolError {
+            error.tab = error.tab ?? named.id
+            throw error
+        }
     }
 
     private func isRateLimited(_ sessionID: String, at now: Date) -> Bool {
@@ -433,9 +565,11 @@ final class AgentHub {
         case .success(let value):
             return ["content": [["type": "text", "text": .string(String(decoding: value.encoded(), as: UTF8.self))]], "structuredContent": value, "isError": false]
         case .failure(let error):
+            var data: [String: JSONValue] = ["code": .string(error.code), "message": .string(error.message)]
+            if let tab = error.tab { data["tab"] = .string(tab) }
             return [
                 "content": [["type": "text", "text": .string("\(error.code): \(error.message)")]],
-                "structuredContent": ["code": .string(error.code), "message": .string(error.message)],
+                "structuredContent": .object(data),
                 "isError": true,
             ]
         }
@@ -455,7 +589,7 @@ final class AgentHub {
 
     // MARK: Tools
 
-    /// The one tool of this version; page tools come in the next ones.
+    /// Always listed; the tab tools (`AgentTabTools.swift`) come with a browser.
     static let statusTool = AgentTool(
         name: "lithium_status",
         description: "Reports Lithium’s version and this agent session. Lithium is the user’s own browser: the user sees and can stop every agent action.",

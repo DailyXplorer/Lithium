@@ -52,6 +52,9 @@ final class Privacy {
     func start() {
         guard loadTask == nil else { return }
         loadTask = Task { await loadRuleLists() }
+        // scripts/test sets it: each test's Browser would download and convert the lists on its
+        // own, and a dozen of them landing at once stalled a later test for two minutes.
+        guard ProcessInfo.processInfo.environment["LITHIUM_NO_FILTER_UPDATES"] != "1" else { return }
         updateLoop = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.loadTask?.value

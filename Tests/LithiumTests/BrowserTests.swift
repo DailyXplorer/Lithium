@@ -458,9 +458,11 @@ struct BrowserTests {
 }
 
 /// A tiny HTTP server on 127.0.0.1: each path answers with its headers and body, then closes.
+/// Headers that begin with a status line (`HTTP/1.1 302 Found`) replace `200 OK`.
 /// Outside the main actor: Network calls its handlers on a queue of its own.
 enum LocalHTTP {
-    static func serve(_ routes: [String: (headers: String, body: String)]) async throws -> (NWListener, URL) {
+    /// `delay` holds every answer back, for a page still on its way.
+    static func serve(_ routes: [String: (headers: String, body: String)], delay: TimeInterval = 0) async throws -> (NWListener, URL) {
         let listener = try NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { connection in
             connection.start(queue: .global())
@@ -468,8 +470,11 @@ enum LocalHTTP {
                 let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                 let (headers, body) = routes[path] ?? ("Content-Type: text/plain", "")
-                let response = "HTTP/1.1 200 OK\r\n\(headers)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
-                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                let status = headers.hasPrefix("HTTP/") ? "" : "HTTP/1.1 200 OK\r\n"
+                let response = "\(status)\(headers)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                }
             }
         }
         listener.start(queue: .global())

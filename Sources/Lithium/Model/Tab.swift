@@ -120,6 +120,10 @@ final class Tab: NSObject, Identifiable {
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
+    /// Counts the loads started, so an agent's input tells a load it started from one already
+    /// under way.
+    private(set) var loadStarts = 0
+    @ObservationIgnored private var startedNavigation: WKNavigation?
     /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
     /// that have none (Lithium's error page, local files).
     @ObservationIgnored private(set) var httpStatus: Int?
@@ -424,7 +428,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
-        isAwaitingCommit = false
+        awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
@@ -464,7 +468,7 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     // WebKit reports a load from the moment it is asked for, before it calls
                     // didStartProvisionalNavigation.
-                    if self?.isLoading != webView.isLoading { self?.isAwaitingCommit = webView.isLoading }
+                    if self?.isLoading != webView.isLoading { self?.awaitCommit(webView.isLoading) }
                     self?.isLoading = webView.isLoading
                     self?.tellExtensions(.loading)
                 }
@@ -714,7 +718,15 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
         httpStatus = nil
-        isAwaitingCommit = true
+        awaitCommit(true, for: navigation)
+    }
+
+    /// `navigation` is nil when `isLoading` tells of a load before WebKit names it: that load,
+    /// named next, isn't counted twice, but one that replaces the load under way is.
+    private func awaitCommit(_ awaiting: Bool, for navigation: WKNavigation? = nil) {
+        if awaiting, !isAwaitingCommit || navigation != nil && startedNavigation != nil && startedNavigation !== navigation { loadStarts += 1 }
+        startedNavigation = awaiting ? navigation ?? startedNavigation : nil
+        isAwaitingCommit = awaiting
     }
 
     /// Private WebKit (`WKNavigationDelegatePrivate`), which calls it only on a delegate that has it.
@@ -726,7 +738,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        isAwaitingCommit = false
+        awaitCommit(false)
         if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.

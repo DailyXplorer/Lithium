@@ -103,6 +103,16 @@ struct AgentInputTests {
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Inside</button>
             <script>document.querySelector('button').addEventListener('click', (event) => parent.postMessage('child-click:' + event.isTrusted, '*'));</script>
             """),
+        "/far-frame": (html, """
+            <title>Far frame</title><style>body { margin: 0 } iframe { position: fixed; left: 0; top: 2500px; width: 300px; height: 100px }</style>
+            <iframe id="far"></iframe>
+            <script>document.getElementById('far').src = \(otherOrigin) + '/field-child';</script>
+            \(logger)
+            """),
+        "/field-child": (html, """
+            <input id="inner" aria-label="Inner">
+            <script>document.getElementById('inner').addEventListener('input', (event) => parent.postMessage('inner:' + event.target.value, '*'));</script>
+            """),
         "/covered": (html, """
             <title>Covered</title><style>body { margin: 0 }</style>
             <button id="under" style="position:absolute;left:40px;top:40px">Under</button>
@@ -404,6 +414,54 @@ struct AgentInputTests {
         }
     }
 
+    @Test func typeAnswersOnceTheLastInsertedCharacterIsInThePage() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            let field = try await ref(client, id, "textbox", "Field")
+            for word in ["café", "naïveté", "déjà vu ✓"] {
+                let typed = await client.call("type", ["tab": .string(id), "ref": .string(field), "text": .string(word), "clear": true])
+                #expect(!typed.isError, "\(typed.content)")
+                #expect(try await page(tab, "return document.getElementById('field').value") as? String == word)
+            }
+        }
+    }
+
+    @Test func keysWithoutRefReachAFocusedFieldInAFrameOutOfView() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "far-frame"))
+            let inner = try await ref(client, id, "textbox", "Inner")
+            #expect(inner.contains(":"))
+            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(inner)])).isError)
+            // Fixed below the viewport: no scrolling brings it into view.
+            #expect(try await page(tab, "return document.querySelector('iframe').getBoundingClientRect().top") as? Double ?? 0 > 2000)
+            let typed = await client.call("type", ["tab": .string(id), "text": "far"])
+            #expect(!typed.isError, "\(typed.content)")
+            let pressed = await client.call("press", ["tab": .string(id), "keys": "Backspace"])
+            #expect(!pressed.isError, "\(pressed.content)")
+            // The frame tells its page by postMessage, which arrives a moment later.
+            #expect(await eventually { try await log(tab).last == "inner:fa" })
+        }
+    }
+
+    @Test func undoAndRedoPerformedAsManyTimesAsRepeatAsks() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            let field = try await ref(client, id, "textbox", "Field")
+            let value = { try await self.page(tab, "return document.getElementById('field').value") as? String }
+            for text in ["a", "b", "c", "d"] {
+                #expect(!(await client.call("type", ["tab": .string(id), "ref": .string(field), "text": .string(text)])).isError)
+            }
+            #expect(try await value() == "abcd")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Meta+Z"])).isError)
+            #expect(try await value() == "abc")
+            let undone = await client.call("press", ["tab": .string(id), "keys": "Meta+Z", "repeat": 3])
+            #expect(!undone.isError, "\(undone.content)")
+            #expect(try await value() == "")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Shift+Meta+Z", "repeat": 2])).isError)
+            #expect(try await value() == "ab")
+        }
+    }
+
     // MARK: Checks
 
     @Test func actionabilityErrorsNameWhatStandsInTheWay() async throws {
@@ -488,6 +546,23 @@ struct AgentInputTests {
             #expect(next["title"] == "Done")
             #expect(next["diff"]?.string != nil)
             #expect(tab.url?.path() == "/done")
+        }
+    }
+
+    @Test func aLoadUnderWayBeforeAClickIsNotTheClicks() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            let press = try await ref(client, id, "button", "Press")
+            tab.webView.load(URLRequest(url: slowBase.appending(path: "slow")))
+            defer { tab.webView.stopLoading() }
+            #expect(await waitUntil(5) { tab.isAwaitingCommit })
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(press), "timeoutMs": 5000])
+            #expect(!clicked.isError, "\(clicked.content)")
+            #expect(clicked["navigated"] == false)
+            #expect(try await log(tab, ["mouseup", "click"]) == ["mouseup:true:b", "click:true:b:1"])
+            #expect(tab.isAwaitingCommit)
         }
     }
 
@@ -618,6 +693,37 @@ struct AgentInputTests {
             #expect(clicked["grant"] == "once")
             #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
             #expect(confirmations.pending.isEmpty)
+        }
+    }
+
+    @Test func aButtonUpThatFailsIsStillLetGo() async throws {
+        try await withAgent { client, base in
+            let (_, tab) = try await open(client, base.appending(path: "events"))
+            let webView = tab.webView
+            let windows = (0..<2).map { _ in
+                let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                return window
+            }
+            webView.removeFromSuperview()
+            webView.frame = windows[0].contentLayoutRect
+            windows[0].contentView = webView
+            defer {
+                webView.removeFromSuperview()
+                windows.forEach { $0.contentView = nil }
+            }
+            try await clearLog(tab)
+            let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
+            try input.down(at: CGPoint(x: 100, y: 60))
+            #expect(await eventually { try await log(tab, ["mousedown"]) == ["mousedown:true:b"] })
+            // The user selects the tab before the last event of a drag: the up fails, and the
+            // button is let go in the window the web view is in now.
+            webView.removeFromSuperview()
+            windows[1].contentView = webView
+            #expect(throws: NativeInput.WindowChanged.self) { try input.up() }
+            #expect(await eventually { try await log(tab, ["mouseup"]) == ["mouseup:true:b"] })
+            input.release()
+            #expect(try await log(tab, ["mouseup"]) == ["mouseup:true:b"])
         }
     }
 

@@ -60,10 +60,11 @@ final class NativeInput {
         pressed = true
     }
 
+    /// Held until sent: an up that fails leaves the button for `release` to let go.
     func up(clickCount: Int = 1) throws {
         guard let held else { return }
-        self.held = nil
         try send(mouse: Self.upType(for: held.button), at: pointer ?? held.at, modifiers: held.modifiers, clickCount: clickCount)
+        self.held = nil
     }
 
     /// A button still down (Stop, the user, an error mid-drag) is let go, wherever the window is.

@@ -145,6 +145,7 @@ struct Settle {
 private struct SettleReport: Decodable {
     let token: String
     let seen: Bool
+    var counts: [String: Int]?
 }
 
 extension AgentHub {
@@ -378,7 +379,10 @@ extension AgentHub {
             let fields: [String: JSONValue] = ["grant": try await hub.allow(action, on: target, submitting: submits ? target.report.form : nil, "press \(combo) in \(target.shortName)", ctx)]
             return try await hub.deliver(ctx, target, wait: wait, diff: diff, fields: fields) { input in
                 if let responder {
-                    ctx.webView.tryToPerform(responder, with: nil)
+                    for _ in 0..<times {
+                        try hub.checkStillWaitable(ctx.named, ignoringDialog: true)
+                        ctx.webView.tryToPerform(responder, with: nil)
+                    }
                     return Settle(type: "keyup", count: target.counts["keyup"] ?? 0)
                 }
                 for _ in 0..<times { try input.key(key, modifiers: modifiers) }
@@ -732,8 +736,9 @@ extension AgentHub {
     }
 
     /// A target in a child frame: its point in the top-level viewport, each frame above letting
-    /// it through, and whether a payment provider's frame or a challenge holds it.
-    private func placeInFrame(_ target: inout ActionTarget, _ ctx: ActionContext, hitTest: Bool) async throws {
+    /// it through, and whether a payment provider's frame or a challenge holds it. Keys, which
+    /// reach the focused element wherever it is, take one out of view (`onScreen` false).
+    private func placeInFrame(_ target: inout ActionTarget, _ ctx: ActionContext, hitTest: Bool, onScreen: Bool = true) async throws {
         guard let address = target.address else { return }
         let layout = try await self.layout(of: ctx.named, ctx.webView, until: ctx.deadline, placing: address)
         guard let path = layout.children.values.first(where: { $0.token == address.document })?.path, let placement = layout.placement(of: path) else {
@@ -743,7 +748,7 @@ extension AgentHub {
         target.css = CGPoint(x: placement.origin.x + local.x * placement.scale, y: placement.origin.y + local.y * placement.scale)
         target.viewport = layout.main.viewport
         let viewport = CGRect(x: 0, y: 0, width: layout.main.viewport.w, height: layout.main.viewport.h)
-        guard placement.clip.contains(target.css), viewport.contains(target.css) else {
+        guard !onScreen || placement.clip.contains(target.css) && viewport.contains(target.css) else {
             throw AgentToolError(code: "not_in_viewport", message: "\(target.label) is outside the part of its frame the page shows. Scroll the page so the frame shows it.")
         }
         var components = path.split(separator: ".").map(String.init)
@@ -829,7 +834,7 @@ extension AgentHub {
             if target.readonly == true { throw AgentToolError(code: "readonly", message: "\(placed.label) is read-only.") }
             if target.editable != true { throw AgentToolError(code: "not_editable", message: "\(placed.label) isn’t a field text can be typed into.") }
         }
-        if case .child = frame { try await placeInFrame(&placed, ctx, hitTest: false) }
+        if case .child = frame { try await placeInFrame(&placed, ctx, hitTest: false, onScreen: false) }
         return placed
     }
 
@@ -967,27 +972,34 @@ extension AgentHub {
     /// rendering update. A page that never sees them (it stopped them before Lithium's listener)
     /// holds the action no longer than `timeout` milliseconds. A document on its way out never
     /// answers: a load that started `since` ends the wait, as does the frame going.
-    func settle(_ ctx: ActionContext, _ frame: FrameTarget, _ settle: Settle, timeout: Int, frame rendered: Bool, hold: Int = 0, since: LoadProgress? = nil) async throws {
+    /// Returns the frame's counts of trusted events once it answered.
+    @discardableResult
+    func settle(_ ctx: ActionContext, _ frame: FrameTarget, _ settle: Settle, timeout: Int, frame rendered: Bool, hold: Int = 0, since: LoadProgress? = nil) async throws -> [String: Int] {
         let args: [String: Any] = ["type": settle.type, "count": settle.count, "timeoutMs": timeout, "scrolled": settle.scrolled, "frame": rendered, "hold": hold]
         let pending = start(ctx.webView, frame, "settle", args)
         let (tab, state) = (ctx.named.tab, ctx.state)
         let done = try await watch(ctx.named, until: ctx.deadline) { () -> Bool? in
             if pending.result != nil { return true }
-            return since?.hasMoved(tab, state) == true ? true : nil
+            // A load under way before the action that commits takes the document too.
+            return since.map { $0.hasMoved(tab, state) || tab.commits > $0.commits } == true ? true : nil
         }
         if done == nil { throw timedOut(ctx.named, after: ctx.timeout, "its page didn’t handle the agent’s input: a script may be keeping it busy") }
-        if let unseen = settle.unseen, let data = try? pending.result?.get(), (try? PageProbe.decode(SettleReport.self, from: data))?.seen == false {
+        let report = (try? pending.result?.get()).flatMap { try? PageProbe.decode(SettleReport.self, from: $0) }
+        if let unseen = settle.unseen, report?.seen == false {
             throw AgentToolError(code: "unsupported", message: unseen)
         }
+        return report?.counts ?? [:]
     }
 
     /// Text no key types, inserted once the page has seen the keys typed before it: an
-    /// insertion overtakes key events still queued (design section 3, item 12).
+    /// insertion overtakes key events still queued (design section 3, item 12). `inserted`
+    /// becomes the page's `beforeinput` count once it has the text, counted from what the keys
+    /// before it fired, as a key that types fires one too.
     func insert(_ pending: inout String, _ input: NativeInput, _ ctx: ActionContext, _ target: ActionTarget, keys: Int, inserted: inout Int) async throws {
         guard !pending.isEmpty else { return }
-        try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false)
+        let counts = try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false)
         try input.insert(pending)
-        inserted += 1
+        inserted = max(inserted, counts["beforeinput"] ?? 0) + 1
         pending = ""
         try await settle(ctx, target.frame, Settle(type: "beforeinput", count: inserted), timeout: 1000, frame: false)
     }

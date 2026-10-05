@@ -494,6 +494,7 @@ extension AgentHub {
     /// from the ones before.
     struct LoadProgress {
         var commits: Int
+        let starts: Int
         let moves: Int
         let unshown: Int
         /// The load before may have failed with its error page still on its way: that page
@@ -503,15 +504,16 @@ extension AgentHub {
 
         @MainActor
         init(of tab: Tab, _ state: AgentTab?) {
-            (commits, moves, unshown) = (tab.commits, tab.sameDocumentNavigations, tab.unshownLoads)
+            (commits, starts, moves, unshown) = (tab.commits, tab.loadStarts, tab.sameDocumentNavigations, tab.unshownLoads)
             earlierError = tab.loadError
             answers = state?.downloadAnswers ?? 0
         }
 
-        /// A load started since, ended without a page (a download, a refused scheme), or asked the user.
+        /// A load started since, ended without a page (a download, a refused scheme), or asked
+        /// the user. A load already under way isn't one.
         @MainActor
         func hasMoved(_ tab: Tab, _ state: AgentTab?) -> Bool {
-            tab.isAwaitingCommit || tab.commits > commits || tab.unshownLoads > unshown || (state?.downloadAnswers ?? 0) > answers
+            tab.loadStarts > starts || tab.unshownLoads > unshown || (state?.downloadAnswers ?? 0) > answers
         }
     }
 

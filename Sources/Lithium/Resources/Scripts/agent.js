@@ -188,6 +188,9 @@
     && (autocomplete(element).some((token) => token.startsWith('cc-') || token === 'transaction-amount') || cardWords.test(fieldWords(element)));
   const isCardNumber = (element) => autocomplete(element).includes('cc-number') || cardNumberWords.test(fieldWords(element));
   const guardOf = (element) => (isPassword(element) ? 'password' : isCard(element) ? 'payment' : null);
+  // Apple Pay and Google Pay buttons: activating one starts a payment.
+  const isWallet = (element, style) => element.localName === 'apple-pay-button' || element.localName === 'gpay-button'
+    || element.classList.contains('gpay-button') || /-apple-pay-button/.test(style.webkitAppearance || style.appearance || '');
 
   // Digit runs that pass the Luhn check, wherever a field holds one.
   const luhn = (digits) => {
@@ -371,6 +374,8 @@
       && (scope === 'page' || (box[1] + box[3] > 0 && box[0] < view.w && box[0] + box[2] > 0));
     const nodes = [];
     const frames = [];
+    // Whether the document is a payment page (design section 7.3), in or out of scope.
+    const pay = {};
     const focused = deepFocus();
     const indexes = frameIndexes();
     const styles = new Map();
@@ -423,6 +428,9 @@
         return;
       }
       const next = { ...context, cursor: style.cursor };
+      const wallet = shown && isWallet(element, style);
+      if (wallet) pay.wallet = true;
+      if (shown && isField(element) && isCard(element)) pay.cards = true;
       const emitted = shown && role && (interactive.has(role) || structural.has(role) || role === 'clickable');
       if (emitted) {
         const box = round(element.getBoundingClientRect());
@@ -442,6 +450,7 @@
           if (tag === 'select') node.options = element.options.length;
           const guard = isField(element) ? guardOf(element) : null;
           if (guard) node.guard = guard;
+          if (wallet) node.wallet = true;
           if (isField(element)) controls.push(element);
           nodes.push(node);
         }
@@ -458,7 +467,7 @@
       // most likely has a closed one: agents act inside it by coordinates.
       if (shown && tag.includes('-') && !element.shadowRoot && element.childElementCount === 0 && !collapse(element.textContent)) {
         const box = round(element.getBoundingClientRect());
-        if (box[2] >= 4 && box[3] >= 4 && inScope(box)) nodes.push({ id: idOf(element), role: 'shadow-closed', name: tag, box });
+        if (box[2] >= 4 && box[3] >= 4 && inScope(box)) nodes.push({ id: idOf(element), role: 'shadow-closed', name: tag, box, wallet: wallet || undefined });
         return;
       }
       for (const child of childrenOf(element)) visit(child, next);
@@ -478,7 +487,7 @@
     frame.sheetStates = sheetStates();
     return {
       token: frame.token, gen: generation, path: framePath(), url: location.href, title: document.title, viewport: view,
-      nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit,
+      nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit, pay,
     };
   };
 

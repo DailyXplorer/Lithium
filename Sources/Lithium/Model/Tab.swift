@@ -604,7 +604,12 @@ extension Tab: WKNavigationDelegate {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
         }
-        if action.shouldPerformDownload { return (.download, preferences) }
+        if action.shouldPerformDownload {
+            // A download the agent started waits for the user's Allow.
+            let name = url.lastPathComponent
+            let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url)
+            return (allowed == false ? .cancel : .download, preferences)
+        }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
@@ -670,6 +675,10 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
+        // A download the agent started waits for the user's Allow, in place of what follows.
+        if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: response.response.suggestedFilename, size: response.response.expectedContentLength, from: response.response.url) {
+            return allowed ? .download : .cancel
+        }
         if response.isForMainFrame { return .download }
         // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
         // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
@@ -870,11 +879,16 @@ extension Tab: WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
-        _ = await present(alert(message, from: frame, buttons: ["OK"]))
+        _ = await answer(AgentDialog(.alert, message: message, host: frame.securityOrigin.host)) {
+            _ = await self.present(self.alert(message, from: frame, buttons: ["OK"]))
+            return DialogReply(accepted: true, text: nil)
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
-        await present(alert(message, from: frame, buttons: ["OK", "Cancel"])) == .alertFirstButtonReturn
+        await answer(AgentDialog(.confirm, message: message, host: frame.securityOrigin.host)) {
+            DialogReply(accepted: await self.present(self.alert(message, from: frame, buttons: ["OK", "Cancel"])) == .alertFirstButtonReturn, text: nil)
+        }.accepted
     }
 
     func webView(
@@ -883,11 +897,22 @@ extension Tab: WKUIDelegate {
         defaultText: String?,
         initiatedByFrame frame: WKFrameInfo
     ) async -> String? {
-        let alert = alert(prompt, from: frame, buttons: ["OK", "Cancel"])
-        let field = NSTextField(string: defaultText ?? "")
-        field.frame.size.width = 260
-        alert.accessoryView = field
-        return await present(alert) == .alertFirstButtonReturn ? field.stringValue : nil
+        let reply = await answer(AgentDialog(.prompt, message: prompt, defaultText: defaultText, host: frame.securityOrigin.host)) {
+            let alert = self.alert(prompt, from: frame, buttons: ["OK", "Cancel"])
+            let field = NSTextField(string: defaultText ?? "")
+            field.frame.size.width = 260
+            alert.accessoryView = field
+            return DialogReply(accepted: await self.present(alert) == .alertFirstButtonReturn, text: field.stringValue)
+        }
+        return reply.accepted ? reply.text ?? "" : nil
+    }
+
+    /// A dialog in a tab out of sight that an agent drives goes to the agent, never to a modal
+    /// that would hold up the user; any other is the user's, and agents see it while it shows.
+    private func answer(_ dialog: AgentDialog, asUser: () async -> DialogReply) async -> DialogReply {
+        guard let agent = browser?.agent else { return await asUser() }
+        if let reply = await agent.agentReply(to: dialog, in: self) { return reply }
+        return await agent.whileUserAnswers(dialog, in: self, asUser)
     }
 
     func webView(
@@ -895,6 +920,12 @@ extension Tab: WKUIDelegate {
         runOpenPanelWith parameters: WKOpenPanelParameters,
         initiatedByFrame frame: WKFrameInfo
     ) async -> [URL]? {
+        // An agent never gets the user's panel: only files the user allowed for it.
+        switch browser?.agent?.openPanel(for: self) {
+        case .files(let files): return files
+        case .cancelled: return nil
+        case nil: break
+        }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories

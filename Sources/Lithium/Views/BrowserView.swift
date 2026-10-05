@@ -83,6 +83,17 @@ struct ContentCard: View {
         let tab = browser.selectedTab
         // Strips sit above the page and push it down, so they never hide its top.
         VStack(spacing: 0) {
+            // An agent's prompt shows whichever tab is selected: it names its tab, with Show Tab.
+            if let confirmations = browser.agent?.confirmations, let confirmation = confirmations.front(selected: tab?.id) {
+                AgentConfirmationBanner(
+                    confirmation: confirmation,
+                    confirmations: confirmations,
+                    otherTab: confirmation.tabID == tab?.id ? nil : browser.tabs.first { $0.id == confirmation.tabID },
+                    queued: confirmations.pending.count - 1
+                )
+                .id(confirmation.id)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
             if let request = browser.permissions.pending.first(where: { $0.tabID == tab?.id }) {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -127,6 +138,7 @@ struct ContentCard: View {
             }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
+        .animation(.snappy(duration: 0.2), value: browser.agent?.confirmations.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))

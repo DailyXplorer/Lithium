@@ -32,9 +32,12 @@ struct FrameLayout {
     /// out, by the path of the frame they are in; and whether one answered with no path at all.
     private let unplaced: [String: Int]
     private let lost: Bool
+    /// Payment providers' frames are painted over whole, whatever they show.
+    private let providers: PaymentProviders
 
-    init(main: MaskReport, children: [MaskReport]) {
+    init(main: MaskReport, children: [MaskReport], providers: PaymentProviders = .known) {
         self.main = main
+        self.providers = providers
         var byPath: [String: MaskReport] = [:]
         var unplaced: [String: Int] = [:]
         var lost = false
@@ -105,8 +108,9 @@ struct FrameLayout {
     }
 
     /// Every rect to mask, in top-level viewport CSS pixels: the sensitive fields of the frames
-    /// that answered, and the whole box of every frame that didn't (no hello: open before agent
-    /// access was on; or too slow), since Lithium can't see what is in it. Nil when a frame
+    /// that answered, and the whole box of every payment provider's frame and of every frame that
+    /// didn't answer (no hello: open before agent access was on; or too slow), since Lithium can't
+    /// see what is in it. Nil when a frame
     /// answered that Lithium can't place (in a shadow root, an `<embed>`), so it can't tell where to paint.
     var masks: [CGRect]? {
         if lost { return nil }
@@ -118,7 +122,9 @@ struct FrameLayout {
                 return nil
             }
             if unplaced[path, default: 0] > report.frames.count(where: { $0.index < 0 }) { return nil }
-            let unknown = report.frames.filter { $0.index < 0 || children[path.isEmpty ? "\($0.index)" : "\(path).\($0.index)"] == nil }
+            let unknown = report.frames.filter {
+                $0.index < 0 || children[path.isEmpty ? "\($0.index)" : "\(path).\($0.index)"] == nil || providers.contains(address: $0.src)
+            }
             rects += (report.rects + unknown.map(\.box)).map { placement.place($0).intersection(placement.clip) }
         }
         return rects.filter { !$0.isNull && !$0.isEmpty }

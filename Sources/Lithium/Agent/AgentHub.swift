@@ -106,6 +106,13 @@ final class AgentHub {
     /// The last few calls, newest last, for the toolbar panel. Hosts only, never full addresses.
     private(set) var recentLog: [AgentLogLine] = []
     static let recentLogLength = 10
+    /// The user's Allow or Deny prompts and the site grants, which the banner and the panel show.
+    @ObservationIgnored let confirmations = AgentConfirmations()
+    /// Payment providers' hosts for the snapshot's `guard`; tests make a local server one.
+    @ObservationIgnored var paymentProviders = PaymentProviders.known
+    /// The session whose tool call is running, for what the call starts that outlives it (a
+    /// download after `wait: none`) and for confirmations deep inside it.
+    @TaskLocal static var callSession: MCPSession?
 
     @ObservationIgnored weak var browser: Browser?
     @ObservationIgnored private var tabIDs = AgentTabIDs()
@@ -247,15 +254,18 @@ final class AgentHub {
         isShutDown = true
         idleSweep?.cancel()
         endAllSessions()
+        answerEveryDialog()
         server?.stop()
         server = nil
         AgentEndpoint.delete(in: folder)
     }
 
-    /// The user's Stop: cancels every call in flight, ends every session, closes every
-    /// connection, and refuses new sessions until `allowAgain()`. Safe to repeat.
+    /// The user's Stop: cancels every call in flight, denies every prompt and drops every site
+    /// grant, answers the pages' dialogs with their safe default, ends every session, closes
+    /// every connection, and refuses new sessions until `allowAgain()`. Safe to repeat.
     func stop() {
         endAllSessions()
+        answerEveryDialog()
         server?.closeConnections()
         if state == .listening { state = .stopped }
     }
@@ -281,6 +291,7 @@ final class AgentHub {
 
     private func end(_ session: MCPSession) {
         for (key, call) in calls where key.session == session.id { call.task.cancel() }
+        confirmations.end(session: session.id)
         sessions.removeAll { $0.id == session.id }
         lastSeen[session.id] = nil
         recentCalls[session.id] = nil
@@ -412,7 +423,7 @@ final class AgentHub {
         } else {
             let task = Task { () -> Result<AgentToolOutput, AgentToolError>? in
                 do {
-                    return .success(try await tool.run(arguments, session, self))
+                    return .success(try await AgentHub.$callSession.withValue(session) { try await tool.run(arguments, session, self) })
                 } catch let error as AgentToolError {
                     return .failure(error)
                 } catch {
@@ -457,8 +468,7 @@ final class AgentHub {
         ]
         let tab = tabID.map(loggedTab)
         if let tab { entry["tab"] = tab }
-        recentLog.append(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
-        if recentLog.count > Self.recentLogLength { recentLog.removeFirst(recentLog.count - Self.recentLogLength) }
+        noteInPanel(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
         await log.append(entry, at: started)
         return Self.result(Self.toolResult(result), id: id)
     }
@@ -471,6 +481,11 @@ final class AgentHub {
             fields["url"] = .string(AgentURLs.redacted(url.absoluteString))
         }
         return .object(fields)
+    }
+
+    func noteInPanel(_ line: AgentLogLine) {
+        recentLog.append(line)
+        if recentLog.count > Self.recentLogLength { recentLog.removeFirst(recentLog.count - Self.recentLogLength) }
     }
 
     /// The log page's Clear also empties the panel's lines, which repeat the log.
@@ -535,15 +550,20 @@ final class AgentHub {
     /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
     /// waiting on the tab ends with the same error as it sees the tab gone.
     func didClose(_ tab: Tab) {
+        confirmations.cancel(tab: tab.id)
+        answerDialog(in: tab)
         tabIDs.retire(tab.id, at: now())
         tabs[tab.id] = nil
     }
 
     /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins over an
-    /// agent call running in it.
+    /// agent call running in it, a prompt about it, and the agent's dialog in it.
     func userNavigated(_ tab: Tab) {
-        guard let state = tabs[tab.id], state.isBusy else { return }
-        state.interruption = .user
+        guard let state = tabs[tab.id] else { return }
+        state.drive = nil
+        confirmations.cancel(tab: tab.id)
+        answerDialog(in: tab)
+        if state.isBusy { state.interruption = .user }
     }
 
     /// An agent's `stop`, which doesn't queue: it ends the call running in the tab, unless the

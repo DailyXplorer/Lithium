@@ -50,21 +50,32 @@ extension AgentHub {
             let format = try arguments.choice("format", ["text", "json"], default: "text")
             let maxNodes = try arguments.int("maxNodes", default: 300, in: 1...2000)
             let since = try arguments.value["since"].map { _ in try arguments.int("since", default: 0, in: 0...Int.max) }
-            return try await hub.reading(named) { webView, deadline in
-                guard let state = hub.agentTab(for: named.tab) else { throw named.closedError }
-                if named.tab.pdf != nil { throw AgentHub.pdfShown(named, use: "read_text or screenshot") }
-                var snapshot = try await hub.snapshot(of: named, in: webView, scope: scope, maxNodes: maxNodes, until: deadline)
-                let previous = state.record(&snapshot, session: session.id)
-                if let since, let previous, previous.seq == since, previous.document == snapshot.document {
-                    let diff = snapshot.diff(since: previous)
-                    guard format == "text" else { return AgentToolOutput(structured: diff) }
-                    return AgentToolOutput(structured: AgentHub.textResult(snapshot, diff["text"]?.string ?? "", since: since), text: diff["text"]?.string)
-                }
-                guard format == "text" else { return AgentToolOutput(structured: snapshot.json) }
-                return AgentToolOutput(structured: AgentHub.textResult(snapshot, snapshot.text, since: nil), text: snapshot.text)
+            // A page paused under a dialog can't be read: the snapshot says what waits for an answer.
+            if let dialog = hub.tabs[named.tab.id]?.dialog { return hub.dialogSnapshot(named, dialog) }
+            do {
+                return try await snapshot(named, scope: scope, format: format, maxNodes: maxNodes, since: since, session: session, hub: hub)
+            } catch let error as AgentToolError where error.code == "dialog_open" {
+                guard let dialog = hub.tabs[named.tab.id]?.dialog else { throw error }
+                return hub.dialogSnapshot(named, dialog)
             }
         }
     )
+
+    private static func snapshot(_ named: NamedTab, scope: String, format: String, maxNodes: Int, since: Int?, session: MCPSession, hub: AgentHub) async throws -> AgentToolOutput {
+        try await hub.reading(named) { webView, deadline in
+            guard let state = hub.agentTab(for: named.tab) else { throw named.closedError }
+            if named.tab.pdf != nil { throw AgentHub.pdfShown(named, use: "read_text or screenshot") }
+            var snapshot = try await hub.snapshot(of: named, in: webView, scope: scope, maxNodes: maxNodes, until: deadline)
+            let previous = state.record(&snapshot, session: session.id)
+            if let since, let previous, previous.seq == since, previous.document == snapshot.document {
+                let diff = snapshot.diff(since: previous)
+                guard format == "text" else { return AgentToolOutput(structured: diff) }
+                return AgentToolOutput(structured: AgentHub.textResult(snapshot, diff["text"]?.string ?? "", since: since), text: diff["text"]?.string)
+            }
+            guard format == "text" else { return AgentToolOutput(structured: snapshot.json) }
+            return AgentToolOutput(structured: AgentHub.textResult(snapshot, snapshot.text, since: nil), text: snapshot.text)
+        }
+    }
 
     static let readText = AgentTool(
         name: "read_text",
@@ -324,7 +335,7 @@ extension AgentHub {
             try checkDrivable(named)
             let tab = named.tab
             if tab.isAsleep {
-                try checkWakeable(named)
+                try await checkWakeable(named, until: deadline)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
             return try await body(sizedWebView(of: tab), deadline)
@@ -481,7 +492,7 @@ extension AgentHub {
             origins[report.token] = "\(origin.protocol)://\(origin.host)\(origin.port == 0 ? "" : ":\(origin.port)")"
             reports.append(report)
         }
-        var snapshot = state.compose(tab: named.id, main: mainReport, children: reports, origins: origins, zoom: webView.pageZoom, maxNodes: maxNodes)
+        var snapshot = state.compose(tab: named.id, main: mainReport, children: reports, origins: origins, zoom: webView.pageZoom, maxNodes: maxNodes, providers: paymentProviders)
         snapshot.view = "\(scope) \(maxNodes)"
         if state.challenge != snapshot.challenge { state.challenge = snapshot.challenge }
         return snapshot
@@ -571,7 +582,7 @@ extension AgentHub {
         let arguments: [String: Any] = element.map { ["element": $0.id, "of": $0.document] } ?? [:]
         let read = { (patient: Bool) in
             let frames = try await self.askEveryFrame(named, webView, "masks", arguments, MaskReport.self, until: deadline, patient: patient)
-            return (FrameLayout(main: frames.reports[0].0, children: frames.reports.dropFirst().map(\.0)), frames.late)
+            return (FrameLayout(main: frames.reports[0].0, children: frames.reports.dropFirst().map(\.0), providers: self.paymentProviders), frames.late)
         }
         let (layout, late) = try await read(false)
         guard let element, late > 0, layout.placement(ofDocument: element.document) == nil else { return layout }

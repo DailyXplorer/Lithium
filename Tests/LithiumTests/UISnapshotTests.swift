@@ -65,6 +65,27 @@ struct UISnapshotTests {
         }
     }
 
+    /// The indicator's panel with a tab where a connected agent met a challenge only the user can
+    /// pass. Access is on and listening, as it is whenever an agent can meet one.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func agentPanelSnapshots() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        let browser = Browser()
+        await browser.setAgentAccess(true)
+        let client = try await AgentTabsTests.Client(browser: browser)
+        let tab = browser.newTab()
+        tab.customTitle = "Sign in · Shop"
+        client.hub.agentTab(for: tab)?.challenge = AgentChallenge(kind: "cloudflare", page: true)
+        for isDark in [false, true] {
+            let png = try render(AgentPanel(agent: client.hub).environment(browser), isDark: isDark)
+            try png.write(to: directory.appending(path: "agent-panel-challenge-\(isDark ? "dark" : "light").png"))
+        }
+        browser.tabs.forEach(browser.close)
+        await browser.setAgentAccess(false)
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

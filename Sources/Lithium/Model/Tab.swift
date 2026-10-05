@@ -494,6 +494,7 @@ final class Tab: NSObject, Identifiable {
         controller.addUserScript(PageTranslation.script)
         browser?.nowPlaying.install(on: controller)
         privacy.addScripts(enabled, for: url, to: controller)
+        browser?.agent?.install(on: controller)
     }
 
     /// Sends a tab an extension woke without its history on to the extension's address. Called

@@ -52,6 +52,7 @@ enum Phosphor: String {
     case redo = "arrow-u-up-right"
     case robot
     case robotFill = "robot-fill"
+    case hand
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

@@ -31,8 +31,9 @@ final class AgentTab {
     /// it to the user, as the page's own dialog.
     var dialog: AgentDialog?
     @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?
-    /// The agent gave the tab its last input: its navigation (from PR 5, its events). A download
-    /// while that load is under way is the agent's, and asks the user.
+    /// The agent started the tab's load: its navigation or its events. A download while that
+    /// load is under way is the agent's, and asks the user, until the user's own click or Enter
+    /// starts another load.
     @ObservationIgnored var drive: AgentDrive?
     /// The user's answers to the agent's downloads in the tab, for the call that started one.
     var downloadAnswers = 0
@@ -221,6 +222,8 @@ struct AgentDrive {
     let session: MCPSession
     var marks: Tab.LoadMarks
     let deadline: ContinuousClock.Instant
+    /// The user pressed a button or a key in the page since.
+    var userPressed = false
 
     /// Until the load it started ends: a page shown, a move within the page, a download, a
     /// scheme refused. A load that ends without a word (cancelled), or never starts, ends it at

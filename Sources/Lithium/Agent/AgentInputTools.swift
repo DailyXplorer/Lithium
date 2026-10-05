@@ -970,10 +970,15 @@ extension AgentHub {
         var gate = Gate()
         var asked: Set<ConfirmationKind> = []
         // Decided on the fields alone, before any Allow: a key the user denies is logged as one
-        // they allowed would be.
-        let fields = steps.compactMap { if case .keys(let target, _, _) = $0.0 { target } else { nil } }
+        // they allowed would be. An option chosen is logged as text typed there would be.
+        let fields = steps.compactMap { step -> ActionTarget? in
+            switch step.0 {
+            case .keys(let target, _, _), .change(let target, .select): target
+            default: nil
+            }
+        }
         if !fields.isEmpty, fields.allSatisfy({ !$0.inUnreadFrame && Guardrails.confirmation(for: .type, on: $0.element, page: $0.page) == nil }) {
-            AgentHub.callNotes?.typedIntoUnguardedField = true
+            AgentHub.callNotes?.intoUnguardedField = true
         }
         for (delivery, describing) in steps {
             let weighed: [(action: Guardrails.Action, target: ActionTarget, form: TargetReport.Form?)]

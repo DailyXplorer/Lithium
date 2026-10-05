@@ -84,6 +84,53 @@ struct AgentKeysTests {
         #expect(NativeInput.guarded(users) === users)
         #expect(!NativeInput.isAgents(users))
     }
+
+    /// WebKit hands a key the page didn't handle back to `NSApp.sendEvent` only once the page
+    /// answered: an agent's ⌘W in a page busy for 3 seconds still never reaches the menu.
+    @Test func anAgentsShortcutNeverReachesTheMenuHoweverLongThePageTakes() async throws {
+        final class Closer: NSObject {
+            var closed = 0
+            @objc func performClose(_ sender: Any?) { closed += 1 }
+        }
+        let closer = Closer()
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        item.submenu = NSMenu(title: "File")
+        let close = NSMenuItem(title: "Close Tab", action: #selector(Closer.performClose(_:)), keyEquivalent: "w")
+        close.target = closer
+        item.submenu?.addItem(close)
+        menu.addItem(item)
+        let app = NSApplication.shared
+        let mainMenu = app.mainMenu
+        app.mainMenu = menu
+        let keyGuard = NativeInput.installKeyGuard()
+        defer {
+            if let keyGuard { NSEvent.removeMonitor(keyGuard) }
+            app.mainMenu = mainMenu
+        }
+
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView = webView
+        defer { window.contentView = nil }
+        webView.loadHTMLString("<script>window.ready = true; addEventListener('keydown', () => { const end = Date.now() + 3000; while (Date.now() < end) {} })</script>", baseURL: nil)
+        for _ in 0..<100 where webView.isLoading { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(try await webView.evaluateJavaScript("window.ready") as? Bool == true)
+
+        let input = try NativeInput(webView: webView, sends: [.pointer, .keys], check: {}, onPointer: { _ in })
+        try input.key(try #require(NativeKey.parse("Meta+W")).key, modifiers: .command)
+        // The agent goes on meanwhile, here or in another tab.
+        try await Task.sleep(for: .milliseconds(2500))
+        try input.move(to: CGPoint(x: 10, y: 10))
+        try await Task.sleep(for: .milliseconds(2500))
+        #expect(closer.closed == 0)
+
+        // The user's own ⌘W still reaches it.
+        let users = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13))
+        app.sendEvent(users)
+        #expect(closer.closed == 1)
+    }
 }
 
 /// The input tools on a whole Browser, called through the hub as an MCP client calls them, on
@@ -454,6 +501,7 @@ struct AgentInputTests {
             #expect(chosen["untrustedEvents"] == true)
             #expect(try await page(tab, "return document.getElementById('pick').value") as? String == "b")
             #expect(try await log(tab, ["change"]) == ["change:false:pick"])
+            #expect(await eventually { await client.hub.log.entries(limit: 1).first?["params"]?["labels"] == ["Beta"] })
             let missing = await client.call("select_option", ["tab": .string(id), "ref": .string(pick), "labels": ["Gamma"]])
             #expect(missing.code == "invalid_params" && missing.message.contains("\"Alpha\", \"Beta\""), "\(missing.message)")
             #expect((await client.call("click", ["tab": .string(id), "ref": .string(pick)])).code == "use_select_option")
@@ -863,6 +911,27 @@ struct AgentInputTests {
         }
     }
 
+    /// The load under way before the click fails while the page handles it: Lithium's error page
+    /// for it is no load of the click's.
+    @Test func aLoadUnderWayBeforeAClickThatFailsDuringItIsNotTheClicks() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/fail": ("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/", "")], delay: 1)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            _ = try await page(tab, """
+                document.body.insertAdjacentHTML('beforeend', '<button id="busy" style="position:absolute;left:40px;top:320px">Busy</button>');
+                document.getElementById('busy').addEventListener('click', () => { const end = Date.now() + 2000; while (Date.now() < end) {} });
+                """)
+            let busy = try await ref(client, id, "button", "Busy")
+            tab.webView.load(URLRequest(url: slowBase.appending(path: "fail")))
+            #expect(await waitUntil(5) { tab.isAwaitingCommit })
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(busy), "timeoutMs": 5000])
+            #expect(!clicked.isError, "\(clicked.content)")
+            #expect(clicked["navigated"] == false, "\(clicked.content)")
+            #expect(await waitUntil(5) { tab.loadError != nil }, "the load failed")
+        }
+    }
+
     @Test func waitNoneAnswersOnceTheActionStartedALoad() async throws {
         let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
         defer { slow.cancel() }
@@ -999,6 +1068,8 @@ struct AgentInputTests {
         let file = folder.appending(path: "notes.txt")
         try "notes".write(to: file, atomically: true, encoding: .utf8)
         try await withAgent(openingFirst: ["login-frame"]) { client, base in
+            // Earlier tests' tabs had the same ids.
+            await client.hub.log.clear()
             var table: [String] = []
             var failures: [String] = []
             func row(_ id: String, _ label: String, _ ref: String, _ expected: [String: String]) async throws {
@@ -1072,6 +1143,24 @@ struct AgentInputTests {
                 return logged.count == 3
             }
             #expect(logged == ["[redacted]", "[redacted]", "[redacted]"], "\(logged)")
+            // What every tool put in a field above (text, a key, an expiry month) is logged as
+            // [redacted]; only a named key pressed on a button shows.
+            var values: [String: [JSONValue]] = [:]
+            _ = await eventually {
+                values = [:]
+                for entry in await client.hub.log.entries(limit: 400) where [pay, login].contains(entry["tab"]?["id"]?.string ?? "") {
+                    for key in ["text", "keys", "values", "labels"] {
+                        if let value = entry["params"]?[key] { values[entry["tool"]?.string ?? "", default: []].append(value) }
+                    }
+                }
+                return values["type"]?.count == 2 && values["select_option"]?.count == 1
+            }
+            #expect(values["type"]?.count == 2 && values["select_option"]?.count == 1, "\(values)")
+            for (tool, logged) in values {
+                for value in logged where value != "[redacted]" && !(tool == "press" && ["Enter", "Space"].contains(value.string ?? "")) {
+                    failures.append("\(tool) logged \(value)")
+                }
+            }
             let all = String(decoding: JSONValue.array(await client.hub.log.entries(limit: 400)).encoded(), as: UTF8.self)
             #expect(!all.contains("hunter2"))
             print("Gate table:\n" + table.joined(separator: "\n"))
@@ -1266,6 +1355,57 @@ struct AgentInputTests {
             let released = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "y"])
             #expect(!released.isError, "\(released.content)")
             #expect(try await page(tab, "return document.getElementById('user').value") as? String == "xy")
+        }
+    }
+
+    /// The user scrolling and typing while the agent's download is on its way doesn't make it
+    /// theirs: it still asks. Only a load of their own, from their click, takes the tab back.
+    @Test func theUsersInputLeavesTheAgentsDownloadTheAgents() async throws {
+        // Redirected on its way, as download links often are: the redirect is still the agent's load.
+        #expect(WKNavigationAction.instancesRespond(to: NSSelectorFromString("_isRedirect")))
+        let (slow, slowBase) = try await LocalHTTP.serve([
+            "/report.csv": Self.pages["/report.csv"]!, "/to-report": ("HTTP/1.1 302 Found\r\nLocation: /report.csv", ""),
+            "/elsewhere": (Self.html, "<title>Elsewhere</title>"),
+        ], delay: 1.5)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            _ = try await page(tab, """
+                document.body.insertAdjacentHTML('beforeend', '<a href="\(slowBase.appending(path: "to-report").absoluteString)" style="position:absolute;left:40px;top:320px">Slow report</a>'
+                  + '<a href="\(slowBase.appending(path: "elsewhere").absoluteString)" style="position:absolute;left:40px;top:360px">Elsewhere</a>');
+                """)
+            let report = try await ref(client, id, "link", "Slow report")
+            let webView = try #require(tab.webView as? PageWebView)
+            let confirmations = client.hub.confirmations
+
+            let clicking = Task { await client.call("click", ["tab": .string(id), "ref": .string(report)]) }
+            #expect(await waitUntil(5) { tab.isAwaitingCommit })
+            // In the stage while the agent acts there.
+            let window = try #require(webView.window)
+            let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -40, wheel2: 0, wheel3: 0))
+            webView.scrollWheel(with: try #require(NSEvent(cgEvent: wheel)))
+            webView.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)))
+            #expect((await clicking.value).code == "user_interrupted")
+            #expect(await waitUntil(10) { !confirmations.pending.isEmpty }, "the download asks")
+            #expect(confirmations.pending.map(\.kind) == [.download])
+            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+
+            let again = Task { await client.call("click", ["tab": .string(id), "ref": .string(report)]) }
+            #expect(await waitUntil(5) { tab.isAwaitingCommit && client.hub.drive(of: tab) != nil })
+            // Where the user's wheel left it.
+            let top = try #require(try await page(tab, "return document.querySelector('a[href$=\"elsewhere\"]').getBoundingClientRect().top") as? Double)
+            let elsewhere = webView.convert(CGPoint(x: 50, y: top + 10), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: elsewhere, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+            }
+            let interrupted = await again.value
+            #expect(interrupted.code == "user_interrupted", "\(interrupted.content)")
+            // The user's page is still on its way: the agent's claim ended with their click.
+            #expect(await waitUntil(5) { tab.isAwaitingCommit && tab.url?.path() == "/elsewhere" })
+            #expect(client.hub.tabs[tab.id]?.drive == nil)
+            #expect(await waitUntil(10) { tab.title == "Elsewhere" })
+            #expect(confirmations.pending.isEmpty)
         }
     }
 

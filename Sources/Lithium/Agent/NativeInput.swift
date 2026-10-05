@@ -226,18 +226,17 @@ final class NativeInput {
 
     // MARK: Key guard
 
-    /// Every event an agent's input made, for 2 seconds: WebKit sends keys a page doesn't handle
-    /// back through `NSApp.sendEvent`, where they would reach Lithium's menus (design section 5.5).
-    private static var made: [(event: NSEvent, until: ContinuousClock.Instant)] = []
+    /// Marks every event an agent's input made, on the event itself: WebKit sends keys a page
+    /// doesn't handle back through `NSApp.sendEvent` once the page answered, however long it
+    /// was busy, where they would reach Lithium's menus (design section 5.5).
+    private static let agentsKey = UnsafeRawPointer(UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1))
 
     private static func note(_ event: NSEvent) {
-        let now = ContinuousClock.now
-        made.removeAll { $0.until < now }
-        made.append((event, now + .seconds(2)))
+        objc_setAssociatedObject(event, agentsKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
     static func isAgents(_ event: NSEvent) -> Bool {
-        made.contains { $0.event === event }
+        objc_getAssociatedObject(event, agentsKey) != nil
     }
 
     /// The local monitor `AgentHub` installs: an agent's ⌘W reaches the page as a `keydown` and

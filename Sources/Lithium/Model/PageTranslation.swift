@@ -116,7 +116,7 @@ final class PageWebView: WKWebView {
         let agents = NativeInput.isAgents(event)
         if pressing { agentPressedLast = agents }
         guard !agents else { return false }
-        tab?.noteUserInput()
+        tab?.noteUserInput(pressing: pressing)
         return true
     }
 }

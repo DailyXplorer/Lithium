@@ -50,25 +50,26 @@ struct AgentTool {
     }
 }
 
-/// What a tool call tells the log about its own arguments. Text typed by an agent is logged
-/// only once the call knows its field isn't guarded (design section 7.6): a call that fails
-/// before it finds out logs `[redacted]`. A key `press` names is logged the same way, and a
-/// character key never is.
+/// What a tool call tells the log about its own arguments. What an agent puts in a field (text
+/// typed, an option chosen) is logged only once the call knows its field isn't guarded (design
+/// section 7.6): a call that fails before it finds out logs `[redacted]`. A key `press` names
+/// is logged the same way, and a character key never is.
 @MainActor
 final class CallNotes {
-    /// Set by `gate` once the field `type` or `press` sends to is known not to be a password or
+    /// Set by `gate` once the field the call's values go to is known not to be a password or
     /// card field, nor one in a frame Lithium can't read.
-    var typedIntoUnguardedField = false
+    var intoUnguardedField = false
+
+    /// The arguments that carry what goes into a field, by tool.
+    private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"]]
 
     func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
-        let key = switch tool {
-        case "type": "text"
-        case "press": "keys"
-        default: ""
+        guard var fields = arguments.object, let keys = Self.values[tool] else { return arguments }
+        for key in keys {
+            guard let value = fields[key] else { continue }
+            let shown = intoUnguardedField && (tool != "press" || value.string.flatMap(NativeKey.parse).map { NativeKey.named[$0.name] != nil } == true)
+            if !shown { fields[key] = "[redacted]" }
         }
-        guard var fields = arguments.object, let value = fields[key] else { return arguments }
-        let shown = typedIntoUnguardedField && (tool == "type" || value.string.flatMap(NativeKey.parse).map { NativeKey.named[$0.name] != nil } == true)
-        if !shown { fields[key] = "[redacted]" }
         return .object(fields)
     }
 }
@@ -621,11 +622,18 @@ final class AgentHub {
     }
 
     /// The user clicked, typed or scrolled in the tab's page: their input wins over an agent
-    /// action running there, and the tab's next download is theirs.
-    func userInput(in tab: Tab) {
+    /// action running there. A load the agent started stays the agent's.
+    func userInput(in tab: Tab, pressing: Bool) {
         guard let state = tabs[tab.id] else { return }
-        state.drive = nil
+        if pressing { state.drive?.userPressed = true }
         if state.acting != nil, state.interruption == nil { state.interruption = .userInput }
+    }
+
+    /// The user's own click or Enter, pressed since the agent's load started, started a load in
+    /// the tab's page: what it downloads is theirs.
+    func userStartedLoad(in tab: Tab) {
+        guard tabs[tab.id]?.drive?.userPressed == true else { return }
+        tabs[tab.id]?.drive = nil
     }
 
     /// The label of the session whose action runs in `tab`, when the agent pressed last in its

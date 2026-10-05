@@ -141,8 +141,11 @@ final class Tab: NSObject, Identifiable {
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
     /// Counts the loads started, so an agent's input tells a load it started from one already
-    /// under way.
+    /// under way. Lithium's error page is the end of the load that failed, not a load of its own.
     private(set) var loadStarts = 0
+    /// From `showError` until its page starts loading, which WebKit may report first through
+    /// `isLoading`, before `errorNavigation` is known.
+    @ObservationIgnored private var isStartingErrorPage = false
     @ObservationIgnored private var startedNavigation: WKNavigation?
     /// `unshownLoads` when the load under way started: one that already ended as a download
     /// isn't dropped too when WebKit then gives it up.
@@ -622,6 +625,7 @@ final class Tab: NSObject, Identifiable {
             </style>
             <div><h1>Can’t open this page</h1><p>\(message)</p></div>
             """
+        isStartingErrorPage = true
         errorNavigation = webView.loadHTMLString(html, baseURL: url)
     }
 }
@@ -640,6 +644,10 @@ extension Tab: WKNavigationDelegate {
         if isMainFrame, let superseded = supersededURL {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
+        }
+        // A server's redirect keeps the type of the click that started its load, whoever pressed since.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), (webView as? PageWebView)?.agentPressedLast != true {
+            browser?.agent?.userStartedLoad(in: self)
         }
         if action.shouldPerformDownload {
             // A download the agent started waits for the user's Allow.
@@ -746,12 +754,14 @@ extension Tab: WKNavigationDelegate {
         if navigation !== errorNavigation { failedURL = nil }
         httpStatus = nil
         awaitCommit(true, for: navigation)
+        isStartingErrorPage = false
     }
 
     /// `navigation` is nil when `isLoading` tells of a load before WebKit names it: that load,
     /// named next, isn't counted twice, but one that replaces the load under way is.
     private func awaitCommit(_ awaiting: Bool, for navigation: WKNavigation? = nil) {
-        if awaiting, !isAwaitingCommit || navigation != nil && startedNavigation != nil && startedNavigation !== navigation {
+        let isErrorPage = navigation.map { $0 === errorNavigation } ?? isStartingErrorPage
+        if awaiting, !isErrorPage, !isAwaitingCommit || navigation != nil && startedNavigation != nil && startedNavigation !== navigation {
             loadStarts += 1
             unshownAtStart = unshownLoads
         }
@@ -833,6 +843,11 @@ extension Tab: WKNavigationDelegate {
         // A load given up with no load after it ends here, as one that became a download does.
         if Self.isDropped(error), !webView.isLoading, unshownLoads == unshownAtStart { endedUnshown(.dropped) }
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)
+    }
+
+    /// Private WebKit (`WKNavigationAction._isRedirect`).
+    private static func isRedirect(_ action: WKNavigationAction) -> Bool {
+        action.responds(to: NSSelectorFromString("_isRedirect")) && action.value(forKey: "_isRedirect") as? Bool == true
     }
 
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
@@ -997,8 +1012,8 @@ extension Tab: WKUIDelegate {
     }
 
     /// The user clicked, typed or scrolled in its page.
-    func noteUserInput() {
-        browser?.agent?.userInput(in: self)
+    func noteUserInput(pressing: Bool) {
+        browser?.agent?.userInput(in: self, pressing: pressing)
     }
 
     /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to

@@ -51,8 +51,9 @@ final class AgentTab {
     @ObservationIgnored var formCovers: [FormCover] = []
     /// Prompts the user was shown for it, so an action knows it waited on them.
     @ObservationIgnored var prompts = 0
-    /// The user's Allows during the action running in it, by kind, prompt and subject: the
-    /// action run again (`AgentHub.action`) doesn't ask twice.
+    /// The Allows `gate` and an upload got during the action running in it, by kind, prompt and
+    /// subject: the action run again (`AgentHub.action`) takes each once, without asking twice.
+    /// A download or a file never comes from it: each asks.
     @ObservationIgnored var answered: [String: ConfirmationGrant] = [:]
 
     static func prompt(_ kind: ConfirmationKind, _ action: String, subject: String) -> String {

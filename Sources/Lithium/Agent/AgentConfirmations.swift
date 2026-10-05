@@ -115,12 +115,8 @@ extension AgentHub {
     /// waits for the answer within `deadline` and `AgentConfirmations.timeout`. Deny is
     /// `denied_by_user`, no answer `confirmation_timeout`; the tab closing, the user navigating it,
     /// Stop and the session ending end the wait as they end any other. Every prompt and its
-    /// answer goes in the log. The action running in the tab, run again, gets the Allow the user
-    /// gave it for the same prompt without asking twice.
+    /// answer goes in the log.
     func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
-        let state = named.flatMap { tabs[$0.tab.id] }.flatMap { $0.acting?.session == session.id ? $0 : nil }
-        let asked = AgentTab.prompt(kind, action, subject: subject)
-        if let grant = state?.answered[asked] { return grant }
         let started = Date()
         var logged: (answer: String, grant: ConfirmationGrant?) = ("cancelled", nil)
         defer {
@@ -162,11 +158,9 @@ extension AgentHub {
         switch answer {
         case .allowOnce:
             logged = ("allow", .once)
-            state?.answered[asked] = .once
             return .once
         case .allowOnSite:
             logged = ("allow", kind.allowsSiteGrant && site != nil ? .site : .once)
-            state?.answered[asked] = logged.grant
             return logged.grant ?? .once
         case .deny:
             logged.answer = "deny"
@@ -253,8 +247,18 @@ extension AgentHub {
         let folders = Set(files.map { $0.deletingLastPathComponent().path(percentEncoded: false) })
         let host = named.tab.url?.host() ?? ""
         let action = "upload \(described.joined(separator: ", ")) from \(folders.sorted().joined(separator: ", "))" + (host.isEmpty ? "" : " to \(host)")
-        let grant = try await confirm(.upload, action, subject: files.map(\.lastPathComponent).joined(separator: ", "), site: host.isEmpty ? nil : SiteInfo.registrable(host), in: named, session: session, until: deadline)
-        agentTab(for: named.tab)?.armedUpload = (files, .now + .seconds(5))
+        let subject = files.map(\.lastPathComponent).joined(separator: ", ")
+        let state = agentTab(for: named.tab)
+        // The action run again (`AgentHub.action`) takes the answer its last attempt got, once.
+        let prompt = AgentTab.prompt(.upload, action, subject: subject)
+        let grant: ConfirmationGrant
+        if let given = state?.answered.removeValue(forKey: prompt) {
+            grant = given
+        } else {
+            grant = try await confirm(.upload, action, subject: subject, site: host.isEmpty ? nil : SiteInfo.registrable(host), in: named, session: session, until: deadline)
+            state?.answered[prompt] = grant
+        }
+        state?.armedUpload = (files, .now + .seconds(5))
         return grant
     }
 

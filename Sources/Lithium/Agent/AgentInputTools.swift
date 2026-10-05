@@ -340,6 +340,7 @@ extension AgentHub {
             let gate = try await hub.gate(steps, ctx)
             let fields: [String: JSONValue] = Guardrails.confirmation(for: .type, on: target.element, page: target.page) == nil ? [:] : ["typed": .int(text.count)]
             return try await hub.deliver(ctx, target, gate, wait: wait, diff: diff, fields: fields) { input in
+                var into = target
                 var keys = target.counts["keyup"] ?? 0
                 var inserted = target.counts["beforeinput"] ?? 0
                 var last = "keyup"
@@ -347,13 +348,28 @@ extension AgentHub {
                     try input.move(to: target.point)
                     try input.click(at: target.point, button: .left, count: 1, modifiers: [])
                     try await hub.settle(ctx, target.frame, Settle(type: "mouseup", count: (target.counts["mouseup"] ?? 0) + 1), timeout: 1000, frame: false)
+                    // The page may move focus on the click (a decoy field that focuses a password
+                    // field): the keys go where focus is, and ask as typing there does.
+                    let focused = try await hub.resolve(.focused, ctx, checks: [.editable])
+                    if focused.address != target.address {
+                        guard !focused.inUnreadFrame, focused.address?.document == target.address?.document else {
+                            AgentHub.callNotes?.noteFields(unguarded: false)
+                            throw AgentToolError(code: "not_editable", message: "Clicking \(target.label) moved focus into another frame. Give the ref of the field to type into.")
+                        }
+                        var moved: [(Delivery, describing: String)] = [(.keys(into: focused, .type, submitting: nil), "type into \(focused.shortName)" + (submit ? " and submit its form" : ""))]
+                        if submit { moved.append((.keys(into: focused, .press(enter: true), submitting: focused.report.form), "submit the form of \(focused.shortName)")) }
+                        _ = try await hub.gate(moved, ctx)
+                        into = focused
+                        keys = focused.counts["keyup"] ?? 0
+                        inserted = focused.counts["beforeinput"] ?? 0
+                    }
                 }
                 if clear {
                     ctx.webView.selectAll(nil)
                     try input.key(NativeKey.named["Backspace"]!)
                     keys += 1
-                } else if ref != nil, let address = target.address {
-                    _ = try await hub.ask(ctx.named, ctx.webView, target.frame, "caretEnd", ["id": address.id, "token": address.document], until: ctx.deadline)
+                } else if ref != nil, let address = into.address {
+                    _ = try await hub.ask(ctx.named, ctx.webView, into.frame, "caretEnd", ["id": address.id, "token": address.document], until: ctx.deadline)
                 }
                 var pending = ""
                 for character in text {
@@ -362,13 +378,13 @@ extension AgentHub {
                         pending.append(character)
                         continue
                     }
-                    try await hub.insert(&pending, input, ctx, target, keys: keys, inserted: &inserted)
+                    try await hub.insert(&pending, input, ctx, into, keys: keys, inserted: &inserted)
                     try input.key(key)
                     keys += 1
                     last = "keyup"
                 }
                 if !pending.isEmpty {
-                    try await hub.insert(&pending, input, ctx, target, keys: keys, inserted: &inserted)
+                    try await hub.insert(&pending, input, ctx, into, keys: keys, inserted: &inserted)
                     last = "beforeinput"
                 }
                 if submit {
@@ -1031,14 +1047,17 @@ extension AgentHub {
         let form = target.report.form.map { ElementAddress(document: target.report.token, id: $0.id) }
         let host = ctx.named.tab.url?.host() ?? ""
         let (asking, subject) = (describing + (host.isEmpty ? "" : " on \(host)"), "\(describing) \(target.label)")
+        let prompt = AgentTab.prompt(kind, asking, subject: subject)
+        // The action run again (`AgentHub.action`) takes the answer its last attempt got, once,
+        // not the form cover that answer made.
+        if let grant = ctx.state.answered.removeValue(forKey: prompt) { return .string(grant.rawValue) }
         ctx.state.formCovers.removeAll { $0.until <= .now }
-        // The action run again keeps the answer it got, not the form cover that answer made.
-        if ctx.state.answered[AgentTab.prompt(kind, asking, subject: subject)] == nil, fieldEntry, let form,
-           ctx.state.formCovers.contains(where: { $0.form == form && $0.session == ctx.session.id && $0.kind == kind }) {
+        if fieldEntry, let form, ctx.state.formCovers.contains(where: { $0.form == form && $0.session == ctx.session.id && $0.kind == kind }) {
             return "form"
         }
         let grant = try await confirm(kind, asking, subject: subject, site: host.isEmpty ? nil : SiteInfo.registrable(host), in: ctx.named, session: ctx.session, until: ctx.deadline)
         if fieldEntry, let form { ctx.state.formCovers.append(FormCover(form: form, session: ctx.session.id, kind: kind, until: .now + .seconds(120))) }
+        ctx.state.answered[prompt] = grant
         return .string(grant.rawValue)
     }
 

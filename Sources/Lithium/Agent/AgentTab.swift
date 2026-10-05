@@ -41,6 +41,13 @@ final class AgentTab {
     @ObservationIgnored var armedUpload: (files: [URL], expires: ContinuousClock.Instant)?
     /// File choosers the agent's action opened without allowed files, cancelled.
     @ObservationIgnored var fileChoosersCancelled = 0
+    /// The agent action running in it, for the border, caption and pointer dot the user sees.
+    var acting: AgentActing?
+    /// Tabs its page opened during that action.
+    @ObservationIgnored var opened: [Tab] = []
+    /// Forms whose fields the user allowed an agent to fill, for 2 minutes after the first Allow
+    /// (card number, expiry and CVC ask once), by form, session and kind.
+    @ObservationIgnored var formCovers: [FormCover] = []
 
     /// The child frames that said hello, by document token; the main frame needs no `WKFrameInfo`.
     @ObservationIgnored private(set) var frames: [String: WKFrameInfo] = [:]
@@ -180,6 +187,23 @@ final class AgentTab {
     nonisolated static func isRef(_ string: String) -> Bool {
         string.wholeMatch(of: /(f\d+:)?e\d+|f\d+/) != nil
     }
+}
+
+/// An agent action in progress in a tab, as the user sees it in the page.
+struct AgentActing: Equatable {
+    let session: String
+    /// "Clicking “Pay €42.00”".
+    var caption: String
+    /// The agent's pointer, in the web view's points.
+    var pointer: CGPoint?
+}
+
+/// Typing into one form's fields, allowed once by the user for a while.
+struct FormCover {
+    let form: ElementAddress
+    let session: String
+    let kind: ConfirmationKind
+    let until: ContinuousClock.Instant
 }
 
 /// An agent's input in a tab: the session that gave it, how far the tab's loads had got then,

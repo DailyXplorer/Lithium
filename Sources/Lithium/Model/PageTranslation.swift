@@ -13,15 +13,77 @@ final class PageWebView: WKWebView {
     /// The tab showing this page, for the messages it sends.
     weak var tab: Tab?
 
+    /// An agent's right click opens no menu until then: WebKit opens it once the page has
+    /// handled `contextmenu`, which may be after the click returned.
+    var agentMenuUntil: ContinuousClock.Instant?
+    private(set) var agentMenusCancelled = 0
+    /// The user's mouse button is down in the page: an agent action waits (`user_busy`).
+    private(set) var isUserPressing = false
+
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        if NativeInput.isAgents(event) || agentMenuUntil.map({ $0 > .now }) == true {
+            agentMenuUntil = nil
+            agentMenusCancelled += 1
+            // `agent.js` prevents the page's default, so WebKit asks for no menu. One that comes
+            // anyway (the page stopped the event before Lithium's listener) is closed as soon as
+            // it tracks: cancelling before that is ignored, and the menu would stay open on the
+            // user's screen, holding the main thread in its loop.
+            NotificationCenter.default.addObserver(self, selector: #selector(agentMenuDidBeginTracking(_:)), name: NSMenu.didBeginTrackingNotification, object: menu)
+            return
+        }
         super.willOpenMenu(menu, with: event)
         translation?.adjust(menu, in: self, at: convert(event.locationInWindow, from: nil))
         menuSelection = ""
     }
 
+    @objc private func agentMenuDidBeginTracking(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: notification.object)
+        (notification.object as? NSMenu)?.cancelTrackingWithoutAnimation()
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { tab?.didComeIntoView() }
+        if userWindow != nil { tab?.didComeIntoView() }
+        tab?.webViewDidMove(self)
+    }
+
+    // User input wins (design section 2.7): input that `NativeInput` isn't delivering ends the
+    // agent action running in the tab.
+    override func mouseDown(with event: NSEvent) {
+        if noteUser(event) { isUserPressing = true }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !NativeInput.isAgents(event) { isUserPressing = false }
+        super.mouseUp(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if noteUser(event) { agentMenuUntil = nil }
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        noteUser(event)
+        super.otherMouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        noteUser(event)
+        super.keyDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        noteUser(event)
+        super.scrollWheel(with: event)
+    }
+
+    @discardableResult
+    private func noteUser(_ event: NSEvent) -> Bool {
+        guard !NativeInput.isAgents(event) else { return false }
+        tab?.noteUserInput()
+        return true
     }
 }
 

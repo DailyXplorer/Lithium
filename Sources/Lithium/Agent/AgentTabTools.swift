@@ -49,6 +49,8 @@ enum AgentInterruption {
     case user
     /// An agent called `stop` on the tab.
     case agentStop
+    /// The user clicked, typed or scrolled in the tab during an agent action.
+    case userInput
 }
 
 /// How far a navigation has to get before the tool answers.
@@ -449,15 +451,18 @@ extension AgentHub {
         }
     }
 
-    func checkStillWaitable(_ named: NamedTab) throws {
+    /// `ignoringDialog`: an action's events go on under a dialog the page opened; the page
+    /// handles them once it is answered, and the result names the dialog.
+    func checkStillWaitable(_ named: NamedTab, ignoringDialog: Bool = false) throws {
         guard isOpen(named.tab) else { throw named.closedError }
         // The page is paused until its dialog is answered: nothing it does can end a wait.
-        if let dialog = tabs[named.tab.id]?.dialog { throw dialogOpen(named, dialog) }
+        if !ignoringDialog, let dialog = tabs[named.tab.id]?.dialog { throw dialogOpen(named, dialog) }
         // `exclusive` clears it when the call ends, so any interruption is this call's.
         switch tabs[named.tab.id]?.interruption {
         case nil: return
         case .user: throw AgentToolError(code: "user_interrupted", message: "The user navigated \(named.id) while the agent waited on it.")
         case .agentStop: throw AgentToolError(code: "stopped", message: "A stop call stopped \(named.id) while this call waited on it.")
+        case .userInput: throw AgentToolError(code: "user_interrupted", message: "The user clicked, typed or scrolled in \(named.id) while the agent acted in it. Check the page before trying again.")
         }
     }
 
@@ -471,14 +476,9 @@ extension AgentHub {
     /// download asks the user (`confirmDownload`): allowed, the result names the file instead of
     /// a state; denied or unanswered, the call fails with the user's answer.
     func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
-        enum Outcome { case document, withinPage, download(String?) }
         let tab = named.tab
-        var (commits, moves, unshown) = (tab.commits, tab.sameDocumentNavigations, tab.unshownLoads)
-        // The load before may have failed with its error page still on its way: that page
-        // committing is not this call's answer.
-        let earlierError = tab.loadError
+        let since = LoadProgress(of: tab, agentTab(for: tab))
         let state = agentTab(for: tab)
-        let answers = state?.downloadAnswers ?? 0
         if let session = Self.callSession { state?.drive = AgentDrive(session: session, marks: tab.loadMarks, deadline: deadline) }
         // A call that ends with nothing loading, however it ends, leaves no load of the agent's.
         defer { if wait > .none, !tab.isLoading { state?.drive = nil } }
@@ -487,6 +487,41 @@ extension AgentHub {
         if !tab.isAsleep, tab.loadedWebView != nil { _ = sizedWebView(of: tab) }
         touch(tab)
         guard wait > .none else { return page(named, reached: LoadWait.none) }
+        return try await follow(since, in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: landedWithinPage)
+    }
+
+    /// How far a tab's loads had got when an agent's input began, so the load it started is told
+    /// from the ones before.
+    struct LoadProgress {
+        var commits: Int
+        let moves: Int
+        let unshown: Int
+        /// The load before may have failed with its error page still on its way: that page
+        /// committing is not this call's answer.
+        let earlierError: NSError?
+        let answers: Int
+
+        @MainActor
+        init(of tab: Tab, _ state: AgentTab?) {
+            (commits, moves, unshown) = (tab.commits, tab.sameDocumentNavigations, tab.unshownLoads)
+            earlierError = tab.loadError
+            answers = state?.downloadAnswers ?? 0
+        }
+
+        /// A load started since, ended without a page (a download, a refused scheme), or asked the user.
+        @MainActor
+        func hasMoved(_ tab: Tab, _ state: AgentTab?) -> Bool {
+            tab.isAwaitingCommit || tab.commits > commits || tab.unshownLoads > unshown || (state?.downloadAnswers ?? 0) > answers
+        }
+    }
+
+    /// Waits until the load the agent started gets as far as `wait` (see `navigation`).
+    func follow(_ since: LoadProgress, in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?) async throws -> JSONValue {
+        enum Outcome { case document, withinPage, download(String?) }
+        let tab = named.tab
+        var commits = since.commits
+        let (moves, unshown, earlierError, answers) = (since.moves, since.unshown, since.earlierError, since.answers)
+        let state = agentTab(for: tab)
         let outcome = try await AgentWait.until(deadline) { () -> Outcome? in
             // Before the tab closing: a tab opened just for a file closes once its download starts.
             if tab.unshownLoads > unshown, let load = tab.lastUnshownLoad {

@@ -699,6 +699,42 @@
     return { token: frame.token, count, matches };
   };
 
+  // What a point hits, through open shadow roots, and what covers an element there.
+  const hitAt = (x, y) => {
+    let hit = document.elementFromPoint(x, y);
+    while (hit?.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  };
+  const contains = (outer, inner) => {
+    for (let node = inner; node; node = node.parentElement ?? node.getRootNode()?.host) if (node === outer) return true;
+    return false;
+  };
+  const inExtensionUI = (element) => {
+    for (let node = element; node; node = node.parentElement ?? node.getRootNode()?.host) if (isExtensionUI(node)) return true;
+    return false;
+  };
+  const cover = (hit) => {
+    let owner = hit;
+    for (let node = hit; node; node = node.parentElement ?? node.getRootNode()?.host) if (isExtensionUI(node)) owner = node;
+    return {
+      id: idOf(owner), tag: owner.localName + (owner.id ? `#${owner.id}` : ''),
+      text: cut(textOf(owner), 40), extension: isExtensionUI(owner) || (/^i?frame$/.test(owner.localName) && isExtensionFrame(owner)),
+    };
+  };
+  const hiddenReason = (element, rect) => {
+    const style = getComputedStyle(element);
+    if (!element.checkVisibility()) return style.display === 'none' ? 'display:none' : 'no box (an ancestor has display:none)';
+    if (!element.checkVisibility({ visibilityProperty: true })) return 'visibility:hidden';
+    if (!element.checkVisibility({ opacityProperty: true })) return 'opacity:0';
+    if (hiddenByAncestor(element)) return 'aria-hidden';
+    if (rect.width < 1 || rect.height < 1) return 'zero size';
+    return null;
+  };
+
   // Element facts for element_info and the stale-ref check.
   const info = ({ id }) => {
     const element = elementOf(id);
@@ -708,13 +744,7 @@
     const facts = { token: frame.token, role, name: cut(nameOf(element, role), 80), box: round(rect) };
     const guard = isField(element) ? guardOf(element) : null;
     if (guard) facts.guard = guard;
-    const style = getComputedStyle(element);
-    let hidden = null;
-    if (!element.checkVisibility()) hidden = style.display === 'none' ? 'display:none' : 'no box (an ancestor has display:none)';
-    else if (!element.checkVisibility({ visibilityProperty: true })) hidden = 'visibility:hidden';
-    else if (!element.checkVisibility({ opacityProperty: true })) hidden = 'opacity:0';
-    else if (hiddenByAncestor(element)) hidden = 'aria-hidden';
-    else if (rect.width < 1 || rect.height < 1) hidden = 'zero size';
+    const hidden = hiddenReason(element, rect);
     facts.visible = !hidden;
     if (hidden) facts.hidden = hidden;
     if (!hidden) {
@@ -722,27 +752,257 @@
       const y = Math.min(Math.max(rect.top + rect.height / 2, 0), innerHeight - 1);
       facts.inViewport = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
       if (facts.inViewport) {
-        let hit = document.elementFromPoint(x, y);
-        while (hit?.shadowRoot) {
-          const inner = hit.shadowRoot.elementFromPoint(x, y);
-          if (!inner || inner === hit) break;
-          hit = inner;
-        }
-        const contains = (outer, inner) => {
-          for (let node = inner; node; node = node.parentElement ?? node.getRootNode()?.host) if (node === outer) return true;
-          return false;
-        };
-        if (hit && !contains(element, hit)) {
-          let owner = hit;
-          for (let node = hit; node; node = node.parentElement ?? node.getRootNode()?.host) if (isExtensionUI(node)) owner = node;
-          facts.coveredBy = {
-            id: idOf(owner), tag: owner.localName + (owner.id ? `#${owner.id}` : ''),
-            text: cut(textOf(owner), 40), extension: isExtensionUI(owner) || (owner.localName === 'iframe' && isExtensionFrame(owner)),
-          };
-        }
+        const hit = hitAt(x, y);
+        if (hit && !contains(element, hit)) facts.coveredBy = cover(hit);
       }
     }
     return facts;
+  };
+
+  // Input (design section 5). Trusted events are counted in the capture phase, so Lithium knows
+  // when the page has handled what it sent instead of waiting a fixed time.
+  const counts = {};
+  const counted = [];
+  for (const type of ['mousemove', 'mouseup', 'keyup', 'beforeinput', 'wheel']) {
+    addEventListener(type, (event) => {
+      if (!event.isTrusted) return;
+      counts[type] = (counts[type] || 0) + 1;
+      for (const waiter of [...counted]) waiter();
+    }, { capture: true, passive: true });
+  }
+  // An agent's right click gives the page its contextmenu, never the native menu, which would
+  // open on the user's screen and hold Lithium in its loop: the default is prevented on the
+  // way back up, once the page's own listeners have run.
+  addEventListener('contextmenu', (event) => {
+    if (!event.isTrusted || !(frame.agentMenu > Date.now())) return;
+    frame.agentMenu = 0;
+    event.preventDefault();
+  });
+  // One rendering update, or a moment where frames don't run (a page out of any window).
+  const nextFrame = () => new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+    setTimeout(resolve, 100);
+  });
+
+  const textTypes = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'date', 'datetime-local', 'month', 'time', 'week']);
+  const isEditable = (element) => (element.localName === 'input' && textTypes.has(element.type)) || element.localName === 'textarea' || element.isContentEditable;
+  const formOf = (element) => {
+    const form = element.form ?? element.closest?.('form');
+    if (!form) return undefined;
+    const fields = [...form.elements];
+    return { id: idOf(form), cards: fields.some((field) => isField(field) && isCard(field)), password: fields.some((field) => isPassword(field) && field.value !== '') };
+  };
+  // Whether the document is a payment page (design section 7.3): card fields and wallet buttons
+  // anywhere in it, and the frames it holds by address.
+  const walletSelector = 'apple-pay-button, gpay-button, .gpay-button, button, [role=button], input[type=button], input[type=submit]';
+  const payFacts = () => {
+    const pay = {};
+    for (const element of document.querySelectorAll('input, select, textarea')) {
+      if (isCard(element) && isVisible(element)) { pay.cards = true; break; }
+    }
+    for (const element of document.querySelectorAll(walletSelector)) {
+      if (isWallet(element, getComputedStyle(element))) { pay.wallet = true; break; }
+    }
+    return pay;
+  };
+  const pay = () => ({
+    token: frame.token, path: framePath(), pay: payFacts(), challenge: pageChallenge(),
+    frames: [...document.querySelectorAll('iframe, frame')].map((element) => element.src).filter(Boolean),
+  });
+
+  // The element an action aims at, by ref (`id`) or by point (`x`, `y`, in this frame's
+  // viewport), with every check of design section 5.1 this frame can make: scrolled into view
+  // when needed, measured again a frame later when it moved since the last snapshot, the point
+  // to press hit-tested. A point on a frame names the frame, for Lithium to look inside it.
+  const target = async ({ id, x, y, scroll, known, menu }) => {
+    if (menu) frame.agentMenu = Date.now() + 2000;
+    const byPoint = id === undefined;
+    const element = byPoint ? hitAt(x, y) : elementOf(id);
+    const facts = { token: frame.token, path: framePath(), viewport: viewport(), counts: { ...counts } };
+    if (!element) return { ...facts, gone: true };
+    if (byPoint && /^i?frame$/.test(element.localName)) {
+      const index = frameIndexes().get(element.contentWindow);
+      if (isExtensionFrame(element)) facts.extensionUI = true;
+      else if (index !== undefined) facts.frame = index;
+      facts.src = element.src || '';
+    }
+    const role = roleOf(element) || (element.localName === 'body' ? 'page' : 'text');
+    Object.assign(facts, { id: idOf(element), role, name: cut(nameOf(element, role), 80), tag: element.localName, type: element.type || undefined });
+    const field = isField(element) ? guardOf(element) : null;
+    if (field) facts.field = field;
+    if (isWallet(element, getComputedStyle(element))) facts.wallet = true;
+    facts.form = formOf(element);
+    if (isSubmit(element)) facts.submit = true;
+    if (isEditable(element)) facts.editable = true;
+    if (element.localName === 'textarea' || (element.isContentEditable && element.localName !== 'input')) facts.multiline = true;
+    if (element.readOnly && ['input', 'textarea'].includes(element.localName)) facts.readonly = true;
+    if (element.disabled || element.getAttribute('aria-disabled') === 'true' || safeMatches(element, ':disabled')) facts.disabled = true;
+    if (element === deepFocus()) facts.focused = true;
+    if (element.checked === true || element.getAttribute('aria-checked') === 'true') facts.checked = true;
+    if (element.closest('[draggable=true]') || (element.draggable && element.getAttribute('draggable') !== 'false' && ['a', 'img'].includes(element.localName))) facts.draggable = true;
+    if (inExtensionUI(element)) facts.extensionUI = true;
+    Object.assign(facts, pay());
+    if (byPoint) {
+      facts.point = [x, y];
+      facts.box = round(element.getBoundingClientRect());
+      return facts;
+    }
+    let rect = element.getBoundingClientRect();
+    const hidden = hiddenReason(element, rect);
+    if (hidden) return { ...facts, hidden };
+    const showing = (r) => r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+    const center = (r) => [r.left + r.width / 2, r.top + r.height / 2];
+    const inside = ([px, py]) => px >= 0 && py >= 0 && px < innerWidth && py < innerHeight;
+    if (scroll && !inside(center(rect))) {
+      element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      rect = element.getBoundingClientRect();
+    }
+    const box = round(rect);
+    // Stable: the same box a frame later, measured only when it differs from the last snapshot's.
+    if (!known || known.some((value, index) => Math.abs(value - box[index]) > 1)) {
+      await nextFrame();
+      const again = round(element.getBoundingClientRect());
+      if (again.some((value, index) => Math.abs(value - box[index]) > 1)) return { ...facts, box: again, unstable: true };
+    }
+    facts.box = box;
+    facts.viewport = viewport();
+    if (!showing(rect)) return { ...facts, inViewport: false };
+    facts.inViewport = true;
+    // The center of the largest visible rect, else a point of it that reaches the element.
+    const clipped = [...element.getClientRects()].map((r) => {
+      const left = Math.max(r.left, 0);
+      const top = Math.max(r.top, 0);
+      return { left, top, width: Math.min(r.right, innerWidth) - left, height: Math.min(r.bottom, innerHeight) - top };
+    }).filter((r) => r.width > 0 && r.height > 0);
+    const largest = clipped.sort((a, b) => b.width * b.height - a.width * a.height)[0] ?? rect;
+    const points = [center(largest)];
+    for (const [fx, fy] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) points.push([largest.left + largest.width * fx, largest.top + largest.height * fy]);
+    let firstHit = null;
+    for (const point of points.filter(inside)) {
+      const hit = hitAt(point[0], point[1]);
+      firstHit ??= hit;
+      if (hit && contains(element, hit)) {
+        facts.point = point;
+        return facts;
+      }
+    }
+    facts.point = points[0];
+    if (firstHit) facts.coveredBy = cover(firstHit);
+    else facts.inViewport = false;
+    return facts;
+  };
+
+  // In a parent frame: whether a point lands on the frame at `index` of window.frames, or what covers it.
+  const frameHit = ({ x, y, index }) => {
+    const hit = hitAt(x, y);
+    const facts = { token: frame.token };
+    if (hit && /^i?frame$/.test(hit.localName) && frameIndexes().get(hit.contentWindow) === index) return facts;
+    if (hit) facts.coveredBy = cover(hit);
+    return facts;
+  };
+
+  // The focused element, or the frame focus went into, for keys sent without a ref.
+  const focused = () => {
+    const element = deepFocus();
+    const facts = { token: frame.token, path: framePath(), counts: { ...counts } };
+    if (!element || element === document.body || element === document.documentElement) return facts;
+    if (/^i?frame$/.test(element.localName)) return { ...facts, frame: frameIndexes().get(element.contentWindow) ?? -1 };
+    return { ...facts, id: idOf(element) };
+  };
+
+  // Waits until the page has seen `count` trusted events of `type` (or `timeoutMs` passes), then
+  // with `frame` one rendering update; with `scrolled`, until the scroll position holds for a
+  // frame; with `hold`, until that many milliseconds after the call, so a load the events start
+  // has begun (Lithium stops waiting as soon as one does: this document then never answers).
+  const settle = async ({ type, count, timeoutMs, scrolled, frame: rendered, hold }) => {
+    const called = performance.now();
+    const seen = await new Promise((resolve) => {
+      const check = () => {
+        if ((counts[type] || 0) < count) return false;
+        counted.splice(counted.indexOf(check), 1);
+        clearTimeout(timer);
+        resolve(true);
+        return true;
+      };
+      const timer = setTimeout(() => {
+        counted.splice(counted.indexOf(check), 1);
+        resolve(false);
+      }, timeoutMs);
+      counted.push(check);
+      check();
+    });
+    if (rendered) await nextFrame();
+    if (scrolled) {
+      const deadline = Date.now() + 500;
+      let last = `${scrollX} ${scrollY}`;
+      while (Date.now() < deadline) {
+        await nextFrame();
+        const now = `${scrollX} ${scrollY}`;
+        if (now === last) break;
+        last = now;
+      }
+    }
+    const left = (hold || 0) - (performance.now() - called);
+    if (left > 0) await new Promise((resolve) => setTimeout(resolve, left));
+    return { token: frame.token, seen, counts: { ...counts } };
+  };
+
+  // A <select> without native input (design section 5.2): its pop-up menu would run a tracking
+  // loop on the user's screen. Sets the options, then input and change, untrusted.
+  const selectOption = ({ id, values, labels }) => {
+    const element = elementOf(id);
+    if (!element) return { token: frame.token, gone: true };
+    if (element.localName !== 'select') return { token: frame.token, notSelect: true };
+    const options = [...element.options];
+    const label = (option) => collapse(option.label || option.text);
+    const wanted = values ?? labels;
+    const picked = wanted.map((want) => options.find((option) => (values ? option.value === want : label(option) === collapse(want))));
+    const missing = wanted.filter((_, index) => !picked[index]);
+    if (missing.length) return { token: frame.token, missing, available: options.slice(0, 100).map(label) };
+    if (!element.multiple && picked.length > 1) return { token: frame.token, single: true };
+    if (element.multiple) options.forEach((option) => { option.selected = picked.includes(option); });
+    else element.selectedIndex = picked[0].index;
+    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    return { token: frame.token, selected: [...element.selectedOptions].map(label) };
+  };
+
+  // Focus as tabbing into the element gives it: no input event.
+  const focus = ({ id }) => {
+    const element = elementOf(id);
+    if (!element) return { token: frame.token, gone: true };
+    element.focus({ preventScroll: false });
+    return { token: frame.token, focused: deepFocus() === element };
+  };
+
+  // The caret at the end of the field a click just focused, so typing adds to what it holds.
+  const caretEnd = ({ id }) => {
+    const element = elementOf(id);
+    if (!element) return { token: frame.token, gone: true };
+    if (element.isContentEditable && element.localName !== 'input' && element.localName !== 'textarea') {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    } else {
+      // Number and email fields have no selection to set.
+      try { element.setSelectionRange(element.value.length, element.value.length); } catch {}
+    }
+    return { token: frame.token };
+  };
+
+  const scrollTo = ({ id }) => {
+    const element = elementOf(id);
+    if (!element) return { token: frame.token, gone: true };
+    element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    return { token: frame.token, box: round(element.getBoundingClientRect()), viewport: viewport() };
+  };
+
+  // What a file input holds now, by name only, after an upload.
+  const files = ({ id }) => {
+    const element = elementOf(id);
+    return { token: frame.token, names: element?.files ? [...element.files].map((file) => file.name) : undefined };
   };
 
   // DOM waits: re-checked when the document changes, never by polling faster than 4 times a
@@ -799,7 +1059,7 @@
     }).map((element) => element.src).filter(Boolean),
   });
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge };
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files };
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.

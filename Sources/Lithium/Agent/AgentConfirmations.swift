@@ -262,7 +262,7 @@ extension AgentHub {
             if armed.expires > .now { return .files(armed.files) }
         }
         // The user can't click in a tab out of sight; in the one shown, only the agent's input counts.
-        let unseen = state.isBusy && tab.loadedWebView?.window == nil
+        let unseen = state.isBusy && tab.loadedWebView?.userWindow == nil
         guard unseen || drive(of: tab) != nil else { return nil }
         state.fileChoosersCancelled += 1
         return .cancelled

@@ -831,14 +831,24 @@ extension Tab: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard let browser else { return nil }
+        // An agent's click opening a tab: it goes into the Agent group, unselected, and the
+        // action's result names it.
+        let agentSession = browser.agent?.actingSession(in: self)
         // WebKit hands an extension's page its own configuration for the new one, which a website
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
-            browser.newTab(url: url)
+            if let agentSession {
+                let tab = browser.newAgentTab(session: agentSession)
+                tab.load(url)
+                browser.agent?.didOpen(tab, from: self)
+            } else {
+                browser.newTab(url: url)
+            }
             return nil
         }
         browser.prepare(popup: configuration)
-        let popup = browser.newTab(configuration: configuration)
+        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration) } ?? browser.newTab(configuration: configuration)
+        if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
         // window.open with no features at all, which can't be told apart from one.
@@ -925,6 +935,16 @@ extension Tab: WKUIDelegate {
         dialogOwner?.handDialogToUser(in: self)
     }
 
+    /// Its web view moved to another window, or out of any: out of the agent's stage, if it was there.
+    func webViewDidMove(_ webView: WKWebView) {
+        browser?.agent?.stage.didLeave(webView)
+    }
+
+    /// The user clicked, typed or scrolled in its page.
+    func noteUserInput() {
+        browser?.agent?.userInput(in: self)
+    }
+
     /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to
     /// a modal that would hold up the user, until it is handed to the user; any other is the
     /// user's, and agents see it while it shows.
@@ -948,7 +968,7 @@ extension Tab: WKUIDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
-        guard let window = webView.window else { return panel.runModal() == .OK ? panel.urls : nil }
+        guard let window = webView.userWindow else { return panel.runModal() == .OK ? panel.urls : nil }
         return await panel.beginSheetModal(for: window) == .OK ? panel.urls : nil
     }
 
@@ -975,7 +995,7 @@ extension Tab: WKUIDelegate {
     }
 
     private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
-        guard let window = webView.window else { return alert.runModal() }
+        guard let window = webView.userWindow else { return alert.runModal() }
         return await alert.beginSheetModal(for: window)
     }
 }

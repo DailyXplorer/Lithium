@@ -203,7 +203,7 @@ final class Browser {
     func setAgentAccess(_ enabled: Bool) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools)
+            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {
@@ -238,8 +238,9 @@ final class Browser {
         guard eventMonitors.isEmpty else { return }
         // Escape is caught before any text field sees it, since a focused field editor swallows it.
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }
-            return MainActor.assumeIsolated { self.dismissOverlay() } ? nil : event
+            return MainActor.assumeIsolated { !NativeInput.isAgents(event) && self.dismissOverlay() } ? nil : event
         }
         // A click only moves focus when it lands on something that takes focus (like the page).
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
@@ -331,8 +332,8 @@ final class Browser {
 
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
     /// stay as they were. Agents open only web pages, which load in Lithium's own configuration.
-    func newAgentTab(session: String) -> Tab {
-        let tab = Tab(browser: self, configuration: makeConfiguration())
+    func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration())
         tab.openedByAgent = session
         tabs.append(tab)
         extensions.didOpen(tab)

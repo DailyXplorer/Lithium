@@ -50,6 +50,21 @@ struct AgentTool {
     }
 }
 
+/// What a tool call tells the log about its own arguments. Text typed by an agent is logged
+/// only once the call knows its field isn't guarded (design section 7.6): a call that fails
+/// before it finds out logs `[redacted]`.
+@MainActor
+final class CallNotes {
+    /// Set by `type` once its field is known not to be a password or card field.
+    var typedIntoUnguardedField = false
+
+    func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
+        guard tool == "type", !typedIntoUnguardedField, var fields = arguments.object, fields["text"] != nil else { return arguments }
+        fields["text"] = "[redacted]"
+        return .object(fields)
+    }
+}
+
 /// A failure the agent reads: `code` from the design's error list, then a sentence.
 struct AgentToolError: Error, Equatable {
     let code: String
@@ -113,6 +128,12 @@ final class AgentHub {
     /// The session whose tool call is running, for what the call starts that outlives it (a
     /// download after `wait: none`) and for confirmations deep inside it.
     @TaskLocal static var callSession: MCPSession?
+    /// What the running call tells the log about its arguments.
+    @TaskLocal static var callNotes: CallNotes?
+    /// Where background tabs' web views take an agent's events.
+    @ObservationIgnored private(set) lazy var stage = AgentStage()
+    /// Keeps an agent's keys from Lithium's menus while access is on.
+    @ObservationIgnored private var keyGuard: Any?
 
     @ObservationIgnored weak var browser: Browser?
     @ObservationIgnored private var tabIDs = AgentTabIDs()
@@ -148,6 +169,7 @@ final class AgentHub {
     /// Listens on the port of the last run when it is free, else on a new one, and writes the
     /// endpoint file. A token left by the last run is kept, so HTTP clients survive a relaunch.
     func start() async {
+        if keyGuard == nil { keyGuard = NativeInput.installKeyGuard() }
         token = AgentEndpoint.read(in: folder)?.token ?? AgentEndpoint.makeToken()
         let server = AgentServer(token: token, listenerDidFail: { [weak self] error in
             Task { @MainActor in await self?.listenerDied(error) }
@@ -259,6 +281,9 @@ final class AgentHub {
         server?.stop()
         server = nil
         AgentEndpoint.delete(in: folder)
+        stage.releaseAll()
+        if let keyGuard { NSEvent.removeMonitor(keyGuard) }
+        keyGuard = nil
     }
 
     /// The user's Stop: cancels every call in flight, denies every prompt and drops every site
@@ -429,12 +454,15 @@ final class AgentHub {
             return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
         }
         var result: Result<AgentToolOutput, AgentToolError>
+        let notes = CallNotes()
         if isRateLimited(session.id, at: started) {
             result = .failure(AgentToolError(code: "rate_limited", message: "More than \(Self.maxCallsPerSecond) tool calls in a second. Slow down."))
         } else {
             let task = Task { () -> Result<AgentToolOutput, AgentToolError>? in
                 do {
-                    return .success(try await AgentHub.$callSession.withValue(session) { try await tool.run(arguments, session, self) })
+                    return .success(try await AgentHub.$callSession.withValue(session) {
+                        try await AgentHub.$callNotes.withValue(notes) { try await tool.run(arguments, session, self) }
+                    })
                 } catch let error as AgentToolError {
                     return .failure(error)
                 } catch {
@@ -473,7 +501,7 @@ final class AgentHub {
         var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": AgentURLs.redacted(arguments),
+            "params": AgentURLs.redacted(notes.logged(arguments, tool: name)),
             "result": .object(logged),
             "ms": .int(ms),
         ]
@@ -582,6 +610,30 @@ final class AgentHub {
         state.drive = nil
         confirmations.cancel(tab: tab.id)
         if state.isBusy { state.interruption = .user }
+    }
+
+    /// The user clicked, typed or scrolled in the tab's page: their input wins over an agent
+    /// action running there, and the tab's next download is theirs.
+    func userInput(in tab: Tab) {
+        guard let state = tabs[tab.id] else { return }
+        state.drive = nil
+        if state.acting != nil, state.interruption == nil { state.interruption = .userInput }
+    }
+
+    /// The label of the session whose action runs in `tab`: what its page opens is the agent's.
+    func actingSession(in tab: Tab) -> String? {
+        guard let acting = tabs[tab.id]?.acting else { return nil }
+        return sessions.first { $0.id == acting.session }?.label
+    }
+
+    /// A tab the page opened during an agent action, for the action's result.
+    func didOpen(_ tab: Tab, from opener: Tab) {
+        tabs[opener.id]?.opened.append(tab)
+        touch(tab)
+    }
+
+    func isActing(in tab: Tab) -> Bool {
+        tabs[tab.id]?.acting != nil
     }
 
     /// The tab's page went (it slept, or its process died), and any load with it. Its

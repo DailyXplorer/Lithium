@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 import WebKit
 @testable import Lithium
@@ -71,6 +72,114 @@ struct ContextMenuDownloadTests {
         #expect(Downloads.shared.items.count == before)
         #expect(!Downloads.shared.items.contains { $0 === item })
         #expect(!FileManager.default.fileExists(atPath: URL.downloadsDirectory.appending(path: "logo.svg").path))
+    }
+
+    /// A file the user chose to replace is only replaced once the new one is complete.
+    @Test func replacesAFileOnceTheDownloadIsComplete() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<img src="/logo.svg">"#),
+            "/logo.svg": ("Content-Type: image/svg+xml", Self.svg),
+        ])
+        defer { listener.cancel() }
+        let (folder, file) = try existingFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        Downloads.shared.chooseDestination = { _, _ in file }
+        defer { Downloads.shared.chooseDestination = { _, _ in nil } }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        let item = try await downloadFromMenu(base.appending(path: "logo.svg"), in: tab)
+        #expect(item.filename == "logo.svg")
+        #expect(await waitUntil(30) { item.state != .downloading })
+        #expect(item.state == .finished)
+        #expect(item.filename == "logo.svg")
+        #expect(try String(contentsOf: file, encoding: .utf8) == Self.svg)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["logo.svg"])
+    }
+
+    @Test func aFailedDownloadLeavesTheFileItWouldReplace() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>Page</p>")])
+        defer { listener.cancel() }
+        let truncated = try await serveTruncated()
+        defer { truncated.listener.cancel() }
+        let (folder, file) = try existingFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        Downloads.shared.chooseDestination = { _, _ in file }
+        defer { Downloads.shared.chooseDestination = { _, _ in nil } }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        let item = try await downloadFromMenu(truncated.url.appending(path: "logo.svg"), in: tab)
+        #expect(await waitUntil(30) { item.state != .downloading })
+        guard case .failed = item.state else {
+            Issue.record("expected a failed download, got \(item.state)")
+            return
+        }
+        #expect(try String(contentsOf: file, encoding: .utf8) == "original")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["logo.svg"])
+    }
+
+    @Test func cancellingWhileThePanelIsOpenKeepsTheFile() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<img src="/logo.svg">"#),
+            "/logo.svg": ("Content-Type: image/svg+xml", Self.svg),
+        ])
+        defer { listener.cancel() }
+        let (folder, file) = try existingFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        Downloads.shared.chooseDestination = { _, _ in
+            Downloads.shared.items.first?.cancel()
+            return file
+        }
+        defer { Downloads.shared.chooseDestination = { _, _ in nil } }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        let item = try await downloadFromMenu(base.appending(path: "logo.svg"), in: tab)
+        #expect(await waitUntil(30) { item.state != .downloading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(item.state == .cancelled)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "original")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["logo.svg"])
+    }
+
+    /// A folder holding `logo.svg`, which says "original".
+    private func existingFile() throws -> (folder: URL, file: URL) {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: "logo.svg")
+        try "original".write(to: file, atomically: true, encoding: .utf8)
+        return (folder, file)
+    }
+
+    /// Answers every request with the start of a body far longer, then closes the connection.
+    private func serveTruncated() async throws -> (listener: NWListener, url: URL) {
+        let listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n"
+                let response = Data(head.utf8) + Data(repeating: 0x20, count: 1_000)
+                connection.send(content: response, completion: .contentProcessed { _ in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { connection.cancel() }
+                })
+            }
+        }
+        listener.start(queue: .global())
+        for _ in 0..<500 {
+            if let port = listener.port, listener.state == .ready {
+                return (listener, URL(string: "http://127.0.0.1:\(port.rawValue)/")!)
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        listener.cancel()
+        throw URLError(.cannotConnectToHost)
     }
 
     /// Starts the download the way the menu item does, and hands it to the tab as WebKit does.

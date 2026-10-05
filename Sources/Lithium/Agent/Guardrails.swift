@@ -71,8 +71,8 @@ enum Guardrails {
 
     enum Action: Equatable {
         case type, select, check
-        /// A key pressed in the element, as `Enter`.
-        case press(String)
+        /// A key pressed in the element; `enter` when it is Enter or types Enter's carriage return.
+        case press(enter: Bool)
         /// A click, or Enter or Space on a button or link.
         case activate
     }
@@ -86,9 +86,9 @@ enum Guardrails {
         case .type, .select, .check:
             if element.field == "payment" { return .payment }
             if element.field == "password", action == .type { return .password }
-        case .press(let key):
+        case .press(let enter):
             if element.field == "payment" { return .payment }
-            if element.field == "password", key == "Enter" { return .password }
+            if element.field == "password", enter { return .password }
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }

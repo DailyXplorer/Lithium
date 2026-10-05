@@ -108,7 +108,7 @@ final class NativeInput {
             guard let event = NSEvent.keyEvent(
                 with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: (webView.window ?? window).windowNumber, context: nil,
-                characters: key.characters(with: flags), charactersIgnoringModifiers: key.characters,
+                characters: key.characters(with: flags), charactersIgnoringModifiers: key.charactersIgnoringModifiers(with: flags),
                 isARepeat: false, keyCode: key.code
             ) else { continue }
             pressed = true
@@ -230,7 +230,7 @@ struct NativeKey: Equatable {
     let characters: String
     /// Shift for an uppercase letter or a shifted symbol; Function for arrows and F keys.
     var flags: NSEvent.ModifierFlags = []
-    /// The text a single-character key types with its modifiers.
+    /// What a letter or symbol key types with Shift on a US layout.
     var shifted: String?
 
     func characters(with flags: NSEvent.ModifierFlags) -> String {
@@ -238,18 +238,32 @@ struct NativeKey: Equatable {
         if flags.contains(.control), characters.count == 1, let scalar = characters.lowercased().unicodeScalars.first, ("a"..."z").contains(scalar) {
             return String(UnicodeScalar(UInt8(scalar.value - 96)))
         }
-        return shifted ?? characters
+        return charactersIgnoringModifiers(with: flags)
     }
+
+    /// As AppKit gives it: every modifier ignored but Shift.
+    func charactersIgnoringModifiers(with flags: NSEvent.ModifierFlags) -> String {
+        flags.contains(.shift) ? shifted ?? characters : characters
+    }
+
+    /// Enter, or a combination that types a carriage return as Enter does (Control+M): it
+    /// submits a field's form and activates a button or link.
+    func isEnter(with modifiers: NSEvent.ModifierFlags) -> Bool {
+        code == 36 || characters(with: modifiers.union(flags)) == "\r"
+    }
+
+    /// Space activates a button, a checkbox and the like, whatever the modifiers.
+    var isSpace: Bool { code == 49 }
 
     /// The key that types `character` on a US layout, nil for one no key types (é, ✓, 日).
     static func typing(_ character: Character) -> NativeKey? {
         let text = String(character)
-        if let code = letters[text] { return NativeKey(code: code, characters: text) }
+        if let code = letters[text] { return NativeKey(code: code, characters: text, shifted: text.uppercased()) }
         if let code = letters[text.lowercased()], text != text.lowercased() { return NativeKey(code: code, characters: text.lowercased(), flags: .shift, shifted: text) }
         if let (base, code) = symbols.first(where: { $0.value.shifted == text }).map({ ($0.key, $0.value.code) }) {
             return NativeKey(code: code, characters: base, flags: .shift, shifted: text)
         }
-        if let symbol = symbols[text] { return NativeKey(code: symbol.code, characters: text) }
+        if let symbol = symbols[text] { return NativeKey(code: symbol.code, characters: text, shifted: symbol.shifted) }
         if text == " " { return named["Space"] }
         return nil
     }
@@ -280,13 +294,18 @@ struct NativeKey: Equatable {
         ]
         let fCodes: [UInt16] = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111]
         for (index, code) in fCodes.enumerated() { keys["F\(index + 1)"] = function(code, NSF1FunctionKey + index) }
-        keys["Return"] = keys["Enter"]
-        keys["Esc"] = keys["Escape"]
-        keys[" "] = keys["Space"]
         return keys
     }()
 
-    /// `Meta+K`, `Shift+Tab`, `ArrowDown`: the key and its modifiers, nil for a name it doesn't know.
+    /// Other spellings of named keys, lowercased, and the name `parse` gives them.
+    private static let aliases: [String: String] = {
+        var aliases = ["return": "Enter", "esc": "Escape", " ": "Space"]
+        for name in named.keys { aliases[name.lowercased()] = name }
+        return aliases
+    }()
+
+    /// `Meta+K`, `Shift+Tab`, `ArrowDown`: the key and its modifiers, nil for a name it doesn't
+    /// know. Named keys are found whatever their case or spelling, and named as `named` names them.
     static func parse(_ combo: String) -> (key: NativeKey, name: String, modifiers: NSEvent.ModifierFlags)? {
         var parts = combo.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
         // "Meta++" names the plus key.
@@ -302,11 +321,11 @@ struct NativeKey: Equatable {
             default: return nil
             }
         }
-        if let key = named[name] ?? named.first(where: { $0.key.lowercased() == name.lowercased() })?.value { return (key, name, modifiers) }
+        if let canonical = aliases[name.lowercased()], let key = named[canonical] { return (key, canonical, modifiers) }
         guard name.count == 1, let key = typing(Character(name)) else { return nil }
-        // Meta+K is the k key with Command, not Shift-k.
+        // Meta+K is the k key with Command, not Shift-k; Shift+K is K.
         if key.flags.contains(.shift), name.lowercased() != name, !modifiers.isEmpty {
-            return (NativeKey(code: key.code, characters: key.characters), name.lowercased(), modifiers)
+            return (NativeKey(code: key.code, characters: key.characters, shifted: key.shifted), name.lowercased(), modifiers)
         }
         return (key, name, modifiers)
     }

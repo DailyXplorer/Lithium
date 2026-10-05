@@ -253,9 +253,12 @@ extension AgentHub {
             let end = try await hub.resolve(to, ctx, checks: [])
             ctx.state.acting?.caption = "Dragging \(start.shortName)"
             return try await hub.deliver(ctx, start, wait: .commit, diff: diff) { input in
-                var moves = start.counts["mousemove"] ?? 0
                 try input.move(to: start.point)
                 try input.down(at: start.point)
+                // The page reaches a move without a button only in the window in front: what it
+                // counted by the press tells whether that first move is one of its own.
+                let pressed = try await hub.settle(ctx, start.frame, Settle(type: "mousedown", count: (start.counts["mousedown"] ?? 0) + 1), timeout: 250, frame: false)
+                var moves = pressed["mousemove"] ?? start.counts["mousemove"] ?? 0
                 for step in 1...steps {
                     let fraction = Double(step) / Double(steps)
                     try input.move(to: CGPoint(x: start.point.x + (end.point.x - start.point.x) * fraction, y: start.point.y + (end.point.y - start.point.y) * fraction))
@@ -297,7 +300,7 @@ extension AgentHub {
             if typing == nil { AgentHub.callNotes?.typedIntoUnguardedField = true }
             ctx.state.acting?.caption = "Typing in \(target.shortName)"
             var fields: [String: JSONValue] = ["grant": try await hub.allow(.type, on: target, submitting: nil, "type into \(target.shortName)" + (submit ? " and submit its form" : ""), ctx)]
-            let submitting = submit ? try await hub.allow(.press("Enter"), on: target, submitting: target.report.form, "submit the form of \(target.shortName)", ctx, asked: typing) : .null
+            let submitting = submit ? try await hub.allow(.press(enter: true), on: target, submitting: target.report.form, "submit the form of \(target.shortName)", ctx, asked: typing) : .null
             if submitting != .null { fields["grant"] = submitting }
             if typing != nil { fields["typed"] = .int(text.count) }
             return try await hub.deliver(ctx, target, wait: wait, diff: diff, fields: fields) { input in
@@ -373,9 +376,12 @@ extension AgentHub {
         let (wait, diff, timeout) = (try arguments.wait(default: .commit), try arguments.bool("diff", default: true), try arguments.timeout(default: 15_000))
         return try await hub.action(named, "Pressing \(combo)", session: session, timeout: timeout) { ctx in
             let target = try await hub.resolve(.focused, ctx, checks: [])
-            let activates = ["Enter", "Return", "Space", " "].contains(name) && modifiers.isEmpty && ["button", "link", "checkbox", "radio", "switch", "menuitem", "tab", "option"].contains(target.report.role ?? "")
-            let action: Guardrails.Action = activates ? .activate : .press(name == "Return" ? "Enter" : name)
-            let submits = name == "Enter" || name == "Return" ? (target.report.submit == true || target.report.editable == true && target.report.multiline != true) : false
+            // Decided on the key, not how its name was spelled: Enter and Space with any modifier,
+            // and Control+M, which types Enter's carriage return, may still activate or submit.
+            let enter = key.isEnter(with: modifiers)
+            let activates = (enter || key.isSpace) && ["button", "link", "checkbox", "radio", "switch", "menuitem", "tab", "option"].contains(target.report.role ?? "")
+            let action: Guardrails.Action = activates ? .activate : .press(enter: enter)
+            let submits = enter && (target.report.submit == true || target.report.editable == true && target.report.multiline != true)
             let fields: [String: JSONValue] = ["grant": try await hub.allow(action, on: target, submitting: submits ? target.report.form : nil, "press \(combo) in \(target.shortName)", ctx)]
             return try await hub.deliver(ctx, target, wait: wait, diff: diff, fields: fields) { input in
                 if let responder {
@@ -891,7 +897,7 @@ extension AgentHub {
         if kind == asked, kind != .payment { return .null }
         let fieldEntry: Bool = switch action {
         case .type, .select, .check: true
-        case .press(let key): key != "Enter"
+        case .press(let enter): !enter
         case .activate: false
         }
         let form = target.report.form.map { ElementAddress(document: target.report.token, id: $0.id) }
@@ -945,7 +951,8 @@ extension AgentHub {
             // long, timed in the page, as a timer of Lithium's in the background fires late.
             if let settle { try await self.settle(ctx, target.frame, settle, timeout: 1000, frame: true, hold: 50, since: since) }
             if since.hasMoved(tab, ctx.state) {
-                let page = try await follow(since, in: ctx.named, wait: max(wait, .commit), deadline: ctx.deadline, timeout: ctx.timeout, landedWithinPage: nil)
+                // `none`: the load has started, and nothing more is known, as for navigate.
+                let page = wait == .none ? self.page(ctx.named, reached: LoadWait.none) : try await follow(since, in: ctx.named, wait: wait, deadline: ctx.deadline, timeout: ctx.timeout, landedWithinPage: nil)
                 result.merge(page.object ?? [:]) { _, new in new }
                 result["navigated"] = .bool(page["download"] == nil)
                 if diff, wait > .commit, page["download"] == nil { result = try await addingDiff(to: .object(result), of: ctx.named, for: ctx.session, if: true, until: ctx.deadline).object ?? result }

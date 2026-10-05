@@ -763,7 +763,7 @@
   // when the page has handled what it sent instead of waiting a fixed time.
   const counts = {};
   const counted = [];
-  for (const type of ['mousemove', 'mouseup', 'keyup', 'beforeinput', 'wheel']) {
+  for (const type of ['mousemove', 'mousedown', 'mouseup', 'keyup', 'beforeinput', 'wheel']) {
     addEventListener(type, (event) => {
       if (!event.isTrusted) return;
       counts[type] = (counts[type] || 0) + 1;

@@ -9,7 +9,7 @@ import WebKit
 @Suite(.timeLimit(.minutes(1)))
 struct AgentKeysTests {
     @Test func namesKeysAsAUSKeyboardTypesThem() throws {
-        #expect(NativeKey.typing("a") == NativeKey(code: 0, characters: "a"))
+        #expect(NativeKey.typing("a") == NativeKey(code: 0, characters: "a", shifted: "A"))
         #expect(NativeKey.typing("A") == NativeKey(code: 0, characters: "a", flags: .shift, shifted: "A"))
         #expect(NativeKey.typing("!") == NativeKey(code: 18, characters: "1", flags: .shift, shifted: "!"))
         #expect(NativeKey.typing("é") == nil)
@@ -22,6 +22,44 @@ struct AgentKeysTests {
         #expect(NativeKey.parse("F5")?.key.code == 96)
         #expect(NativeKey.parse("Hyper+K") == nil)
         #expect(NativeKey.parse("NoSuchKey") == nil)
+    }
+
+    @Test func everySpellingOfAKeyIsThatKey() throws {
+        let spellings = [
+            "Enter": ["Enter", "enter", "ENTER", "Return", "return"], "Space": ["Space", "space", " "],
+            "Escape": ["Escape", "escape", "Esc", "esc"], "ArrowDown": ["arrowdown"], "F5": ["f5"],
+        ]
+        for (name, spelled) in spellings {
+            for spelling in spelled + spelled.map({ "shift+" + $0 }) {
+                let parsed = try #require(NativeKey.parse(spelling), "\(spelling)")
+                #expect(parsed.name == name && parsed.key == NativeKey.named[name], "\(spelling)")
+            }
+        }
+        let enters = ["Enter", "enter", "return", "Shift+Enter", "Control+Enter", "Meta+enter", "Alt+Return", "Control+M", "control+m"]
+        for combo in enters {
+            let parsed = try #require(NativeKey.parse(combo))
+            #expect(parsed.key.isEnter(with: parsed.modifiers), "\(combo)")
+        }
+        for combo in ["Tab", "Shift+Tab", "m", "Meta+M", "Space", "ArrowDown"] {
+            let parsed = try #require(NativeKey.parse(combo))
+            #expect(!parsed.key.isEnter(with: parsed.modifiers), "\(combo)")
+        }
+        for combo in ["Space", "space", " ", "Shift+Space", "Control+space"] { #expect(NativeKey.parse(combo)?.key.isSpace == true, "\(combo)") }
+    }
+
+    /// The characters a US keyboard gives, and those AppKit gives ignoring every modifier but Shift.
+    @Test func shiftTypesTheShiftedCharacter() throws {
+        let cases: [(combo: String, characters: String, ignoringModifiers: String)] = [
+            ("Shift+A", "A", "A"), ("Shift+a", "A", "A"), ("A", "A", "A"), ("a", "a", "a"), ("Shift+1", "!", "!"),
+            ("Shift+/", "?", "?"), ("1", "1", "1"), ("!", "!", "!"), ("Meta+K", "k", "k"), ("Meta+Shift+K", "K", "K"),
+            ("Control+Shift+A", "\u{01}", "A"), ("Shift+Tab", "\u{19}", "\t"), ("Shift+Enter", "\r", "\r"),
+        ]
+        for (combo, characters, ignoring) in cases {
+            let parsed = try #require(NativeKey.parse(combo))
+            let flags = parsed.modifiers.union(parsed.key.flags)
+            #expect(parsed.key.characters(with: flags) == characters, "\(combo)")
+            #expect(parsed.key.charactersIgnoringModifiers(with: flags) == ignoring, "\(combo)")
+        }
     }
 
     @Test func theKeyGuardSwallowsOnlyTheAgentsEvents() throws {
@@ -146,6 +184,18 @@ struct AgentInputTests {
             \(logger)
             """),
         "/done": (html, "<title>Done</title>"),
+        "/busy-pad": (html, """
+            <title>Busy pad</title><style>body { margin: 0 } #pad { position: absolute; left: 0; top: 0; width: 400px; height: 200px }</style>
+            <div id="pad" role="button" aria-label="Pad"></div>
+            <script>
+              window.xs = [];
+              document.getElementById('pad').addEventListener('mousemove', (event) => {
+                xs.push(event.clientX);
+                const end = Date.now() + 40;
+                while (Date.now() < end) {}
+              });
+            </script>
+            """),
     ]
 
     private func withAgent(_ body: (Client, URL) async throws -> Void) async throws {
@@ -350,6 +400,17 @@ struct AgentInputTests {
         }
     }
 
+    @Test func aDragOnABusyPageReachesEveryStep() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "busy-pad"))
+            let dragged = await client.call("drag", ["tab": .string(id), "from": ["x": 20, "y": 100], "to": ["x": 220, "y": 100], "steps": 10])
+            #expect(!dragged.isError, "\(dragged.content)")
+            // The press's own move, at 20, reaches only a page in the window in front.
+            let xs = try JSONDecoder().decode([Int].self, from: Data((try await page(tab, "return JSON.stringify(xs)") as? String ?? "").utf8))
+            #expect(Array(xs.drop { $0 == 20 }) == (1...10).map { 20 + 20 * $0 }, "\(xs)")
+        }
+    }
+
     // MARK: Keys
 
     @Test func typesInFieldsInOrderAndSubmits() async throws {
@@ -462,6 +523,18 @@ struct AgentInputTests {
         }
     }
 
+    @Test func shiftWithALetterOrADigitTypesItsShiftedCharacter() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(try await ref(client, id, "textbox", "Field"))])).isError)
+            for keys in ["Shift+A", "Shift+1", "Shift+/", "b"] {
+                let pressed = await client.call("press", ["tab": .string(id), "keys": .string(keys)])
+                #expect(!pressed.isError, "\(keys): \(pressed.content)")
+            }
+            #expect(try await page(tab, "return document.getElementById('field').value") as? String == "A!?b")
+        }
+    }
+
     // MARK: Checks
 
     @Test func actionabilityErrorsNameWhatStandsInTheWay() async throws {
@@ -566,7 +639,45 @@ struct AgentInputTests {
         }
     }
 
+    @Test func waitNoneAnswersOnceTheActionStartedALoad() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            _ = try await page(tab, "document.body.insertAdjacentHTML('beforeend', '<a href=\"\(slowBase.appending(path: "slow").absoluteString)\" style=\"position:absolute;left:40px;top:320px\">Slow</a>')")
+            defer { tab.webView.stopLoading() }
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", "Slow")), "wait": "none", "timeoutMs": 3000])
+            #expect(!clicked.isError, "\(clicked.content)")
+            #expect(clicked["navigated"] == true)
+            #expect(clicked["state"] == "started")
+            #expect(tab.isAwaitingCommit)
+        }
+    }
+
     // MARK: Guardrails
+
+    @Test func enterAndSpaceAskWhateverTheirSpellingOrModifiers() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "pay"))
+            _ = try await page(tab, "document.getElementById('pw').value = 'filled'")
+            // The form holds a card field: its submit asks for a payment.
+            let targets: [(name: String, kind: ConfirmationKind, keys: [String])] = [
+                ("Password", .payment, ["enter", "ENTER", "return", "Shift+Enter", "Control+Enter", "Meta+Enter", "Alt+return", "Control+M"]),
+                ("Pay €42.00", .payment, ["space", " ", "Shift+Space", "Control+space", "enter", "return", "Shift+Enter", "Control+M"]),
+            ]
+            for (name, kind, keys) in targets {
+                let target = try await ref(client, id, name == "Password" ? "textbox" : "button", name)
+                #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(target)])).isError)
+                for combo in keys {
+                    let denied = try await call(client, "press", ["tab": .string(id), "keys": .string(combo)], answering: .deny, expecting: kind)
+                    #expect(denied.code == "denied_by_user", "\(combo) in \(name): \(denied.content)")
+                }
+            }
+            // Nothing reached the page before the user's answer.
+            #expect(try await log(tab, ["keydown", "click"]).isEmpty)
+            #expect(tab.url?.path() == "/pay")
+        }
+    }
 
     @Test func guardedActionsWaitForTheUserAndTypedSecretsAreNeverLogged() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")

@@ -149,6 +149,51 @@ struct ContextMenuDownloadTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["logo.svg"])
     }
 
+    /// A menu download that ends before WebKit asks where to save leaves nothing that would make
+    /// a later ordinary download ask.
+    @Test func aMenuDownloadFailingBeforeThePanelLeavesNothingBehind() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<img src="/logo.svg">"#),
+            "/logo.svg": ("Content-Type: image/svg+xml", Self.svg),
+        ])
+        defer { listener.cancel() }
+        let closing = try await serveClosing()
+        defer { closing.listener.cancel() }
+        var asked = 0
+        Downloads.shared.chooseDestination = { _, _ in
+            asked += 1
+            return nil
+        }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        let failing = await tab.webView.startDownload(using: URLRequest(url: closing.url.appending(path: "logo.svg")))
+        try hand(failing, to: tab)
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(30) { item.state != .downloading })
+        guard case .failed = item.state else {
+            Issue.record("expected a failed download, got \(item.state)")
+            return
+        }
+        #expect(asked == 0)
+        #expect(Downloads.shared.byDownload[ObjectIdentifier(failing)] == nil)
+
+        try FileManager.default.createDirectory(at: URL.downloadsDirectory, withIntermediateDirectories: true)
+        let ordinary = await tab.webView.startDownload(using: URLRequest(url: base.appending(path: "logo.svg")))
+        Downloads.shared.track(ordinary)
+        let saved = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(30) { saved.state != .downloading })
+        #expect(saved.state == .finished)
+        #expect(asked == 0)
+        let destination = try #require(saved.destination)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        #expect(destination.deletingLastPathComponent() == URL.downloadsDirectory)
+        #expect(try String(contentsOf: destination, encoding: .utf8) == Self.svg)
+        #expect(Downloads.shared.byDownload[ObjectIdentifier(ordinary)] == nil)
+    }
+
     /// A folder holding `logo.svg`, which says "original".
     private func existingFile() throws -> (folder: URL, file: URL) {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -160,16 +205,26 @@ struct ContextMenuDownloadTests {
 
     /// Answers every request with the start of a body far longer, then closes the connection.
     private func serveTruncated() async throws -> (listener: NWListener, url: URL) {
+        try await serve { connection in
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n"
+            let response = Data(head.utf8) + Data(repeating: 0x20, count: 1_000)
+            connection.send(content: response, completion: .contentProcessed { _ in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { connection.cancel() }
+            })
+        }
+    }
+
+    /// Closes every connection without a response.
+    private func serveClosing() async throws -> (listener: NWListener, url: URL) {
+        try await serve { $0.cancel() }
+    }
+
+    /// Calls `answer` once each connection's request arrives.
+    private func serve(_ answer: @escaping @Sendable (NWConnection) -> Void) async throws -> (listener: NWListener, url: URL) {
         let listener = try NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { connection in
             connection.start(queue: .global())
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in
-                let head = "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n"
-                let response = Data(head.utf8) + Data(repeating: 0x20, count: 1_000)
-                connection.send(content: response, completion: .contentProcessed { _ in
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { connection.cancel() }
-                })
-            }
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in answer(connection) }
         }
         listener.start(queue: .global())
         for _ in 0..<500 {
@@ -185,10 +240,14 @@ struct ContextMenuDownloadTests {
     /// Starts the download the way the menu item does, and hands it to the tab as WebKit does.
     private func downloadFromMenu(_ url: URL, in tab: Tab) async throws -> DownloadItem {
         let download = await tab.webView.startDownload(using: URLRequest(url: url))
+        try hand(download, to: tab)
+        return try #require(Downloads.shared.items.first)
+    }
+
+    private func hand(_ download: WKDownload, to tab: Tab) throws {
         let selector = NSSelectorFromString("_webView:contextMenuDidCreateDownload:")
         try #require(tab.responds(to: selector))
         tab.perform(selector, with: tab.webView, with: download)
-        return try #require(Downloads.shared.items.first)
     }
 
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {

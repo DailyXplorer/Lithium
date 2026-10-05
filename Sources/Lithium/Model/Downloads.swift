@@ -21,11 +21,14 @@ final class DownloadItem: Identifiable {
     private(set) var totalBytes: Int64 = -1
 
     @ObservationIgnored fileprivate weak var download: WKDownload?
+    /// Asks where to save before it starts, as a download from the page menu does.
+    @ObservationIgnored fileprivate let asksWhere: Bool
     @ObservationIgnored private var observation: NSKeyValueObservation?
 
-    fileprivate init(download: WKDownload, filename: String) {
+    fileprivate init(download: WKDownload, filename: String, asksWhere: Bool) {
         self.download = download
         self.filename = filename
+        self.asksWhere = asksWhere
         observation = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
             let completed = progress.completedUnitCount
             let total = progress.totalUnitCount
@@ -39,6 +42,7 @@ final class DownloadItem: Identifiable {
     /// A file Lithium already holds, written at once.
     fileprivate init(filename: String, size: Int) {
         self.filename = filename
+        asksWhere = false
         completedBytes = Int64(size)
         totalBytes = Int64(size)
     }
@@ -78,11 +82,11 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Set when a download finishes while the list is closed; the toolbar button shows a dot.
     var hasUnseen = false
 
-    @ObservationIgnored private var byDownload: [ObjectIdentifier: DownloadItem] = [:]
+    /// Transfers still running. An entry goes when its download ends, and `track` replaces any
+    /// left by a download whose address a new one reuses.
+    @ObservationIgnored private(set) var byDownload: [ObjectIdentifier: DownloadItem] = [:]
     /// Names taken by files still being written, which don't exist on disk yet.
     @ObservationIgnored private var reserved: Set<URL> = []
-    /// Downloads that ask where to save before they start.
-    @ObservationIgnored private var askingWhere: Set<ObjectIdentifier> = []
     /// Where downloads replacing a file are written until they finish; the item shows the file replaced.
     @ObservationIgnored private var partials: [ObjectIdentifier: URL] = [:]
     /// Asks where to save, starting from the name and folder given; nil when the user cancels.
@@ -101,9 +105,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     func track(_ download: WKDownload, askingWhere: Bool = false) {
         download.delegate = self
-        let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download")
+        let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download", asksWhere: askingWhere)
         byDownload[ObjectIdentifier(download)] = item
-        if askingWhere { self.askingWhere.insert(ObjectIdentifier(download)) }
         items.insert(item, at: 0)
     }
 
@@ -137,7 +140,9 @@ final class Downloads: NSObject, WKDownloadDelegate {
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
         let id = ObjectIdentifier(download)
         var destination = destination(for: suggestedFilename)
-        if askingWhere.remove(id) != nil {
+        if byDownload[id]?.asksWhere == true {
+            // Cancelled from the list before WebKit asked.
+            guard byDownload[id]?.state == .downloading else { return nil }
             guard let chosen = await chooseDestination(destination, download.webView?.window) else {
                 if let item = byDownload.removeValue(forKey: id) { items.removeAll { $0 === item } }
                 return nil

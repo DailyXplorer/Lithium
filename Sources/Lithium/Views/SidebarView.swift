@@ -164,7 +164,7 @@ private struct PinTile: View {
             .fill(palette.tileFill(isSelected: isSelected, isHovered: isHovered))
             .frame(height: 48)
             .overlay {
-                Favicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, size: 20)
+                BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: live?.unread.shown)
             }
             // The slot a drop lands in: whatever is dragged takes this place and the tile shifts along.
             .overlay {
@@ -387,6 +387,54 @@ struct Favicon: View {
                 .frame(width: size, height: size)
                 .background(Circle().fill(.primary.opacity(0.1)))
         }
+    }
+}
+
+/// A favorite's icon with its unread badge at the top right, like the Dock's. The badge is an
+/// overlay, so it never moves the icon.
+struct BadgedFavicon: View {
+    let image: NSImage?
+    let fallback: String
+    let badge: UnreadBadge.Shown?
+
+    var body: some View {
+        Favicon(image: image, fallback: fallback, size: 20)
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    // Centered on the icon's corner, a little inside it: a frame of no size
+                    // centers what it holds on its point.
+                    UnreadBadgeView(shown: badge)
+                        .frame(width: 0, height: 0)
+                        .offset(x: -2, y: 2)
+                }
+            }
+    }
+}
+
+struct UnreadBadgeView: View {
+    let shown: UnreadBadge.Shown
+
+    var body: some View {
+        Group {
+            switch shown {
+            case .dot:
+                Circle()
+                    .fill(Color(nsColor: .systemRed))
+                    .frame(width: 8, height: 8)
+            case .count(let count):
+                Text(UnreadBadge.label(count))
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3.5)
+                    .frame(minWidth: 13, minHeight: 13)
+                    .background(Capsule().fill(Color(nsColor: .systemRed)))
+                    .fixedSize()
+            }
+        }
+        // Keeps the red off an icon or a tile of the same color.
+        .shadow(color: .black.opacity(0.25), radius: 0.5, y: 0.5)
+        .accessibilityElement()
+        .accessibilityLabel(UnreadBadge.accessibilityLabel(shown))
     }
 }
 

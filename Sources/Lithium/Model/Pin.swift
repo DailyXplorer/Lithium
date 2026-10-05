@@ -5,6 +5,9 @@ struct Pin: Codable, Identifiable, Equatable {
     var url: URL
     var title: String
     var favicon: Data?
+    /// The icon the page last declared, fetched again each day while the tab sleeps (a
+    /// calendar's icon shows the date). Missing from favorites saved before it existed.
+    var iconURL: URL? = nil
 }
 
 enum PinStore {

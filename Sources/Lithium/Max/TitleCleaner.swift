@@ -11,9 +11,12 @@ enum TitleCleaner {
     private static let separators = [" - ", " – ", " — ", " | ", " · ", " • ", " :: "]
     private static let colons = [" : ", ": "]
 
+    /// A notification counter at the start of a title, "(3) " or "[99+] ": the count and its "+".
+    static var counter: Regex<(Substring, Substring, Substring)> { /^[\(\[](\d+)(\+?)[\)\]]\s*/ }
+
     static func clean(_ title: String, host: String) -> String {
         var text = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        text = text.replacing(/^[\(\[]\d+\+?[\)\]]\s*/, with: "")
+        text = text.replacing(counter, with: "")
         let site = siteName(host)
         for separatorSet in [separators, colons] {
             let segments = split(text, by: separatorSet)

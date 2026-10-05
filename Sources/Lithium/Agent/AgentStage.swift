@@ -31,6 +31,8 @@ final class AgentStage {
     private struct Entry {
         weak var webView: WKWebView?
         var lastUse: ContinuousClock.Instant
+        /// Actions running in its tab: none is ever swept away mid-way.
+        var holds = 0
     }
     private var entries: [ObjectIdentifier: Entry] = [:]
     private var sweep: Task<Void, Never>?
@@ -57,6 +59,18 @@ final class AgentStage {
         scheduleSweep()
     }
 
+    /// An action running in `webView`'s tab keeps it staged, however long it waits, until `letGo`.
+    func hold(_ webView: WKWebView) {
+        entries[ObjectIdentifier(webView)]?.holds += 1
+    }
+
+    /// The action ended: the web view stays staged until `releaseDelay` from now.
+    func letGo(_ webView: WKWebView) {
+        guard let entry = entries[ObjectIdentifier(webView)] else { return }
+        entries[ObjectIdentifier(webView)] = Entry(webView: entry.webView, lastUse: .now, holds: max(0, entry.holds - 1))
+        scheduleSweep()
+    }
+
     /// Hooked from `PageWebView.viewDidMoveToWindow`: the user selected its tab, or it slept.
     func didLeave(_ webView: WKWebView) {
         guard !(webView.window is AgentStageWindow), entries.removeValue(forKey: ObjectIdentifier(webView)) != nil else { return }
@@ -80,13 +94,13 @@ final class AgentStage {
 
     private func scheduleSweep() {
         sweep?.cancel()
-        guard let next = entries.values.map(\.lastUse).min() else { return }
+        guard let next = entries.values.filter({ $0.holds == 0 }).map(\.lastUse).min() else { return }
         let delay = releaseDelay
         sweep = Task { [weak self] in
             try? await Task.sleep(until: next + delay)
             guard !Task.isCancelled, let self else { return }
             let now = ContinuousClock.now
-            for (key, entry) in self.entries where entry.lastUse + delay <= now {
+            for (key, entry) in self.entries where entry.holds == 0 && entry.lastUse + delay <= now {
                 if let webView = entry.webView, webView.window === self.window { self.release(webView) } else { self.entries[key] = nil }
             }
             self.sweep = nil

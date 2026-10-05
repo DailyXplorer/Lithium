@@ -17,8 +17,15 @@ final class PageWebView: WKWebView {
     /// handled `contextmenu`, which may be after the click returned.
     var agentMenuUntil: ContinuousClock.Instant?
     private(set) var agentMenusCancelled = 0
-    /// The user's mouse button is down in the page: an agent action waits (`user_busy`).
-    private(set) var isUserPressing = false
+    /// The user's mouse button is down in the page: an agent action waits (`user_busy`). The
+    /// button as it really is decides: a drag of a link, a native `<select>` or a context menu
+    /// tracks the press in its own loop, and the view never gets its `mouseUp`.
+    var isUserPressing: Bool {
+        if userPressed, Self.pressedMouseButtons() & 1 == 0 { userPressed = false }
+        return userPressed
+    }
+    private var userPressed = false
+    static var pressedMouseButtons = { NSEvent.pressedMouseButtons }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         if NativeInput.isAgents(event) || agentMenuUntil.map({ $0 > .now }) == true {
@@ -50,12 +57,12 @@ final class PageWebView: WKWebView {
     // User input wins (design section 2.7): input that `NativeInput` isn't delivering ends the
     // agent action running in the tab.
     override func mouseDown(with event: NSEvent) {
-        if noteUser(event) { isUserPressing = true }
+        if noteUser(event) { userPressed = true }
         super.mouseDown(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        if !NativeInput.isAgents(event) { isUserPressing = false }
+        if !NativeInput.isAgents(event) { userPressed = false }
         super.mouseUp(with: event)
     }
 

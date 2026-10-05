@@ -4,7 +4,8 @@ import WebKit
 /// An agent's clicks, keys and wheel as `NSEvent`s handed straight to one web view (design
 /// section 5.2), so pages see trusted events. Nothing is posted to the window server: the
 /// system cursor never moves, no other app or Lithium's own UI can receive them, and Lithium
-/// needs no Accessibility permission.
+/// needs no Accessibility permission. Points are in the web view's own coordinates, put in the
+/// window's as each event is made, in the window it goes to.
 @MainActor
 final class NativeInput {
     /// The window the web view was in when the action began: one it leaves between events (the
@@ -18,7 +19,7 @@ final class NativeInput {
     private let window: NSWindow
     /// Runs before every event: the tab closing, the user's own input and Stop end the action there.
     private let check: () throws -> Void
-    /// Where the agent's pointer is, in the web view's points, for the dot the user sees.
+    /// Where the agent's pointer is, for the dot the user sees.
     private let onPointer: (CGPoint) -> Void
     private var held: (button: NSEvent.EventType, at: CGPoint, modifiers: NSEvent.ModifierFlags)?
     private var pressed = false
@@ -69,7 +70,7 @@ final class NativeInput {
     func release() {
         guard let held else { return }
         self.held = nil
-        post(Self.mouseEvent(Self.upType(for: held.button), at: pointer ?? held.at, window: webView.window ?? window, modifiers: held.modifiers, clickCount: 1, pressure: 0))
+        post(Self.mouseEvent(Self.upType(for: held.button), at: webView.convert(pointer ?? held.at, to: nil), window: webView.window ?? window, modifiers: held.modifiers, clickCount: 1, pressure: 0))
     }
 
     /// Phased pixel wheel events of at most 120 px each, at `point`. Returns how many the page will see.
@@ -88,7 +89,8 @@ final class NativeInput {
             // The event has no window: AppKit gives the CG location, flipped by the primary
             // screen's height, as locationInWindow (design section 3, item 6). It is never posted.
             let height = NSScreen.screens.first?.frame.height ?? 0
-            cg.location = CGPoint(x: point.x, y: height - point.y)
+            let location = webView.convert(point, to: nil)
+            cg.location = CGPoint(x: location.x, y: height - location.y)
             guard let wheel = NSEvent(cgEvent: cg) else { continue }
             pressed = true
             post(wheel)
@@ -154,8 +156,8 @@ final class NativeInput {
         try checkWindow()
         let pressure: Float = [.leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged].contains(type) ? 1 : 0
         pointer = point
-        onPointer(webView.convert(point, from: nil))
-        post(Self.mouseEvent(type, at: point, window: window, modifiers: modifiers, clickCount: clickCount, pressure: pressure))
+        onPointer(point)
+        post(Self.mouseEvent(type, at: webView.convert(point, to: nil), window: window, modifiers: modifiers, clickCount: clickCount, pressure: pressure))
     }
 
     private static var eventNumber = 1_000_000

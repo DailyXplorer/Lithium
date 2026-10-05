@@ -129,6 +129,12 @@ struct AgentInputTests {
             </form>
             \(logger)
             """),
+        "/moved": (html, """
+            <title>Moved</title><style>body { margin: 0 } button { position: absolute; left: 40px; width: 160px; height: 40px }</style>
+            <button id="pay" style="top: 40px">Pay €42.00</button>
+            <button id="decoy" style="top: 140px">Decoy</button>
+            \(logger)
+            """),
         "/done": (html, "<title>Done</title>"),
     ]
 
@@ -152,6 +158,8 @@ struct AgentInputTests {
         #expect(NSApp?.isActive != true || active == true)
         #expect(NSApp?.keyWindow === key)
         #expect(NSEvent.mouseLocation == pointer)
+        let onScreen = (NSApp?.windows ?? []).filter { window in window.isVisible && NSScreen.screens.contains { $0.frame.intersects(window.frame) } }
+        #expect(onScreen.isEmpty, "\(onScreen)")
         if let stage = browser.agent?.stage.window {
             #expect(!stage.canBecomeKey && !stage.canBecomeMain && stage.ignoresMouseEvents && stage.isExcludedFromWindowsMenu)
             #expect(!NSScreen.screens.contains { $0.frame.intersects(stage.frame) })
@@ -567,6 +575,49 @@ struct AgentInputTests {
             shown.makeFirstResponder(nil)
             let free = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "x"])
             #expect(!free.isError, "\(free.content)")
+
+            // A press whose mouseUp a native loop took (a link dragged, a <select> or a context
+            // menu open): only while the button is really down does it hold the agent up.
+            let buttons = PageWebView.pressedMouseButtons
+            defer { PageWebView.pressedMouseButtons = buttons }
+            PageWebView.pressedMouseButtons = { 1 }
+            webView.mouseDown(with: try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 5, y: 5), modifierFlags: [], timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 1)))
+            let pressing = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "x", "timeoutMs": 1000])
+            #expect(pressing.code == "user_busy", "\(pressing.content)")
+            PageWebView.pressedMouseButtons = { 0 }
+            let released = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "y"])
+            #expect(!released.isError, "\(released.content)")
+            #expect(try await page(tab, "return document.getElementById('user').value") as? String == "xy")
+        }
+    }
+
+    @Test func theTargetIsPlacedAgainWhenTheUserSelectsItsTabDuringTheirAllow() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "moved"))
+            let pay = try await ref(client, id, "button", "Pay €42.00")
+            let confirmations = client.hub.confirmations
+            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            let asked = try #require(confirmations.pending.first)
+            #expect(asked.kind == .payment)
+            #expect(tab.webView.window is AgentStageWindow)
+            // The user selects the tab: its web view goes to their window, 100 points taller
+            // than the stage, where the stage's window point for Pay is on Decoy.
+            let stageHeight = try #require(tab.webView.window).contentLayoutRect.height
+            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: stageHeight + 100), styleMask: [.borderless], backing: .buffered, defer: false)
+            shown.isReleasedWhenClosed = false
+            let webView = tab.webView
+            webView.removeFromSuperview()
+            webView.frame = shown.contentLayoutRect
+            shown.contentView = webView
+            defer { shown.contentView = nil }
+            client.browser.select(tab)
+            confirmations.answer(asked.id, .allowOnce)
+            let clicked = await waiting.value
+            #expect(!clicked.isError, "\(clicked.content)")
+            #expect(clicked["grant"] == "once")
+            #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
+            #expect(confirmations.pending.isEmpty)
         }
     }
 
@@ -599,6 +650,32 @@ struct AgentInputTests {
             #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty })
             client.browser.close(payTab)
             #expect((await waiting.value).code == "tab_closed")
+        }
+    }
+
+    @Test func anActionWaitingForTheUserKeepsItsTabStagedAndAsksOnce() async throws {
+        try await withAgent { client, base in
+            let hub = client.hub
+            hub.stage.releaseDelay = .milliseconds(300)
+            let (id, tab) = try await open(client, base.appending(path: "moved"))
+            let pay = try await ref(client, id, "button", "Pay €42.00")
+            var clicked: AgentTabsTests.ToolResult?
+            Task { clicked = await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
+            #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty })
+            let asked = try #require(hub.confirmations.pending.first)
+            // Many times the stage's delay, as a user reading the prompt takes.
+            try await Task.sleep(for: .milliseconds(1500))
+            #expect(tab.webView.window is AgentStageWindow)
+            hub.confirmations.answer(asked.id, .allowOnce)
+            #expect(await waitUntil(20) { clicked != nil || hub.confirmations.pending.contains { $0.id != asked.id } })
+            let again = hub.confirmations.pending.filter { $0.id != asked.id }
+            #expect(again.isEmpty, "asked again: \(again)")
+            again.forEach { hub.confirmations.answer($0.id, .deny) }
+            #expect(await waitUntil(20) { clicked != nil })
+            #expect(clicked?.isError == false, "\(clicked?.content ?? .null)")
+            #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
+            // Once the action is over, the stage lets it go.
+            #expect(await waitUntil(5) { tab.webView.window == nil })
         }
     }
 }

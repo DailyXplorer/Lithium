@@ -85,15 +85,19 @@ private struct FocusReport: Decodable {
 }
 
 /// An action's target, placed: the element (or what the point hits), the frame to ask about it,
-/// where to press in the tab's window, and what Guardrails needs to know.
+/// where to press in the web view, and what Guardrails needs to know.
 struct ActionTarget {
     var report: TargetReport
     let address: ElementAddress?
     let frame: FrameTarget
     let ref: String?
-    /// Where to press, in top-level viewport CSS pixels and in the web view's window points.
+    /// Where to press, in top-level viewport CSS pixels and in the web view's points.
     var css: CGPoint
     var point = CGPoint.zero
+    /// The window the web view was in, and the prompts the tab had shown the user, when it was
+    /// placed: `deliver` places it again if either changed since.
+    weak var window: NSWindow?
+    var prompts = 0
     var viewport: PageViewport?
     var inPaymentFrame = false
     var page = Guardrails.Page()
@@ -595,17 +599,21 @@ extension AgentHub {
             defer {
                 state.acting = nil
                 state.opened = []
+                state.answered = [:]
             }
             touch(tab)
             for attempt in 1...2 {
                 let webView = staged(tab)
+                // The stage keeps it however long the user takes to answer.
+                stage.hold(webView)
+                defer { stage.letGo(webView) }
                 do {
                     return try await body(ActionContext(named: named, webView: webView, state: state, session: session, deadline: deadline, timeout: timeout))
                 } catch let change as NativeInput.WindowChanged where !change.afterPress {
                     if attempt == 2 { break }
                 }
             }
-            throw AgentToolError(code: "user_interrupted", message: "\(named.id) moved between windows twice while the agent acted in it.")
+            throw AgentToolError(code: "user_interrupted", message: "\(named.id) moved between windows, or its page changed, while the agent acted in it.")
         }
     }
 
@@ -673,8 +681,9 @@ extension AgentHub {
         }
         try await addPageFacts(to: &target, ctx)
         guard let viewport = target.viewport else { throw AgentHub.frameGone(target.ref) }
-        let view = AgentScreenshot.viewRect(CGRect(origin: target.css, size: .zero), viewport: viewport, zoom: ctx.webView.pageZoom).origin
-        target.point = ctx.webView.convert(view, to: nil)
+        target.point = AgentScreenshot.viewRect(CGRect(origin: target.css, size: .zero), viewport: viewport, zoom: ctx.webView.pageZoom).origin
+        target.window = ctx.webView.window
+        target.prompts = ctx.state.prompts
         return target
     }
 
@@ -881,12 +890,15 @@ extension AgentHub {
         case .activate: false
         }
         let form = target.report.form.map { ElementAddress(document: target.report.token, id: $0.id) }
+        let host = ctx.named.tab.url?.host() ?? ""
+        let (asking, subject) = (describing + (host.isEmpty ? "" : " on \(host)"), "\(describing) \(target.label)")
         ctx.state.formCovers.removeAll { $0.until <= .now }
-        if fieldEntry, let form, ctx.state.formCovers.contains(where: { $0.form == form && $0.session == ctx.session.id && $0.kind == kind }) {
+        // The action run again keeps the answer it got, not the form cover that answer made.
+        if ctx.state.answered[AgentTab.prompt(kind, asking, subject: subject)] == nil, fieldEntry, let form,
+           ctx.state.formCovers.contains(where: { $0.form == form && $0.session == ctx.session.id && $0.kind == kind }) {
             return "form"
         }
-        let host = ctx.named.tab.url?.host() ?? ""
-        let grant = try await confirm(kind, describing + (host.isEmpty ? "" : " on \(host)"), subject: "\(describing) \(target.label)", site: host.isEmpty ? nil : SiteInfo.registrable(host), in: ctx.named, session: ctx.session, until: ctx.deadline)
+        let grant = try await confirm(kind, asking, subject: subject, site: host.isEmpty ? nil : SiteInfo.registrable(host), in: ctx.named, session: ctx.session, until: ctx.deadline)
         if fieldEntry, let form { ctx.state.formCovers.append(FormCover(form: form, session: ctx.session.id, kind: kind, until: .now + .seconds(120))) }
         return .string(grant.rawValue)
     }
@@ -898,6 +910,10 @@ extension AgentHub {
     /// within 50 ms is followed as far as `wait`; new tabs, a dialog, a download and a file
     /// chooser the action caused are in the result, with the viewport's diff.
     func deliver(_ ctx: ActionContext, _ target: ActionTarget, wait: LoadWait, diff: Bool, fields: [String: JSONValue] = [:], _ send: (NativeInput) async throws -> Settle) async throws -> JSONValue {
+        // While the user answered, the page may have moved the element, or the user selected the
+        // tab and its web view left the stage: the action places its target again, every check
+        // with it, and their answers stand.
+        guard ctx.webView.window === target.window, ctx.state.prompts == target.prompts else { throw NativeInput.WindowChanged(afterPress: false) }
         let tab = ctx.named.tab
         let since = LoadProgress(of: tab, ctx.state)
         let choosers = ctx.state.fileChoosersCancelled

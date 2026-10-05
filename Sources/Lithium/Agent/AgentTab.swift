@@ -48,6 +48,15 @@ final class AgentTab {
     /// Forms whose fields the user allowed an agent to fill, for 2 minutes after the first Allow
     /// (card number, expiry and CVC ask once), by form, session and kind.
     @ObservationIgnored var formCovers: [FormCover] = []
+    /// Prompts the user was shown for it, so an action knows it waited on them.
+    @ObservationIgnored var prompts = 0
+    /// The user's Allows during the action running in it, by kind, prompt and subject: the
+    /// action run again (`AgentHub.action`) doesn't ask twice.
+    @ObservationIgnored var answered: [String: ConfirmationGrant] = [:]
+
+    static func prompt(_ kind: ConfirmationKind, _ action: String, subject: String) -> String {
+        "\(kind.rawValue)\n\(action)\n\(subject)"
+    }
 
     /// The child frames that said hello, by document token; the main frame needs no `WKFrameInfo`.
     @ObservationIgnored private(set) var frames: [String: WKFrameInfo] = [:]

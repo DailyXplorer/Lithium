@@ -115,8 +115,12 @@ extension AgentHub {
     /// waits for the answer within `deadline` and `AgentConfirmations.timeout`. Deny is
     /// `denied_by_user`, no answer `confirmation_timeout`; the tab closing, the user navigating it,
     /// Stop and the session ending end the wait as they end any other. Every prompt and its
-    /// answer goes in the log.
+    /// answer goes in the log. The action running in the tab, run again, gets the Allow the user
+    /// gave it for the same prompt without asking twice.
     func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
+        let state = named.flatMap { tabs[$0.tab.id] }.flatMap { $0.acting?.session == session.id ? $0 : nil }
+        let asked = AgentTab.prompt(kind, action, subject: subject)
+        if let grant = state?.answered[asked] { return grant }
         let started = Date()
         var logged: (answer: String, grant: ConfirmationGrant?) = ("cancelled", nil)
         defer {
@@ -137,6 +141,7 @@ extension AgentHub {
             tabID: named?.tab.id, action: action, site: kind.allowsSiteGrant ? site : nil
         )
         confirmations.ask(request)
+        if let named { tabs[named.tab.id]?.prompts += 1 }
         defer { confirmations.finish(request.id) }
         if NSApp?.isActive == false, NSApp.activationPolicy() == .regular { NSApp.requestUserAttention(.informationalRequest) }
         let limit = min(deadline, .now + AgentConfirmations.timeout)
@@ -157,9 +162,11 @@ extension AgentHub {
         switch answer {
         case .allowOnce:
             logged = ("allow", .once)
+            state?.answered[asked] = .once
             return .once
         case .allowOnSite:
             logged = ("allow", kind.allowsSiteGrant && site != nil ? .site : .once)
+            state?.answered[asked] = logged.grant
             return logged.grant ?? .once
         case .deny:
             logged.answer = "deny"

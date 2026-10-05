@@ -180,7 +180,7 @@ extension AgentHub {
         hub.touch(tab)
         guard let url else { return hub.page(named, reached: .load) }
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
-            try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { tab.go(to: url) }
+            try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.go(to: url) }
         }
     }
 
@@ -200,6 +200,8 @@ extension AgentHub {
         inputSchema: schema(["tab": tabParam], required: ["tab"])
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
+        // Lithium's own pages are shown to the user, never to the agent: those can wake.
+        if !AgentURLs.isBlocked(named.tab.url) { try hub.checkWakeable(named) }
         hub.browser?.select(named.tab)
         hub.touch(named.tab)
         return hub.page(named, reached: nil)
@@ -221,7 +223,15 @@ extension AgentHub {
         let deadline = ContinuousClock.now + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
-            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { named.tab.go(to: url) }
+            let tab = named.tab
+            var landedWithinPage: (@MainActor () -> Bool)?
+            if !tab.isAsleep, AgentURLs.isMoveWithinPage(from: tab.url, to: url) {
+                landedWithinPage = { tab.url?.fragment == url.fragment }
+            }
+            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: landedWithinPage) {
+                // Waking with its history would show the page it slept on first, which an agent may not open.
+                if tab.isAsleep, let old = tab.url, AgentURLs.verdict(for: old) != .allowed { tab.load(url) } else { tab.go(to: url) }
+            }
         }
     }
 
@@ -237,16 +247,23 @@ extension AgentHub {
             let deadline = ContinuousClock.now + timeout
             return try await hub.exclusive(named, until: deadline, timeout: timeout) {
                 try hub.checkDrivable(named)
+                try hub.checkWakeable(named)
                 let tab = named.tab
                 tab.wake()
                 let list = tab.webView.backForwardList
                 guard let item = forward ? list.forwardItem : list.backItem else {
                     throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to go \(forward ? "forward" : "back") to.")
                 }
-                if AgentURLs.isBlocked(item.url) {
-                    throw AgentToolError(code: "blocked_page", message: "That page is one of Lithium’s own or an extension’s, out of reach for agents.")
+                try hub.checkOpenable(item.url)
+                // Only an entry of the same site can be in the document shown (an anchor, a
+                // `pushState`); the move counts once the tab is on that entry.
+                var landedWithinPage: (@MainActor () -> Bool)?
+                if let current = tab.url, AgentURLs.sameOrigin(current, item.url) {
+                    landedWithinPage = { tab.url == item.url }
                 }
-                return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) { tab.webView.go(to: item) }
+                return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: landedWithinPage) {
+                    tab.webView.go(to: item)
+                }
             }
         }
     }
@@ -264,8 +281,9 @@ extension AgentHub {
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
             let tab = named.tab
-            guard tab.url != nil else { throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to reload.") }
-            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout) {
+            guard let url = tab.url else { throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to reload.") }
+            try hub.checkOpenable(url)
+            return try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) {
                 if tab.isAsleep { tab.wake() } else { tab.reload() }
             }
         }
@@ -311,6 +329,7 @@ extension AgentHub {
         let deadline = started + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
+            try hub.checkWakeable(named)
             if let pattern {
                 let matches: (String) -> Bool
                 do { matches = try AgentURLs.matcher(for: pattern) } catch { throw Arguments.invalid("url is not a valid pattern: \(error.localizedDescription)") }
@@ -325,7 +344,7 @@ extension AgentHub {
                 }
                 // A sleeping tab loads its page once woken: that load is the one to wait for.
                 if tab.isAsleep {
-                    _ = try await hub.navigation(in: named, wait: state, deadline: deadline, timeout: timeout) { tab.wake() }
+                    _ = try await hub.navigation(in: named, wait: state, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() }
                 } else {
                     try await hub.waitForLoad(of: named, state, deadline: deadline, timeout: timeout)
                 }
@@ -339,7 +358,8 @@ extension AgentHub {
 
     // MARK: Helpers
 
-    /// `tab_open` and `navigate` only open the web; `file:` waits for confirmations.
+    /// Every page an agent's call loads, whether it names it (`tab_open`, `navigate`) or not
+    /// (Back, Forward, Reload, waking a tab), is on the web; `file:` waits for confirmations.
     private func checkOpenable(_ url: URL) throws {
         switch AgentURLs.verdict(for: url) {
         case .allowed: return
@@ -355,6 +375,12 @@ extension AgentHub {
     private func checkDrivable(_ named: NamedTab) throws {
         guard AgentURLs.isBlocked(named.tab.url) else { return }
         throw AgentToolError(code: "blocked_page", message: "\(named.id) shows one of Lithium’s own or an extension’s pages, out of reach for agents.")
+    }
+
+    /// Waking a sleeping tab loads the page it slept on.
+    private func checkWakeable(_ named: NamedTab) throws {
+        guard named.tab.isAsleep, let url = named.tab.url else { return }
+        try checkOpenable(url)
     }
 
     /// What every navigation tool returns: where the tab is now and how far its page got.
@@ -392,8 +418,10 @@ extension AgentHub {
 
     /// Starts a navigation, then waits until the page it leads to (the next document the tab
     /// commits, never the one before) gets as far as `wait`. A move within the document shown
-    /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded.
-    private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, _ start: () -> Void) async throws -> JSONValue {
+    /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded:
+    /// when the call may be one, `landedWithinPage` tells it from a move the page's own script
+    /// made meanwhile. Without it only a commit ends the wait.
+    private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
         let tab = named.tab
         let (commits, moves) = (tab.commits, tab.sameDocumentNavigations)
         start()
@@ -401,7 +429,8 @@ extension AgentHub {
         guard wait > .none else { return page(named, reached: nil) }
         let newDocument = try await watch(named, until: deadline) { () -> Bool? in
             if tab.commits > commits { return true }
-            return tab.sameDocumentNavigations > moves ? false : nil
+            guard let landedWithinPage, tab.sameDocumentNavigations > moves else { return nil }
+            return landedWithinPage() ? false : nil
         }
         guard let newDocument else { throw timedOut(named, after: timeout, "no page had started to show") }
         if newDocument, wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }

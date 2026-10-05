@@ -287,7 +287,7 @@ final class Browser {
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
     /// The tab list. Tabs an agent opened sit apart, in the Agent group below it.
-    var regularTabs: [Tab] { tabs.filter { $0.pinID == nil && $0.openedByAgent == nil } }
+    var regularTabs: [Tab] { tabs.filter(\.isInTabList) }
     var agentTabs: [Tab] { tabs.filter(\.isInAgentGroup) }
     /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within: the
     /// Agent group for its tabs, the tab list for the rest.
@@ -319,11 +319,14 @@ final class Browser {
     /// no particular order, so the new tab goes just before the one it pushes down.
     private func insertTab(at index: Int, configuration: WKWebViewConfiguration) -> Tab {
         let tab = Tab(browser: self, configuration: configuration)
-        let list = regularTabs
-        let position = index <= 0 ? 0 : index >= list.count ? tabs.count : tabs.firstIndex { $0 === list[index] } ?? tabs.count
-        tabs.insert(tab, at: position)
+        tabs.insert(tab, at: Self.position(inTabList: index, of: tabs))
         extensions.didOpen(tab)
         return tab
+    }
+
+    private static func position(inTabList index: Int, of tabs: [Tab]) -> Int {
+        let list = tabs.filter(\.isInTabList)
+        return index <= 0 ? 0 : index >= list.count ? tabs.count : tabs.firstIndex { $0 === list[index] } ?? tabs.count
     }
 
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
@@ -336,9 +339,30 @@ final class Browser {
         return tab
     }
 
-    /// Dragged or moved by the user into the tab list, a tab the agent opened becomes theirs.
-    func keep(_ tab: Tab) {
+    /// Dragged or moved by the user into the tab list, a tab the agent opened becomes theirs:
+    /// at `index` in the list, or at its end, just above the Agent group it leaves.
+    func keep(_ tab: Tab, at index: Int? = nil) {
+        guard tab.isInAgentGroup, let from = tabs.firstIndex(where: { $0 === tab }) else { return }
+        var reordered = tabs
+        reordered.remove(at: from)
         tab.openedByAgent = nil
+        reordered.insert(tab, at: Self.position(inTabList: index ?? .max, of: reordered))
+        tabs = reordered
+    }
+
+    enum TabDropTarget {
+        /// Before the tab at this place in the tab list; nil past its end.
+        case tabList(Int?)
+        case agentGroup
+    }
+
+    /// A tab from the Agent group dropped on the tab list joins it there. Dropped among the
+    /// Agent group, it stays: the group has no order of its own to change.
+    func dropTab(_ items: [String], on target: TabDropTarget) -> Bool {
+        guard case .tabList(let index) = target,
+              let tab = agentTabs.first(where: { $0.id.uuidString == items.first }) else { return false }
+        keep(tab, at: index)
+        return true
     }
 
     func newTabFocusingAddress() {

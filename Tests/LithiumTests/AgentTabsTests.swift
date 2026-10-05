@@ -38,6 +38,16 @@ struct AgentURLsTests {
         #expect(regex("https://shop.example/order/42"))
         #expect(!regex("https://shop.example/order/42/edit"))
     }
+
+    @Test func tellsAnchorsFromOtherDocuments() {
+        let page = URL(string: "https://example.com/a?q=1#top")!
+        #expect(AgentURLs.isMoveWithinPage(from: page, to: URL(string: "https://example.com/a?q=1#section")!))
+        #expect(!AgentURLs.isMoveWithinPage(from: page, to: URL(string: "https://example.com/a?q=1")!))
+        #expect(!AgentURLs.isMoveWithinPage(from: page, to: URL(string: "https://example.com/b#section")!))
+        #expect(!AgentURLs.isMoveWithinPage(from: nil, to: URL(string: "https://example.com/a#section")!))
+        #expect(AgentURLs.sameOrigin(page, URL(string: "HTTPS://Example.com/other")!))
+        #expect(!AgentURLs.sameOrigin(page, URL(string: "https://example.com:8443/a")!))
+    }
 }
 
 /// The tab tools on a whole Browser, called through the hub as an MCP client calls them, on
@@ -99,6 +109,7 @@ struct AgentTabsTests {
         "/three": ("Content-Type: text/html", "<title>Three</title><p>three</p>"),
         "/secret?token=abc123&page=2": ("Content-Type: text/html", "<title>Secret</title>"),
         "/app": ("Content-Type: text/html", "<title>App</title>"),
+        "/ticking": ("Content-Type: text/html", "<title>Ticking</title><script>let n = 0; setInterval(() => { location.hash = 'tick' + (++n) }, 20)</script>"),
     ]
 
     /// A browser with agent access on and one session. Afterwards its tabs close, so a dozen
@@ -159,6 +170,38 @@ struct AgentTabsTests {
             #expect(browser.agentTabs.isEmpty)
             #expect(browser.regularTabs.contains { $0 === tab })
         }
+    }
+
+    @Test func aTabDroppedOnTheTabListJoinsItWhereDroppedAndAmongTheAgentGroupStays() throws {
+        let browser = Browser()
+        defer { browser.tabs.forEach(browser.close) }
+        let first = browser.newAgentTab(session: "s1")
+        let second = browser.newAgentTab(session: "s1")
+        // Opened after the agent's tabs, so they come after them in `tabs`.
+        let older = browser.newTab(selecting: false)
+        _ = browser.newTab(selecting: false)
+        var expected = browser.regularTabs.map(\.id)
+        let place = try #require(expected.firstIndex(of: older.id))
+
+        #expect(!browser.dropTab([first.id.uuidString], on: .agentGroup))
+        #expect(browser.agentTabs.map(\.id) == [first.id, second.id])
+        #expect(first.openedByAgent == "s1")
+
+        #expect(browser.dropTab([first.id.uuidString], on: .tabList(place)))
+        expected.insert(first.id, at: place)
+        #expect(browser.regularTabs.map(\.id) == expected)
+        #expect(browser.agentTabs.map(\.id) == [second.id])
+
+        // Move to Tab List: at its end, below the tabs the user opened after it.
+        browser.keep(second)
+        expected.append(second.id)
+        #expect(browser.regularTabs.map(\.id) == expected)
+        #expect(browser.agentTabs.isEmpty)
+
+        // The user's own tabs and favorites dropped on the list change nothing.
+        #expect(!browser.dropTab([older.id.uuidString], on: .tabList(0)))
+        #expect(!browser.dropTab(["pin:" + UUID().uuidString], on: .tabList(0)))
+        #expect(browser.regularTabs.map(\.id) == expected)
     }
 
     @Test func tabsListNamesEveryTabWithIDsThatStay() async throws {
@@ -315,6 +358,78 @@ struct AgentTabsTests {
             let forward = await client.call("go_forward", ["tab": tab, "wait": "domcontentloaded"])
             #expect(forward["url"] == .string(base.appending(path: "app/inbox").absoluteString))
             #expect(ContinuousClock.now - started < .seconds(5))
+        }
+    }
+
+    /// The page on its way out moving to its own anchors isn't the page the agent was sent to.
+    /// WebKit drops the load when that happens, so the call times out: it never answers for
+    /// the page shown as if the load had completed.
+    @Test(.timeLimit(.minutes(1))) func theOldPagesOwnAnchorMovesDontAnswerForTheNextPage() async throws {
+        let (listener, slow) = try await LocalHTTP.serve(["/late": ("Content-Type: text/html", "<title>Late</title>")], delay: 1)
+        defer { listener.cancel() }
+        try await withAgent { client, base in
+            let ticking = base.appending(path: "ticking").absoluteString
+            let id = try #require((await client.call("tab_open", ["url": .string(ticking), "wait": "load"]))["tab"]?.string)
+            let tab: JSONValue = .string(id)
+            let late = slow.appending(path: "late").absoluteString
+            let dropped = await client.call("navigate", ["tab": tab, "url": .string(late), "timeoutMs": 3000])
+            #expect(dropped.code == "timeout", "\(dropped.content)")
+            #expect(dropped.message == "\(id) after 3000 ms: no page had started to show.")
+            #expect(client.tab(id)?.url?.absoluteString.hasPrefix(ticking + "#tick") == true)
+
+            // From a page that keeps still, the same address loads.
+            let still = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
+            let loaded = await client.call("navigate", ["tab": .string(still), "url": .string(late)])
+            #expect(loaded["url"] == .string(late), "\(loaded.content)")
+            #expect(loaded["title"] == "Late")
+            #expect(loaded["state"] == "load")
+
+            // An anchor the agent asks for still answers while the page moves to its own.
+            let anchor = await client.call("navigate", ["tab": tab, "url": .string(ticking + "#section")])
+            #expect(anchor["url"] == .string(ticking + "#section"), "\(anchor.content)")
+        }
+    }
+
+    /// Back, Forward, Reload and waking load a page the agent didn't name: it must be one the
+    /// agent may open, as `navigate` checks.
+    @Test func historyReloadAndWakingReachOnlyPagesAgentsMayOpen() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "agent-notes-\(UUID().uuidString).html")
+        try "<title>Notes</title><p>private</p>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try await withAgent { client, base in
+            let browser = client.browser
+            let one = base.appending(path: "one")
+            for start in [file, URL(string: "data:text/html,%3Ctitle%3EData%3C/title%3E")!] {
+                let tab = browser.newTab(url: start, selecting: false)
+                #expect(await waitUntil(30) { !tab.isLoading && tab.webView.backForwardList.currentItem != nil })
+                tab.load(one)
+                #expect(await waitUntil(30) { !tab.isLoading && tab.title == "One" })
+                let id: JSONValue = .string(client.hub.id(for: tab))
+                let back = await client.call("go_back", ["tab": id])
+                #expect(back.code == (start.isFileURL ? "unsupported" : "blocked_page"), "\(start): \(back.content)")
+                #expect(tab.url == one)
+
+                tab.webView.goBack()
+                #expect(await waitUntil(30) { !tab.isLoading && tab.url?.scheme == start.scheme })
+                #expect((await client.call("reload", ["tab": id])).code == (start.isFileURL ? "unsupported" : "blocked_page"))
+                #expect((await client.call("go_forward", ["tab": id]))["title"] == "One")
+            }
+
+            let selected = browser.selectedTabID
+            let asleep = browser.newTab(selecting: false)
+            asleep.restore(url: file, title: "Notes")
+            let id: JSONValue = .string(client.hub.id(for: asleep))
+            #expect((await client.call("tab_select", ["tab": id])).code == "unsupported")
+            #expect((await client.call("wait_for", ["tab": id, "load": "load"])).code == "unsupported")
+            #expect((await client.call("reload", ["tab": id])).code == "unsupported")
+            #expect((await client.call("go_back", ["tab": id])).code == "unsupported")
+            #expect(asleep.isAsleep)
+            #expect(browser.selectedTabID == selected)
+            // Sent elsewhere, it goes straight there without showing the file on the way.
+            let two = base.appending(path: "two")
+            let navigated = await client.call("navigate", ["tab": id, "url": .string(two.absoluteString)])
+            #expect(navigated["title"] == "Two", "\(navigated.content)")
+            #expect(asleep.webView.backForwardList.backList.isEmpty)
         }
     }
 

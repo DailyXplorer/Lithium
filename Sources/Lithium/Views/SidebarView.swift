@@ -40,17 +40,27 @@ struct SidebarView: View {
             }
             .opacity(browser.selectedTabID == nil ? 1 : 0.7)
             .contextMenu { ReopenClosedTabButton() }
+            // The top of the tab list, which is there to drop on even when the list is empty.
+            .dropDestination(for: String.self) { items, _ in dropTab(items, on: .tabList(0)) }
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(browser.regularTabs) { tab in
+                    // A tab from the Agent group dropped on a row's upper half goes above it, on
+                    // its lower half below it.
+                    ForEach(Array(browser.regularTabs.enumerated()), id: \.element.id) { index, tab in
                         TabRow(tab: tab)
+                            .dropDestination(for: String.self) { items, location in
+                                dropTab(items, on: .tabList(location.y < sidebarRowHeight / 2 ? index : index + 1))
+                            }
                     }
                     let agentTabs = browser.agentTabs
                     if !agentTabs.isEmpty {
-                        AgentGroupHeader()
-                        ForEach(agentTabs) { tab in
-                            TabRow(tab: tab)
+                        VStack(spacing: 2) {
+                            AgentGroupHeader()
+                            ForEach(agentTabs) { tab in
+                                TabRow(tab: tab)
+                            }
                         }
+                        .dropDestination(for: String.self) { items, _ in dropTab(items, on: .agentGroup) }
                     }
                 }
             }
@@ -58,12 +68,6 @@ struct SidebarView: View {
             // The empty space below the tabs too; a row's own menu wins over this one.
             .contentShape(Rectangle())
             .contextMenu { ReopenClosedTabButton() }
-            // A tab from the Agent group dropped on the list becomes one of the user's own.
-            .dropDestination(for: String.self) { items, _ in
-                guard let tab = browser.agentTabs.first(where: { $0.id.uuidString == items.first }) else { return false }
-                withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) }
-                return true
-            }
             if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
                 MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -78,6 +82,10 @@ struct SidebarView: View {
 
     private var playingTab: Tab? {
         browser.nowPlaying.shownTab(besides: browser.videoPopout.tab)
+    }
+
+    private func dropTab(_ items: [String], on target: Browser.TabDropTarget) -> Bool {
+        withAnimation(.snappy(duration: 0.2)) { browser.dropTab(items, on: target) }
     }
 }
 
@@ -336,6 +344,8 @@ private struct TabNameField: View {
     }
 }
 
+private let sidebarRowHeight: CGFloat = 34
+
 private struct SidebarRow<Content: View>: View {
     let isSelected: Bool
     let action: () -> Void
@@ -346,7 +356,7 @@ private struct SidebarRow<Content: View>: View {
     var body: some View {
         HStack(spacing: 8) { content }
             .padding(.horizontal, 10)
-            .frame(height: 34)
+            .frame(height: sidebarRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

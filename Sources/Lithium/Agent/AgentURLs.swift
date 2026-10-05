@@ -32,6 +32,23 @@ enum AgentURLs {
         }
     }
 
+    /// Opening `url` from `current` scrolls to an anchor of the document shown instead of loading
+    /// another: the two differ only in a fragment, which `url` has.
+    static func isMoveWithinPage(from current: URL?, to url: URL) -> Bool {
+        guard let current, url.fragment != nil else { return false }
+        return withoutFragment(current) == withoutFragment(url)
+    }
+
+    static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        a.scheme?.lowercased() == b.scheme?.lowercased() && a.host()?.lowercased() == b.host()?.lowercased() && a.port == b.port
+    }
+
+    private static func withoutFragment(_ url: URL) -> String {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.fragment = nil
+        return components?.string ?? url.absoluteString
+    }
+
     /// A tab showing one of these can't be read or driven, though it can be listed, selected and closed.
     static func isBlocked(_ url: URL?) -> Bool {
         guard let url else { return false }

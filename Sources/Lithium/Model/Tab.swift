@@ -87,13 +87,15 @@ final class Tab: NSObject, Identifiable {
     /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
     var openedByAgent: String?
     var isInAgentGroup: Bool { pinID == nil && openedByAgent != nil }
+    var isInTabList: Bool { pinID == nil && openedByAgent == nil }
     /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
     /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
     /// address it was sent to (`go(to:)`), isn't counted.
     private(set) var commits = 0
-    /// Counts the moves within the document shown that a navigation asked for: to an anchor
-    /// (`page#section`), or Back and Forward between `pushState` entries. WebKit commits nothing
-    /// for them. The page's own `pushState` and `replaceState` aren't counted.
+    /// Counts the moves within the document shown to an anchor (`page#section`), or Back and
+    /// Forward between `pushState` entries, which WebKit commits nothing for. The page's own
+    /// script makes them too (`location.hash`, `history.back()`), not only a navigation asked for.
+    /// The page's `pushState` and `replaceState` aren't counted.
     private(set) var sameDocumentNavigations = 0
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.

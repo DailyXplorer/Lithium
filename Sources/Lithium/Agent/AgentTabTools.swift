@@ -435,17 +435,21 @@ extension AgentHub {
     /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded:
     /// when the call may be one, `landedWithinPage` tells it from a move the page's own script
     /// made meanwhile. Without it only a commit ends the wait. Lithium's error page committing
-    /// for it is `navigation_failed`, whatever `wait`; `none` answers before anything is known.
+    /// for it is `navigation_failed`, whatever `wait`; a load that ends without showing anything
+    /// is `download_started` or `navigation_cancelled`; `none` answers before anything is known.
     private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
         let tab = named.tab
-        var (commits, moves) = (tab.commits, tab.sameDocumentNavigations)
+        var (commits, moves, unshown) = (tab.commits, tab.sameDocumentNavigations, tab.unshownLoads)
         // The load before may have failed with its error page still on its way: that page
         // committing is not this call's answer.
         let earlierError = tab.loadError
         start()
         touch(tab)
         guard wait > .none else { return page(named, reached: LoadWait.none) }
-        let newDocument = try await watch(named, until: deadline) { () -> Bool? in
+        let newDocument = try await AgentWait.until(deadline) { () -> Bool? in
+            // Before the tab closing: a tab opened just for a file closes once its download starts.
+            if tab.unshownLoads > unshown, let load = tab.lastUnshownLoad { throw Self.unshownError(load, in: named) }
+            try self.checkStillWaitable(named)
             if tab.commits > commits {
                 guard let error = tab.loadError else { return true }
                 if error === earlierError {
@@ -519,6 +523,17 @@ extension AgentHub {
     }
 
     static let agentWorld = WKContentWorld.world(name: "lithium-agent")
+
+    private static func unshownError(_ load: UnshownLoad, in named: NamedTab) -> AgentToolError {
+        switch load {
+        case .download(let fileName):
+            // TODO(PR 4): the agent's downloads wait for the user's Allow (AgentConfirmations).
+            let file = fileName.map { " (\($0))" } ?? ""
+            return AgentToolError(code: "download_started", message: "\(named.id)’s page became a download\(file) instead of a page. Lithium handles it as the user’s own download; downloads an agent starts will need the user’s Allow in a later version.")
+        case .refused(let scheme):
+            return AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s page led to a \(scheme): address, which Lithium doesn’t open in a tab.")
+        }
+    }
 
     private func timedOut(_ named: NamedTab, after timeout: Duration, _ state: String) -> AgentToolError {
         AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: \(state).")

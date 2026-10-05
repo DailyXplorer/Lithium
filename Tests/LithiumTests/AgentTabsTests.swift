@@ -725,6 +725,36 @@ struct AgentTabsTests {
         }
     }
 
+    /// A load that ends without a page answers at once: a download names its file, and a tab
+    /// opened just for it, closed as the download starts, isn't reported closed by the user.
+    @Test func aLoadThatShowsNoPageAnswersAtOnce() async throws {
+        let (listener, files) = try await LocalHTTP.serve([
+            "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
+            "/mail": ("HTTP/1.1 302 Found\r\nLocation: mailto:x@example.com", ""),
+        ])
+        defer { listener.cancel() }
+        let report = files.appending(path: "report.csv").absoluteString
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString)])
+            let tab = try #require(opened["tab"])
+            let cases: [(tool: String, arguments: JSONValue, code: String, mentions: String)] = [
+                ("navigate", ["tab": tab, "url": .string(report)], "download_started", "report.csv"),
+                ("tab_open", ["url": .string(report)], "download_started", "report.csv"),
+                ("navigate", ["tab": tab, "url": .string(files.appending(path: "mail").absoluteString)], "navigation_cancelled", "mailto:"),
+            ]
+            for (tool, arguments, code, mentions) in cases {
+                let started = ContinuousClock.now
+                let result = await client.call(tool, arguments)
+                #expect(ContinuousClock.now - started < .seconds(2), "\(tool) \(code)")
+                #expect(result.code == code, "\(tool): \(result.content)")
+                #expect(result.message.contains(mentions), "\(result.message)")
+                let id = try #require(result["tab"]?.string)
+                #expect(result.message.hasPrefix(id), "\(result.message)")
+                if tool == "navigate" { #expect(client.tab(id)?.title == "One", "the page before stays") } else { #expect(client.tab(id) == nil) }
+            }
+        }
+    }
+
     /// Wrong arguments don't wait their turn behind the call running in the tab.
     @Test(.timeLimit(.minutes(1))) func argumentsAreCheckedBeforeWaitingInLine() async throws {
         let hanging = try await HangingHTTP()

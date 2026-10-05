@@ -2,6 +2,13 @@ import AppKit
 import Observation
 import WebKit
 
+/// How a load in the page ended without showing anything.
+enum UnshownLoad {
+    case download(fileName: String?)
+    /// Lithium refused where it led: another app's scheme (`mailto:`), or its own pages.
+    case refused(scheme: String)
+}
+
 @MainActor
 @Observable
 final class Tab: NSObject, Identifiable {
@@ -97,6 +104,10 @@ final class Tab: NSObject, Identifiable {
     /// script makes them too (`location.hash`, `history.back()`), not only a navigation asked for.
     /// The page's `pushState` and `replaceState` aren't counted.
     private(set) var sameDocumentNavigations = 0
+    /// Counts the loads in the page itself that ended without showing anything, for an agent
+    /// waiting on one; `lastUnshownLoad` tells how the latest ended.
+    private(set) var unshownLoads = 0
+    @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
@@ -498,11 +509,18 @@ final class Tab: NSObject, Identifiable {
         return true
     }
 
-    /// A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
-    private func closeIfOnlyADownload() {
+    private func downloadStarted(_ download: WKDownload, inMainFrame: Bool, fileName: String?) {
+        Downloads.shared.track(download)
         // A tab going on to an extension's address isn't empty, though nothing is shown yet.
-        guard !goToAddressAfterWaking(), webView.backForwardList.currentItem == nil else { return }
-        browser?.close(self)
+        guard !goToAddressAfterWaking() else { return }
+        if inMainFrame { endedUnshown(.download(fileName: fileName)) }
+        // A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
+        if webView.backForwardList.currentItem == nil { browser?.close(self) }
+    }
+
+    private func endedUnshown(_ load: UnshownLoad) {
+        lastUnshownLoad = load
+        unshownLoads += 1
     }
 
     /// Applied only if the page still has the title the tidy name was made from.
@@ -590,7 +608,7 @@ extension Tab: WKNavigationDelegate {
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
             // A load refused here ends without a word from WebKit.
-            if isMainFrame { goToAddressAfterWaking() }
+            if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
             return (.cancel, preferences)
         }
 
@@ -610,7 +628,10 @@ extension Tab: WKNavigationDelegate {
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
             // Websites may not open Lithium's pages; only the app or another Lithium page can.
-            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else { return (.cancel, preferences) }
+            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else {
+                if isMainFrame { endedUnshown(.refused(scheme: Internal.scheme)) }
+                return (.cancel, preferences)
+            }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
             setWebstoreBridge(false)
@@ -656,13 +677,12 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        Downloads.shared.track(download)
-        closeIfOnlyADownload()
+        let name = navigationAction.request.url?.lastPathComponent
+        downloadStarted(download, inMainFrame: navigationAction.targetFrame?.isMainFrame ?? true, fileName: ["", "/"].contains(name) ? nil : name)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        Downloads.shared.track(download)
-        closeIfOnlyADownload()
+        downloadStarted(download, inMainFrame: navigationResponse.isForMainFrame, fileName: navigationResponse.response.suggestedFilename)
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {

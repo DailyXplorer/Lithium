@@ -7,6 +7,7 @@ import WebKit
 
 /// What agents may open, and how the log writes addresses. No browser needed.
 @MainActor
+@Suite(.timeLimit(.minutes(1)))
 struct AgentURLsTests {
     @Test func opensOnlyTheWeb() {
         #expect(AgentURLs.verdict(for: URL(string: "https://example.com/a")!) == .allowed)
@@ -71,7 +72,7 @@ struct AgentURLsTests {
 /// pages served from 127.0.0.1. It keeps its data in the home folder, so it only runs in a
 /// throwaway one, as `scripts/test` gives.
 @MainActor
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct AgentTabsTests {
     struct ToolResult {
         let isError: Bool
@@ -385,7 +386,7 @@ struct AgentTabsTests {
     /// The page on its way out moving to its own anchors isn't the page the agent was sent to.
     /// WebKit drops the load when that happens, so the call times out: it never answers for
     /// the page shown as if the load had completed.
-    @Test(.timeLimit(.minutes(1))) func theOldPagesOwnAnchorMovesDontAnswerForTheNextPage() async throws {
+    @Test func theOldPagesOwnAnchorMovesDontAnswerForTheNextPage() async throws {
         let (listener, slow) = try await LocalHTTP.serve(["/late": ("Content-Type: text/html", "<title>Late</title>")], delay: 1)
         defer { listener.cancel() }
         try await withAgent { client, base in
@@ -470,7 +471,7 @@ struct AgentTabsTests {
     }
 
     /// The page on its way out is long since ready; the one coming hasn't arrived.
-    @Test(.timeLimit(.minutes(1))) func domContentLoadedWaitsForTheNextDocument() async throws {
+    @Test func domContentLoadedWaitsForTheNextDocument() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, base in
@@ -492,7 +493,7 @@ struct AgentTabsTests {
 
     /// Lithium putting the tab to sleep mid-wait fails the wait, and the wait doesn't hand the
     /// sleeping tab a new, empty page.
-    @Test(.timeLimit(.minutes(1))) func sleepingDuringDomContentLoadedLeavesNoPage() async throws {
+    @Test func sleepingDuringDomContentLoadedLeavesNoPage() async throws {
         try await withAgent { client, base in
             let id = try #require((await client.call("tab_open"))["tab"]?.string)
             let named = try #require(client.tab(id))
@@ -511,7 +512,7 @@ struct AgentTabsTests {
 
     /// A page whose script keeps it busy can't answer whether its document is ready; the
     /// deadline and Stop end the wait all the same.
-    @Test(.timeLimit(.minutes(1))) func aBusyPageDoesntHoldUpDomContentLoaded() async throws {
+    @Test func aBusyPageDoesntHoldUpDomContentLoaded() async throws {
         try await withAgent { client, base in
             let id = try #require((await client.call("tab_open"))["tab"]?.string)
             let tab: JSONValue = .string(id)
@@ -593,7 +594,7 @@ struct AgentTabsTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func navigationToAPageThatNeverAnswersTimesOut() async throws {
+    @Test func navigationToAPageThatNeverAnswersTimesOut() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, _ in
@@ -615,7 +616,7 @@ struct AgentTabsTests {
         return (tab, call)
     }
 
-    @Test(.timeLimit(.minutes(1))) func userClosingTheTabEndsTheWait() async throws {
+    @Test func userClosingTheTabEndsTheWait() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, _ in
@@ -627,7 +628,7 @@ struct AgentTabsTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func userNavigatingTheTabEndsTheWait() async throws {
+    @Test func userNavigatingTheTabEndsTheWait() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, _ in
@@ -642,7 +643,7 @@ struct AgentTabsTests {
 
     /// Reloads the user asks for from a site's settings are the user's navigation too: the agent's
     /// load doesn't answer for them.
-    @Test(.timeLimit(.minutes(1))) func reloadsTheUserAsksForEndTheWait() async throws {
+    @Test func reloadsTheUserAsksForEndTheWait() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         // Shown at once, but never done loading: its image never comes.
@@ -756,7 +757,7 @@ struct AgentTabsTests {
     }
 
     /// Wrong arguments don't wait their turn behind the call running in the tab.
-    @Test(.timeLimit(.minutes(1))) func argumentsAreCheckedBeforeWaitingInLine() async throws {
+    @Test func argumentsAreCheckedBeforeWaitingInLine() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, _ in
@@ -772,7 +773,7 @@ struct AgentTabsTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func stopEndsAWaitingCall() async throws {
+    @Test func stopEndsAWaitingCall() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         try await withAgent { client, _ in
@@ -813,7 +814,7 @@ struct AgentTabsTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func stopDoesntWaitItsTurnAndEndsTheCallInFlight() async throws {
+    @Test func stopDoesntWaitItsTurnAndEndsTheCallInFlight() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
         // Shown at once, but never done loading: its image never comes.

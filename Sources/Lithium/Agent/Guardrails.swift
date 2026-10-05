@@ -45,6 +45,9 @@ enum Guardrails {
         var wallet = false
         /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
+        /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
+        /// card or a password.
+        var inUnknownFrame = false
     }
 
     /// The tab's page, all frames together.
@@ -81,6 +84,7 @@ enum Guardrails {
     /// if it submits one. A payment wins over a password.
     static func confirmation(for action: Action, on element: Element, page: Page, submitting form: Form? = nil) -> ConfirmationKind? {
         if page.isProviderTab || element.inPaymentFrame { return .payment }
+        if element.inUnknownFrame { return page.isPaymentPage ? .payment : .password }
         if let form, form.cardField || page.paymentFrame { return .payment }
         switch action {
         case .type, .select, .check:

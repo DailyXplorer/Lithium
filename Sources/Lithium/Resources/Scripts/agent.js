@@ -901,12 +901,23 @@
     return facts;
   };
 
-  // The focused element, or the frame focus went into, for keys sent without a ref.
+  // The focused element, or the frame focus went into, for keys sent without a ref: its address,
+  // and its origin when known. A frame of another origin is where its address says, unless that
+  // is this document's own origin, which it then left.
   const focused = () => {
     const element = deepFocus();
     const facts = { token: frame.token, path: framePath(), counts: { ...counts } };
     if (!element || element === document.body || element === document.documentElement) return facts;
-    if (/^i?frame$/.test(element.localName)) return { ...facts, frame: frameIndexes().get(element.contentWindow) ?? -1 };
+    if (/^i?frame$/.test(element.localName)) {
+      let origin;
+      try { origin = element.contentWindow.location.origin; } catch {
+        try {
+          const start = new URL(element.src).origin;
+          if (start !== 'null' && start !== location.origin) origin = start;
+        } catch {}
+      }
+      return { ...facts, frame: frameIndexes().get(element.contentWindow) ?? -1, src: element.src || '', origin };
+    }
     return { ...facts, id: idOf(element) };
   };
 

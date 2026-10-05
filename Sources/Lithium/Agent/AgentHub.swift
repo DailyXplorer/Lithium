@@ -627,9 +627,10 @@ final class AgentHub {
         if state.acting != nil, state.interruption == nil { state.interruption = .userInput }
     }
 
-    /// The label of the session whose action runs in `tab`: what its page opens is the agent's.
+    /// The label of the session whose action runs in `tab`, when the agent pressed last in its
+    /// page: what the page opens is the agent's. The user's own click meanwhile opens theirs.
     func actingSession(in tab: Tab) -> String? {
-        guard let acting = tabs[tab.id]?.acting else { return nil }
+        guard let acting = tabs[tab.id]?.acting, (tab.loadedWebView as? PageWebView)?.agentPressedLast == true else { return nil }
         return sessions.first { $0.id == acting.session }?.label
     }
 
@@ -642,9 +643,9 @@ final class AgentHub {
     /// A tab an agent action in `opener` asks for without a popup (a ⌘-click), or for an address
     /// it can't open as it is: as `tab_open` opens one, in the Agent group, unselected, after
     /// `checkOpenable`, and named in the action's result. False when no agent action runs in
-    /// `opener`: the tab is the user's to open.
+    /// `opener`, or the user pressed last in it: the tab is the user's to open.
     func open(_ url: URL, from opener: Tab) async -> Bool {
-        guard let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
+        guard actingSession(in: opener) != nil, let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
         guard (try? await checkOpenable(url, in: nil, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
         let tab = browser.newAgentTab(session: session.label)
         tab.load(url)

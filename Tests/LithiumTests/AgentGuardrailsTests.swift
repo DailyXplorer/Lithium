@@ -66,6 +66,8 @@ struct AgentGuardrailsTests {
             (.select, Element(role: "combobox", name: "Expiry month", field: "payment"), Self.shop, nil, .payment, "picking an expiry month"),
             (.press(enter: false), card, Self.shop, nil, .payment, "a key in a card field"),
             (.type, inFrame, Self.shop, nil, .payment, "anything in a provider's frame"),
+            (.press(enter: false), Element(role: "frame", inUnknownFrame: true), Self.shop, nil, .password, "a key in a frame of an origin nobody knows"),
+            (.type, Element(role: "frame", inUnknownFrame: true), Page(url: Self.shop.url, paymentFrame: true), nil, .payment, "typing there on a page with a payment frame"),
             (.activate, email, Page(url: URL(string: "https://www.paypal.com/signin")), nil, .payment, "anything in a provider's tab"),
             (.activate, button("Pay €42.00"), Self.shop, nil, .payment, "a commit control with an amount anywhere"),
             (.activate, button("Place order"), Self.checkout, nil, .payment, "a commit control on a payment page"),

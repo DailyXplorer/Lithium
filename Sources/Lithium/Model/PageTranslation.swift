@@ -26,6 +26,31 @@ final class PageWebView: WKWebView {
     }
     private var userPressed = false
     static var pressedMouseButtons = { NSEvent.pressedMouseButtons }
+    /// The last button or key pressed in the page was `NativeInput`'s: what the page opens
+    /// is an agent's only then, never on the user's own click during an agent's action.
+    private(set) var agentPressedLast = false
+
+    /// The page's own undo stack. WebKit records its edits with the view's undo manager, else
+    /// the window's: shared with the address bar, and in the stage with every page an agent
+    /// acts in, where one page's Undo would undo another's typing.
+    private let pageUndoManager = UndoManager()
+    override var undoManager: UndoManager? { pageUndoManager }
+
+    @objc func undo(_ sender: Any?) { pageUndoManager.undo() }
+    @objc func redo(_ sender: Any?) { pageUndoManager.redo() }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            (item as? NSMenuItem)?.title = pageUndoManager.undoMenuItemTitle
+            return pageUndoManager.canUndo
+        case #selector(redo(_:)):
+            (item as? NSMenuItem)?.title = pageUndoManager.redoMenuItemTitle
+            return pageUndoManager.canRedo
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         if NativeInput.isAgents(event) || agentMenuUntil.map({ $0 > .now }) == true {
@@ -57,7 +82,7 @@ final class PageWebView: WKWebView {
     // User input wins (design section 2.7): input that `NativeInput` isn't delivering ends the
     // agent action running in the tab.
     override func mouseDown(with event: NSEvent) {
-        if noteUser(event) { userPressed = true }
+        if noteUser(event, pressing: true) { userPressed = true }
         super.mouseDown(with: event)
     }
 
@@ -67,28 +92,30 @@ final class PageWebView: WKWebView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        if noteUser(event) { agentMenuUntil = nil }
+        if noteUser(event, pressing: true) { agentMenuUntil = nil }
         super.rightMouseDown(with: event)
     }
 
     override func otherMouseDown(with event: NSEvent) {
-        noteUser(event)
+        noteUser(event, pressing: true)
         super.otherMouseDown(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
-        noteUser(event)
+        noteUser(event, pressing: true)
         super.keyDown(with: event)
     }
 
     override func scrollWheel(with event: NSEvent) {
-        noteUser(event)
+        noteUser(event, pressing: false)
         super.scrollWheel(with: event)
     }
 
     @discardableResult
-    private func noteUser(_ event: NSEvent) -> Bool {
-        guard !NativeInput.isAgents(event) else { return false }
+    private func noteUser(_ event: NSEvent, pressing: Bool) -> Bool {
+        let agents = NativeInput.isAgents(event)
+        if pressing { agentPressedLast = agents }
+        guard !agents else { return false }
         tab?.noteUserInput()
         return true
     }

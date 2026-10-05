@@ -662,8 +662,9 @@ extension Tab: WKNavigationDelegate {
         // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
 
-        // ⌘-click, or a middle click (WebKit's button mask 4), opens the link in a new tab.
-        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 {
+        // ⌘-click opens the link in a new tab, as does an agent's middle click (WebKit's button
+        // mask 4); the user's own middle click follows it here.
+        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
             if await browser?.agent?.open(url, from: self) != true {
                 browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
             }

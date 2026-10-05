@@ -161,6 +161,26 @@ struct AgentInputTests {
             <input id="inner" aria-label="Inner">
             <script>document.getElementById('inner').addEventListener('input', (event) => parent.postMessage('inner:' + event.target.value, '*'));</script>
             """),
+        "/card-frame": (html, """
+            <title>Card frame</title><style>body { margin: 0 } iframe { position: absolute; left: 40px; top: 40px; width: 300px; height: 100px }</style>
+            <iframe id="card"></iframe>
+            <script>document.getElementById('card').src = \(otherOrigin) + '/field-child'; document.getElementById('card').focus();</script>
+            """),
+        "/blank-frame": (html, """
+            <title>Blank frame</title><iframe id="box" sandbox srcdoc="<input>"></iframe>
+            <script>document.getElementById('box').focus();</script>
+            """),
+        "/user-opens": (html, """
+            <title>User opens</title><style>body { margin: 0 } button, a { position: absolute; left: 40px; width: 120px; height: 30px }</style>
+            <button id="pay" style="top: 40px">Pay €42.00</button>
+            <button id="later" style="top: 100px">Later</button>
+            <a id="plain" href="/form" style="top: 160px">Plain</a>
+            <script>
+              // What the user's click on Later opens comes a moment after it, once an agent's action is under way.
+              window.next = '';
+              document.getElementById('later').addEventListener('click', () => setTimeout(() => window.open(next), 700));
+            </script>
+            """),
         "/covered": (html, """
             <title>Covered</title><style>body { margin: 0 }</style>
             <button id="under" style="position:absolute;left:40px;top:40px">Under</button>
@@ -218,13 +238,18 @@ struct AgentInputTests {
             """),
     ]
 
-    private func withAgent(_ body: (Client, URL) async throws -> Void) async throws {
+    /// `openingFirst`: pages opened before agent access is on, whose frames never say hello.
+    private func withAgent(openingFirst paths: [String] = [], _ body: (Client, URL) async throws -> Void) async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
         defer { listener.cancel() }
         let browser = Browser()
         await browser.privacy.waitUntilReady()
         await browser.extensions.waitUntilLoaded()
+        for path in paths {
+            let tab = browser.newTab(url: base.appending(path: path))
+            #expect(await waitUntil(20) { tab.url?.path() == "/\(path)" && !tab.isLoading && tab.title != "" })
+        }
         await browser.setAgentAccess(true)
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let active = NSApp?.isActive
@@ -543,6 +568,41 @@ struct AgentInputTests {
         }
     }
 
+    @Test func undoInOnePageNeverUndoesAnotherPagesOrLithiumsEdits() async throws {
+        try await withAgent { client, base in
+            let (firstID, first) = try await open(client, base.appending(path: "events"))
+            let (secondID, second) = try await open(client, base.appending(path: "events"))
+            let value = { (tab: Lithium.Tab) in try await self.page(tab, "return document.getElementById('field').value") as? String }
+            for (id, text) in [(firstID, "one"), (secondID, "two")] {
+                let typed = await client.call("type", ["tab": .string(id), "ref": .string(try await ref(client, id, "textbox", "Field")), "text": .string(text)])
+                #expect(!typed.isError, "\(typed.content)")
+            }
+            #expect(first.webView.window === second.webView.window)
+            #expect(!(await client.call("press", ["tab": .string(firstID), "keys": "Meta+Z"])).isError)
+            #expect(try await value(first) == "")
+            #expect(try await value(second) == "two")
+
+            // The selected tab, in a window whose own undo stack holds an edit of Lithium's (the address bar's).
+            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+            shown.isReleasedWhenClosed = false
+            let webView = second.webView
+            webView.removeFromSuperview()
+            webView.frame = shown.contentLayoutRect
+            shown.contentView = webView
+            defer { shown.contentView = nil }
+            client.browser.select(second)
+            let typed = await client.call("type", ["tab": .string(secondID), "ref": .string(try await ref(client, secondID, "textbox", "Field")), "text": "three"])
+            #expect(!typed.isError, "\(typed.content)")
+            #expect(try await value(second) == "twothree")
+            let addressBar = NSMutableString()
+            shown.undoManager?.registerUndo(withTarget: addressBar) { $0.append("undone") }
+            #expect(!(await client.call("press", ["tab": .string(secondID), "keys": "Meta+Z"])).isError)
+            #expect(try await value(second) == "two")
+            #expect(addressBar as String == "")
+            #expect(shown.undoManager?.canUndo == true)
+        }
+    }
+
     @Test func shiftWithALetterOrADigitTypesItsShiftedCharacter() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "events"))
@@ -673,6 +733,92 @@ struct AgentInputTests {
         }
     }
 
+    /// The user's own click opens the user's tab, even while an agent's action in the same tab
+    /// waits for their Allow: the agent didn't press.
+    @Test func whatTheUsersClickOpensDuringAnAgentsActionIsTheUsers() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let (id, tab) = try await open(client, base.appending(path: "user-opens"))
+            let pay = try await ref(client, id, "button", "Pay €42.00")
+            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+            shown.isReleasedWhenClosed = false
+            let webView = tab.webView
+            webView.removeFromSuperview()
+            webView.frame = shown.contentLayoutRect
+            shown.contentView = webView
+            defer { shown.contentView = nil }
+            let confirmations = client.hub.confirmations
+            let agents = browser.tabs.filter(\.isInAgentGroup).count
+            let press = { (css: CGPoint, modifiers: NSEvent.ModifierFlags) in
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let event = try #require(NSEvent.mouseEvent(with: type, location: webView.convert(css, to: nil), modifierFlags: modifiers, timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                    type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+                }
+            }
+            for next in ["/form", "file:///tmp/"] {
+                browser.select(tab)
+                let tabs = Set(browser.tabs.map(\.id))
+                _ = try await page(tab, "window.next = '\(next)'")
+                try press(CGPoint(x: 100, y: 115), [])
+                let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
+                #expect(await waitUntil(20) { !confirmations.pending.isEmpty }, "\(next)")
+                // The page opens it 700 ms after the user's click.
+                try await Task.sleep(for: .milliseconds(1500))
+                let opened = browser.tabs.filter { !tabs.contains($0.id) }
+                #expect(opened.count == 1, "\(next)")
+                #expect(opened.allSatisfy { !$0.isInAgentGroup && browser.selectedTabID == $0.id }, "\(next)")
+                #expect(confirmations.pending.map(\.kind) == [.payment], "\(next)")
+                confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+                let clicked = await waiting.value
+                #expect(clicked.code == "denied_by_user", "\(next): \(clicked.content)")
+                #expect(clicked["newTabs"] == nil)
+                opened.forEach(browser.close)
+            }
+
+            // The user's own ⌘⇧-click while the agent's click waits: their tab, selected, and the agent's action ends.
+            browser.select(tab)
+            let tabs = Set(browser.tabs.map(\.id))
+            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            try press(CGPoint(x: 60, y: 175), [.command, .shift])
+            #expect(await waitUntil(5) { browser.tabs.contains { !tabs.contains($0.id) } })
+            let opened = browser.tabs.filter { !tabs.contains($0.id) }
+            #expect(opened.count == 1 && opened.allSatisfy { !$0.isInAgentGroup && browser.selectedTabID == $0.id })
+            #expect((await waiting.value).code == "user_interrupted")
+            #expect(confirmations.pending.isEmpty)
+            #expect(browser.tabs.filter(\.isInAgentGroup).count == agents)
+            #expect(tab.url?.path() == "/user-opens")
+        }
+    }
+
+    /// Only an agent's middle click opens a tab; the user's follows the link in place.
+    @Test func theUsersMiddleClickOnALinkFollowsItInPlace() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let (_, tab) = try await open(client, base.appending(path: "results"))
+            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+            shown.isReleasedWhenClosed = false
+            let webView = tab.webView
+            webView.removeFromSuperview()
+            webView.frame = shown.contentLayoutRect
+            shown.contentView = webView
+            defer { shown.contentView = nil }
+            browser.select(tab)
+            let count = browser.tabs.count
+            let plain = webView.convert(CGPoint(x: 55, y: 290), to: nil)
+            for type in [NSEvent.EventType.otherMouseDown, .otherMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: plain, modifierFlags: [], timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: type == .otherMouseDown ? 1 : 0))
+                let cg = try #require(event.cgEvent)
+                cg.setIntegerValueField(.mouseEventButtonNumber, value: Int64(CGMouseButton.center.rawValue))
+                cg.setIntegerValueField(.mouseEventNumber, value: 2)
+                let middle = try #require(NSEvent(cgEvent: cg))
+                type == .otherMouseDown ? webView.otherMouseDown(with: middle) : webView.otherMouseUp(with: middle)
+            }
+            #expect(await waitUntil(5) { tab.url?.path() == "/form" })
+            #expect(browser.tabs.count == count)
+        }
+    }
+
     @Test func aLoadUnderWayBeforeAClickIsNotTheClicks() async throws {
         let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
         defer { slow.cancel() }
@@ -779,6 +925,23 @@ struct AgentInputTests {
             let submitted = try await call(client, "press", ["tab": .string(id), "keys": "Enter", "wait": "load"], answering: .allowOnce, expecting: .password)
             #expect(submitted["navigated"] == true, "\(submitted.content)")
             #expect(tab.url?.path() == "/done")
+        }
+    }
+
+    /// Focus in a frame open before agent access was on, which Lithium can't read: a payment
+    /// provider's asks for a payment, as by point, and one of an origin nobody knows asks too.
+    @Test func keysIntoAFrameLithiumCantReadAskTheUser() async throws {
+        try await withAgent(openingFirst: ["card-frame", "blank-frame"]) { client, _ in
+            client.hub.paymentProviders = PaymentProviders(hosts: ["localhost"])
+            for (path, kind) in [("/card-frame", ConfirmationKind.payment), ("/blank-frame", .password)] {
+                let tab = try #require(client.browser.tabs.first { $0.url?.path() == path })
+                let id = client.hub.id(for: tab)
+                #expect(try await page(tab, "return document.activeElement.localName") as? String == "iframe", "\(path)")
+                for (tool, arguments) in [("press", ["tab": .string(id), "keys": "4"]), ("press", ["tab": .string(id), "keys": "Enter"]), ("type", ["tab": .string(id), "text": "4242"])] as [(String, JSONValue)] {
+                    let denied = try await call(client, tool, arguments, answering: .deny, expecting: kind)
+                    #expect(denied.code == "denied_by_user", "\(path) \(tool): \(denied.content)")
+                }
+            }
         }
     }
 

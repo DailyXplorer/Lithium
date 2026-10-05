@@ -60,6 +60,9 @@ struct FocusedReport: Decodable, DocumentReport {
     var path: String?
     var id: Int?
     var frame: Int?
+    /// The focused frame's address, and its origin when the page knows it.
+    var src: String?
+    var origin: String?
 }
 
 private struct FrameHitReport: Decodable {
@@ -100,6 +103,8 @@ struct ActionTarget {
     var prompts = 0
     var viewport: PageViewport?
     var inPaymentFrame = false
+    /// Focus is in a frame Lithium can't read, of an origin nobody knows.
+    var inUnknownFrame = false
     var page = Guardrails.Page()
 
     /// `e9 button "Pay €42.00"`, as messages name it.
@@ -114,7 +119,7 @@ struct ActionTarget {
     }
 
     var element: Guardrails.Element {
-        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, inPaymentFrame: inPaymentFrame)
+        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
     }
 
     var counts: [String: Int] { report.counts ?? [:] }
@@ -406,6 +411,10 @@ extension AgentHub {
         let times = try arguments.int("repeat", default: 1, in: 1...100)
         let (wait, diff, timeout) = (try arguments.wait(default: .commit), try arguments.bool("diff", default: true), try arguments.timeout(default: 15_000))
         return try await hub.action(named, "Pressing \(spoken)", session: session, timeout: timeout) { ctx in
+            // Only a page's own undo stack is the page's: the window's holds Lithium's edits too.
+            if let responder, responder != #selector(NSResponder.selectAll(_:)), !(ctx.webView is PageWebView) {
+                throw AgentToolError(code: "unsupported", message: "Undo and redo in \(ctx.named.id) would reach Lithium’s own edits, not just its page’s.")
+            }
             let target = try await hub.resolve(.focused, ctx, checks: [])
             if Guardrails.confirmation(for: .type, on: target.element, page: target.page) == nil { AgentHub.callNotes?.typedIntoUnguardedField = true }
             let (action, form) = target.guarded(.key(key, modifiers))
@@ -845,15 +854,28 @@ extension AgentHub {
     private func resolveFocused(_ ctx: ActionContext, checks: Checks) async throws -> ActionTarget {
         let frames = try await askEveryFrame(ctx.named, ctx.webView, "focused", [:], FocusedReport.self, until: ctx.deadline)
         var report = frames.reports[0].0
-        while let index = report.frame, index >= 0 {
+        var above: [FocusedReport] = []
+        while let index = report.frame {
             let path = (report.path ?? "").isEmpty ? "\(index)" : "\(report.path ?? "").\(index)"
-            guard let child = frames.reports.first(where: { $0.0.path == path })?.0 else { break }
+            guard index >= 0, let child = frames.reports.first(where: { $0.0.path == path })?.0 else { break }
+            above.append(report)
             report = child
         }
         guard let id = report.id, let frame = ctx.state.target(for: report.token) else {
-            if checks.contains(.editable) { throw AgentToolError(code: "not_editable", message: "Nothing is focused in \(ctx.named.id): give the field’s ref.") }
+            let unread = report.frame != nil
+            if checks.contains(.editable), !unread { throw AgentToolError(code: "not_editable", message: "Nothing is focused in \(ctx.named.id): give the field’s ref.") }
             let main = try PageProbe.decode(TargetReport.self, from: try await ask(ctx.named, ctx.webView, .main, "target", ["x": 0, "y": 0], until: ctx.deadline))
-            return ActionTarget(report: TargetReport(token: main.token, path: "", role: "page", viewport: main.viewport, counts: main.counts, pay: main.pay, challenge: main.challenge, frames: main.frames), address: nil, frame: .main, ref: nil, css: .zero, viewport: main.viewport)
+            var target = ActionTarget(report: TargetReport(token: main.token, path: "", role: unread ? "frame" : "page", focused: unread ? true : nil, viewport: main.viewport, counts: main.counts, pay: main.pay, challenge: main.challenge, frames: main.frames), address: nil, frame: .main, ref: nil, css: .zero, viewport: main.viewport)
+            guard unread else { return target }
+            // Focus went into a frame that never said hello (open before agent access was on):
+            // keys go to it whatever it holds. The frames on the way decide as for a point, and
+            // one whose origin nobody knows asks.
+            for (parent, child) in zip(above, above.dropFirst() + [report]) {
+                try note(frame: parent.src ?? "", origin: origin(of: child.token, ctx), in: &target)
+            }
+            try note(frame: report.src ?? "", origin: report.origin, in: &target)
+            target.inUnknownFrame = (report.origin ?? "null") == "null"
+            return target
         }
         let address = ElementAddress(document: report.token, id: id)
         let target = try PageProbe.decode(TargetReport.self, from: try await ask(ctx.named, ctx.webView, frame, "target", ["id": id, "token": report.token, "scroll": false], until: ctx.deadline))

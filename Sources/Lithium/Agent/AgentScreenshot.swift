@@ -26,14 +26,30 @@ struct FrameLayout {
 
     let main: MaskReport
     let children: [String: MaskReport]
+    /// Child frames that answered from a frame in a shadow root, which `window.frames` leaves
+    /// out, by the path of the frame they are in; and whether one answered with no path at all.
+    private let unplaced: [String: Int]
+    private let lost: Bool
 
     init(main: MaskReport, children: [MaskReport]) {
         self.main = main
         var byPath: [String: MaskReport] = [:]
+        var unplaced: [String: Int] = [:]
+        var lost = false
         for child in children {
-            if let path = child.path, byPath[path] == nil { byPath[path] = child }
+            guard let path = child.path else {
+                lost = true
+                continue
+            }
+            if path == "-1" || path.hasSuffix(".-1") {
+                unplaced[path == "-1" ? "" : String(path.dropLast(3)), default: 0] += 1
+            } else if byPath[path] == nil {
+                byPath[path] = child
+            }
         }
         self.children = byPath
+        self.unplaced = unplaced
+        self.lost = lost
     }
 
     var reports: [MaskReport] { [main] + children.values }
@@ -61,12 +77,21 @@ struct FrameLayout {
         return placement(of: path)
     }
 
-    /// Every rect to mask, in top-level viewport CSS pixels.
-    var masks: [CGRect] {
-        reports.flatMap { report -> [CGRect] in
-            guard let placement = placement(of: report.path ?? "") else { return [] }
-            return report.rects.map { placement.place($0).intersection(placement.clip) }.filter { !$0.isNull && !$0.isEmpty }
+    /// Every rect to mask, in top-level viewport CSS pixels: the sensitive fields of the frames
+    /// that answered, and the whole box of every frame that didn't (no hello: open before agent
+    /// access was on; or too slow), since Lithium can't see what is in it. Nil when a frame
+    /// answered that Lithium can't place, so it can't tell where to paint.
+    var masks: [CGRect]? {
+        if lost { return nil }
+        var rects: [CGRect] = []
+        for report in reports {
+            let path = report.path ?? ""
+            guard let placement = placement(of: path) else { continue }
+            if unplaced[path, default: 0] > report.frames.count(where: { $0.index < 0 }) { return nil }
+            let unknown = report.frames.filter { $0.index < 0 || children[path.isEmpty ? "\($0.index)" : "\(path).\($0.index)"] == nil }
+            rects += (report.rects + unknown.map(\.box)).map { placement.place($0).intersection(placement.clip) }
         }
+        return rects.filter { !$0.isNull && !$0.isEmpty }
     }
 }
 
@@ -145,17 +170,44 @@ enum AgentScreenshot {
         return page.getBoxRect(.mediaBox).size
     }
 
-    /// A PDF of one page holding `image`, `size` points large: a page with masked regions goes
-    /// out as pixels, since text drawn under a mask would still be in the PDF.
-    static func pdf(of image: CGImage, size: CGSize) -> Data? {
-        let data = NSMutableData()
-        var box = CGRect(origin: .zero, size: size)
-        guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return nil }
-        context.beginPDFPage(nil)
-        context.draw(image, in: box)
-        context.endPDFPage()
-        context.closePDF()
-        return data as Data
+    /// The first page of a PDF as pixels, `scale` per point, with `masks` (in points from the
+    /// page's top left) painted over: a page with masked regions goes out as pixels, since text
+    /// drawn under a mask would still be in the PDF. Cut into pages of up to `slice` points, so
+    /// a page of any length keeps its proportions and its end within a bitmap's size.
+    static func maskedPDF(_ data: Data, masks: [CGRect], scale: Double = 2, slice: Double = 2048) -> (data: Data, pages: Int)? {
+        guard let provider = CGDataProvider(data: data as CFData), let page = CGPDFDocument(provider)?.page(at: 1) else { return nil }
+        let box = page.getBoxRect(.mediaBox)
+        let output = NSMutableData()
+        var mediaBox = CGRect(x: 0, y: 0, width: box.width, height: min(box.height, slice))
+        guard let consumer = CGDataConsumer(data: output), let pdf = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+        var top = 0.0
+        var pages = 0
+        while top < box.height {
+            let height = min(slice, box.height - top)
+            let width = max(1, Int((box.width * scale).rounded()))
+            guard let bitmap = CGContext(data: nil, width: width, height: max(1, Int((height * scale).rounded())), bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            bitmap.setFillColor(.white)
+            bitmap.fill(CGRect(x: 0, y: 0, width: bitmap.width, height: bitmap.height))
+            // PDF space runs bottom up: the slice's bottom edge goes to the bitmap's.
+            bitmap.scaleBy(x: scale, y: scale)
+            bitmap.translateBy(x: -box.minX, y: -(box.minY + box.height - top - height))
+            bitmap.drawPDFPage(page)
+            bitmap.setFillColor(maskColor)
+            for mask in masks {
+                bitmap.fill(CGRect(x: box.minX + mask.minX, y: box.minY + box.height - mask.maxY, width: mask.width, height: mask.height))
+            }
+            guard let image = bitmap.makeImage() else { return nil }
+            var bounds = CGRect(x: 0, y: 0, width: box.width, height: height)
+            let pageBox = Data(bytes: &bounds, count: MemoryLayout<CGRect>.size)
+            pdf.beginPDFPage([kCGPDFContextMediaBox as String: pageBox] as CFDictionary)
+            pdf.draw(image, in: bounds)
+            pdf.endPDFPage()
+            top += height
+            pages += 1
+        }
+        pdf.closePDF()
+        return (output as Data, pages)
     }
 
     static func encode(_ image: CGImage, jpeg: Bool) async -> Data? {

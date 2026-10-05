@@ -49,13 +49,14 @@ final class AgentTab {
 
     // MARK: Frames
 
-    /// A frame's bootstrap said hello. The main frame's starts a new page, whose frames are all new.
+    /// A frame's bootstrap said hello. The main frame's starts a new page, whose frames are all
+    /// new, or brings back one Back or Forward restored from WebKit's cache, with its frames.
     func hello(token: String, frame: WKFrameInfo) {
         if frame.isMainFrame {
-            frames = [:]
+            guard token != mainDocument else { return }
             reports = [:]
             shown = [:]
-            mainDocument = token
+            switchPage(to: token)
         } else {
             frames[token] = frame
         }
@@ -65,7 +66,20 @@ final class AgentTab {
     /// access was on) makes its own.
     func mainFrameAnswered(_ token: String) {
         guard mainDocument != token else { return }
-        if mainDocument != nil { reports = [:] }
+        reports = [:]
+        if mainDocument == nil { mainDocument = token } else { switchPage(to: token) }
+    }
+
+    /// The frames of the pages left, by main document: a restored page's frames say hello again,
+    /// maybe before its main frame does, and the frames of a page left must never answer for it.
+    @ObservationIgnored private var framesOfPagesLeft: [String: [String: WKFrameInfo]] = [:]
+
+    private func switchPage(to token: String) {
+        if let mainDocument, !frames.isEmpty {
+            if framesOfPagesLeft.count >= 8 { framesOfPagesLeft = [:] }
+            framesOfPagesLeft[mainDocument] = frames
+        }
+        frames = framesOfPagesLeft.removeValue(forKey: token) ?? [:]
         mainDocument = token
     }
 

@@ -320,10 +320,21 @@
     };
   };
 
+  // A page script setting value, checked or selected fires no event and no mutation: the
+  // controls the last snapshot showed are read again each time.
+  const controlState = (element) => (element.localName === 'select'
+    ? [...element.selectedOptions].map((option) => option.index).join(',')
+    : `${element.checked} ${element.indeterminate} ${element.value}`);
+  const controlStates = () => (frame.controls ?? []).map(controlState).join('\u0000');
+
   // Snapshot
-  const snapshot = ({ scope, since, key }) => {
-    if (since === generation && key === frame.lastKey) return { token: frame.token, unchanged: true, gen: generation };
+  const snapshot = ({ scope, since, key, of }) => {
+    // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
+    if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates) {
+      return { token: frame.token, unchanged: true, gen: generation };
+    }
     frame.lastKey = key;
+    const controls = [];
     const view = viewport();
     const bottom = scope === 'page' ? Infinity : view.h * 2;
     const inScope = (box) => box[2] >= 1 && box[3] >= 1 && box[1] < bottom
@@ -401,6 +412,7 @@
           if (tag === 'select') node.options = element.options.length;
           const guard = isField(element) ? guardOf(element) : null;
           if (guard) node.guard = guard;
+          if (isField(element)) controls.push(element);
           nodes.push(node);
         }
       } else if (shown && !context.named && !isInline(style) && !textless.has(tag) && parseFloat(style.fontSize) >= 6) {
@@ -428,6 +440,8 @@
       if (focused.localName === 'iframe' || focused.localName === 'frame') focusedFrame = indexes.get(focused.contentWindow);
       else focusedID = idOf(focused);
     }
+    frame.controls = controls;
+    frame.controlStates = controlStates();
     return {
       token: frame.token, gen: generation, path: framePath(), url: location.href, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit,
@@ -488,14 +502,16 @@
         flush();
         block = element;
       }
+      // Cells and link text go through the same rules, so hidden text in them stays out too.
+      const visibleText = (child, inMarkdown) => collapse(lines(child, { markdown: inMarkdown }).map((item) => item.text).join(' '));
       if (tag === 'tr') {
-        line = [...element.cells].map((cell) => collapse(cell.innerText)).join(' | ');
-        flush(markdown ? '| ' : '');
-        if (markdown) out[out.length - 1].text += ' |';
+        const cells = [...element.cells].map((cell) => visibleText(cell, markdown));
+        // Spacer rows (Hacker News has one between stories) have nothing to read.
+        if (cells.some(Boolean)) out.push({ text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element });
         return;
       }
       if (markdown && tag === 'a' && element.href && !element.href.startsWith('javascript:')) {
-        const text = collapse(element.innerText);
+        const text = visibleText(element, false);
         if (text) line += ` [${text}](${element.href}) `;
         return;
       }

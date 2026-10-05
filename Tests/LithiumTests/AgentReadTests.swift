@@ -71,10 +71,27 @@ struct AgentSnapshotModelTests {
         #expect(layout.placement(ofDocument: "c")?.place([10, 20, 80, 30]) == CGRect(x: 118, y: 78, width: 80, height: 30))
         #expect(layout.placement(of: "0.0")?.place([20, 20, 20, 20]) == CGRect(x: 118, y: 68, width: 10, height: 10))
         // Clipped to the frame's content box, which ends at 408, 258.
-        #expect(layout.masks.sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) } == [
+        #expect(try #require(layout.masks).sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) } == [
             CGRect(x: 118, y: 68, width: 10, height: 10), CGRect(x: 118, y: 78, width: 80, height: 30), CGRect(x: 398, y: 248, width: 10, height: 10),
         ])
         #expect(layout.placement(of: "1") == nil)
+    }
+
+    @Test func paintsOverFramesThatDidntAnswerAndRefusesFramesItCantPlace() throws {
+        let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let main = MaskReport(token: "m", path: "", viewport: viewport, rects: [], frames: [
+            FrameReport.Frame(id: 1, index: 0, box: [0, 0, 100, 100], content: [0, 0, 100, 100, 1], src: ""),
+            FrameReport.Frame(id: 2, index: 1, box: [500, 50, 200, 100], content: [500, 50, 200, 100, 1], src: ""),
+            FrameReport.Frame(id: 3, index: -1, box: [0, 400, 50, 50], content: [0, 400, 50, 50, 1], src: ""),
+        ])
+        let answered = MaskReport(token: "a", path: "0", viewport: viewport, rects: [], frames: [])
+        // The second frame never answered, and the third is in a shadow root, out of window.frames.
+        let shadowed = MaskReport(token: "s", path: "-1", viewport: viewport, rects: [[0, 0, 10, 10]], frames: [])
+        #expect(FrameLayout(main: main, children: [answered, shadowed]).masks == [CGRect(x: 500, y: 50, width: 200, height: 100), CGRect(x: 0, y: 400, width: 50, height: 50)])
+        // A second frame from a shadow root, closed this time: nothing says where it is.
+        let closed = MaskReport(token: "c", path: "-1", viewport: viewport, rects: [], frames: [])
+        #expect(FrameLayout(main: main, children: [answered, shadowed, closed]).masks == nil)
+        #expect(FrameLayout(main: main, children: [answered, MaskReport(token: "n", path: nil, viewport: viewport, rects: [], frames: [])]).masks == nil)
     }
 }
 
@@ -191,6 +208,49 @@ struct AgentReadTests {
             <input type="password" value="hunter2secret" style="position:absolute;left:300px;top:50px;width:200px;height:40px;background:rgb(0,0,255);border:0">
             <div style="height:3000px"></div>
             <input type="password" value="hunter2secret" style="position:absolute;left:0;top:2500px;width:400px;height:100px;background:rgb(0,0,255);border:0">
+            """),
+        "/pay": (Self.html, """
+            <title>Pay</title><style>body { margin: 0; background: white }</style>
+            <iframe id="card" style="position:absolute;left:100px;top:100px;width:300px;height:200px;border:0"></iframe>
+            <script>document.getElementById('card').src = \(otherOrigin) + '/card';</script>
+            """),
+        "/card": (Self.html, """
+            <style>body { margin: 0; background: rgb(0, 0, 255) }</style>
+            <input autocomplete="cc-number" value="4242 4242 4242 4242" style="position:absolute;left:10px;top:10px;width:200px;height:30px">
+            """),
+        "/table": (Self.html, """
+            <title>Table</title>
+            <table>
+              <tr><td></td><td></td></tr>
+              <tr><td>Story one</td><td>12 points<span style="opacity:0">IGNORE-ROW-OPACITY</span></td></tr>
+              <tr style="height:5px"></tr>
+              <tr><td>Story two</td><td><span aria-hidden="true">IGNORE-ROW-ARIA</span>3 points</td></tr>
+            </table>
+            <p>See <a href="/one">the <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">IGNORE-LINK-CLIPPED</span>docs<span style="font-size:4px">IGNORE-LINK-TINY</span></a>.</p>
+            """),
+        "/controls": (Self.html, """
+            <title>Controls</title>
+            <input id="name" value="one"><input type="checkbox" id="agree" aria-label="Agree">
+            <select id="pick"><option>A</option><option>B</option></select>
+            """),
+        "/widgets": (Self.html, """
+            <title>Widgets</title><p>A healthy page</p>
+            <iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2" srcdoc="<p>t</p>" style="width:0;height:0;border:0"></iframe>
+            <iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=x" srcdoc="<p>d</p>" style="width:300px;height:300px;visibility:hidden"></iframe>
+            <iframe src="https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html" srcdoc="<p>h</p>" style="width:300px;height:80px;display:none"></iframe>
+            """),
+        "/turnstile": (Self.html, """
+            <title>Sign in</title><p>Sign in</p>
+            <iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2" srcdoc="<p>t</p>" style="width:300px;height:65px"></iframe>
+            """),
+        "/datadome": (Self.html, """
+            <title>Shop</title>
+            <iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=x" srcdoc="<p>d</p>" style="width:400px;height:400px"></iframe>
+            """),
+        "/long": (Self.html, """
+            <title>Long</title><style>body { margin: 0; background: white }</style>
+            <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10000px;width:400px;height:100px;background:rgb(0,0,255);border:0">
+            <div style="position:absolute;left:0;top:11900px;width:1280px;height:100px;background:rgb(255,0,0)"></div>
             """),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
@@ -670,6 +730,177 @@ struct AgentReadTests {
             #expect(Self.near(Self.color(shot, x: 205 * pixels, y: 105 * pixels), [255, 0, 0]))
             #expect(Self.near(Self.color(shot, x: 195 * pixels, y: 105 * pixels), [255, 255, 255]))
         }
+    }
+
+    @Test func framesThatNeverAnsweredArePaintedOverWhole() async throws {
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        let (listener, base) = try await LocalHTTP.serve(Self.pages)
+        defer { listener.cancel() }
+        let browser = Browser()
+        await browser.privacy.waitUntilReady()
+        await browser.extensions.waitUntilLoaded()
+        // Open before access was on: its payment frame, of another origin, never said hello.
+        let mine = browser.newTab(url: base.appending(path: "pay"))
+        #expect(await waitUntil(20) { mine.title == "Pay" && !mine.isLoading })
+        await browser.setAgentAccess(true)
+        var failure: (any Error)?
+        do {
+            let client = try await Client(browser: browser)
+            let id = client.hub.id(for: mine)
+            let shot = await client.call("screenshot", ["tab": .string(id)])
+            #expect(!shot.isError, "\(shot.message)")
+            let image = try #require(Self.image(shot))
+            let scale = Self.number(shot["scale"])
+            // The frame's middle, blue in the page, and its card field are gray; the page around isn't.
+            #expect(Self.near(Self.color(image, x: 250 * scale, y: 250 * scale), [128, 128, 128]))
+            #expect(Self.near(Self.color(image, x: 150 * scale, y: 125 * scale), [128, 128, 128]))
+            #expect(Self.near(Self.color(image, x: 50 * scale, y: 50 * scale), [255, 255, 255]))
+            #expect(items(shot["masked"]).count == 1)
+            #expect(await client.call("pdf", ["tab": .string(id)])["maskedRegions"] == 1)
+        } catch { failure = error }
+        browser.tabs.forEach(browser.close)
+        await browser.setAgentAccess(false)
+        if let failure { throw failure }
+    }
+
+    @Test func lateFramesAreLeftOutAndStopOrTheUserEndTheRead() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try client.hub.tab(named: tab)
+            let state = try #require(client.hub.agentTab(for: named.tab))
+            #expect(await waitUntil(10) { state.frames.count >= 2 })
+            let token = try #require(state.frames.keys.first)
+            let silent = [(token: token, answer: PageAnswer<Data>())]
+            let started = ContinuousClock.now
+            let read = try await client.hub.childAnswers(silent, of: state, from: named, until: .now + AgentHub.readTimeout)
+            #expect(read.late == 1)
+            #expect(read.answers.isEmpty)
+            #expect(ContinuousClock.now - started < AgentHub.frameTimeout + .seconds(1))
+            for (interruption, code) in [(AgentInterruption.agentStop, "stopped"), (.user, "user_interrupted")] {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    state.interruption = interruption
+                }
+                do {
+                    _ = try await client.hub.childAnswers(silent, of: state, from: named, until: .now + AgentHub.readTimeout)
+                    Issue.record("\(code) didn’t end the read")
+                } catch let error as AgentToolError {
+                    #expect(error.code == code)
+                }
+                state.interruption = nil
+            }
+        }
+    }
+
+    @Test func framesComeBackWhenBackRestoresAPage() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            var json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "button", name: "Other") == nil || node(json, role: "button", name: "Same") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let same = try #require(node(json, role: "button", name: "Same")?["ref"])
+            _ = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "one")])
+            let back = await client.call("go_back", ["tab": .string(tab), "wait": "load"])
+            #expect(!back.isError, "\(back.message)")
+            // WebKit's cache brought the page back as it was, without running document-start scripts.
+            let restored = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(!restored.isError, "\(restored.message)")
+            #expect(node(restored, role: "button", name: "Same")?["ref"] == same, "\(text(restored.content))")
+            #expect(node(restored, role: "button", name: "Other") != nil)
+            #expect(await client.call("element_info", ["tab": .string(tab), "ref": same])["visible"] == true)
+        }
+    }
+
+    @Test func invisibleChallengeFramesLeaveThePageAlone() async throws {
+        try await withAgent { client, base in
+            let healthy = try await open(client, base, "/widgets")
+            let state = { (id: String) in client.tab(id).flatMap { client.hub.agentTab(for: $0) } }
+            for tool in ["read_text", "links", "forms"] {
+                let read = await client.call(tool, ["tab": .string(healthy)])
+                #expect(!read.isError, "\(tool): \(read.message)")
+            }
+            #expect(await client.call("snapshot", ["tab": .string(healthy), "format": "json"])["challenge"] == nil)
+            #expect(state(healthy)?.challenge == nil)
+
+            let signIn = try await open(client, base, "/turnstile")
+            #expect(!(await client.call("read_text", ["tab": .string(signIn)])).isError)
+            #expect(state(signIn)?.challenge == AgentChallenge(kind: "turnstile", page: false))
+            let shop = try await open(client, base, "/datadome")
+            #expect(await client.call("read_text", ["tab": .string(shop)]).code == "challenge_requires_user")
+        }
+    }
+
+    @Test func tableRowsAndLinksReadOnlyVisibleText() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/table")
+            let markdown = await client.call("read_text", ["tab": .string(tab), "format": "markdown", "main": false])
+            #expect(!markdown.isError, "\(markdown.message)")
+            #expect(markdown["text"]?.string == "| Story one | 12 points |\n| Story two | 3 points |\nSee [the docs](\(base.absoluteString)one) .")
+            let plain = await client.call("read_text", ["tab": .string(tab), "main": false])
+            #expect(plain["text"]?.string == "Story one | 12 points\nStory two | 3 points\nSee the docs.")
+            #expect(await client.call("find_text", ["tab": .string(tab), "text": "IGNORE"])["count"] == 0)
+        }
+    }
+
+    @Test func valuesSetByPageScriptsShowInDiffs() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/controls")
+            let first = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            let refs = try ["textbox", "checkbox", "combobox"].map { role in try #require(nodes(first).first { $0["role"] == .string(role) }?["ref"]?.string) }
+            // Setting properties fires no event and changes no attribute.
+            _ = try await client.tab(tab)?.webView.callAsyncJavaScript("""
+                document.getElementById('name').value = 'two';
+                document.getElementById('agree').checked = true;
+                document.getElementById('pick').selectedIndex = 1;
+                """, contentWorld: .page)
+            let diff = await client.call("snapshot", ["tab": .string(tab), "since": 1, "format": "json"])
+            #expect(diff["seq"] == 2)
+            #expect(Set(items(diff["changed"]).compactMap { $0["ref"]?.string }) == Set(refs), "\(text(diff.content))")
+            let changed = text(diff["changed"])
+            #expect(changed.contains("\"two\"") && changed.contains("\"checked\"") && changed.contains("\"B\""))
+        }
+    }
+
+    @Test func longPagesComeWholeInThePDF() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/long")
+            let pdf = await client.call("pdf", ["tab": .string(tab)])
+            #expect(!pdf.isError, "\(pdf.message)")
+            #expect(pdf["maskedRegions"] == 1)
+            let resource = try #require(pdf.result?["content"].flatMap { if case .array(let items) = $0 { items.last?["resource"] } else { nil } })
+            let data = try #require(resource["blob"]?.string.flatMap { Data(base64Encoded: $0) })
+            let document = try #require(CGDataProvider(data: data as CFData).flatMap(CGPDFDocument.init))
+            let pages = (1...max(1, document.numberOfPages)).compactMap { document.page(at: $0) }
+            // 12000 CSS pixels in pages of at most 2048: six, the whole page, at its own proportions.
+            #expect(pages.count == 6)
+            #expect(pdf["pages"] == 6)
+            let points = try #require(pages.first).getBoxRect(.mediaBox).width / 1280
+            #expect(abs(pages.map { $0.getBoxRect(.mediaBox).height }.reduce(0, +) - 12000 * points) < 2)
+            guard pages.count == 6 else { return }
+            let fifth = try #require(Self.picture(pages[4]))
+            #expect(Self.near(Self.color(fifth, x: 200 * points, y: (10050 - 4 * 2048) * points), [128, 128, 128]))
+            let last = try #require(Self.picture(pages[5]))
+            #expect(Self.near(Self.color(last, x: 200 * points, y: (11950 - 5 * 2048) * points), [255, 0, 0]))
+        }
+    }
+
+    private static func number(_ value: JSONValue?) -> Double {
+        switch value {
+        case .double(let number): number
+        case .int(let number): Double(number)
+        default: 0
+        }
+    }
+
+    /// A PDF page drawn at one pixel per point.
+    private static func picture(_ page: CGPDFPage) -> CGImage? {
+        let box = page.getBoxRect(.mediaBox)
+        guard let context = CGContext(data: nil, width: Int(box.width), height: Int(box.height), bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.drawPDFPage(page)
+        return context.makeImage()
     }
 
     private static func image(_ result: AgentTabsTests.ToolResult) -> CGImage? {

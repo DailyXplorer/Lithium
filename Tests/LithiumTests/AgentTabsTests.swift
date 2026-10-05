@@ -29,14 +29,31 @@ struct AgentURLsTests {
         #expect(AgentURLs.redacted(["tab": "t1", "url": "https://x.com/?session=s3cret"]) == ["tab": "t1", "url": "https://x.com/?session=[redacted]"])
     }
 
-    @Test func matchesGlobsAndRegexes() throws {
-        let glob = try AgentURLs.matcher(for: "https://example.com/done*")
+    @Test func matchesGlobsOnly() throws {
+        let glob = try #require(AgentURLs.matcher(for: "https://example.com/done*"))
         #expect(glob("https://example.com/done?id=1"))
         #expect(!glob("https://example.com/pending"))
-        #expect(try AgentURLs.matcher(for: "https://ex?mple.com/")("https://example.com/"))
-        let regex = try AgentURLs.matcher(for: "/order/[0-9]+$/")
-        #expect(regex("https://shop.example/order/42"))
-        #expect(!regex("https://shop.example/order/42/edit"))
+        let one = try #require(AgentURLs.matcher(for: "https://ex?mple.com/"))
+        #expect(one("https://example.com/"))
+        #expect(!one("https://exmple.com/"))
+        let two = try #require(AgentURLs.matcher(for: "*/order/*/edit"))
+        #expect(two("https://shop.example/order/42/edit"))
+        #expect(!two("https://shop.example/order/42/edit/x"))
+        let literal = try #require(AgentURLs.matcher(for: "a.b[1]"))
+        #expect(literal("a.b[1]"))
+        #expect(!literal("axb1"))
+        #expect(AgentURLs.matcher(for: "/order/[0-9]+$/") == nil)
+        #expect(AgentURLs.matcher(for: "/") != nil)
+    }
+
+    @Test func aPathologicalGlobStaysFast() throws {
+        let matches = try #require(AgentURLs.matcher(for: "*a*a*a*a*a*a*a*b"))
+        let url = "https://example.com/" + String(repeating: "a", count: 2_000)
+        let started = ContinuousClock.now
+        let matched = matches(url)
+        let elapsed = ContinuousClock.now - started
+        #expect(!matched)
+        #expect(elapsed < .milliseconds(50))
     }
 
     @Test func tellsAnchorsFromOtherDocuments() {
@@ -464,6 +481,34 @@ struct AgentTabsTests {
         }
     }
 
+    @Test func waitForRejectsRegexes() async throws {
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
+            let waited = await client.call("wait_for", ["tab": .string(id), "url": "/^(a+)+$/", "timeoutMs": 500])
+            #expect(waited.code == "invalid_params", "\(waited.content)")
+            #expect(waited.message.contains("glob"))
+        }
+    }
+
+    /// Lithium putting the tab to sleep mid-wait fails the wait, and the wait doesn't hand the
+    /// sleeping tab a new, empty page.
+    @Test(.timeLimit(.minutes(1))) func sleepingDuringDomContentLoadedLeavesNoPage() async throws {
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open"))["tab"]?.string)
+            let named = try #require(client.tab(id))
+            #expect(!(await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "busy").absoluteString), "wait": "commit"])).isError)
+            let waiting = Task { await client.call("wait_for", ["tab": .string(id), "load": "domcontentloaded", "timeoutMs": 20_000]) }
+            try await Task.sleep(for: .milliseconds(300))
+            named.sleep(configuration: client.browser.makeConfiguration())
+            let waited = await waiting.value
+            #expect(waited.code == "navigation_failed", "\(waited.content)")
+            #expect(waited.message.contains("went to sleep"))
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(named.isAsleep)
+            #expect(named.loadedWebView == nil)
+        }
+    }
+
     /// A page whose script keeps it busy can't answer whether its document is ready; the
     /// deadline and Stop end the wait all the same.
     @Test(.timeLimit(.minutes(1))) func aBusyPageDoesntHoldUpDomContentLoaded() async throws {
@@ -540,7 +585,7 @@ struct AgentTabsTests {
             let load = await client.call("wait_for", ["tab": tab, "load": "load"])
             #expect(load["met"] == true)
             #expect(load["title"] == "Two")
-            #expect((await client.call("wait_for", ["tab": tab, "url": "/\\/tw[o]$/"]))["met"] == true)
+            #expect((await client.call("wait_for", ["tab": tab, "url": "http://127.0.0.1:*/tw?"]))["met"] == true)
 
             let timeout = await client.call("wait_for", ["tab": tab, "url": "*/never", "timeoutMs": 300])
             #expect(timeout.code == "timeout")

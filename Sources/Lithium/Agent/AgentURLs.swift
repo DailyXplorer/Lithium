@@ -96,21 +96,34 @@ enum AgentURLs {
         }
     }
 
-    /// `wait_for`'s URL condition: `/regex/`, or a glob where `*` is any run of characters and
-    /// `?` one character, matched against the whole address.
-    static func matcher(for pattern: String) throws -> (String) -> Bool {
-        if pattern.count > 2, pattern.hasPrefix("/"), pattern.hasSuffix("/") {
-            let regex = try NSRegularExpression(pattern: String(pattern.dropFirst().dropLast()))
-            return { regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
-        }
-        let body = pattern.map { character -> String in
-            switch character {
-            case "*": ".*"
-            case "?": "."
-            default: NSRegularExpression.escapedPattern(for: String(character))
+    /// `wait_for`'s URL condition: a glob where `*` is any run of characters and `?` one
+    /// character, matched against the whole address. Nil for a `/regex/`: one can backtrack for
+    /// minutes on the main thread, where nothing can interrupt it.
+    static func matcher(for pattern: String) -> ((String) -> Bool)? {
+        if pattern.count > 2, pattern.hasPrefix("/"), pattern.hasSuffix("/") { return nil }
+        let pattern = Array(pattern)
+        return { globMatches(pattern, Array($0)) }
+    }
+
+    /// Two pointers that go back only to the last `*`: at most pattern × text steps.
+    private static func globMatches(_ pattern: [Character], _ text: [Character]) -> Bool {
+        var (p, t) = (0, 0)
+        var lastStar: (pattern: Int, text: Int)?
+        while t < text.count {
+            if p < pattern.count, pattern[p] == "*" {
+                lastStar = (p, t)
+                p += 1
+            } else if p < pattern.count, pattern[p] == "?" || pattern[p] == text[t] {
+                p += 1
+                t += 1
+            } else if let star = lastStar {
+                lastStar = (star.pattern, star.text + 1)
+                (p, t) = (star.pattern + 1, star.text + 1)
+            } else {
+                return false
             }
-        }.joined()
-        let regex = try NSRegularExpression(pattern: "^\(body)$")
-        return { regex.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+        }
+        while p < pattern.count, pattern[p] == "*" { p += 1 }
+        return p == pattern.count
     }
 }

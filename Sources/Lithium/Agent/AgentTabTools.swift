@@ -315,11 +315,11 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load) or its address matches url (a glob such as https://example.com/done* or a /regex/). Give exactly one of load and url. A sleeping tab wakes, which loads its page.",
+        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load) or its address matches url (a glob such as https://example.com/done*). Give exactly one of load and url. A sleeping tab wakes, which loads its page.",
         inputSchema: schema([
             "tab": tabParam,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
-            "url": ["type": "string", "description": "A glob (* any characters, ? one) matched against the whole address, or /regex/."],
+            "url": ["type": "string", "description": "A glob (* any characters, ? one) matched against the whole address. Regular expressions aren’t supported."],
             "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 10000 by default."],
         ], required: ["tab"])
     ) { arguments, _, hub in
@@ -333,14 +333,18 @@ extension AgentHub {
         let load = try arguments.optionalString("load")
         let pattern = try arguments.optionalString("url")
         guard (load == nil) != (pattern == nil) else { throw Arguments.invalid("Give exactly one condition: load or url.") }
+        let matches = try pattern.map { pattern in
+            guard let matches = AgentURLs.matcher(for: pattern) else {
+                throw Arguments.invalid("url is a glob (* any characters, ? one character); /regex/ patterns aren’t supported.")
+            }
+            return matches
+        }
         let started = ContinuousClock.now
         let deadline = started + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
             try hub.checkWakeable(named)
-            if let pattern {
-                let matches: (String) -> Bool
-                do { matches = try AgentURLs.matcher(for: pattern) } catch { throw Arguments.invalid("url is not a valid pattern: \(error.localizedDescription)") }
+            if let pattern, let matches {
                 tab.wake()
                 let met = try await hub.watch(named, until: deadline) { matches(tab.url?.absoluteString ?? "") ? true : nil }
                 guard met != nil else {
@@ -465,6 +469,7 @@ extension AgentHub {
                     guard try await watch(named, until: deadline, { try failed(); return tab.isAwaitingCommit ? nil : true }) != nil else { break }
                     continue
                 }
+                try failed()
                 let answer = PageAnswer()
                 Task { answer.ready = await documentIsReady(tab, within: deadline - .now) }
                 let ready = try await watch(named, until: deadline) { () -> Bool? in
@@ -485,8 +490,10 @@ extension AgentHub {
         guard loaded != nil else { throw timedOut(named, after: timeout, "the page was still loading") }
     }
 
-    /// Asked in a content world of Lithium's own, which the page can't see or touch.
+    /// Asked in a content world of Lithium's own, which the page can't see or touch. A tab
+    /// without a page isn't given an empty one to ask.
     private func documentIsReady(_ tab: Tab, within limit: Duration) async -> Bool {
+        guard !tab.isAsleep, let webView = tab.loadedWebView else { return false }
         let milliseconds = max(1, Int(limit / .milliseconds(1)))
         let script = """
             if (document.readyState === 'loading') {
@@ -494,7 +501,7 @@ extension AgentHub {
             }
             return document.readyState !== 'loading';
             """
-        let ready = try? await tab.webView.callAsyncJavaScript(script, contentWorld: Self.agentWorld) as? Bool
+        let ready = try? await webView.callAsyncJavaScript(script, contentWorld: Self.agentWorld) as? Bool
         return ready == true
     }
 

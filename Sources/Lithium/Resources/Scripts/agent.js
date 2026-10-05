@@ -4,6 +4,8 @@
 // fields never leave this script; hidden text (display, visibility, opacity, aria-hidden,
 // clipped, under 6 px) is left out, as it is a common carrier of prompt injection.
 (() => {
+  // Installed already: a second copy would number the document's elements again from 1.
+  if (globalThis.lithiumAgent) return;
   const frame = globalThis.lithiumAgentFrame ?? (() => {
     // A frame open before agent access was turned on has no bootstrap.
     const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -479,8 +481,9 @@
   };
 
   // Masks for screenshots: fields that were ever passwords, card fields, and extension UI, in
-  // this frame's viewport, plus where its frames sit so their own masks can be placed.
-  const masks = () => {
+  // this frame's viewport, plus where its frames sit so their own masks can be placed. With
+  // `element` in this document (`of`), that element's box too, read with the masks.
+  const masks = ({ element: id, of }) => {
     const rects = [];
     const frames = [];
     const indexes = frameIndexes();
@@ -505,7 +508,8 @@
     if (claimed.size < window.length) {
       for (const element of embeds) frames.push(frameFacts(element, getComputedStyle(element), indexes));
     }
-    return { token: frame.token, path: framePath(), viewport: viewport(), rects, frames };
+    const element = of === frame.token ? elementOf(id) : null;
+    return { token: frame.token, path: framePath(), viewport: viewport(), rects, frames, box: element ? round(element.getBoundingClientRect()) : undefined };
   };
 
   // Readable text, as lines, each with the block it came from: read_text, find_text, waits.
@@ -673,8 +677,10 @@
         for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
           count++;
           if (matches.length < limit) {
-            const start = Math.max(0, at - Math.floor((80 - needle.length) / 2));
-            matches.push({ id: idOf(line.element), context: line.text.slice(start, start + Math.max(80, needle.length)) });
+            // About 80 characters around the match, and the whole match with 10 on each side when it is longer.
+            const around = Math.max(10, Math.floor((80 - needle.length) / 2));
+            const start = Math.max(0, at - around);
+            matches.push({ id: idOf(line.element), context: line.text.slice(start, Math.max(start + 80, at + needle.length + around)) });
           }
         }
       }

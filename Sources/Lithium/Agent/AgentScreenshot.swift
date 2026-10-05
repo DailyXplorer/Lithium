@@ -9,6 +9,8 @@ struct MaskReport: Decodable {
     let viewport: PageViewport
     let rects: [[Double]]
     let frames: [FrameReport.Frame]
+    /// The box of the element the layout was read for, from the frame it is in.
+    var box: [Double]?
 }
 
 /// Where every frame of a page sits in the top-level viewport, from the frames' `masks` answers.
@@ -95,6 +97,11 @@ struct FrameLayout {
         if token == main.token { return Placement() }
         guard let path = children.values.first(where: { $0.token == token })?.path else { return nil }
         return placement(of: path)
+    }
+
+    /// The box, in its own frame's viewport, of the element this layout was read for; nil once it is gone.
+    func box(of element: ElementAddress) -> [Double]? {
+        reports.first { $0.token == element.document }?.box
     }
 
     /// Every rect to mask, in top-level viewport CSS pixels: the sensitive fields of the frames

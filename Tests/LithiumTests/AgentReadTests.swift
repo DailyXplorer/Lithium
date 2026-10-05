@@ -1179,15 +1179,137 @@ struct AgentReadTests {
             let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
             var refs: [String] = []
             for page in 1...9 {
-                state.mainFrameAnswered("p\(page)")
+                #expect(state.mainFrameAnswered("p\(page)", asked: state.hellos))
                 refs.append(state.ref(for: ElementAddress(document: "p\(page)", id: 1)))
             }
-            state.mainFrameAnswered("p8")
+            #expect(state.mainFrameAnswered("p8", asked: state.hellos))
             #expect(state.address(of: refs[7]) == ElementAddress(document: "p8", id: 1))
-            state.mainFrameAnswered("p7")
+            #expect(state.mainFrameAnswered("p7", asked: state.hellos))
             #expect(state.address(of: refs[6]) == ElementAddress(document: "p7", id: 1))
-            state.mainFrameAnswered("p1")
+            #expect(state.mainFrameAnswered("p1", asked: state.hellos))
             #expect(state.address(of: refs[0]) == nil)
+        }
+    }
+
+    /// Two reads finding no agent.js in a frame at once: it goes in once, and the document's
+    /// elements keep their numbers.
+    @Test func agentJSGoesIntoAFrameOnce() async throws {
+        try await withAgent { client, base in
+            let webView = try #require(client.tab(try await open(client, base, "/article"))?.webView)
+            // The same document, as agent.js never went into it.
+            _ = try await webView.callAsyncJavaScript("delete globalThis.lithiumAgent", contentWorld: PageProbe.world)
+            let find = { (text: String) async throws -> Int? in
+                let data = try await PageProbe.run("find", ["text": text, "caseSensitive": false, "limit": 1], in: .main, of: webView)
+                return try PageProbe.decode(FindReport.self, from: data).matches.first?.id
+            }
+            let installs = PageProbe.installs
+            let news = Task { try await find("big news") }
+            let point = Task { try await find("another point") }
+            let (first, second) = (try await news.value, try await point.value)
+            #expect(PageProbe.installs == installs + 1)
+            #expect(first != nil && second != nil && first != second, "\(String(describing: first)) and \(String(describing: second))")
+            #expect(try await find("big news") == first)
+            #expect(try await find("another point") == second)
+            // agent.js going in again, however it comes, keeps the copy already there.
+            let source = try String(contentsOf: try #require(Resources.bundle.url(forResource: "agent", withExtension: "js")), encoding: .utf8)
+            _ = try await webView.callAsyncJavaScript(source, contentWorld: PageProbe.world)
+            #expect(try await find("another point") == second)
+            #expect(try await find("big news") == first)
+        }
+    }
+
+    /// The main frame's answer from the page it left, coming after the next page said hello,
+    /// leaves the next page and its frames where they are.
+    @Test func aLateAnswerOfThePageLeftDoesntBringItBack() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let state = try #require(client.hub.agentTab(for: try client.hub.tab(named: tab).tab))
+            #expect(await waitUntil(10) { state.frames.count >= 2 })
+            #expect(!(await client.call("snapshot", ["tab": .string(tab)])).isError)
+            let left = try #require(state.mainDocument)
+            let asked = state.hellos
+            let navigated = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "frames"), "diff": false])
+            #expect(!navigated.isError, "\(navigated.message)")
+            #expect(await waitUntil(10) { state.mainDocument != left && state.frames.count >= 2 })
+            let (shown, frames) = (state.mainDocument, Set(state.frames.keys))
+            #expect(!state.mainFrameAnswered(left, asked: asked))
+            #expect(state.mainDocument == shown)
+            #expect(Set(state.frames.keys) == frames)
+        }
+    }
+
+    /// An element's box is read with the masks: a picture taken again after the page scrolled
+    /// crops the element where it is in that picture.
+    @Test func anElementsBoxComesWithItsMasks() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/geometry")
+            let named = try client.hub.tab(named: tab)
+            let state = try #require(client.hub.agentTab(for: named.tab))
+            let webView = try #require(client.tab(tab)?.webView)
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            let address = try #require(node(snapshot, role: "button", name: "Red")?["ref"]?.string.flatMap(state.address(of:)))
+            let deadline = ContinuousClock.now + AgentHub.readTimeout
+            let first = try await client.hub.layout(of: named, webView, until: deadline, placing: address)
+            #expect(first.box(of: address) == [100, 50, 100, 100])
+            var takes = 0
+            let picture = try await client.hub.masked(named, webView, from: first, placing: address, until: deadline) {
+                takes += 1
+                if takes == 1 { _ = try await webView.callAsyncJavaScript("scrollTo(0, 30)", contentWorld: .page) }
+            }
+            #expect(takes == 2)
+            #expect(picture.layout.box(of: address) == [100, 20, 100, 100])
+        }
+    }
+
+    /// What a frame too slow this time showed stays in the snapshot the next one is compared with:
+    /// when it answers again, nothing is added and `seq` stays.
+    @Test func framesTooSlowStayInTheBaseline() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+            let frame = SnapshotNode(ref: "f1", role: "frame", box: [0, 0, 300, 200])
+            let page = { (nodes: [SnapshotNode], unread: Set<String>) in
+                PageSnapshot(tab: "t1", url: "https://a.example/", title: "A", seq: 0, viewport: viewport, zoom: 1, focused: nil, challenge: nil, dropped: 0, nodes: nodes, unread: unread)
+            }
+            let all = [
+                frame,
+                SnapshotNode(ref: "f1:e2", role: "button", name: "In frame", box: [10, 10, 80, 30], frame: "f1"),
+                SnapshotNode(ref: "f2", role: "frame", box: [100, 100, 100, 50], frame: "f1"),
+                SnapshotNode(ref: "f2:e3", role: "button", name: "Nested", box: [110, 110, 50, 20], frame: "f2"),
+                SnapshotNode(ref: "e4", role: "button", name: "Stays", box: [400, 0, 50, 20]),
+            ]
+            var read = page(all, [])
+            _ = state.record(&read, session: "s")
+            var late = page([frame, all[4]], ["f1"])
+            let before = try #require(state.record(&late, session: "s"))
+            #expect(late.diff(since: before)["text"]?.string?.hasSuffix("no changes") == true)
+            #expect(late.seq == read.seq)
+            var again = page(all, [])
+            let baseline = try #require(state.record(&again, session: "s"))
+            #expect(again.diff(since: baseline)["text"]?.string?.hasSuffix("no changes") == true, "\(again.diff(since: baseline))")
+            #expect(again.seq == read.seq)
+        }
+    }
+
+    /// Text made only of spaces and line breaks is no text to wait for or find.
+    @Test func blankTextIsInvalid() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            for text in ["\n", " \n\t "] {
+                #expect(await client.call("wait_for", ["tab": .string(tab), "text": .string(text), "timeoutMs": 500]).code == "invalid_params")
+                #expect(await client.call("find_text", ["tab": .string(tab), "text": .string(text)]).code == "invalid_params")
+            }
+        }
+    }
+
+    /// A match longer than the 80 characters of context comes whole, with what is around it.
+    @Test func findTextKeepsLongMatchesWhole() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/many")
+            let needle = String(String(repeating: "needle ", count: 20).dropFirst(3).prefix(100))
+            let found = await client.call("find_text", ["tab": .string(tab), "text": .string(needle)])
+            let context = try #require(items(found["matches"]).first?["context"]?.string)
+            #expect(context.contains(needle), "\(context)")
         }
     }
 

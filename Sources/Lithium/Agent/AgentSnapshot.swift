@@ -139,7 +139,7 @@ struct PageSnapshot {
     let challenge: AgentChallenge?
     /// Nodes left out over the cap, nearest the viewport kept.
     let dropped: Int
-    let nodes: [SnapshotNode]
+    var nodes: [SnapshotNode]
     /// The main frame's document: a diff from a snapshot of another one (a reload, the next
     /// page) would remove and add every node, so the whole snapshot is given instead.
     var document = ""
@@ -205,15 +205,7 @@ struct PageSnapshot {
             }
             if !old.hasSameContent(as: node) { changed.append(node) }
         }
-        let parents = Dictionary(earlier.nodes.filter { $0.role == "frame" }.map { ($0.ref, $0.frame) }) { first, _ in first }
-        let inUnreadFrame = { (node: SnapshotNode) -> Bool in
-            var frame = node.frame
-            while let ref = frame {
-                if unread.contains(ref) { return true }
-                frame = parents[ref] ?? nil
-            }
-            return false
-        }
+        let inUnreadFrame = earlier.inside(unread)
         let removed = earlier.nodes.filter { !now.contains($0.ref) && !inUnreadFrame($0) }.map(\.ref)
         var fields = head
         fields["since"] = .int(earlier.seq)
@@ -227,6 +219,30 @@ struct PageSnapshot {
         if lines.count == 1 { lines.append("no changes") }
         fields["text"] = .string(lines.joined(separator: "\n"))
         return .object(fields)
+    }
+
+    /// Whether a node of this snapshot is inside one of `frames`, at any depth.
+    private func inside(_ frames: Set<String>) -> (SnapshotNode) -> Bool {
+        let parents = Dictionary(nodes.filter { $0.role == "frame" }.map { ($0.ref, $0.frame) }) { first, _ in first }
+        return { node in
+            var frame = node.frame
+            while let ref = frame {
+                if frames.contains(ref) { return true }
+                frame = parents[ref] ?? nil
+            }
+            return false
+        }
+    }
+
+    /// This snapshot with what `earlier` showed in the frames that didn't answer this time, each
+    /// after its frame, as the diff left it: the baseline the next snapshot compares with.
+    func keepingUnread(from earlier: PageSnapshot) -> PageSnapshot {
+        guard !unread.isEmpty, earlier.document == document else { return self }
+        var kept = self
+        kept.nodes = nodes.flatMap { node in
+            unread.contains(node.ref) ? [node] + earlier.nodes.filter(earlier.inside([node.ref])) : [node]
+        }
+        return kept
     }
 }
 
@@ -326,17 +342,20 @@ extension AgentTab {
 
     /// Numbers the snapshot for the session: the same number as its last snapshot in the same view
     /// when nothing but boxes changed, the next number otherwise. Returns that last snapshot, the
-    /// only one a diff may compare with: a view of another scope or size shows other nodes.
+    /// only one a diff may compare with: a view of another scope or size shows other nodes. What a
+    /// frame too slow this time showed before stays in the one kept for the next diff.
     func record(_ snapshot: inout PageSnapshot, session: String) -> PageSnapshot? {
         let key = "\(session) \(snapshot.view)"
         let previous = snapshots[key]
-        if let previous, snapshot.hasSameContent(as: previous) {
+        var baseline = previous.map(snapshot.keepingUnread) ?? snapshot
+        if let previous, baseline.hasSameContent(as: previous) {
             snapshot.seq = previous.seq
         } else {
             snapshot.seq = seqs[session, default: 0] + 1
             seqs[session] = snapshot.seq
         }
-        snapshots[key] = snapshot
+        baseline.seq = snapshot.seq
+        snapshots[key] = baseline
         if shown.count > 20_000 { shown = [:] }
         for node in snapshot.nodes { shown[node.ref] = node }
         return previous

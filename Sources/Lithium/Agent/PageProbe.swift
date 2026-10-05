@@ -31,16 +31,40 @@ enum PageProbe {
         const agent = globalThis.lithiumAgent;
         return agent ? await agent.run(operation, args) : null;
         """
-    private static let install = source + "\nreturn await globalThis.lithiumAgent.run(operation, args);"
 
     struct Failure: Error {}
 
-    /// The JSON `agent.js` answered with. Throws when the frame is gone or the script failed.
+    /// A frame of a web view: the main frame, or the `WKFrameInfo` its `AgentTab` holds.
+    private struct FrameKey: Hashable {
+        let webView: ObjectIdentifier
+        let frame: ObjectIdentifier?
+    }
+
+    /// The calls waiting for the install going on in each frame.
+    private static var installing: [FrameKey: [CheckedContinuation<Void, Never>]] = [:]
+    /// How many times `agent.js` went into a frame.
+    private(set) static var installs = 0
+
+    /// The JSON `agent.js` answered with. Throws when the frame is gone or the script failed. A
+    /// call that finds no `agent.js` while another call installs it waits for that install.
     static func run(_ operation: String, _ arguments: [String: Any], in target: FrameTarget, of webView: WKWebView) async throws -> Data {
         let parameters: [String: Any] = ["operation": operation, "args": arguments]
+        let key = FrameKey(webView: ObjectIdentifier(webView), frame: target.info.map(ObjectIdentifier.init))
         var answer = try await webView.callAsyncJavaScript(call, arguments: parameters, in: target.info, contentWorld: world)
         if answer == nil || answer is NSNull {
-            answer = try await webView.callAsyncJavaScript(install, arguments: parameters, in: target.info, contentWorld: world)
+            if installing[key] != nil {
+                await withCheckedContinuation { waiter in
+                    if installing[key] != nil { installing[key]?.append(waiter) } else { waiter.resume() }
+                }
+            } else {
+                // Only the install, which answers at once: an operation can wait in the page for
+                // long, and one in a document that went away never answers.
+                installing[key] = []
+                installs += 1
+                defer { installing.removeValue(forKey: key)?.forEach { $0.resume() } }
+                _ = try await webView.callAsyncJavaScript(source, in: target.info, contentWorld: world)
+            }
+            answer = try await webView.callAsyncJavaScript(call, arguments: parameters, in: target.info, contentWorld: world)
         }
         guard let json = answer as? String else { throw Failure() }
         return Data(json.utf8)

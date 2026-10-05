@@ -62,6 +62,7 @@ final class AgentTab {
     func hello(token: String, frame: WKFrameInfo) {
         if frame.isMainFrame {
             guard token != mainDocument else { return }
+            hellos += 1
             reports = [:]
             shown = [:]
             // The user may have passed the check: the next read says if the new page is one.
@@ -72,12 +73,19 @@ final class AgentTab {
         }
     }
 
-    /// The main frame answered with its document token: a page without the bootstrap (open before
-    /// access was on) makes its own.
-    func mainFrameAnswered(_ token: String) {
-        guard mainDocument != token else { return }
+    /// How many main documents said hello: a main frame asked before the last one answered from
+    /// the document before it.
+    @ObservationIgnored private(set) var hellos = 0
+
+    /// The main frame, asked when `hellos` was `asked`, answered with its document token: a page
+    /// without the bootstrap (open before access was on) makes its own. False when a main document
+    /// said hello since and the answer came from another one: a late answer of the page left.
+    func mainFrameAnswered(_ token: String, asked: Int) -> Bool {
+        guard mainDocument != token else { return true }
+        guard asked == hellos else { return false }
         reports = [:]
         if mainDocument == nil { mainDocument = token } else { switchPage(to: token) }
+        return true
     }
 
     /// The frames and refs of the pages left, by main document: a restored page's frames say hello

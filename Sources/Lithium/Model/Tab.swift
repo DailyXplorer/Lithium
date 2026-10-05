@@ -724,6 +724,14 @@ extension Tab: WKNavigationDelegate {
         if type == 0 || type == 3 { sameDocumentNavigations += 1 }
     }
 
+    /// Private WebKit (`WKNavigationDelegatePrivate`): the page menu's Download Image, Download
+    /// Linked File and Download Video. Without it WebKit drops the download before it starts.
+    /// Like Safari's Save Image As…, it asks where to save.
+    @objc(_webView:contextMenuDidCreateDownload:)
+    func webView(_ webView: WKWebView, contextMenuDidCreateDownload download: WKDownload) {
+        Downloads.shared.track(download, askingWhere: true)
+    }
+
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
         isAwaitingCommit = false

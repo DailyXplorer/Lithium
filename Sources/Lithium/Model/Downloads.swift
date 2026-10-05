@@ -67,7 +67,8 @@ final class DownloadItem: Identifiable {
     }
 }
 
-/// Every download of the session, newest first. Files land in ~/Downloads.
+/// Every download of the session, newest first. Files land in ~/Downloads, or where the user
+/// picks for a download from the page menu.
 @MainActor
 @Observable
 final class Downloads: NSObject, WKDownloadDelegate {
@@ -80,6 +81,11 @@ final class Downloads: NSObject, WKDownloadDelegate {
     @ObservationIgnored private var byDownload: [ObjectIdentifier: DownloadItem] = [:]
     /// Names taken by files still being written, which don't exist on disk yet.
     @ObservationIgnored private var reserved: Set<URL> = []
+    /// Downloads that ask where to save before they start.
+    @ObservationIgnored private var askingWhere: Set<ObjectIdentifier> = []
+    /// Asks where to save, starting from the name and folder given; nil when the user cancels.
+    /// Tests replace it, so no panel shows.
+    @ObservationIgnored var chooseDestination: @MainActor (URL, NSWindow?) async -> URL? = Downloads.savePanel(suggesting:in:)
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
@@ -91,10 +97,11 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return Double(running.reduce(Int64(0)) { $0 + $1.completedBytes }) / Double(total)
     }
 
-    func track(_ download: WKDownload) {
+    func track(_ download: WKDownload, askingWhere: Bool = false) {
         download.delegate = self
         let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download")
         byDownload[ObjectIdentifier(download)] = item
+        if askingWhere { self.askingWhere.insert(ObjectIdentifier(download)) }
         items.insert(item, at: 0)
     }
 
@@ -126,9 +133,27 @@ final class Downloads: NSObject, WKDownloadDelegate {
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
-        let destination = destination(for: suggestedFilename)
-        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
+        let id = ObjectIdentifier(download)
+        var destination = destination(for: suggestedFilename)
+        if askingWhere.remove(id) != nil {
+            guard let chosen = await chooseDestination(destination, download.webView?.window) else {
+                if let item = byDownload.removeValue(forKey: id) { items.removeAll { $0 === item } }
+                return nil
+            }
+            // The panel already asked whether to replace a file of that name; WebKit won't write over it.
+            try? FileManager.default.removeItem(at: chosen)
+            destination = chosen
+        }
+        byDownload[id]?.setDestination(destination)
         return destination
+    }
+
+    private static func savePanel(suggesting destination: URL, in window: NSWindow?) async -> URL? {
+        let panel = NSSavePanel()
+        panel.directoryURL = destination.deletingLastPathComponent()
+        panel.nameFieldStringValue = destination.lastPathComponent
+        let response = if let window { await panel.beginSheetModal(for: window) } else { await panel.begin() }
+        return response == .OK ? panel.url : nil
     }
 
     /// In ~/Downloads, numbered when the name is taken.

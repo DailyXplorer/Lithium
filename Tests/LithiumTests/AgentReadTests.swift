@@ -179,6 +179,9 @@ struct AgentReadTests {
         "/child?new": (Self.html, """
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">New</button>
             """),
+        "/nested": (Self.html, "<title>Nested</title><iframe src=\"/nested-middle\" style=\"width:400px;height:300px\"></iframe>"),
+        "/nested-middle": (Self.html, "<iframe src=\"/nested-inner\" style=\"width:300px;height:200px\"></iframe>"),
+        "/nested-inner": (Self.html, "<button>Deep</button>"),
         "/focus": (Self.html, """
             <title>Focus</title><input id="search" aria-label="Search"><iframe id="inner" src="/focus-child"></iframe>
             """),
@@ -1290,6 +1293,42 @@ struct AgentReadTests {
             #expect(took < .seconds(4))
 
             (result, took) = try await waiting(other, "hidden", "document.getElementById('other').remove()")
+            #expect(!result.isError, "\(result.message)")
+            #expect(took < .seconds(4))
+        }
+    }
+
+    /// The page navigating ends a wait on an element of a frame inside a frame, whose document
+    /// and parent's are both gone and never answer.
+    @Test func waitsOnANestedFramesElementEndWithThePage() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/nested")
+            let webView = try #require(client.tab(tab)?.webView)
+            let deep = { () async throws -> JSONValue in
+                var json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+                for _ in 0..<100 where node(json, role: "button", name: "Deep") == nil {
+                    try await Task.sleep(for: .milliseconds(50))
+                    json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+                }
+                return try #require(node(json, role: "button", name: "Deep")?["ref"])
+            }
+            let waiting = { (ref: JSONValue, state: String) async throws -> (AgentTabsTests.ToolResult, Duration) in
+                let start = ContinuousClock.now
+                let call = Task { await client.call("wait_for", ["tab": .string(tab), "ref": ref, "state": .string(state), "timeoutMs": 8000]) }
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await webView.callAsyncJavaScript("location.href = '/nested'", contentWorld: .page)
+                return (await call.value, ContinuousClock.now - start)
+            }
+            var ref = try await deep()
+            guard case .string(let name) = ref else { throw CancellationError() }
+            #expect(name.hasPrefix("f2:"), "\(name)")
+            _ = try await webView.callAsyncJavaScript("document.querySelector('iframe').contentDocument.querySelector('iframe').contentDocument.querySelector('button').style.display = 'none'", contentWorld: .page)
+            var (result, took) = try await waiting(ref, "visible")
+            #expect(result.code == "stale_ref", "\(result.message)")
+            #expect(took < .seconds(4))
+
+            ref = try await deep()
+            (result, took) = try await waiting(ref, "detached")
             #expect(!result.isError, "\(result.message)")
             #expect(took < .seconds(4))
         }

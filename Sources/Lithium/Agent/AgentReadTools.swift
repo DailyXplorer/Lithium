@@ -650,8 +650,9 @@ extension AgentHub {
                     for result in probes.compactMap(\.result) {
                         guard let report = try? result.get(), let info = try? PageProbe.decode(WaitReport.self, from: report), info.gone != true else { return gone }
                     }
-                    // The element's document was replaced: its element can't come back.
-                    return tab.commits != commits && target.info == nil ? gone : nil
+                    // The main frame's document was replaced, and every frame in it: the element
+                    // can't come back, and a nested frame's probes go to documents that never answer.
+                    return tab.commits != commits ? gone : nil
                 }
             } while met == nil && ContinuousClock.now < deadline
             if met == true { return }

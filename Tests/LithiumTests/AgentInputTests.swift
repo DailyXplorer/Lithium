@@ -62,6 +62,16 @@ struct AgentKeysTests {
         }
     }
 
+    @Test func plusAloneOrWithModifiersIsThePlusKey() throws {
+        for combo in ["+", "Meta++", "Shift+="] {
+            let parsed = try #require(NativeKey.parse(combo), "\(combo)")
+            #expect(parsed.key.code == 24, "\(combo)")
+            #expect(parsed.key.charactersIgnoringModifiers(with: parsed.modifiers.union(parsed.key.flags)) == "+", "\(combo)")
+        }
+        #expect(NativeKey.parse("+")?.modifiers == [])
+        #expect(NativeKey.parse("Meta++")?.modifiers == .command)
+    }
+
     @Test func theKeyGuardSwallowsOnlyTheAgentsEvents() throws {
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
@@ -165,6 +175,16 @@ struct AgentInputTests {
             <button id="al" onclick="alert('Saved')" style="position:absolute;left:40px;top:100px">Alert</button>
             <a id="file" href="/report.csv" style="position:absolute;left:40px;top:160px">Report</a>
             <a id="next" href="/done" style="position:absolute;left:40px;top:220px">Next</a>
+            <a id="plain" href="/form" style="position:absolute;left:40px;top:280px">Plain</a>
+            <button id="win" onclick="window.open('/form')" style="position:absolute;left:40px;top:340px">Window</button>
+            """),
+        "/login": (html, """
+            <title>Sign in</title><style>body { margin: 0 }</style>
+            <form action="/done">
+              <input id="who" aria-label="Who"><input type="password" id="secret" aria-label="Secret">
+              <label><input type="checkbox" id="remember"> Remember</label><button>Sign in</button>
+            </form>
+            \(logger)
             """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
         "/pay": (html, """
@@ -622,6 +642,37 @@ struct AgentInputTests {
         }
     }
 
+    @Test func everyTabAnAgentsClickOpensIsTheAgentsAndUnselected() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let selected = browser.selectedTabID
+            let (id, tab) = try await open(client, base.appending(path: "results"))
+            let usersTabs = browser.tabs.filter { !$0.isInAgentGroup }.count
+            let plain = try await ref(client, id, "link", "Plain")
+            let clicks: [(name: String, arguments: JSONValue)] = [
+                ("⌘-click", ["tab": .string(id), "ref": .string(plain), "modifiers": ["Meta"]]),
+                ("⌘⇧-click", ["tab": .string(id), "ref": .string(plain), "modifiers": ["Meta", "Shift"]]),
+                ("middle click", ["tab": .string(id), "ref": .string(plain), "button": "middle"]),
+                ("target=_blank", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", "Open"))]),
+                ("window.open", ["tab": .string(id), "ref": .string(try await ref(client, id, "button", "Window"))]),
+            ]
+            for (name, arguments) in clicks {
+                let clicked = await client.call("click", arguments)
+                #expect(!clicked.isError, "\(name): \(clicked.content)")
+                guard case .array(let newTabs)? = clicked["newTabs"], newTabs.count == 1, let opened = client.tab(newTabs[0]["tab"]?.string ?? "") else {
+                    Issue.record("\(name) named no new tab: \(clicked.content)")
+                    continue
+                }
+                #expect(newTabs[0]["openedBy"] == .string(id), "\(name)")
+                #expect(opened.isInAgentGroup, "\(name)")
+                #expect(await waitUntil(5) { opened.url?.path() == "/form" }, "\(name)")
+                #expect(tab.url?.path() == "/results", "\(name)")
+                #expect(browser.selectedTabID == selected, "\(name)")
+            }
+            #expect(browser.tabs.filter { !$0.isInAgentGroup }.count == usersTabs)
+        }
+    }
+
     @Test func aLoadUnderWayBeforeAClickIsNotTheClicks() async throws {
         let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
         defer { slow.cancel() }
@@ -676,6 +727,58 @@ struct AgentInputTests {
             // Nothing reached the page before the user's answer.
             #expect(try await log(tab, ["keydown", "click"]).isEmpty)
             #expect(tab.url?.path() == "/pay")
+        }
+    }
+
+    @Test func keysAskWhatTypingAndClickingAskAndCharactersAreNeverLogged() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "login"))
+            let focus = { (role: String, name: String) in
+                let focused = await client.call("focus", ["tab": .string(id), "ref": .string(try await ref(client, id, role, name))])
+                #expect(!focused.isError, "\(focused.content)")
+            }
+            try await focus("textbox", "Secret")
+            let denied = try await call(client, "press", ["tab": .string(id), "keys": "q"], answering: .deny, expecting: .password)
+            #expect(denied.code == "denied_by_user")
+            #expect(try await log(tab, ["keydown"]).isEmpty)
+            let typed = try await call(client, "press", ["tab": .string(id), "keys": "q", "repeat": 2], answering: .allowOnce, expecting: .password)
+            #expect(!typed.isError, "\(typed.content)")
+            #expect(try await page(tab, "return document.getElementById('secret').value") as? String == "qq")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Backspace"])).isError)
+
+            // The password is filled: what submits the form asks, as a click on Sign in does.
+            for (role, name, combo) in [("button", "Sign in", "Space"), ("button", "Sign in", "Enter"), ("checkbox", "Remember", "Enter")] {
+                try await focus(role, name)
+                let refused = try await call(client, "press", ["tab": .string(id), "keys": .string(combo)], answering: .deny, expecting: .password)
+                #expect(refused.code == "denied_by_user", "\(combo) on \(name): \(refused.content)")
+            }
+            #expect(try await log(tab, ["click"]).isEmpty)
+            #expect(tab.url?.path() == "/login")
+            let checked = await client.call("press", ["tab": .string(id), "keys": "Space"])
+            #expect(!checked.isError && checked["grant"] == nil, "\(checked.content)")
+            #expect(try await page(tab, "return document.getElementById('remember').checked") as? Bool == true)
+            try await focus("textbox", "Who")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Tab"])).isError)
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "z"])).isError)
+
+            // Named keys only, and only outside the password field.
+            let expected = ["[redacted]", "[redacted]", "[redacted]", "Space", "Enter", "Enter", "Space", "Tab", "[redacted]"]
+            var entries: [JSONValue] = []
+            var keys: [String] = []
+            _ = await eventually {
+                entries = await client.hub.log.entries(limit: 200)
+                keys = entries.filter { $0["tool"] == "press" }.prefix(expected.count).reversed().compactMap { $0["params"]?["keys"]?.string }
+                return keys == expected
+            }
+            #expect(keys == expected)
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            #expect(!logged.contains("press q") && !logged.contains("\"q\""), "\(logged)")
+
+            // Enter on a checkbox does submit its form.
+            try await focus("checkbox", "Remember")
+            let submitted = try await call(client, "press", ["tab": .string(id), "keys": "Enter", "wait": "load"], answering: .allowOnce, expecting: .password)
+            #expect(submitted["navigated"] == true, "\(submitted.content)")
+            #expect(tab.url?.path() == "/done")
         }
     }
 

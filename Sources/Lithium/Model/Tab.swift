@@ -662,8 +662,11 @@ extension Tab: WKNavigationDelegate {
         // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
 
-        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) {
-            browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
+        // ⌘-click, or a middle click (WebKit's button mask 4), opens the link in a new tab.
+        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 {
+            if await browser?.agent?.open(url, from: self) != true {
+                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
+            }
             return (.cancel, preferences)
         }
         // An extension's page sending its tab to a website (1Password's Sign In button) goes on
@@ -844,8 +847,13 @@ extension Tab: WKUIDelegate {
     ) -> WKWebView? {
         guard let browser else { return nil }
         // An agent's click opening a tab: it goes into the Agent group, unselected, and the
-        // action's result names it.
+        // action's result names it. One for an address agents can't open as it is (a file:
+        // page, which asks the user) opens through the hub, without its opener.
         let agentSession = browser.agent?.actingSession(in: self)
+        if agentSession != nil, let url = action.request.url, !url.absoluteString.isEmpty, AgentURLs.verdict(for: url) != .allowed {
+            Task { await browser.agent?.open(url, from: self) }
+            return nil
+        }
         // WebKit hands an extension's page its own configuration for the new one, which a website
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {

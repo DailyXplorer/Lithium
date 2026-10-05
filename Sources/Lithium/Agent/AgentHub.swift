@@ -52,15 +52,22 @@ struct AgentTool {
 
 /// What a tool call tells the log about its own arguments. Text typed by an agent is logged
 /// only once the call knows its field isn't guarded (design section 7.6): a call that fails
-/// before it finds out logs `[redacted]`.
+/// before it finds out logs `[redacted]`. A key `press` names is logged the same way, and a
+/// character key never is.
 @MainActor
 final class CallNotes {
-    /// Set by `type` once its field is known not to be a password or card field.
+    /// Set by `type` and `press` once their field is known not to be a password or card field.
     var typedIntoUnguardedField = false
 
     func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
-        guard tool == "type", !typedIntoUnguardedField, var fields = arguments.object, fields["text"] != nil else { return arguments }
-        fields["text"] = "[redacted]"
+        let key = switch tool {
+        case "type": "text"
+        case "press": "keys"
+        default: ""
+        }
+        guard var fields = arguments.object, let value = fields[key] else { return arguments }
+        let shown = typedIntoUnguardedField && (tool == "type" || value.string.flatMap(NativeKey.parse).map { NativeKey.named[$0.name] != nil } == true)
+        if !shown { fields[key] = "[redacted]" }
         return .object(fields)
     }
 }
@@ -630,6 +637,19 @@ final class AgentHub {
     func didOpen(_ tab: Tab, from opener: Tab) {
         tabs[opener.id]?.opened.append(tab)
         touch(tab)
+    }
+
+    /// A tab an agent action in `opener` asks for without a popup (a ⌘-click), or for an address
+    /// it can't open as it is: as `tab_open` opens one, in the Agent group, unselected, after
+    /// `checkOpenable`, and named in the action's result. False when no agent action runs in
+    /// `opener`: the tab is the user's to open.
+    func open(_ url: URL, from opener: Tab) async -> Bool {
+        guard let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
+        guard (try? await checkOpenable(url, in: nil, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
+        let tab = browser.newAgentTab(session: session.label)
+        tab.load(url)
+        didOpen(tab, from: opener)
+        return true
     }
 
     func isActing(in tab: Tab) -> Bool {

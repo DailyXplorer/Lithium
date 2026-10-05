@@ -197,10 +197,10 @@ extension AgentHub {
 
     /// `file:` addresses ask each time; other addresses agents may open go through, and the
     /// rest are `blocked_page`. `named` is the tab the address loads in, nil for a tab not open yet.
-    func checkOpenable(_ url: URL, in named: NamedTab?, until deadline: ContinuousClock.Instant) async throws {
+    func checkOpenable(_ url: URL, in named: NamedTab?, session: MCPSession? = AgentHub.callSession, until deadline: ContinuousClock.Instant) async throws {
         try checkNotBlocked(url)
         guard AgentURLs.verdict(for: url) == .needsConfirmation else { return }
-        guard let session = AgentHub.callSession else { throw AgentToolError(code: "denied_by_user", message: "file: addresses need the user’s Allow.") }
+        guard let session else { throw AgentToolError(code: "denied_by_user", message: "file: addresses need the user’s Allow.") }
         let name = url.lastPathComponent.isEmpty ? url.path() : url.lastPathComponent
         _ = try await confirm(.file, "open the local file “\(name)” (its folder becomes readable to the page)", subject: url.absoluteString, site: nil, in: named, session: session, until: deadline)
     }

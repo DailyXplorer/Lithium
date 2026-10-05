@@ -118,6 +118,34 @@ struct ActionTarget {
     }
 
     var counts: [String: Int] { report.counts ?? [:] }
+
+    enum Input {
+        case click
+        case key(NativeKey, NSEvent.ModifierFlags)
+    }
+
+    /// What Guardrails weighs before `input` reaches the target, decided the same way for a
+    /// click and a key: a click, or Enter or Space on a control, activates it and submits the
+    /// form of a submit control; Enter also submits from any input of a form (a checkbox's too)
+    /// and a one-line field; a key that types a character types it.
+    func guarded(_ input: Input) -> (action: Guardrails.Action, submitting: TargetReport.Form?) {
+        guard case .key(let key, let modifiers) = input else { return (.activate, report.submit == true ? report.form : nil) }
+        // Decided on the key, not how its name was spelled: Enter and Space with any modifier,
+        // and Control+M, which types Enter's carriage return, may still activate or submit.
+        let enter = key.isEnter(with: modifiers)
+        let activates = (enter || key.isSpace) && Self.activatedByKeys.contains(report.role ?? "")
+        if !activates, key.types(with: modifiers) { return (.type, nil) }
+        let submits = report.submit == true && activates || enter && (report.submit == true || report.tag == "input" || report.editable == true && report.multiline != true)
+        return (activates ? .activate : .press(enter: enter), submits ? report.form : nil)
+    }
+
+    private static let activatedByKeys: Set<String> = ["button", "link", "checkbox", "radio", "switch", "menuitem", "tab", "option"]
+}
+
+extension Guardrails.Form {
+    init(_ form: TargetReport.Form) {
+        self.init(cardField: form.cards == true, filledPassword: form.password == true)
+    }
 }
 
 /// One action call, in its turn in a tab.
@@ -195,7 +223,8 @@ extension AgentHub {
             ctx.state.acting?.caption = "\(button == .right ? "Right-clicking" : count == 2 ? "Double-clicking" : "Clicking") \(target.shortName)"
             var fields: [String: JSONValue] = [:]
             if button != .right {
-                fields["grant"] = try await hub.allow(.activate, on: target, submitting: target.report.submit == true ? target.report.form : nil, "click \(target.shortName)", ctx)
+                let (action, form) = target.guarded(.click)
+                fields["grant"] = try await hub.allow(action, on: target, submitting: form, "click \(target.shortName)", ctx)
             }
             return try await hub.deliver(ctx, target, wait: wait, diff: diff, fields: fields) { input in
                 try input.move(to: target.point, modifiers: modifiers)
@@ -347,7 +376,7 @@ extension AgentHub {
 
     static let pressTool = AgentTool(
         name: "press",
-        description: "Presses a key or a combination in the focused element: Enter, Tab, Shift+Tab, Escape, ArrowDown, PageDown, Backspace, F5, Meta+K. Meta+A, Meta+Z and Shift+Meta+Z select all, undo and redo; copy, cut and paste are disabled. Lithium’s own shortcuts never fire. Enter that submits a password or payment form waits for the user’s Allow. \(trusted)",
+        description: "Presses a key or a combination in the focused element: Enter, Tab, Shift+Tab, Escape, ArrowDown, PageDown, Backspace, F5, Meta+K. Meta+A, Meta+Z and Shift+Meta+Z select all, undo and redo; copy, cut and paste are disabled. Lithium’s own shortcuts never fire. A character typed into a password or card field, and Enter or Space that submits a password or payment form or activates a payment control, wait for the user’s Allow, as type and click do. Character keys are never logged. \(trusted)",
         inputSchema: schema([
             "tab": tabParam, "keys": ["type": "string", "description": "One key, with modifiers joined by +, such as Meta+K."],
             "repeat": ["type": "integer", "minimum": 1, "maximum": 100, "description": "1 by default."],
@@ -361,6 +390,8 @@ extension AgentHub {
             throw Arguments.invalid("keys must be one key such as Enter, Tab, ArrowDown, F5 or a character, with Meta, Control, Alt or Shift joined by +.")
         }
         let (key, name, modifiers) = parsed
+        // A character key is never shown or logged: it may be part of a password.
+        let spoken = NativeKey.named[name] != nil ? combo : modifiers.subtracting(.shift).isEmpty ? "a character key" : "a shortcut"
         let command = modifiers.contains(.command) ? name.lowercased() : nil
         if let command, ["c", "x", "v"].contains(command), modifiers.subtracting([.command, .shift]).isEmpty {
             throw AgentToolError(code: "clipboard_disabled", message: "Copy, cut and paste would use the user’s clipboard, which agents can’t reach. Use read_text to read and type to write.")
@@ -374,15 +405,12 @@ extension AgentHub {
         }
         let times = try arguments.int("repeat", default: 1, in: 1...100)
         let (wait, diff, timeout) = (try arguments.wait(default: .commit), try arguments.bool("diff", default: true), try arguments.timeout(default: 15_000))
-        return try await hub.action(named, "Pressing \(combo)", session: session, timeout: timeout) { ctx in
+        return try await hub.action(named, "Pressing \(spoken)", session: session, timeout: timeout) { ctx in
             let target = try await hub.resolve(.focused, ctx, checks: [])
-            // Decided on the key, not how its name was spelled: Enter and Space with any modifier,
-            // and Control+M, which types Enter's carriage return, may still activate or submit.
-            let enter = key.isEnter(with: modifiers)
-            let activates = (enter || key.isSpace) && ["button", "link", "checkbox", "radio", "switch", "menuitem", "tab", "option"].contains(target.report.role ?? "")
-            let action: Guardrails.Action = activates ? .activate : .press(enter: enter)
-            let submits = enter && (target.report.submit == true || target.report.editable == true && target.report.multiline != true)
-            let fields: [String: JSONValue] = ["grant": try await hub.allow(action, on: target, submitting: submits ? target.report.form : nil, "press \(combo) in \(target.shortName)", ctx)]
+            if Guardrails.confirmation(for: .type, on: target.element, page: target.page) == nil { AgentHub.callNotes?.typedIntoUnguardedField = true }
+            let (action, form) = target.guarded(.key(key, modifiers))
+            let describing = action == .type ? "type into \(target.shortName)" : "press \(spoken) in \(target.shortName)"
+            let fields: [String: JSONValue] = ["grant": try await hub.allow(action, on: target, submitting: form, describing, ctx)]
             return try await hub.deliver(ctx, target, wait: wait, diff: diff, fields: fields) { input in
                 if let responder {
                     for _ in 0..<times {
@@ -891,7 +919,7 @@ extension AgentHub {
     /// site grant, or by the Allow given on the same form in the last 2 minutes (typing into a
     /// card number, then its expiry and CVC). `asked`: the kind this call was allowed already.
     func allow(_ action: Guardrails.Action, on target: ActionTarget, submitting form: TargetReport.Form?, _ describing: String, _ ctx: ActionContext, asked: ConfirmationKind? = nil) async throws -> JSONValue {
-        let submitted = form.map { Guardrails.Form(cardField: $0.cards == true, filledPassword: $0.password == true) }
+        let submitted = form.map(Guardrails.Form.init)
         guard let kind = Guardrails.confirmation(for: action, on: target.element, page: target.page, submitting: submitted) else { return .null }
         // Typing into a password field and submitting its form is one Allow; a payment submit always asks.
         if kind == asked, kind != .payment { return .null }

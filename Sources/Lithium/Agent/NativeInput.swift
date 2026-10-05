@@ -166,10 +166,16 @@ final class NativeInput {
     /// A new `eventNumber` per press: WebKit tells a double click from two clicks by it.
     private static func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, window: NSWindow, modifiers: NSEvent.ModifierFlags, clickCount: Int, pressure: Float) -> NSEvent {
         if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type) { eventNumber += 1 }
-        return NSEvent.mouseEvent(
+        let event = NSEvent.mouseEvent(
             with: type, location: point, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, eventNumber: eventNumber, clickCount: clickCount, pressure: pressure
         )!
+        // AppKit's factory leaves an other button's number at 0, which WebKit takes for the left
+        // button: a middle click would follow a link in place.
+        guard [.otherMouseDown, .otherMouseUp].contains(type), let cg = event.cgEvent else { return event }
+        cg.setIntegerValueField(.mouseEventButtonNumber, value: Int64(CGMouseButton.center.rawValue))
+        cg.setIntegerValueField(.mouseEventNumber, value: Int64(eventNumber))
+        return NSEvent(cgEvent: cg) ?? event
     }
 
     /// Straight to the web view, never `window.sendEvent`: it can't land on Lithium's overlays.
@@ -255,6 +261,13 @@ struct NativeKey: Equatable {
     /// Space activates a button, a checkbox and the like, whatever the modifiers.
     var isSpace: Bool { code == 49 }
 
+    /// The key types a character into a field: no Command, Control or function key, and a
+    /// printable character (Space's too).
+    func types(with modifiers: NSEvent.ModifierFlags) -> Bool {
+        let flags = modifiers.union(self.flags)
+        return flags.isDisjoint(with: [.command, .control, .function]) && characters(with: flags).unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
+    }
+
     /// The key that types `character` on a US layout, nil for one no key types (é, ✓, 日).
     static func typing(_ character: Character) -> NativeKey? {
         let text = String(character)
@@ -308,8 +321,8 @@ struct NativeKey: Equatable {
     /// know. Named keys are found whatever their case or spelling, and named as `named` names them.
     static func parse(_ combo: String) -> (key: NativeKey, name: String, modifiers: NSEvent.ModifierFlags)? {
         var parts = combo.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        // "Meta++" names the plus key.
-        if combo.hasSuffix("++") { parts = Array(parts.dropLast(2)) + ["+"] }
+        // "+" and "Meta++" name the plus key.
+        if combo == "+" || combo.hasSuffix("++") { parts = Array(parts.dropLast(2)) + ["+"] }
         guard let name = parts.popLast(), !name.isEmpty else { return nil }
         var modifiers: NSEvent.ModifierFlags = []
         for part in parts {

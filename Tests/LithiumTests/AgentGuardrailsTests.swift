@@ -88,6 +88,57 @@ struct AgentGuardrailsTests {
         }
     }
 
+    /// A key that activates or submits asks what a click asks, and one that types a character
+    /// asks what typing does, from the same decision.
+    @Test func keysAskWhatAClickOrTypingAsks() throws {
+        let login = TargetReport.Form(id: 1, cards: false, password: true)
+        let cart = TargetReport.Form(id: 2, cards: true, password: false)
+        let target = { (report: TargetReport) in ActionTarget(report: report, address: nil, frame: .main, ref: nil, css: .zero, page: Self.shop) }
+        let control = { (role: String, name: String, form: TargetReport.Form?, submit: Bool) in
+            target(TargetReport(token: "d", role: role, name: name, tag: role == "checkbox" ? "input" : role == "link" ? "a" : "button", form: form, submit: submit))
+        }
+        let field = { (name: String, field: String?) in
+            target(TargetReport(token: "d", role: "textbox", name: name, tag: "input", field: field, form: login, editable: true))
+        }
+        func asks(_ input: ActionTarget.Input, on target: ActionTarget) -> ConfirmationKind? {
+            let (action, form) = target.guarded(input)
+            return Guardrails.confirmation(for: action, on: target.element, page: target.page, submitting: form.map(Guardrails.Form.init))
+        }
+        func key(_ combo: String) throws -> ActionTarget.Input {
+            let parsed = try #require(NativeKey.parse(combo), "\(combo)")
+            return .key(parsed.key, parsed.modifiers)
+        }
+        let controls: [(target: ActionTarget, click: ConfirmationKind?, enter: ConfirmationKind?, why: String)] = [
+            (control("button", "Sign in", login, true), .password, .password, "the submit of a filled password"),
+            (control("button", "Continue", cart, true), .payment, .payment, "the submit of a form with a card field"),
+            (control("button", "Pay €42.00", nil, false), .payment, .payment, "a commit control"),
+            (control("link", "Pay €42.00", nil, false), .payment, .payment, "a commit link"),
+            (control("link", "Help", nil, false), nil, nil, "a plain link"),
+            (control("button", "Show password", login, false), nil, nil, "a button that submits nothing"),
+            (control("checkbox", "Remember me", login, false), nil, .password, "a checkbox, which Enter submits from"),
+            (control("checkbox", "Save card", cart, false), nil, .payment, "a checkbox in a card form"),
+        ]
+        for test in controls {
+            #expect(asks(.click, on: test.target) == test.click, "click: \(test.why)")
+            for combo in ["Space", "space", "Shift+Space", "Control+Space"] { #expect(try asks(key(combo), on: test.target) == test.click, "\(combo): \(test.why)") }
+            for combo in ["Enter", "return", "Shift+Enter", "Control+M"] { #expect(try asks(key(combo), on: test.target) == test.enter, "\(combo): \(test.why)") }
+        }
+        let password = field("Password", "password")
+        let card = field("Card number", "payment")
+        let who = field("Who", nil)
+        let fields: [(target: ActionTarget, combo: String, expected: ConfirmationKind?, why: String)] = [
+            (password, "q", .password, "a character typed into a password field"),
+            (password, "Shift+Q", .password, "a capital"), (password, "+", .password, "a symbol"), (password, "Space", .password, "a space"),
+            (password, "Alt+e", .password, "an Option character"), (password, "Enter", .password, "Enter in a password field"),
+            (password, "Tab", nil, "Tab out of it"), (password, "ArrowLeft", nil, "an arrow"), (password, "Meta+K", nil, "a shortcut"),
+            (card, "4", .payment, "a digit typed into a card field"), (card, "Tab", .payment, "any key in a card field"),
+            (who, "q", nil, "a character in a plain field"), (who, "Enter", .password, "Enter submitting a filled password"),
+        ]
+        for test in fields {
+            #expect(try asks(key(test.combo), on: test.target) == test.expected, "\(test.combo): \(test.why)")
+        }
+    }
+
     /// The mark is the confirmation the element's usual action meets: typing into a field,
     /// activating anything else. Text and headings have no action, and no mark.
     @Test func marksWhatTheSnapshotShows() {

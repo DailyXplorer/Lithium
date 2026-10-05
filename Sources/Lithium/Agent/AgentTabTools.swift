@@ -472,7 +472,8 @@ extension AgentHub {
     /// when the call may be one, `landedWithinPage` tells it from a move the page's own script
     /// made meanwhile. Without it only a commit ends the wait. Lithium's error page committing
     /// for it is `navigation_failed`, whatever `wait`; a load that leads to another app's scheme
-    /// is `navigation_cancelled`; `none` answers before anything is known. A load that becomes a
+    /// is `navigation_cancelled`, as is one given up before it showed anything (a 204 answer, a
+    /// stopped load); `none` answers before anything is known. A load that becomes a
     /// download asks the user (`confirmDownload`): allowed, the result names the file instead of
     /// a state; denied or unanswered, the call fails with the user's answer.
     func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
@@ -531,6 +532,8 @@ extension AgentHub {
                 case .download(let fileName): return .download(fileName)
                 case .refused(let scheme):
                     throw AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s page led to a \(scheme): address, which Lithium doesn’t open in a tab.")
+                case .dropped:
+                    throw AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s load stopped before it showed a page: the server answered with no content (204), or the load was stopped.")
                 }
             }
             if let state, state.downloadAnswers > answers, case .failure(let error) = state.downloadAnswer { throw error }

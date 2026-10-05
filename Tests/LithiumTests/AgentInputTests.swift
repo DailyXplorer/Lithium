@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import WebKit
 @testable import Lithium
+import LithiumTestGuard
 
 /// Keys and the key guard, without a page.
 @MainActor
@@ -77,7 +78,7 @@ struct AgentKeysTests {
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         window.contentView = webView
         defer { window.contentView = nil }
-        let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
+        let input = try NativeInput(webView: webView, sends: [.pointer, .buttons, .keys], check: {}, onPointer: { _ in })
         try input.key(try #require(NativeKey.parse("Meta+W")).key, modifiers: .command)
         let users = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil, characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13))
         #expect(NativeInput.guarded(users) === users)
@@ -214,8 +215,24 @@ struct AgentInputTests {
               <input id="user" aria-label="User"><input type="password" id="pw" aria-label="Password">
               <input id="card" autocomplete="cc-number" aria-label="Card number"><input id="cvc" name="cvc" aria-label="CVC">
               <input id="upload" type="file" aria-label="Attachment"><button>Sign in</button>
+              <select id="exp" autocomplete="cc-exp-month" aria-label="Expiry month"><option>01</option><option>02</option></select>
             </form>
             \(logger)
+            """),
+        "/login-frame": (html, """
+            <title>Login frame</title><style>body { margin: 0 } iframe { position: absolute; left: 40px; top: 40px; width: 400px; height: 200px; border: 0 }</style>
+            <iframe id="login" src="/login"></iframe>
+            <script>
+              const frame = document.getElementById('login');
+              frame.addEventListener('load', () => frame.contentDocument.getElementById('secret').focus());
+            </script>
+            """),
+        "/nothing": ("HTTP/1.1 204 No Content", ""),
+        "/mail": ("HTTP/1.1 302 Found\r\nLocation: mailto:x@example.com", ""),
+        "/mail-links": (html, """
+            <title>Mail links</title><style>body { margin: 0 } a { position: absolute; left: 40px; width: 120px; height: 30px }</style>
+            <a href="mailto:x@example.com" style="top: 40px">Write</a>
+            <a href="/mail" style="top: 100px">Redirect</a>
             """),
         "/moved": (html, """
             <title>Moved</title><style>body { margin: 0 } button { position: absolute; left: 40px; width: 160px; height: 40px }</style>
@@ -255,6 +272,7 @@ struct AgentInputTests {
         let active = NSApp?.isActive
         let key = NSApp?.keyWindow
         let pointer = NSEvent.mouseLocation
+        let started = ContinuousClock.now
         var failure: (any Error)?
         do { try await body(try await Client(browser: browser), base) } catch { failure = error }
         // Out of the user's sight and reach, whatever the test did: their app stays in front.
@@ -262,7 +280,9 @@ struct AgentInputTests {
         #expect(now != getpid() || frontmost == getpid(), "the tests' process came to the front")
         #expect(NSApp?.isActive != true || active == true)
         #expect(NSApp?.keyWindow === key)
-        #expect(NSEvent.mouseLocation == pointer)
+        // Lithium never moves the pointer. The user may, while the tests run: their mouse's own
+        // moves (hardware events only) since the test started leave the pointer theirs to place.
+        if !Self.userMovedTheMouse(since: started) { #expect(NSEvent.mouseLocation == pointer) }
         let onScreen = (NSApp?.windows ?? []).filter { window in window.isVisible && NSScreen.screens.contains { $0.frame.intersects(window.frame) } }
         #expect(onScreen.isEmpty, "\(onScreen)")
         if let stage = browser.agent?.stage.window {
@@ -273,6 +293,13 @@ struct AgentInputTests {
         browser.tabs.forEach(browser.close)
         await browser.setAgentAccess(false)
         if let failure { throw failure }
+    }
+
+    static func userMovedTheMouse(since start: ContinuousClock.Instant) -> Bool {
+        let elapsed = (ContinuousClock.now - start) / .seconds(1)
+        return [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains {
+            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) < elapsed
+        }
     }
 
     private func open(_ client: Client, _ url: URL) async throws -> (id: String, tab: Lithium.Tab) {
@@ -851,7 +878,206 @@ struct AgentInputTests {
         }
     }
 
+    /// A load that ends before it shows a page (a 204 answer, a load the page stops) ends the
+    /// action that started it: it happened, and nothing navigated.
+    @Test func aLoadGivenUpBeforeItShowsAPageEndsTheAction() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 20)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            _ = try await page(tab, """
+                document.body.insertAdjacentHTML('beforeend', '<a href="/nothing" style="position:absolute;left:40px;top:320px">Nothing</a>'
+                  + '<a href="\(slowBase.appending(path: "slow").absoluteString)" onclick="setTimeout(() => stop(), 300)" style="position:absolute;left:40px;top:360px">Stopped</a>')
+                """)
+            for name in ["Nothing", "Stopped"] {
+                let started = ContinuousClock.now
+                let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", name)), "timeoutMs": 5000])
+                #expect(!clicked.isError, "\(name): \(clicked.content)")
+                #expect(clicked["navigated"] == false, "\(name): \(clicked.content)")
+                #expect(ContinuousClock.now - started < .seconds(3), "\(name)")
+                #expect(tab.url?.path() == "/events")
+            }
+            let navigated = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "nothing").absoluteString), "timeoutMs": 5000])
+            #expect(navigated.code == "navigation_cancelled", "\(navigated.content)")
+            #expect(!(await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "button", "Press"))])).isError)
+        }
+    }
+
+    /// Tests never open another app on the user's screen: every hand-off is only recorded.
+    @Test func theTestsRecordHandOffsToOtherApps() {
+        #expect(ExternalApps.isRecording)
+        #expect(ExternalApps.runsTests, "recording even without scripts/test's LITHIUM_NO_EXTERNAL_OPEN")
+        #expect(LithiumHandOffGuardInstalled(), "NSWorkspace opens nothing, whoever calls it")
+        if ProcessInfo.processInfo.environment["LITHIUM_HANDOFF_LOG"] != nil {
+            #expect(LithiumLaunchServicesDenied(), "scripts/test's sandbox refuses LaunchServices' opens")
+        }
+    }
+
+    /// A closed tab's web view hands nothing to another app: a load still on its way when the tab
+    /// closed (a redirect to `mailto:`) reaches a delegate that refuses it, not WebKit's own
+    /// fallback, which opens it with NSWorkspace.
+    @Test func aClosedTabsWebViewOpensNoOtherApp() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let (_, tab) = try await open(client, base.appending(path: "mail-links"))
+            let webView = tab.webView
+            let before = (LithiumHandOffCount(), ExternalApps.recorded)
+            browser.close(tab)
+            #expect(webView.navigationDelegate != nil)
+            webView.load(URLRequest(url: URL(string: "mailto:x@example.com")!))
+            webView.load(URLRequest(url: base.appending(path: "mail")))
+            try await Task.sleep(for: .seconds(1))
+            #expect(LithiumHandOffCount() == before.0, "see \(LithiumHandOffLogPath())")
+            #expect(ExternalApps.recorded == before.1)
+        }
+    }
+
+    /// An agent's click never hands an address to another app: a `mailto:` link, or a link the
+    /// server redirects to one, ends as `navigation_cancelled`. The user's own click on the same
+    /// link still opens their mail app.
+    @Test func anAgentsClickNeverOpensAnotherApp() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let (id, tab) = try await open(client, base.appending(path: "mail-links"))
+            let before = ExternalApps.recorded
+            for name in ["Write", "Redirect"] {
+                let started = ContinuousClock.now
+                let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", name)), "timeoutMs": 5000])
+                #expect(clicked.code == "navigation_cancelled", "\(name): \(clicked.content)")
+                #expect(clicked.message.contains("mailto:"), "\(name): \(clicked.message)")
+                #expect(ContinuousClock.now - started < .seconds(3), "\(name)")
+                #expect(tab.title == "Mail links", "\(name): the page before stays")
+            }
+            #expect(ExternalApps.recorded == before, "\(ExternalApps.recorded)")
+
+            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+            shown.isReleasedWhenClosed = false
+            let webView = tab.webView
+            webView.removeFromSuperview()
+            webView.frame = shown.contentLayoutRect
+            shown.contentView = webView
+            defer { shown.contentView = nil }
+            browser.select(tab)
+            let write = webView.convert(CGPoint(x: 55, y: 50), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: write, modifierFlags: [], timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+            }
+            #expect(await waitUntil(5) { ExternalApps.recorded == before + [.open(URL(string: "mailto:x@example.com")!)] }, "\(ExternalApps.recorded)")
+        }
+    }
+
     // MARK: Guardrails
+
+    /// The first Allow a call asks for, denied, or `none` when it ran without asking.
+    private func firstAsk(_ client: Client, _ tool: String, _ arguments: JSONValue) async -> String {
+        final class Done { var value = false }
+        let done = Done()
+        let confirmations = client.hub.confirmations
+        let task = Task {
+            let result = await client.call(tool, arguments)
+            done.value = true
+            return result
+        }
+        _ = await waitUntil(20) { done.value || !confirmations.pending.isEmpty }
+        guard let asked = confirmations.pending.first else {
+            _ = await task.value
+            return "none"
+        }
+        confirmations.answer(asked.id, .deny)
+        _ = await task.value
+        return asked.kind.rawValue
+    }
+
+    /// Every input tool on the elements Guardrails cares about asks exactly what a click (for
+    /// a button pressed) or typing (for keys) asks there: no tool sends a press or a key the
+    /// gate didn't weigh.
+    @Test func everyToolAsksWhatAClickOrTypingAsksOnTheSameElement() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-gate-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "notes.txt")
+        try "notes".write(to: file, atomically: true, encoding: .utf8)
+        try await withAgent(openingFirst: ["login-frame"]) { client, base in
+            var table: [String] = []
+            var failures: [String] = []
+            func row(_ id: String, _ label: String, _ ref: String, _ expected: [String: String]) async throws {
+                var cells: [String] = []
+                for tool in ["click", "drag", "upload_files", "set_checked", "select_option", "hover", "scroll", "focus", "type", "press"] {
+                    guard let want = expected[tool] else { continue }
+                    let tab: JSONValue = .string(id)
+                    let arguments: JSONValue = switch tool {
+                    case "drag": ["tab": tab, "from": .string(ref), "to": .string(ref)]
+                    case "upload_files": ["tab": tab, "ref": .string(ref), "paths": [.string(file.path())]]
+                    case "set_checked": ["tab": tab, "ref": .string(ref), "checked": true]
+                    case "select_option": ["tab": tab, "ref": .string(ref), "labels": ["02"]]
+                    case "scroll": ["tab": tab, "at": .string(ref), "dy": 10]
+                    case "type": ["tab": tab, "ref": .string(ref), "text": "4242"]
+                    case "press": ["tab": tab, "keys": .string(want.hasPrefix("Enter") || want.hasPrefix("Space") ? String(want.prefix { $0 != ":" }) : "4")]
+                    default: ["tab": tab, "ref": .string(ref)]
+                    }
+                    if tool == "press" { _ = await client.call("focus", ["tab": tab, "ref": .string(ref)]) }
+                    let expectedKind = String(want.split(separator: ":").last ?? "")
+                    let got = await firstAsk(client, tool, arguments)
+                    if got != expectedKind { failures.append("\(label) \(tool): asked \(got), expected \(expectedKind)") }
+                    cells.append("\(tool)=\(got)")
+                }
+                table.append("\(label): " + cells.joined(separator: " "))
+            }
+
+            let (pay, payTab) = try await open(client, base.appending(path: "pay"))
+            let both = ["click", "drag", "upload_files", "hover", "scroll", "focus"]
+            func asks(_ tools: [String], _ kind: String, _ more: [String: String] = [:]) -> [String: String] {
+                Dictionary(uniqueKeysWithValues: tools.map { ($0, kind) }).merging(more) { _, new in new }
+            }
+            try await row(pay, "Pay €42.00", try await ref(client, pay, "button", "Pay €42.00"), asks(["click", "drag", "upload_files"], "payment", ["hover": "none", "scroll": "none", "focus": "none", "press": "Enter:payment"]))
+            try await row(pay, "Pay €42.00 (Space)", try await ref(client, pay, "button", "Pay €42.00"), ["press": "Space:payment"])
+            try await row(pay, "Card number", try await ref(client, pay, "textbox", "Card number"), asks(both, "none", ["upload_files": "upload", "type": "payment", "press": "payment"]))
+            try await row(pay, "Expiry month", try await ref(client, pay, "combobox", "Expiry month"), ["select_option": "payment"])
+            // Nothing the user denied reached the page.
+            #expect(try await log(payTab, ["mousedown", "keydown"]).filter { $0.hasSuffix(":pay") || $0 == "keydown:true:card" }.isEmpty)
+
+            let (login, loginTab) = try await open(client, base.appending(path: "login"))
+            _ = try await page(loginTab, "document.getElementById('secret').value = 'filled'")
+            try await row(login, "Sign in, password filled", try await ref(client, login, "button", "Sign in"), asks(["click", "drag", "upload_files"], "password", ["hover": "none", "scroll": "none", "focus": "none", "press": "Enter:password"]))
+            try await row(login, "Sign in (Space)", try await ref(client, login, "button", "Sign in"), ["press": "Space:password"])
+            try await row(login, "Password field", try await ref(client, login, "textbox", "Secret"), asks(both, "none", ["upload_files": "upload", "type": "password", "press": "password"]))
+            try await row(login, "Remember checkbox", try await ref(client, login, "checkbox", "Remember"), ["click": "none", "set_checked": "none"])
+            #expect(loginTab.url?.path() == "/login")
+            #expect(try await page(loginTab, "return document.getElementById('secret').value") as? String == "filled")
+
+            // A password field in a frame open before agent access was on, of the page's own
+            // origin: nothing asks, as for any field of a known site, and nothing typed is logged.
+            let frameTab = try #require(client.browser.tabs.first { $0.url?.path() == "/login-frame" })
+            let frame = client.hub.id(for: frameTab)
+            var cells: [String] = []
+            for (tool, arguments) in [
+                ("type", ["tab": .string(frame), "text": "hunter2"]), ("press", ["tab": .string(frame), "keys": "q"]),
+                ("press", ["tab": .string(frame), "keys": "Tab"]), ("click", ["tab": .string(frame), "x": 45, "y": 45]),
+                ("drag", ["tab": .string(frame), "from": ["x": 45, "y": 45], "to": ["x": 45, "y": 45]]),
+                ("hover", ["tab": .string(frame), "x": 45, "y": 45]), ("scroll", ["tab": .string(frame), "x": 45, "y": 45, "dy": 10]),
+            ] as [(String, JSONValue)] {
+                let got = await firstAsk(client, tool, arguments)
+                if got != "none" { failures.append("unread frame \(tool): asked \(got)") }
+                cells.append("\(tool)=\(got)")
+            }
+            table.append("Field in an unread frame: " + cells.joined(separator: " "))
+            #expect(try await page(frameTab, "return document.getElementById('login').contentDocument.getElementById('secret').value") as? String == "hunter2q")
+
+            var logged: [String] = []
+            _ = await eventually {
+                let entries = await client.hub.log.entries(limit: 400)
+                logged = entries.filter { $0["tab"]?["id"]?.string == frame && ["type", "press"].contains($0["tool"]?.string ?? "") }
+                    .compactMap { $0["params"]?["text"]?.string ?? $0["params"]?["keys"]?.string }
+                return logged.count == 3
+            }
+            #expect(logged == ["[redacted]", "[redacted]", "[redacted]"], "\(logged)")
+            let all = String(decoding: JSONValue.array(await client.hub.log.entries(limit: 400)).encoded(), as: UTF8.self)
+            #expect(!all.contains("hunter2"))
+            print("Gate table:\n" + table.joined(separator: "\n"))
+            #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
+        }
+    }
 
     @Test func enterAndSpaceAskWhateverTheirSpellingOrModifiers() async throws {
         try await withAgent { client, base in
@@ -1090,7 +1316,7 @@ struct AgentInputTests {
                 windows.forEach { $0.contentView = nil }
             }
             try await clearLog(tab)
-            let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
+            let input = try NativeInput(webView: webView, sends: [.pointer, .buttons, .keys], check: {}, onPointer: { _ in })
             try input.down(at: CGPoint(x: 100, y: 60))
             #expect(await eventually { try await log(tab, ["mousedown"]) == ["mousedown:true:b"] })
             // The user selects the tab before the last event of a drag: the up fails, and the

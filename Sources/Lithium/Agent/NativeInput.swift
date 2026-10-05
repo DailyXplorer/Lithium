@@ -15,8 +15,19 @@ final class NativeInput {
         let afterPress: Bool
     }
 
+    /// What an action may send, as `AgentHub.gate` let it through: a button or a key it didn't
+    /// weigh never reaches the page.
+    struct Sends: OptionSet {
+        let rawValue: Int
+        /// Pointer moves and the wheel.
+        static let pointer = Sends(rawValue: 1)
+        static let buttons = Sends(rawValue: 2)
+        static let keys = Sends(rawValue: 4)
+    }
+
     let webView: WKWebView
     private let window: NSWindow
+    private let sends: Sends
     /// Runs before every event: the tab closing, the user's own input and Stop end the action there.
     private let check: () throws -> Void
     /// Where the agent's pointer is, for the dot the user sees.
@@ -25,18 +36,27 @@ final class NativeInput {
     private var pressed = false
     private(set) var pointer: CGPoint?
 
-    init(webView: WKWebView, check: @escaping () throws -> Void, onPointer: @escaping (CGPoint) -> Void) throws {
+    init(webView: WKWebView, sends: Sends, check: @escaping () throws -> Void, onPointer: @escaping (CGPoint) -> Void) throws {
         guard let window = webView.window else { throw WindowChanged(afterPress: false) }
         self.webView = webView
         self.window = window
+        self.sends = sends
         self.check = check
         self.onPointer = onPointer
+    }
+
+    private func checkGated(_ kind: Sends) throws {
+        guard sends.contains(kind) else {
+            assertionFailure("An action sent input its gate didn't weigh.")
+            throw AgentToolError(code: "unsupported", message: "Lithium refused input its Guardrails hadn’t weighed.")
+        }
     }
 
     // MARK: Pointer
 
     /// `steps` moves on a straight line from the agent's last pointer position, or one move.
     func move(to point: CGPoint, steps: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws {
+        try checkGated(.pointer)
         let start = pointer ?? point
         for step in 1...max(1, steps) {
             let fraction = Double(step) / Double(max(1, steps))
@@ -54,6 +74,7 @@ final class NativeInput {
     }
 
     func down(at point: CGPoint, button: Button = .left, clickCount: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws {
+        try checkGated(.buttons)
         if button == .right, let page = webView as? PageWebView { page.agentMenuUntil = .now + .seconds(2) }
         try send(mouse: button.down, at: point, modifiers: modifiers, clickCount: clickCount)
         held = (button.down, point, modifiers)
@@ -102,6 +123,7 @@ final class NativeInput {
     // MARK: Keys
 
     func key(_ key: Key, modifiers: NSEvent.ModifierFlags = []) throws {
+        try checkGated(.keys)
         let flags = modifiers.union(key.flags)
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             try check()
@@ -118,6 +140,7 @@ final class NativeInput {
 
     /// Text no key types (accents, CJK, emoji), as the Character Viewer and input methods insert it.
     func insert(_ text: String) throws {
+        try checkGated(.keys)
         try check()
         pressed = true
         (webView as NSView as? NSTextInputClient)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))

@@ -315,7 +315,7 @@ final class PDFReader: NSObject {
     }
 
     func showInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        ExternalApps.reveal(url)
     }
 
     /// Preview signs, annotates and fills in forms; a downloaded PDF goes there as a temporary copy.
@@ -338,7 +338,7 @@ final class PDFReader: NSObject {
                 }
             }
         }
-        NSWorkspace.shared.open([file], withApplicationAt: preview, configuration: NSWorkspace.OpenConfiguration())
+        ExternalApps.open(file, withApplicationAt: preview)
     }
 
     func print() {

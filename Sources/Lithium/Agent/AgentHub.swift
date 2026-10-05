@@ -56,7 +56,8 @@ struct AgentTool {
 /// character key never is.
 @MainActor
 final class CallNotes {
-    /// Set by `type` and `press` once their field is known not to be a password or card field.
+    /// Set by `gate` once the field `type` or `press` sends to is known not to be a password or
+    /// card field, nor one in a frame Lithium can't read.
     var typedIntoUnguardedField = false
 
     func logged(_ arguments: JSONValue, tool: String) -> JSONValue {

@@ -66,7 +66,7 @@ private struct DownloadsList: View {
             }
             Divider()
             HStack {
-                Button("Open Downloads Folder") { NSWorkspace.shared.open(URL.downloadsDirectory) }
+                Button("Open Downloads Folder") { ExternalApps.open(URL.downloadsDirectory) }
                 Spacer()
                 if downloads.items.contains(where: { $0.state != .downloading }) {
                     Button("Clear") { downloads.clearFinished() }
@@ -121,7 +121,7 @@ private struct DownloadRow: View {
                 if item.canCancel { RowButton(icon: .close, help: "Cancel") { item.cancel() } }
             } else if item.state == .finished, let destination = item.destination {
                 RowButton(icon: .search, help: "Show in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                    ExternalApps.reveal(destination)
                 }
             }
         }
@@ -130,7 +130,7 @@ private struct DownloadRow: View {
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .onTapGesture {
-            if item.state == .finished, let destination = item.destination { NSWorkspace.shared.open(destination) }
+            if item.state == .finished, let destination = item.destination { ExternalApps.open(destination) }
         }
     }
 

@@ -253,8 +253,9 @@ final class AgentHub {
     func shutdown() {
         isShutDown = true
         idleSweep?.cancel()
-        endAllSessions()
+        // Before the sessions end, which would hand the dialogs to the user.
         answerEveryDialog()
+        endAllSessions()
         server?.stop()
         server = nil
         AgentEndpoint.delete(in: folder)
@@ -264,8 +265,8 @@ final class AgentHub {
     /// grant, answers the pages' dialogs with their safe default, ends every session, closes
     /// every connection, and refuses new sessions until `allowAgain()`. Safe to repeat.
     func stop() {
-        endAllSessions()
         answerEveryDialog()
+        endAllSessions()
         server?.closeConnections()
         if state == .listening { state = .stopped }
     }
@@ -299,6 +300,10 @@ final class AgentHub {
         }
         confirmations.end(session: session.id)
         sessions.removeAll { $0.id == session.id }
+        // With no session left to answer it, the page's dialog is the user's.
+        for state in tabs.values where state.holder == session.id {
+            if let tab = state.tab { handDialogToUser(in: tab) }
+        }
         lastSeen[session.id] = nil
         recentCalls[session.id] = nil
     }
@@ -545,12 +550,19 @@ final class AgentHub {
         guard let state = agentTab(for: tab) else { return }
         if !state.isTouched { state.isTouched = true }
         state.lastAction = now()
+        if let session = Self.callSession { state.holder = session.id }
     }
 
     /// An agent acted in the tab in the last 10 minutes; the sleep pass leaves it be.
     func holds(_ tab: Tab) -> Bool {
         guard let last = tabs[tab.id]?.lastAction else { return false }
         return now().timeIntervalSince(last) < 10 * 60
+    }
+
+    /// A connected session holds the tab: its call runs there, or it acted there in the last 10 minutes.
+    func isHeldBySession(_ tab: Tab) -> Bool {
+        guard let holder = tabs[tab.id]?.holder, sessions.contains(where: { $0.id == holder }) else { return false }
+        return isBusy(tab) || holds(tab)
     }
 
     /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
@@ -611,6 +623,7 @@ final class AgentHub {
                 throw AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: another agent call was still running in it.")
             }
             state.isBusy = true
+            if let session = Self.callSession { state.holder = session.id }
             defer {
                 state.isBusy = false
                 state.interruption = nil

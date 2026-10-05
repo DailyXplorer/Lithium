@@ -18,6 +18,11 @@ final class PageWebView: WKWebView {
         translation?.adjust(menu, in: self, at: convert(event.locationInWindow, from: nil))
         menuSelection = ""
     }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { tab?.didComeIntoView() }
+    }
 }
 
 /// The context menu's Translate. WebKit's own opens macOS's translation popover, which picks the

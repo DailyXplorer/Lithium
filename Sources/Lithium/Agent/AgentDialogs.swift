@@ -49,17 +49,34 @@ struct DialogReply: Equatable {
 extension AgentHub {
     static let dialogTools: [AgentTool] = [dialogRespond]
 
-    /// Hooked from `Tab`'s alert, confirm and prompt. A dialog in a tab out of the window that an
-    /// agent drives (a call runs in it, or it acted there in the last 10 minutes) goes to the
-    /// agent, never to a modal that would hold up the user: the page waits for `dialog_respond`,
-    /// Stop, the user navigating the tab, or the tab closing. Nil when the dialog is the user's.
+    /// Hooked from `Tab`'s alert, confirm and prompt. A dialog in a tab out of the window that a
+    /// connected session holds goes to the agent, never to a modal that would hold up the user:
+    /// the page waits for `dialog_respond`, Stop, the user navigating the tab, or the tab closing.
+    /// It becomes the user's when the user looks at the tab or no connected session holds it any
+    /// more (`handDialogToUser`). Nil when the dialog is the user's.
     func agentReply(to dialog: AgentDialog, in tab: Tab) async -> DialogReply? {
-        guard tab.loadedWebView?.window == nil, isBusy(tab) || holds(tab), let state = agentTab(for: tab) else { return nil }
+        guard tab.loadedWebView?.window == nil, isHeldBySession(tab), let state = agentTab(for: tab) else { return nil }
         // Pages show one dialog at a time; another frame's would be the second.
         guard state.dialog == nil else { return dialog.safeDefault }
         state.dialog = dialog
         let reply = await withCheckedContinuation { state.dialogReply = $0 }
         return reply
+    }
+
+    /// The agent's dialog in `tab` is the user's now: shown at once in a tab in a window, else
+    /// when the user looks at it (hooked from its web view coming into a window). Until then
+    /// agents see it with `shownToUser`, and what answers an agent's dialog without the agent
+    /// (the user navigating, the tab closing, sleeping or its process dying) answers it.
+    func handDialogToUser(in tab: Tab) {
+        guard let state = tabs[tab.id], var dialog = state.dialog, let continuation = state.dialogReply else { return }
+        if tab.loadedWebView?.window != nil {
+            state.dialog = nil
+            state.dialogReply = nil
+            continuation.resume(returning: nil)
+        } else if !dialog.toUser {
+            dialog.toUser = true
+            state.dialog = dialog
+        }
     }
 
     /// A dialog shown to the user in a tab agents use: agents see it (`dialog_open`, the
@@ -73,16 +90,18 @@ extension AgentHub {
         return await body()
     }
 
-    /// Answers the agent's dialog in `tab`; with no reply, its safe default.
+    /// Answers the dialog waiting in `tab` for the agent, or for the user to look at the tab; with
+    /// no reply, its safe default. One shown to the user waits for the user.
     func answerDialog(in tab: Tab, _ reply: DialogReply? = nil) {
-        guard let state = tabs[tab.id], let dialog = state.dialog, !dialog.toUser, let continuation = state.dialogReply else { return }
+        guard let state = tabs[tab.id], let dialog = state.dialog, let continuation = state.dialogReply else { return }
         state.dialog = nil
         state.dialogReply = nil
         continuation.resume(returning: reply ?? dialog.safeDefault)
     }
 
+    /// Stop and access turned off: every dialog still the agent's.
     func answerEveryDialog() {
-        for state in tabs.values { if let tab = state.tab { answerDialog(in: tab) } }
+        for state in tabs.values where state.dialog?.toUser == false { if let tab = state.tab { answerDialog(in: tab) } }
     }
 
     func dialogOpen(_ named: NamedTab, _ dialog: AgentDialog) -> AgentToolError {

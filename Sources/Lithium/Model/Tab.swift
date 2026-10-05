@@ -916,8 +916,14 @@ extension Tab: WKUIDelegate {
         return reply.accepted ? reply.text ?? "" : nil
     }
 
-    /// A dialog in a tab out of sight that an agent drives goes to the agent, never to a modal
-    /// that would hold up the user; any other is the user's, and agents see it while it shows.
+    /// Its web view came into a window: the agent's dialog waiting in the page is the user's now.
+    func didComeIntoView() {
+        browser?.agent?.handDialogToUser(in: self)
+    }
+
+    /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to
+    /// a modal that would hold up the user, until it is handed to the user; any other is the
+    /// user's, and agents see it while it shows.
     private func answer(_ dialog: AgentDialog, asUser: () async -> DialogReply) async -> DialogReply {
         guard let agent = browser?.agent else { return await asUser() }
         if let reply = await agent.agentReply(to: dialog, in: self) { return reply }

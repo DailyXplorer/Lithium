@@ -344,10 +344,6 @@ struct AgentConfirmationsTests {
                     #expect(!tab.isAsleep)
                 } else {
                     tab.sleep(configuration: client.browser.makeConfiguration(for: tab.url))
-                    // WebKit takes the alert's answer on a later turn, from the web view let go;
-                    // without this pause the next suite's nested frame wait (AgentReadTests)
-                    // misses its 1 s answer.
-                    try await Task.sleep(for: .milliseconds(300))
                 }
                 #expect(client.hub.tabs[tab.id]?.dialog == nil, crash ? "process died" : "asleep")
                 let navigated = await client.call("navigate", ["tab": .string(id), "url": .string(one.absoluteString)])
@@ -373,6 +369,48 @@ struct AgentConfirmationsTests {
             window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
             #expect(await waitUntil(10) { tab.title == "yes" })
             #expect(client.hub.tabs[tab.id]?.dialog == nil)
+        }
+    }
+
+    /// Shows the tab as the user would, and answers the page's confirm on its sheet with OK.
+    private func answerAsUser(_ client: Client, in tab: Tab) async throws {
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = tab.webView
+        defer { window.contentView = nil }
+        #expect(await waitUntil(10) { window.attachedSheet != nil && client.hub.tabs[tab.id]?.dialog?.toUser == true })
+        let sheet = try #require(window.attachedSheet)
+        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        #expect(await waitUntil(10) { tab.title == "yes" })
+        #expect(client.hub.tabs[tab.id]?.dialog == nil)
+    }
+
+    /// The session that held the tab ends: its dialog waits for the user to look at the tab, and
+    /// the next one is the user's from the start.
+    @Test func aSessionEndingHandsItsDialogToTheUser() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            _ = try await tab.webView.evaluateJavaScript("setTimeout(() => { document.title = confirm('Sure?') ? 'yes' : 'no' }, 0); 0")
+            #expect(await waitUntil(10) { client.hub.tabs[tab.id]?.dialog?.toUser == false })
+
+            #expect(await client.hub.handle(.endSession(client.session)).status == 200)
+            #expect(client.hub.tabs[tab.id]?.dialog?.toUser == true)
+            let other = try await Client(browser: client.browser)
+            #expect((await other.call("dialog_respond", ["tab": .string(id), "accept": false])).code == "dialog_open")
+            try await answerAsUser(client, in: tab)
+
+            let next = await client.hub.agentReply(to: AgentDialog(.confirm, message: "Again?", host: "127.0.0.1"), in: tab)
+            #expect(next == nil, "out of sight, with no session holding the tab")
+        }
+    }
+
+    @Test func lookingAtTheTabHandsTheAgentsDialogToTheUser() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            _ = try await tab.webView.evaluateJavaScript("setTimeout(() => { document.title = confirm('Sure?') ? 'yes' : 'no' }, 0); 0")
+            #expect(await waitUntil(10) { client.hub.tabs[tab.id]?.dialog?.toUser == false })
+            try await answerAsUser(client, in: tab)
         }
     }
 

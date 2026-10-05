@@ -25,9 +25,12 @@ final class AgentTab {
     /// the main frame shows another document.
     var challenge: AgentChallenge?
     @ObservationIgnored var lastAction: Date?
-    /// The page's alert, confirm or prompt, waiting for an answer, and how to give it.
+    /// The session whose call last ran in the tab or acted there.
+    @ObservationIgnored var holder: String?
+    /// The page's alert, confirm or prompt, waiting for an answer, and how to give it: nil hands
+    /// it to the user, as the page's own dialog.
     var dialog: AgentDialog?
-    @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply, Never>?
+    @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?
     /// The agent gave the tab its last input: its navigation (from PR 5, its events). A download
     /// while that load is under way is the agent's, and asks the user.
     @ObservationIgnored var drive: AgentDrive?

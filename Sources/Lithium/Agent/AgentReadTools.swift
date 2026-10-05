@@ -667,7 +667,12 @@ extension AgentHub {
                 }
             } while met == nil && ContinuousClock.now < deadline
             if met == true { return }
-            if met == false, !gone { throw await staleRefIfGone(ref, named, webView, deadline, timeout: timeout, state: state) }
+            if met == false, !gone {
+                // A frame of the page left can still answer after the main frame committed, before
+                // the next page says hello: the element is gone whatever it says.
+                if tab.commits != commits { throw await staleRef(ref, in: named, webView, until: .now + .seconds(2)) }
+                throw await staleRefIfGone(ref, named, webView, deadline, timeout: timeout, state: state)
+            }
             throw timedOut(named, after: timeout, "\(ref) is not \(state)")
         case .text(let text, let present):
             let event = "“\(text)” \(present ? "showed" : "went")"

@@ -59,7 +59,11 @@ extension AgentHub {
         // Pages show one dialog at a time; another frame's would be the second.
         guard state.dialog == nil else { return dialog.safeDefault }
         state.dialog = dialog
+        // The tab's hooks reach this hub through it, even once access is off and the browser
+        // has no hub.
+        tab.dialogOwner = self
         let reply = await withCheckedContinuation { state.dialogReply = $0 }
+        if tab.dialogOwner === self { tab.dialogOwner = nil }
         return reply
     }
 

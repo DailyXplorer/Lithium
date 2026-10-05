@@ -36,6 +36,8 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var sleepingState: Any?
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
+    /// The hub whose dialog the page waits on: it still answers it once agent access is off.
+    @ObservationIgnored var dialogOwner: AgentHub?
     /// When the page was last heard, so a pause between tracks or while buffering isn't taken
     /// for silence.
     @ObservationIgnored private var lastHeard: Date?
@@ -405,6 +407,7 @@ final class Tab: NSObject, Identifiable {
         browser?.videoPopout.discard(self)
         browser?.nowPlaying.discard(self)
         browser?.agent?.pageGone(self)
+        dialogOwner?.answerDialog(in: self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -798,6 +801,7 @@ extension Tab: WKNavigationDelegate {
         // The media died with the process; a reload that never commits would leave it showing as playing.
         browser?.nowPlaying.discard(self)
         browser?.agent?.pageGone(self)
+        dialogOwner?.answerDialog(in: self)
         guard let browser else { return }
         guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))
@@ -918,7 +922,7 @@ extension Tab: WKUIDelegate {
 
     /// Its web view came into a window: the agent's dialog waiting in the page is the user's now.
     func didComeIntoView() {
-        browser?.agent?.handDialogToUser(in: self)
+        dialogOwner?.handDialogToUser(in: self)
     }
 
     /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to

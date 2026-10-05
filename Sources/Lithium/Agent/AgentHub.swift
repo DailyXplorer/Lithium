@@ -566,30 +566,29 @@ final class AgentHub {
     }
 
     /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
-    /// waiting on the tab ends with the same error as it sees the tab gone.
+    /// waiting on the tab ends with the same error as it sees the tab gone. The tab's
+    /// `dialogOwner` answers its dialog.
     func didClose(_ tab: Tab) {
         confirmations.cancel(tab: tab.id)
-        answerDialog(in: tab)
         tabIDs.retire(tab.id, at: now())
         tabs[tab.id] = nil
     }
 
     /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins over an
-    /// agent call running in it, a prompt about it, and the agent's dialog in it.
+    /// agent call running in it, and a prompt about it (the tab's `dialogOwner` answers the
+    /// agent's dialog in it).
     func userNavigated(_ tab: Tab) {
         guard let state = tabs[tab.id] else { return }
         state.drive = nil
         confirmations.cancel(tab: tab.id)
-        answerDialog(in: tab)
         if state.isBusy { state.interruption = .user }
     }
 
-    /// The tab's page went (it slept, or its process died), and any load with it: its dialog gets
-    /// its safe default, which nobody reads, so agents no longer see `dialog_open` for a page
-    /// that isn't there.
+    /// The tab's page went (it slept, or its process died), and any load with it. Its
+    /// `dialogOwner` gives its dialog the safe default, which nobody reads, so agents no longer
+    /// see `dialog_open` for a page that isn't there.
     func pageGone(_ tab: Tab) {
         tabs[tab.id]?.drive = nil
-        answerDialog(in: tab)
     }
 
     /// The agent's navigation still under way in `tab`, for a session still connected.

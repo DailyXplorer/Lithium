@@ -404,6 +404,24 @@ struct AgentConfirmationsTests {
         }
     }
 
+    /// Access turned off with a dialog handed to the user in a tab out of sight: the browser has
+    /// no hub any more, and the dialog still shows when the user looks at the tab.
+    @Test func aDialogHandedToTheUserOutlivesAccessTurnedOff() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            _ = try await tab.webView.evaluateJavaScript("setTimeout(() => { document.title = confirm('Sure?') ? 'yes' : 'no' }, 0); 0")
+            #expect(await waitUntil(10) { client.hub.tabs[tab.id]?.dialog?.toUser == false })
+            #expect(await client.hub.handle(.endSession(client.session)).status == 200)
+            #expect(client.hub.tabs[tab.id]?.dialog?.toUser == true)
+
+            await client.browser.setAgentAccess(false)
+            #expect(client.browser.agent == nil)
+            try await answerAsUser(client, in: tab)
+            #expect(tab.dialogOwner == nil)
+        }
+    }
+
     @Test func lookingAtTheTabHandsTheAgentsDialogToTheUser() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "one"))

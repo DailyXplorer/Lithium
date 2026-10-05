@@ -87,7 +87,10 @@ final class PageWebView: WKWebView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if !NativeInput.isAgents(event) { userPressed = false }
+        if !NativeInput.isAgents(event) {
+            if userPressed { tab?.noteUserActivation() }
+            userPressed = false
+        }
         super.mouseUp(with: event)
     }
 
@@ -102,7 +105,9 @@ final class PageWebView: WKWebView {
     }
 
     override func keyDown(with event: NSEvent) {
-        noteUser(event, pressing: true)
+        // Only Enter, of the user's keys, takes a load back from the agent: Space activates
+        // only a focused control, which the view can't tell before the page acts on it.
+        if noteUser(event, pressing: true), [36, 76].contains(event.keyCode) || event.characters == "\r" { tab?.noteUserActivation() }
         super.keyDown(with: event)
     }
 
@@ -116,7 +121,7 @@ final class PageWebView: WKWebView {
         let agents = NativeInput.isAgents(event)
         if pressing { agentPressedLast = agents }
         guard !agents else { return false }
-        tab?.noteUserInput(pressing: pressing)
+        tab?.noteUserInput()
         return true
     }
 }

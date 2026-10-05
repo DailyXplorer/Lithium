@@ -654,6 +654,7 @@ extension AgentHub {
             }
             touch(tab)
             for attempt in 1...2 {
+                AgentHub.callNotes?.startAttempt()
                 let webView = staged(tab)
                 // The stage keeps it however long the user takes to answer.
                 stage.hold(webView)
@@ -977,8 +978,8 @@ extension AgentHub {
             default: nil
             }
         }
-        if !fields.isEmpty, fields.allSatisfy({ !$0.inUnreadFrame && Guardrails.confirmation(for: .type, on: $0.element, page: $0.page) == nil }) {
-            AgentHub.callNotes?.intoUnguardedField = true
+        if !fields.isEmpty {
+            AgentHub.callNotes?.noteFields(unguarded: fields.allSatisfy { !$0.inUnreadFrame && Guardrails.confirmation(for: .type, on: $0.element, page: $0.page) == nil })
         }
         for (delivery, describing) in steps {
             let weighed: [(action: Guardrails.Action, target: ActionTarget, form: TargetReport.Form?)]

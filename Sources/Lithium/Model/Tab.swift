@@ -1012,8 +1012,13 @@ extension Tab: WKUIDelegate {
     }
 
     /// The user clicked, typed or scrolled in its page.
-    func noteUserInput(pressing: Bool) {
-        browser?.agent?.userInput(in: self, pressing: pressing)
+    func noteUserInput() {
+        browser?.agent?.userInput(in: self)
+    }
+
+    /// The user clicked in its page, or pressed Enter there.
+    func noteUserActivation() {
+        browser?.agent?.userActivated(in: self)
     }
 
     /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to

@@ -56,9 +56,22 @@ struct AgentTool {
 /// is logged the same way, and a character key never is.
 @MainActor
 final class CallNotes {
-    /// Set by `gate` once the field the call's values go to is known not to be a password or
-    /// card field, nor one in a frame Lithium can't read.
-    var intoUnguardedField = false
+    /// The field the values go to in this attempt is known not to be a password or card field,
+    /// nor one in a frame Lithium can't read, and no earlier attempt's was one.
+    var intoUnguardedField: Bool { attemptUnguarded && !everGuarded }
+    private var attemptUnguarded = false
+    private var everGuarded = false
+
+    /// `gate` weighed the fields the attempt's values go to.
+    func noteFields(unguarded: Bool) {
+        attemptUnguarded = unguarded
+        if !unguarded { everGuarded = true }
+    }
+
+    /// An action tries again, maybe into another field: it decides afresh.
+    func startAttempt() {
+        attemptUnguarded = false
+    }
 
     /// The arguments that carry what goes into a field, by tool.
     private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"]]
@@ -623,16 +636,21 @@ final class AgentHub {
 
     /// The user clicked, typed or scrolled in the tab's page: their input wins over an agent
     /// action running there. A load the agent started stays the agent's.
-    func userInput(in tab: Tab, pressing: Bool) {
-        guard let state = tabs[tab.id] else { return }
-        if pressing { state.drive?.userPressed = true }
-        if state.acting != nil, state.interruption == nil { state.interruption = .userInput }
+    func userInput(in tab: Tab) {
+        guard let state = tabs[tab.id], state.acting != nil, state.interruption == nil else { return }
+        state.interruption = .userInput
+    }
+
+    /// The user clicked in the tab's page, or pressed Enter there: a load the page starts next
+    /// may be theirs. Scrolling, arrows and typing never are.
+    func userActivated(in tab: Tab) {
+        tabs[tab.id]?.drive?.userActivated = true
     }
 
     /// The user's own click or Enter, pressed since the agent's load started, started a load in
     /// the tab's page: what it downloads is theirs.
     func userStartedLoad(in tab: Tab) {
-        guard tabs[tab.id]?.drive?.userPressed == true else { return }
+        guard tabs[tab.id]?.drive?.userActivated == true else { return }
         tabs[tab.id]?.drive = nil
     }
 

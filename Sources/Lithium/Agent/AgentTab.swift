@@ -222,8 +222,8 @@ struct AgentDrive {
     let session: MCPSession
     var marks: Tab.LoadMarks
     let deadline: ContinuousClock.Instant
-    /// The user pressed a button or a key in the page since.
-    var userPressed = false
+    /// The user clicked in the page since, or pressed Enter there.
+    var userActivated = false
 
     /// Until the load it started ends: a page shown, a move within the page, a download, a
     /// scheme refused. A load that ends without a word (cancelled), or never starts, ends it at

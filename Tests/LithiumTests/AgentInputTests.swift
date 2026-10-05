@@ -1409,6 +1409,78 @@ struct AgentInputTests {
         }
     }
 
+    /// A download the page starts a moment after the agent's click, while the user presses
+    /// arrows and letters, is still the agent's. The user's own click on a download link is theirs.
+    @Test func theUsersKeysLeaveTheAgentsDelayedDownloadTheAgents() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/export": (Self.html, "<title>Exported</title>")], delay: 20)
+        defer { slow.cancel() }
+        // Never answers within the test: the user's file never downloads.
+        let (stalled, stalledBase) = try await LocalHTTP.serve(["/mine.csv": Self.pages["/report.csv"]!], delay: 60)
+        defer { stalled.cancel() }
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "events"))
+            // Into a hidden frame, as sites' Export buttons often do: the agent's load goes on.
+            _ = try await page(tab, """
+                document.body.insertAdjacentHTML('beforeend', '<iframe name="sink" style="display:none"></iframe>'
+                  + '<a id="export" href="\(slowBase.appending(path: "export").absoluteString)" style="position:absolute;left:40px;top:320px">Export</a>'
+                  + '<a id="save" href="/report.csv" target="sink" style="position:absolute;left:40px;top:360px">Save</a>'
+                  + '<a id="mine" href="\(stalledBase.appending(path: "mine.csv").absoluteString)" target="sink" style="position:absolute;left:40px;top:440px">Mine</a>');
+                document.getElementById('export').addEventListener('click', () => setTimeout(() => document.getElementById('save').click(), 400), { once: true });
+                """)
+            let export = try await ref(client, id, "link", "Export")
+            let webView = try #require(tab.webView as? PageWebView)
+            let confirmations = client.hub.confirmations
+
+            let clicking = Task { await client.call("click", ["tab": .string(id), "ref": .string(export)]) }
+            #expect(await waitUntil(5) { tab.isAwaitingCommit })
+            let window = try #require(webView.window)
+            for (characters, code) in [("\u{F701}", UInt16(125)), ("a", 0)] {
+                webView.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)))
+            }
+            #expect((await clicking.value).code == "user_interrupted")
+            #expect(await waitUntil(10) { !confirmations.pending.isEmpty }, "the page's download asks")
+            #expect(confirmations.pending.map(\.kind) == [.download])
+            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+
+            #expect(tab.isAwaitingCommit && client.hub.drive(of: tab) != nil, "the agent's page is still on its way")
+            let top = try #require(try await page(tab, "return document.getElementById('mine').getBoundingClientRect().top") as? Double)
+            let mine = webView.convert(CGPoint(x: 50, y: top + 10), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: mine, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+            }
+            // Their click's load took the tab back: what it downloads won't ask for the agent.
+            #expect(await waitUntil(5) { client.hub.tabs[tab.id]?.drive == nil })
+            #expect(tab.isLoading, "the agent's page is still on its way")
+            #expect(confirmations.pending.isEmpty)
+        }
+    }
+
+    /// An action tried again after the user's Allow decides its log afresh: text the first try
+    /// would have typed into a plain field, and the second types into a password, is never logged.
+    @Test func anActionTriedAgainIntoAPasswordNeverLogsItsText() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "pay"))
+            _ = try await page(tab, "document.getElementById('user').focus()")
+            let confirmations = client.hub.confirmations
+            let typing = Task { await client.call("type", ["tab": .string(id), "text": "hunter2retry", "submit": true]) }
+            // Enter in the User field submits a form with card fields: the first try asks.
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            #expect(confirmations.pending.map(\.kind) == [.payment])
+            _ = try await page(tab, "document.getElementById('pw').focus()")
+            confirmations.pending.forEach { confirmations.answer($0.id, .allowOnce) }
+            // The prompt sends the action round again, now focused in the password field.
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+            #expect((await typing.value).code == "denied_by_user")
+
+            let entries = await client.hub.log.entries(limit: 100)
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            #expect(!logged.contains("hunter2retry"))
+            #expect(logged.contains("\"text\":\"[redacted]\""))
+        }
+    }
+
     @Test func theTargetIsPlacedAgainWhenTheUserSelectsItsTabDuringTheirAllow() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "moved"))

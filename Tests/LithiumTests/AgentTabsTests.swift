@@ -110,7 +110,11 @@ struct AgentTabsTests {
         "/secret?token=abc123&page=2": ("Content-Type: text/html", "<title>Secret</title>"),
         "/app": ("Content-Type: text/html", "<title>App</title>"),
         "/ticking": ("Content-Type: text/html", "<title>Ticking</title><script>let n = 0; setInterval(() => { location.hash = 'tick' + (++n) }, 20)</script>"),
+        "/busy": ("Content-Type: text/html", busy),
+        "/busy?again": ("Content-Type: text/html", busy),
     ]
+    /// Its script keeps the page busy for 3 seconds before the document is parsed.
+    private static let busy = "<title>Busy</title><script>const end = Date.now() + 3000; while (Date.now() < end) {}</script><p>done</p>"
 
     /// A browser with agent access on and one session. Afterwards its tabs close, so a dozen
     /// tests' web processes don't slow the next ones down, and access goes off, so the next
@@ -460,6 +464,30 @@ struct AgentTabsTests {
         }
     }
 
+    /// A page whose script keeps it busy can't answer whether its document is ready; the
+    /// deadline and Stop end the wait all the same.
+    @Test(.timeLimit(.minutes(1))) func aBusyPageDoesntHoldUpDomContentLoaded() async throws {
+        try await withAgent { client, base in
+            let id = try #require((await client.call("tab_open"))["tab"]?.string)
+            let tab: JSONValue = .string(id)
+            #expect(!(await client.call("navigate", ["tab": tab, "url": .string(base.appending(path: "busy").absoluteString), "wait": "commit"])).isError)
+            var started = ContinuousClock.now
+            let waited = await client.call("wait_for", ["tab": tab, "load": "domcontentloaded", "timeoutMs": 500])
+            #expect(waited.code == "timeout", "\(waited.content)")
+            #expect(ContinuousClock.now - started < .milliseconds(1500))
+
+            let again = base.appending(path: "busy").absoluteString + "?again"
+            #expect(!(await client.call("navigate", ["tab": tab, "url": .string(again), "wait": "commit"])).isError)
+            let waiting = Task { await client.call("wait_for", ["tab": tab, "load": "domcontentloaded", "timeoutMs": 20_000]) }
+            try await Task.sleep(for: .milliseconds(300))
+            started = ContinuousClock.now
+            #expect(!(await client.call("stop", ["tab": tab])).isError)
+            let stopped = await waiting.value
+            #expect(stopped.code == "stopped", "\(stopped.content)")
+            #expect(ContinuousClock.now - started < .milliseconds(1500))
+        }
+    }
+
     @Test func refusesBlockedAddressesAndPages() async throws {
         try await withAgent { client, base in
             let browser = client.browser
@@ -567,6 +595,56 @@ struct AgentTabsTests {
         }
     }
 
+    /// Reloads the user asks for from a site's settings are the user's navigation too: the agent's
+    /// load doesn't answer for them.
+    @Test(.timeLimit(.minutes(1))) func reloadsTheUserAsksForEndTheWait() async throws {
+        let hanging = try await HangingHTTP()
+        defer { hanging.stop() }
+        // Shown at once, but never done loading: its image never comes.
+        let (listener, slow) = try await LocalHTTP.serve(["/slow": ("Content-Type: text/html", "<title>Slow</title><img src=\"\(hanging.url.absoluteString)\">")])
+        defer { listener.cancel() }
+        try await withAgent { client, _ in
+            let browser = client.browser
+            let page = slow.appending(path: "slow")
+            defer { browser.privacy.setEnabled(true, for: page) }
+            let settings = browser.newTab(url: Internal.settingsURL, selecting: false)
+            #expect(await poll(30) { (try? await settings.webView.evaluateJavaScript("typeof call", in: nil, contentWorld: .page) as? String) == "function" })
+            let reloads: [(String, (Lithium.Tab) async throws -> Void)] = [
+                ("protections", { browser.setProtections(false, for: $0) }),
+                ("site data", { _ in _ = try await settings.webView.callAsyncJavaScript("return await call('clearSiteData', '127.0.0.1')", contentWorld: .page) }),
+            ]
+            for (name, reload) in reloads {
+                let (tab, call) = try await pendingNavigation(client, to: page)
+                #expect(await waitUntil(15) { tab.title == "Slow" && tab.isLoading }, "\(name)")
+                try await reload(tab)
+                let result = await call.value
+                #expect(result.code == "user_interrupted", "\(name): \(result.content)")
+            }
+        }
+    }
+
+    /// The tab stays, showing the error, and the agent is told which it is.
+    @Test func aTabWhosePageFailsToOpenStaysAndIsNamed() async throws {
+        let (closed, refusing) = try await LocalHTTP.serve([:])
+        closed.cancel()
+        try await withAgent { client, base in
+            let failed = await client.call("tab_open", ["url": .string(refusing.appending(path: "gone").absoluteString), "wait": "load"])
+            #expect(failed.code == "navigation_failed", "\(failed.content)")
+            let id = try #require(failed["tab"]?.string)
+            let tab = try #require(client.tab(id))
+            #expect(client.browser.agentTabs.contains { $0 === tab })
+            #expect(tab.loadError != nil)
+            #expect(client.hub.recentLog.last?.tab == id)
+            #expect(client.hub.recentLog.last?.error == "navigation_failed")
+            let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
+            let last = try #require(log.split(separator: "\n").last.map { try JSONValue.decode(Data($0.utf8)) })
+            #expect(last["tab"]?["id"] == .string(id))
+
+            let retried = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "one").absoluteString)])
+            #expect(retried["title"] == "One", "\(retried.content)")
+        }
+    }
+
     @Test(.timeLimit(.minutes(1))) func stopEndsAWaitingCall() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }
@@ -600,6 +678,7 @@ struct AgentTabsTests {
             let stopped = await client.call("stop", ["tab": .string(id)])
             #expect(stopped.code == "tab_closed")
             #expect(stopped.message.hasPrefix("\(id) was closed at "))
+            #expect([waited, reloaded, stopped].allSatisfy { $0["tab"] == .string(id) })
             #expect(!client.hub.isTouched(tab))
             #expect(!client.hub.holds(tab))
             // No id was given to the closed tab: the next one is the next number.

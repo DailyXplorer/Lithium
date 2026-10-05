@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import WebKit
 
 /// Agents' short names for tabs: `t1`, `t2`, … in the order agents first see them, never reused
@@ -40,6 +41,13 @@ struct NamedTab {
     var closedError: AgentToolError {
         AgentToolError(code: "tab_closed", message: "\(id) was closed while the agent waited on it.")
     }
+}
+
+/// The page's answer to a question, observed, so a wait on it ends as it comes.
+@MainActor
+@Observable
+private final class PageAnswer {
+    var ready: Bool?
 }
 
 /// What ends an agent call running in a tab before it is done.
@@ -157,7 +165,7 @@ extension AgentHub {
 
     static let tabOpen = AgentTool(
         name: "tab_open",
-        description: "Opens a tab in the background, in the sidebar’s Agent group. The user’s selected tab and focus stay as they are; call tab_select to show it.",
+        description: "Opens a tab in the background, in the sidebar’s Agent group. The user’s selected tab and focus stay as they are; call tab_select to show it. If its page fails to load, the tab stays open, showing the error, and the error names it.",
         inputSchema: schema([
             "url": ["type": "string", "description": "An http or https address. Without one the tab opens empty."],
             "ephemeral": ["type": "boolean", "description": "Not supported yet; must be false."],
@@ -447,21 +455,24 @@ extension AgentHub {
             if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: error.localizedDescription) }
         }
         if state == .domcontentloaded {
-            // No delegate call marks DOMContentLoaded: the page is asked, in short rounds so Stop and the deadline still apply.
+            // No delegate call marks DOMContentLoaded: the page is asked. A page script can keep
+            // the page from answering for as long as it runs, so the answer races the deadline,
+            // Stop, the user and the load ending, and the first of them ends the wait. An answer
+            // still pending then comes once the script lets go, to nobody; no other is asked meanwhile.
             while ContinuousClock.now < deadline {
-                try checkStillWaitable(named)
-                try failed()
-                if !tab.isLoading { return }
                 if tab.isAwaitingCommit {
                     // The document shown is on its way out, and long since ready.
-                    _ = try await watch(named, until: deadline) { tab.isAwaitingCommit ? nil : true }
+                    guard try await watch(named, until: deadline, { try failed(); return tab.isAwaitingCommit ? nil : true }) != nil else { break }
                     continue
                 }
-                if await documentIsReady(tab, within: min(.milliseconds(250), deadline - .now)) {
-                    // What happened while the page was asked counts first.
-                    try checkStillWaitable(named)
-                    return
+                let answer = PageAnswer()
+                Task { answer.ready = await documentIsReady(tab, within: deadline - .now) }
+                let ready = try await watch(named, until: deadline) { () -> Bool? in
+                    try failed()
+                    return tab.isLoading ? answer.ready : true
                 }
+                guard let ready else { break }
+                if ready { return }
                 // A page between documents answers at once, with an error.
                 try await Task.sleep(for: .milliseconds(20))
             }

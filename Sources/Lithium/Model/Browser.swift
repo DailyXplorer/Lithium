@@ -215,13 +215,13 @@ final class Browser {
     /// Reloads the page so its content blockers and scripts match the new setting.
     func setProtections(_ enabled: Bool, for tab: Tab?) {
         privacy.setEnabled(enabled, for: tab?.url)
-        tab?.reload()
+        navigate(tab, .reload)
     }
 
     /// Reuses a tab already showing that internal page, moving it to the requested section.
     private func openInternal(_ url: URL) {
         if let existing = tabs.first(where: { $0.url?.host() == url.host() && Internal.isInternal($0.url) }) {
-            if url.fragment() != nil, existing.url != url { existing.load(url) }
+            if url.fragment() != nil, existing.url != url { navigate(existing, .open(url)) }
             select(existing)
         } else {
             newTab(url: url)
@@ -381,21 +381,22 @@ final class Browser {
 
     private func open(_ url: URL) {
         if let tab = selectedTab {
-            agent?.userNavigated(tab)
-            tab.load(url)
+            navigate(tab, .open(url))
         } else {
             newTab(url: url)
         }
     }
 
-    enum Step { case back, forward, reload, stop }
+    enum Step { case open(URL), back, forward, reload, stop }
 
-    /// Back, Forward, Reload and Stop from Lithium's toolbar, menus and sidebar: the user's own
-    /// navigation, which wins over an agent waiting on that tab.
+    /// Every navigation the user asks of an open tab (the address bar, Back, Forward, Reload and
+    /// Stop, a reload after a change to the site's settings or data): it wins over an agent
+    /// waiting on that tab. What Lithium or an extension does on its own doesn't come here.
     func navigate(_ tab: Tab?, _ step: Step) {
         guard let tab else { return }
         agent?.userNavigated(tab)
         switch step {
+        case .open(let url): tab.load(url)
         case .back: tab.webView.goBack()
         case .forward: tab.webView.goForward()
         case .reload: tab.reload()

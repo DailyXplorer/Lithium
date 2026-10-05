@@ -299,8 +299,9 @@ struct AgentServerTests {
         #expect(missing.status == 401)
         #expect(missing.headers["www-authenticate"] == "Bearer")
         var wrong = fixture.endpoint.token
-        wrong.removeLast()
-        wrong += "A"
+        // One character off: a different one, whatever the token ends with.
+        let last = wrong.removeLast()
+        wrong.append(last == "A" ? "B" : "A")
         for authorization in ["Bearer \(wrong)", "Bearer ", "Basic \(fixture.endpoint.token)", fixture.endpoint.token] {
             let reply = try await RawHTTP.send(port: fixture.port, method: "POST", headers: ["Content-Type": "application/json", "Authorization": authorization], body: body)
             #expect(reply.status == 401, "\(authorization)")

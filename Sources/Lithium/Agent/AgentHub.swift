@@ -30,6 +30,9 @@ struct AgentTool {
 struct AgentToolError: Error, Equatable {
     let code: String
     let message: String
+    /// The tab the failed call concerns, so the agent can still reach it: the one `tab_open`
+    /// opened stays open when its page fails to load.
+    var tab: String?
 }
 
 /// Agent access while it is on: the server, the sessions, tool calls in flight, and the Stop
@@ -384,7 +387,7 @@ final class AgentHub {
         guard calls[key] == nil else {
             return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
         }
-        let result: Result<JSONValue, AgentToolError>
+        var result: Result<JSONValue, AgentToolError>
         if isRateLimited(session.id, at: started) {
             result = .failure(AgentToolError(code: "rate_limited", message: "More than \(Self.maxCallsPerSecond) tool calls in a second. Slow down."))
         } else {
@@ -415,10 +418,17 @@ final class AgentHub {
             }
         }
         let ms = Int(Date().timeIntervalSince(started) * 1000)
+        if case .failure(var error) = result, error.tab == nil, let id = arguments["tab"]?.string, tabIDs.tabID(for: id) != nil || tabIDs.closed[id] != nil {
+            error.tab = id
+            result = .failure(error)
+        }
         // Reads are logged without what they returned; the tab a call opened is named.
         var logged: [String: JSONValue] = ["ok": .bool((try? result.get()) != nil)]
         if case .failure(let error) = result { logged["error"] = .string(error.code) }
-        let tabID = arguments["tab"]?.string ?? (try? result.get())?["tab"]?.string
+        let tabID: String? = switch result {
+        case .success(let value): arguments["tab"]?.string ?? value["tab"]?.string
+        case .failure(let error): error.tab ?? arguments["tab"]?.string
+        }
         var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
@@ -513,22 +523,27 @@ final class AgentHub {
     }
 
     /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
-    /// turn. Waiting in line counts against the call's own deadline.
+    /// turn. Waiting in line counts against the call's own deadline. Its errors name the tab.
     func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {
-        let tab = named.tab
-        let free = try await AgentWait.until(deadline) { () -> Bool? in
-            guard self.isOpen(tab) else { throw named.closedError }
-            return self.busyTabs.contains(tab.id) ? nil : true
+        do {
+            let tab = named.tab
+            let free = try await AgentWait.until(deadline) { () -> Bool? in
+                guard self.isOpen(tab) else { throw named.closedError }
+                return self.busyTabs.contains(tab.id) ? nil : true
+            }
+            guard free != nil else {
+                throw AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: another agent call was still running in it.")
+            }
+            busyTabs.insert(tab.id)
+            defer {
+                busyTabs.remove(tab.id)
+                interruptions[tab.id] = nil
+            }
+            return try await body()
+        } catch var error as AgentToolError {
+            error.tab = error.tab ?? named.id
+            throw error
         }
-        guard free != nil else {
-            throw AgentToolError(code: "timeout", message: "\(named.id) after \(Int(timeout / .milliseconds(1))) ms: another agent call was still running in it.")
-        }
-        busyTabs.insert(tab.id)
-        defer {
-            busyTabs.remove(tab.id)
-            interruptions[tab.id] = nil
-        }
-        return try await body()
     }
 
     private func isRateLimited(_ sessionID: String, at now: Date) -> Bool {
@@ -550,9 +565,11 @@ final class AgentHub {
         case .success(let value):
             return ["content": [["type": "text", "text": .string(String(decoding: value.encoded(), as: UTF8.self))]], "structuredContent": value, "isError": false]
         case .failure(let error):
+            var data: [String: JSONValue] = ["code": .string(error.code), "message": .string(error.message)]
+            if let tab = error.tab { data["tab"] = .string(tab) }
             return [
                 "content": [["type": "text", "text": .string("\(error.code): \(error.message)")]],
-                "structuredContent": ["code": .string(error.code), "message": .string(error.message)],
+                "structuredContent": .object(data),
                 "isError": true,
             ]
         }

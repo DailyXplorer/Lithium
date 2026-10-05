@@ -141,7 +141,7 @@ extension AgentHub {
     private static let timeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default."]
     static let diffParam: JSONValue = [
         "type": "boolean",
-        "description": "true by default: once the page has loaded as far as domcontentloaded, the result’s diff says what changed in the viewport since this session’s last snapshot of the page (the whole viewport snapshot for a new page), as snapshot text.",
+        "description": "true by default: once the page has loaded as far as domcontentloaded, the result’s diff says what changed in the viewport since this session’s last default snapshot of the page, viewport scope and 300 nodes (the whole viewport snapshot for a new page or when there was none), as snapshot text.",
     ]
 
     static func schema(_ properties: [String: JSONValue], required: [String] = []) -> JSONValue {

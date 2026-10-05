@@ -58,6 +58,22 @@ struct AgentSnapshotModelTests {
         #expect(!after.hasSameContent(as: before))
     }
 
+    @Test func framesTooSlowThisTimeAreNotRemoved() {
+        let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let frame = SnapshotNode(ref: "f1", role: "frame", box: [0, 0, 300, 200])
+        let read = PageSnapshot(tab: "t1", url: "https://a.example/", title: "A", seq: 1, viewport: viewport, zoom: 1, focused: nil, challenge: nil, dropped: 0, nodes: [
+            frame,
+            SnapshotNode(ref: "f1:e2", role: "button", name: "In frame", box: [10, 10, 80, 30], frame: "f1"),
+            SnapshotNode(ref: "f2", role: "frame", box: [100, 100, 100, 50], frame: "f1"),
+            SnapshotNode(ref: "f2:e3", role: "button", name: "Nested", box: [110, 110, 50, 20], frame: "f2"),
+            SnapshotNode(ref: "e4", role: "button", name: "Gone", box: [400, 0, 50, 20]),
+        ])
+        let late = PageSnapshot(tab: "t1", url: "https://a.example/", title: "A", seq: 2, viewport: viewport, zoom: 1, focused: nil, challenge: nil, dropped: 0, nodes: [frame], unread: ["f1"])
+        #expect(late.diff(since: read)["removed"] == ["e4"])
+        let gone = PageSnapshot(tab: "t1", url: "https://a.example/", title: "A", seq: 2, viewport: viewport, zoom: 1, focused: nil, challenge: nil, dropped: 0, nodes: [])
+        #expect(gone.diff(since: read)["removed"] == ["f1", "f1:e2", "f2", "f2:e3", "e4"])
+    }
+
     @Test func placesFramesDownTheirContentBoxes() throws {
         let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
         let main = MaskReport(token: "m", path: "", viewport: viewport, rects: [], frames: [
@@ -251,6 +267,11 @@ struct AgentReadTests {
             <title>Long</title><style>body { margin: 0; background: white }</style>
             <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10000px;width:400px;height:100px;background:rgb(0,0,255);border:0">
             <div style="position:absolute;left:0;top:11900px;width:1280px;height:100px;background:rgb(255,0,0)"></div>
+            """),
+        "/chart": (Self.html, """
+            <title>Chart</title>
+            <svg width="300" height="100"><a href="one"><rect width="100" height="40" fill="red"></rect><text x="10" y="30">Bar one</text></a></svg>
+            <p><a href="/help">Help</a></p>
             """),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
@@ -494,6 +515,14 @@ struct AgentReadTests {
             #expect(reloaded.contains("button \"Pay €42.00\""))
             let waited = await client.call("wait_for", ["tab": .string(tab), "load": "load"])
             #expect(waited["diff"]?.string?.hasSuffix("seq 2 · viewport 1280x800 scroll 0,0 · page 1280x800 · since 2\nno changes") == true, "\(waited["diff"]?.string ?? "")")
+            // A page snapshot shows nodes the default view leaves out: diffs never compare the two.
+            _ = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "many"), "diff": false])
+            #expect(await client.call("snapshot", ["tab": .string(tab), "scope": "page", "maxNodes": 2000])["seq"] == 3)
+            let afterWhole = try #require(await client.call("wait_for", ["tab": .string(tab), "text": "Item 1"])["diff"]?.string)
+            #expect(!afterWhole.contains(" · since ") && !afterWhole.contains("\n- "), "\(afterWhole.prefix(300))")
+            let again = await client.call("snapshot", ["tab": .string(tab), "scope": "page", "maxNodes": 2000, "since": 3])
+            #expect(again["seq"] == 3)
+            #expect(again["text"]?.string?.hasSuffix(" · since 3\nno changes") == true, "\(again["text"]?.string?.prefix(300) ?? "")")
             let quiet = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "list"), "diff": false])
             #expect(quiet["diff"] == nil)
             #expect(await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "list"), "diff": "yes"]).code == "invalid_params")
@@ -532,8 +561,10 @@ struct AgentReadTests {
             #expect(snapshot["challenge"] == ["kind": "cloudflare", "page": true])
             let state = try #require(client.tab(tab).flatMap { client.hub.agentTab(for: $0) })
             #expect(state.challenge == AgentChallenge(kind: "cloudflare", page: true))
-            _ = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "one")])
-            #expect(state.challenge == nil)
+            // The user passes the check and the page moves on: no agent reads it again.
+            let page = try #require(client.tab(tab)?.webView)
+            _ = try await page.callAsyncJavaScript("location.href = '/one'", contentWorld: .page)
+            #expect(await waitUntil(10) { state.challenge == nil })
         }
     }
 
@@ -636,6 +667,23 @@ struct AgentReadTests {
             #expect(info["coveredBy"]?["element"] == "div#cookie-banner")
             #expect(info["coveredBy"]?["text"] == "We use cookies")
             #expect(info["box"]?["css"] == [20, 20, 100, 40])
+        }
+    }
+
+    @Test func svgLinksAreListedWithTheirAddress() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/chart")
+            let links = await client.call("links", ["tab": .string(tab)])
+            #expect(!links.isError, "\(links.message)")
+            #expect(links["count"] == 2)
+            let bar = try #require(items(links["links"]).first { $0["text"] == "Bar one" }, "\(text(links.content))")
+            #expect(bar["href"] == .string(base.absoluteString + "one"))
+            let filtered = await client.call("links", ["tab": .string(tab), "filter": "BAR"])
+            #expect(!filtered.isError, "\(filtered.message)")
+            #expect(items(filtered["links"]).compactMap { $0["text"] } == ["Bar one"])
+            let markdown = await client.call("read_text", ["tab": .string(tab), "ref": try #require(bar["ref"]), "format": "markdown"])
+            #expect(!markdown.isError, "\(markdown.message)")
+            #expect(markdown["text"]?.string == "[Bar one](\(base.absoluteString)one)")
         }
     }
 

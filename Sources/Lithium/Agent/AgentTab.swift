@@ -21,7 +21,8 @@ final class AgentTab {
     var isBusy = false
     /// What ends the call running in it early; cleared when that call ends.
     var interruption: AgentInterruption?
-    /// A CAPTCHA or bot check the agent met in it, for the indicator, until a read finds none.
+    /// A CAPTCHA or bot check the agent met in it, for the indicator, until a read finds none or
+    /// the main frame shows another document.
     var challenge: AgentChallenge?
     @ObservationIgnored var lastAction: Date?
 
@@ -33,13 +34,16 @@ final class AgentTab {
     @ObservationIgnored private var refs: [String: ElementAddress] = [:]
     @ObservationIgnored private var issued: [ElementAddress: String] = [:]
     @ObservationIgnored private var frameRefs: [String: String] = [:]
+    @ObservationIgnored private var frameElements: [ElementAddress: String] = [:]
     @ObservationIgnored private var nextElement = 1
     @ObservationIgnored private var nextFrame = 1
     /// Each frame's last full report and the generation it had, so an unchanged frame answers
     /// without walking its document.
     @ObservationIgnored var reports: [String: (scope: String, report: FrameReport)] = [:]
-    /// The last snapshot each session got of this tab, for diffs.
+    /// The last snapshot each session got of this tab in each view (scope and size), for diffs,
+    /// and the last `seq` each session got.
     @ObservationIgnored var snapshots: [String: PageSnapshot] = [:]
+    @ObservationIgnored var seqs: [String: Int] = [:]
     /// Every node a snapshot of this page showed, so `stale_ref` can say what a ref was.
     @ObservationIgnored var shown: [String: SnapshotNode] = [:]
 
@@ -56,6 +60,8 @@ final class AgentTab {
             guard token != mainDocument else { return }
             reports = [:]
             shown = [:]
+            // The user may have passed the check: the next read says if the new page is one.
+            challenge = nil
             switchPage(to: token)
         } else {
             frames[token] = frame
@@ -125,6 +131,12 @@ final class AgentTab {
 
     func setFrameElement(_ frameRef: String, _ address: ElementAddress) {
         refs[frameRef] = address
+        frameElements[address] = frameRef
+    }
+
+    /// The ref of the frame document last read in the `<iframe>` at `address`.
+    func frameRef(at address: ElementAddress) -> String? {
+        frameElements[address]
     }
 
     nonisolated static func isRef(_ string: String) -> Bool {

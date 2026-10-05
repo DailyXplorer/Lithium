@@ -143,6 +143,10 @@ struct PageSnapshot {
     /// The main frame's document: a diff from a snapshot of another one (a reload, the next
     /// page) would remove and add every node, so the whole snapshot is given instead.
     var document = ""
+    /// Frames read before that didn't answer this time (too slow), by ref: their nodes are left out, not removed.
+    var unread: Set<String> = []
+    /// The scope and node cap it was taken with: diffs only compare snapshots of the same view.
+    var view = ""
 
     func hasSameContent(as other: PageSnapshot) -> Bool {
         document == other.document && url == other.url && title == other.title && focused == other.focused && challenge == other.challenge
@@ -201,7 +205,16 @@ struct PageSnapshot {
             }
             if !old.hasSameContent(as: node) { changed.append(node) }
         }
-        let removed = earlier.nodes.map(\.ref).filter { !now.contains($0) }
+        let parents = Dictionary(earlier.nodes.filter { $0.role == "frame" }.map { ($0.ref, $0.frame) }) { first, _ in first }
+        let inUnreadFrame = { (node: SnapshotNode) -> Bool in
+            var frame = node.frame
+            while let ref = frame {
+                if unread.contains(ref) { return true }
+                frame = parents[ref] ?? nil
+            }
+            return false
+        }
+        let removed = earlier.nodes.filter { !now.contains($0.ref) && !inUnreadFrame($0) }.map(\.ref)
         var fields = head
         fields["since"] = .int(earlier.seq)
         fields["added"] = .array(added.map(\.json))
@@ -229,6 +242,7 @@ extension AgentTab {
         var nodes: [SnapshotNode] = []
         var focused: String?
         var challenge = main.challenge.map { AgentChallenge(kind: $0, page: true) }
+        var unread: Set<String> = []
 
         func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?) {
             let document = report.token
@@ -266,7 +280,13 @@ extension AgentTab {
                 let child = frame.index >= 0 ? byPath[childPath] : nil
                 node.origin = child.flatMap { origins[$0.token] } ?? Self.origin(of: frame.src)
                 guard let child else {
-                    node.ref = ref(for: address)
+                    // A frame read before that didn't answer this time keeps its ref; what it showed isn't removed.
+                    if let known = frameRef(at: address) {
+                        node.ref = known
+                        unread.insert(known)
+                    } else {
+                        node.ref = ref(for: address)
+                    }
                     nodes.append(node)
                     continue
                 }
@@ -300,20 +320,23 @@ extension AgentTab {
         if main.truncated == true || children.contains(where: { $0.truncated == true }) { dropped = max(dropped, 1) }
         return PageSnapshot(
             tab: id, url: main.url ?? "", title: main.title ?? "", viewport: viewport, zoom: zoom,
-            focused: focused, challenge: challenge, dropped: dropped, nodes: nodes, document: main.token
+            focused: focused, challenge: challenge, dropped: dropped, nodes: nodes, document: main.token, unread: unread
         )
     }
 
-    /// Numbers the snapshot for the session: the same number as the last one when nothing but
-    /// boxes changed, the next one otherwise. Returns the session's previous snapshot.
+    /// Numbers the snapshot for the session: the same number as its last snapshot in the same view
+    /// when nothing but boxes changed, the next number otherwise. Returns that last snapshot, the
+    /// only one a diff may compare with: a view of another scope or size shows other nodes.
     func record(_ snapshot: inout PageSnapshot, session: String) -> PageSnapshot? {
-        let previous = snapshots[session]
-        if let previous {
-            snapshot.seq = snapshot.hasSameContent(as: previous) ? previous.seq : previous.seq + 1
+        let key = "\(session) \(snapshot.view)"
+        let previous = snapshots[key]
+        if let previous, snapshot.hasSameContent(as: previous) {
+            snapshot.seq = previous.seq
         } else {
-            snapshot.seq = 1
+            snapshot.seq = seqs[session, default: 0] + 1
+            seqs[session] = snapshot.seq
         }
-        snapshots[session] = snapshot
+        snapshots[key] = snapshot
         if shown.count > 20_000 { shown = [:] }
         for node in snapshot.nodes { shown[node.ref] = node }
         return previous

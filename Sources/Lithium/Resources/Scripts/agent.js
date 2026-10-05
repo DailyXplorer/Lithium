@@ -57,6 +57,13 @@
   const isExtensionUI = (element) => element.localName.startsWith('com-1password');
   // WebKit shows pages an extension frame's address as webkit-masked-url://hidden/.
   const isExtensionFrame = (element) => /^(webkit-extension|webkit-masked-url):/i.test(element.src || element.getAttribute('src') || '');
+  // An SVG link's href is an SVGAnimatedString; users follow it all the same.
+  const hrefOf = (element) => {
+    if (typeof element.href === 'string') return element.href;
+    const raw = element.href?.baseVal;
+    if (!raw) return '';
+    try { return new URL(raw, document.baseURI).href; } catch { return ''; }
+  };
 
   // Roles
   const inputRoles = {
@@ -510,9 +517,10 @@
         if (cells.some(Boolean)) out.push({ text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element });
         return;
       }
-      if (markdown && tag === 'a' && element.href && !element.href.startsWith('javascript:')) {
+      const href = markdown && tag === 'a' ? hrefOf(element) : '';
+      if (href && !href.startsWith('javascript:')) {
         const text = visibleText(element, false);
-        if (text) line += ` [${text}](${element.href}) `;
+        if (text) line += ` [${text}](${href}) `;
         return;
       }
       const children = element.shadowRoot ? [...element.shadowRoot.childNodes, ...element.childNodes] : element.childNodes;
@@ -569,10 +577,11 @@
     const wanted = (filter || '').toLowerCase();
     const found = [];
     for (const element of allElements(document)) {
-      if (!['a', 'area'].includes(element.localName) || !element.href || !isVisible(element)) continue;
+      const href = ['a', 'area'].includes(element.localName) ? hrefOf(element) : '';
+      if (!href || !isVisible(element)) continue;
       const text = cut(nameOf(element, 'link'), 80);
-      if (wanted && !text.toLowerCase().includes(wanted) && !element.href.toLowerCase().includes(wanted)) continue;
-      found.push({ id: idOf(element), text, href: element.href });
+      if (wanted && !text.toLowerCase().includes(wanted) && !href.toLowerCase().includes(wanted)) continue;
+      found.push({ id: idOf(element), text, href });
       if (found.length >= 1000) break;
     }
     return { token: frame.token, links: found };

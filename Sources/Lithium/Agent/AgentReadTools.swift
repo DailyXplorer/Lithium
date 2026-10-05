@@ -474,13 +474,14 @@ extension AgentHub {
             origins[report.token] = "\(origin.protocol)://\(origin.host)\(origin.port == 0 ? "" : ":\(origin.port)")"
             reports.append(report)
         }
-        let snapshot = state.compose(tab: named.id, main: mainReport, children: reports, origins: origins, zoom: webView.pageZoom, maxNodes: maxNodes)
+        var snapshot = state.compose(tab: named.id, main: mainReport, children: reports, origins: origins, zoom: webView.pageZoom, maxNodes: maxNodes)
+        snapshot.view = "\(scope) \(maxNodes)"
         if state.challenge != snapshot.challenge { state.challenge = snapshot.challenge }
         return snapshot
     }
 
     /// What navigation tools and `wait_for` add: what the viewport shows now, as a diff from this
-    /// session's last snapshot of the tab, or whole when there was none or it was another page.
+    /// session's last default snapshot of the tab, or whole when there was none or it was another page.
     /// Left out, rather than failing the call, when the page doesn't answer in a few seconds.
     func addingDiff(to page: JSONValue, of named: NamedTab, for session: MCPSession, if wanted: Bool) async -> JSONValue {
         guard wanted, var fields = page.object, named.tab.pdf == nil, !named.tab.isAsleep, named.tab.loadedWebView != nil,

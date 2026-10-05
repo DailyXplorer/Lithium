@@ -120,7 +120,7 @@ extension AgentHub {
     private static let tabParam: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
     private static let waitParam: JSONValue = [
         "type": "string", "enum": ["none", "commit", "domcontentloaded", "load"],
-        "description": "How far the page must get before the call returns.",
+        "description": "How far the page must get before the call returns. A page that fails to open is navigation_failed. none returns at once, with state started, before anything is known: call wait_for to learn whether the page opened.",
     ]
     private static let timeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default."]
 
@@ -333,6 +333,10 @@ extension AgentHub {
         let load = try arguments.optionalString("load")
         let pattern = try arguments.optionalString("url")
         guard (load == nil) != (pattern == nil) else { throw Arguments.invalid("Give exactly one condition: load or url.") }
+        let state = try load.map { load in
+            guard let state = LoadWait(rawValue: load), state >= .domcontentloaded else { throw Arguments.invalid("load must be domcontentloaded or load.") }
+            return state
+        }
         let matches = try pattern.map { pattern in
             guard let matches = AgentURLs.matcher(for: pattern) else {
                 throw Arguments.invalid("url is a glob (* any characters, ? one character); /regex/ patterns aren’t supported.")
@@ -350,10 +354,7 @@ extension AgentHub {
                 guard met != nil else {
                     throw hub.timedOut(named, after: timeout, "its address \(tab.url?.absoluteString ?? "none") doesn’t match \(pattern)")
                 }
-            } else {
-                guard let state = load.flatMap(LoadWait.init(rawValue:)), state >= .domcontentloaded else {
-                    throw Arguments.invalid("load must be domcontentloaded or load.")
-                }
+            } else if let state {
                 // A sleeping tab loads its page once woken: that load is the one to wait for.
                 if tab.isAsleep {
                     _ = try await hub.navigation(in: named, wait: state, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() }
@@ -404,7 +405,8 @@ extension AgentHub {
             "title": .string(tab.displayTitle),
             "loading": .bool(tab.isLoading),
         ]
-        if let reached, reached != .none { fields["state"] = .string(reached.rawValue) }
+        // `none`: the navigation has started, and nothing more is known; wait_for tells how it ends.
+        if let reached { fields["state"] = .string(reached == LoadWait.none ? "started" : reached.rawValue) }
         if let status = tab.httpStatus { fields["status"] = .int(status) }
         return .object(fields)
     }
@@ -432,15 +434,26 @@ extension AgentHub {
     /// commits, never the one before) gets as far as `wait`. A move within the document shown
     /// (an anchor, Back to a `pushState` entry) commits nothing, and its document has loaded:
     /// when the call may be one, `landedWithinPage` tells it from a move the page's own script
-    /// made meanwhile. Without it only a commit ends the wait.
+    /// made meanwhile. Without it only a commit ends the wait. Lithium's error page committing
+    /// for it is `navigation_failed`, whatever `wait`; `none` answers before anything is known.
     private func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
         let tab = named.tab
-        let (commits, moves) = (tab.commits, tab.sameDocumentNavigations)
+        var (commits, moves) = (tab.commits, tab.sameDocumentNavigations)
+        // The load before may have failed with its error page still on its way: that page
+        // committing is not this call's answer.
+        let earlierError = tab.loadError
         start()
         touch(tab)
-        guard wait > .none else { return page(named, reached: nil) }
+        guard wait > .none else { return page(named, reached: LoadWait.none) }
         let newDocument = try await watch(named, until: deadline) { () -> Bool? in
-            if tab.commits > commits { return true }
+            if tab.commits > commits {
+                guard let error = tab.loadError else { return true }
+                if error === earlierError {
+                    commits = tab.commits
+                    return nil
+                }
+                throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)")
+            }
             guard let landedWithinPage, tab.sameDocumentNavigations > moves else { return nil }
             return landedWithinPage() ? false : nil
         }
@@ -456,7 +469,7 @@ extension AgentHub {
         let failed: @MainActor () throws -> Void = {
             // Lithium put it to sleep (its page stopped working, or memory ran short): nothing is loading in it any more.
             if tab.isAsleep { throw AgentToolError(code: "navigation_failed", message: "\(named.id) went to sleep before its page loaded. Call navigate or reload to load it again.") }
-            if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: error.localizedDescription) }
+            if let error = tab.loadError, !tab.isLoading { throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)") }
         }
         if state == .domcontentloaded {
             // No delegate call marks DOMContentLoaded: the page is asked. A page script can keep

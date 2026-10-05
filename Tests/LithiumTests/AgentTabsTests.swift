@@ -475,7 +475,7 @@ struct AgentTabsTests {
         defer { hanging.stop() }
         try await withAgent { client, base in
             let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
-            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(hanging.url.absoluteString), "wait": "none"]))["state"] == nil)
+            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(hanging.url.absoluteString), "wait": "none"]))["state"] == "started")
             let waited = await client.call("wait_for", ["tab": .string(id), "load": "domcontentloaded", "timeoutMs": 500])
             #expect(waited.code == "timeout", "\(waited.content)")
         }
@@ -579,7 +579,7 @@ struct AgentTabsTests {
             let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
             let tab: JSONValue = .string(id)
             let started = await client.call("navigate", ["tab": tab, "url": .string(base.appending(path: "two").absoluteString), "wait": "none"])
-            #expect(started["state"] == nil)
+            #expect(started["state"] == "started")
             let url = await client.call("wait_for", ["tab": tab, "url": "*/two"])
             #expect(url["met"] == true, "\(url.message)")
             let load = await client.call("wait_for", ["tab": tab, "load": "load"])
@@ -687,6 +687,58 @@ struct AgentTabsTests {
 
             let retried = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "one").absoluteString)])
             #expect(retried["title"] == "One", "\(retried.content)")
+        }
+    }
+
+    /// Lithium's error page is a document like any other: committing it is no success, at any
+    /// wait, and `none` claims nothing.
+    @Test func aPageThatFailsToOpenFailsAtEveryWait() async throws {
+        let (closed, refusing) = try await LocalHTTP.serve([:])
+        closed.cancel()
+        let gone = refusing.appending(path: "gone").absoluteString
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(gone)])
+            #expect(opened.code == "navigation_failed", "\(opened.content)")
+            let id = try #require(opened["tab"]?.string)
+            #expect(opened.message.hasPrefix("\(id) couldn’t open its page"), "\(opened.message)")
+            let tab: JSONValue = .string(id)
+
+            for wait in ["commit", "domcontentloaded"] {
+                let failed = await client.call("navigate", ["tab": tab, "url": .string(gone + "?" + wait), "wait": .string(wait)])
+                #expect(failed.code == "navigation_failed", "\(wait): \(failed.content)")
+                #expect(failed["tab"] == tab, "\(wait)")
+            }
+            let reloaded = await client.call("reload", ["tab": tab, "wait": "commit"])
+            #expect(reloaded.code == "navigation_failed", "\(reloaded.content)")
+
+            let started = await client.call("navigate", ["tab": tab, "url": .string(gone + "?none"), "wait": "none"])
+            #expect(!started.isError, "\(started.content)")
+            #expect(started["state"] == "started")
+            let waited = await client.call("wait_for", ["tab": tab, "load": "load"])
+            #expect(waited.code == "navigation_failed", "\(waited.content)")
+
+            // The error page still shown is the load before's, not this one's.
+            let committed = await client.call("navigate", ["tab": tab, "url": .string(base.appending(path: "one").absoluteString), "wait": "commit"])
+            #expect(!committed.isError, "\(committed.content)")
+            #expect(committed["state"] == "commit")
+            #expect(client.tab(id)?.loadError == nil)
+        }
+    }
+
+    /// Wrong arguments don't wait their turn behind the call running in the tab.
+    @Test(.timeLimit(.minutes(1))) func argumentsAreCheckedBeforeWaitingInLine() async throws {
+        let hanging = try await HangingHTTP()
+        defer { hanging.stop() }
+        try await withAgent { client, _ in
+            let (tab, call) = try await pendingNavigation(client, to: hanging.url)
+            let id = client.hub.id(for: tab)
+            let started = ContinuousClock.now
+            let waited = await client.call("wait_for", ["tab": .string(id), "load": "commit", "timeoutMs": 5_000])
+            #expect(waited.code == "invalid_params", "\(waited.content)")
+            #expect(ContinuousClock.now - started < .milliseconds(1000))
+            #expect(client.hub.busyTabs.contains(tab.id))
+            #expect(!(await client.call("stop", ["tab": .string(id)])).isError)
+            #expect((await call.value).code == "stopped")
         }
     }
 

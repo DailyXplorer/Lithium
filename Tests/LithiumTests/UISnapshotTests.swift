@@ -65,6 +65,22 @@ struct UISnapshotTests {
         }
     }
 
+    /// The indicator's panel with a tab where the agent met a challenge only the user can pass.
+    @Test func agentPanelSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let browser = Browser()
+        defer { browser.tabs.forEach(browser.close) }
+        let tab = browser.newTab()
+        tab.customTitle = "Sign in · Shop"
+        let hub = AgentHub(browser: browser)
+        hub.agentTab(for: tab)?.challenge = AgentChallenge(kind: "cloudflare", page: true)
+        for isDark in [false, true] {
+            let png = try render(AgentPanel(agent: hub).environment(browser), isDark: isDark)
+            try png.write(to: directory.appending(path: "agent-panel-challenge-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

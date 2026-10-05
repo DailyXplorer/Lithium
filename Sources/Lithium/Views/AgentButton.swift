@@ -30,15 +30,23 @@ struct AgentButton: View {
     }
 }
 
-private struct AgentPanel: View {
+struct AgentPanel: View {
     let agent: AgentHub
     @Environment(Browser.self) private var browser
+
+    /// Tabs where the agent met a CAPTCHA or bot check, which only the user can pass.
+    private var challenges: [(tab: Tab, challenge: AgentChallenge)] {
+        browser.tabs.compactMap { tab in agent.tabs[tab.id]?.challenge.map { (tab, $0) } }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Agents").font(Theme.font(15, .semibold))
                 Text(AgentStatus.text(agent)).font(Theme.font(12)).foregroundStyle(.secondary)
+            }
+            ForEach(challenges, id: \.tab.id) { item in
+                ChallengeRow(tab: item.tab, challenge: item.challenge)
             }
             if !agent.sessions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -93,6 +101,34 @@ private struct SessionRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+    }
+}
+
+/// "The agent needs you": a CAPTCHA or bot check in a tab, with the way to it.
+private struct ChallengeRow: View {
+    let tab: Tab
+    let challenge: AgentChallenge
+    @Environment(Browser.self) private var browser
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Icon(.hand, size: 18).foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("The agent needs you").font(Theme.font(13, .medium))
+                Text("\(challenge.label) in “\(tab.displayTitle)”")
+                    .font(Theme.font(11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Show Tab") { browser.select(tab) }
+                .buttonStyle(.plain)
+                .font(Theme.font(12))
+                .foregroundStyle(Color.accentColor)
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

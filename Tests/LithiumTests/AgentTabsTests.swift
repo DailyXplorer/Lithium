@@ -77,6 +77,8 @@ struct AgentTabsTests {
     struct ToolResult {
         let isError: Bool
         let content: JSONValue
+        /// The whole MCP result, with its content items (images, resources).
+        var result: JSONValue?
         var code: String? { isError ? content["code"]?.string : nil }
         var message: String { content["message"]?.string ?? "" }
         subscript(key: String) -> JSONValue? { content[key] }
@@ -112,7 +114,7 @@ struct AgentTabsTests {
                 "jsonrpc": "2.0", "id": .int(nextID), "method": "tools/call", "params": ["name": .string(tool), "arguments": arguments],
             ], session: session, protocolVersion: nil))
             let result = reply.body?["result"]
-            return ToolResult(isError: result?["isError"] == true, content: result?["structuredContent"] ?? reply.body?["error"] ?? .null)
+            return ToolResult(isError: result?["isError"] == true, content: result?["structuredContent"] ?? reply.body?["error"] ?? .null, result: result)
         }
 
         /// Looked up as the tools do, without giving ids to the tabs it passes.
@@ -568,7 +570,7 @@ struct AgentTabsTests {
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "wait": "networkidle"])).code == "unsupported")
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "timeoutMs": 0])).code == "invalid_params")
             #expect((await client.call("wait_for", ["tab": .string(id)])).code == "invalid_params")
-            #expect((await client.call("wait_for", ["tab": .string(id), "text": "Done"])).code == "unsupported")
+            #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": 500])).code == "unsupported")
             #expect((await client.call("tab_open", ["ephemeral": true])).code == "unsupported")
         }
     }
@@ -612,7 +614,7 @@ struct AgentTabsTests {
         let id = try #require((await client.call("tab_open"))["tab"]?.string)
         let tab = try #require(client.tab(id))
         let call = Task { await client.call("navigate", ["tab": .string(id), "url": .string(url.absoluteString), "timeoutMs": 20_000]) }
-        #expect(await waitUntil(10) { client.hub.busyTabs.contains(tab.id) })
+        #expect(await waitUntil(10) { client.hub.isBusy(tab) })
         return (tab, call)
     }
 
@@ -624,7 +626,7 @@ struct AgentTabsTests {
             client.browser.close(tab)
             let result = await call.value
             #expect(result.code == "tab_closed")
-            #expect(client.hub.busyTabs.isEmpty)
+            #expect(!client.hub.tabs.values.contains { $0.isBusy })
         }
     }
 
@@ -637,7 +639,7 @@ struct AgentTabsTests {
             let result = await call.value
             #expect(result.code == "user_interrupted")
             // Over: the user's next navigation doesn't count against the agent's next call.
-            #expect(client.hub.interruptions.isEmpty)
+            #expect(!client.hub.tabs.values.contains { $0.interruption != nil })
         }
     }
 
@@ -767,7 +769,7 @@ struct AgentTabsTests {
             let waited = await client.call("wait_for", ["tab": .string(id), "load": "commit", "timeoutMs": 5_000])
             #expect(waited.code == "invalid_params", "\(waited.content)")
             #expect(ContinuousClock.now - started < .milliseconds(1000))
-            #expect(client.hub.busyTabs.contains(tab.id))
+            #expect(client.hub.isBusy(tab))
             #expect(!(await client.call("stop", ["tab": .string(id)])).isError)
             #expect((await call.value).code == "stopped")
         }
@@ -781,7 +783,7 @@ struct AgentTabsTests {
             client.hub.stop()
             let result = await call.value
             #expect(result.code == "agent_stopped")
-            #expect(client.hub.busyTabs.isEmpty)
+            #expect(!client.hub.tabs.values.contains { $0.isBusy })
             client.hub.allowAgain()
         }
     }
@@ -792,7 +794,7 @@ struct AgentTabsTests {
             let number = try #require(Int(id.dropFirst()))
             let tab = try #require(client.tab(id))
             let waiting = Task { await client.call("wait_for", ["tab": .string(id), "url": "*/never", "timeoutMs": 20_000]) }
-            #expect(await waitUntil(10) { client.hub.busyTabs.contains(tab.id) })
+            #expect(await waitUntil(10) { client.hub.isBusy(tab) })
             let queued = Task { await client.call("reload", ["tab": .string(id), "timeoutMs": 20_000]) }
             try await Task.sleep(for: .milliseconds(100))
             client.browser.close(tab)
@@ -825,7 +827,7 @@ struct AgentTabsTests {
             let tab = try #require(client.tab(id))
             let navigating = Task { await client.call("navigate", ["tab": .string(id), "url": .string(slow.appending(path: "slow").absoluteString), "wait": "load", "timeoutMs": 20_000]) }
             #expect(await waitUntil(15) { tab.title == "Slow" && tab.isLoading })
-            #expect(client.hub.busyTabs.contains(tab.id))
+            #expect(client.hub.isBusy(tab))
 
             let started = ContinuousClock.now
             let stopped = await client.call("stop", ["tab": .string(id)])
@@ -835,8 +837,8 @@ struct AgentTabsTests {
             #expect(navigated.code == "stopped")
             #expect(navigated.message == "A stop call stopped \(id) while this call waited on it.")
             #expect(ContinuousClock.now - started < .seconds(5))
-            #expect(client.hub.interruptions.isEmpty)
-            #expect(client.hub.busyTabs.isEmpty)
+            #expect(!client.hub.tabs.values.contains { $0.interruption != nil })
+            #expect(!client.hub.tabs.values.contains { $0.isBusy })
         }
     }
 
@@ -845,7 +847,7 @@ struct AgentTabsTests {
             let id = try #require((await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "wait": "load"]))["tab"]?.string)
             let tab = try #require(client.tab(id))
             let waiting = Task { await client.call("wait_for", ["tab": .string(id), "url": "*/never", "timeoutMs": 30_000]) }
-            #expect(await waitUntil(10) { client.hub.busyTabs.contains(tab.id) })
+            #expect(await waitUntil(10) { client.hub.isBusy(tab) })
 
             let started = ContinuousClock.now
             let reloaded = await client.call("reload", ["tab": .string(id), "timeoutMs": 300])

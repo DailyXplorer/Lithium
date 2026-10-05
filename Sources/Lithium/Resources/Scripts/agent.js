@@ -358,8 +358,9 @@
   // Snapshot
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
+    // Focus going into a frame fires no focusin in its parent, whose activeElement still changes.
     if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates
-      && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates) {
+      && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates && deepFocus() === frame.focused) {
       return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
     }
     frame.lastKey = key;
@@ -469,6 +470,7 @@
       if (focused.localName === 'iframe' || focused.localName === 'frame') focusedFrame = indexes.get(focused.contentWindow);
       else focusedID = idOf(focused);
     }
+    frame.focused = focused;
     frame.controls = controls;
     frame.controlStates = controlStates();
     frame.shown = nodes.map((node) => elementOf(node.id));

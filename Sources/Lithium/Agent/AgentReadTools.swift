@@ -177,8 +177,9 @@ extension AgentHub {
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
-        let text = try arguments.string("text")
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Arguments.invalid("text must not be empty.") }
+        // The page's lines have their spaces collapsed, so the text has too, as wait_for's.
+        let text = try arguments.string("text").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !text.isEmpty else { throw Arguments.invalid("text must not be empty.") }
         let caseSensitive = try arguments.bool("caseSensitive", default: false)
         return try await hub.reading(named) { webView, deadline in
             if named.tab.pdf != nil { throw AgentHub.pdfShown(named, use: "read_text") }
@@ -625,14 +626,34 @@ extension AgentHub {
             }
             let pending = start(webView, target, "wait", ["id": address.id, "token": address.document, "state": state, "timeoutMs": remaining()])
             let commits = tab.commits
-            let met = try await watch(named, until: deadline) { () -> Bool? in
-                if let result = pending.result {
-                    guard let report = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: report), wait.gone != true else { return gone }
-                    return wait.met == true
-                }
-                // The element's document was replaced: its element can't come back.
-                return tab.commits != commits && target.info == nil ? gone : nil
+            // A call into a document that went away never answers, and a frame navigating or
+            // taken away commits nothing in the tab: for an element of a frame, its document and
+            // the <iframe> showing it are asked after every half second.
+            var probed: [(element: ElementAddress, target: FrameTarget)] = []
+            if target.info != nil, let state = agentTab(for: tab) {
+                probed.append((address, target))
+                if let frame = state.address(of: state.frameRef(for: address.document)), let parent = state.target(for: frame.document) { probed.append((frame, parent)) }
             }
+            var asked: [PageAnswer<Data>] = []
+            var met: Bool?
+            repeat {
+                asked = probed.indices.map { index in
+                    if asked.indices.contains(index), asked[index].result == nil { return asked[index] }
+                    return start(webView, probed[index].target, "info", ["id": probed[index].element.id, "token": probed[index].element.document])
+                }
+                let probes = asked
+                met = try await watch(named, until: probes.isEmpty ? deadline : min(deadline, .now + .milliseconds(500))) { () -> Bool? in
+                    if let result = pending.result {
+                        guard let report = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: report), wait.gone != true else { return gone }
+                        return wait.met == true
+                    }
+                    for result in probes.compactMap(\.result) {
+                        guard let report = try? result.get(), let info = try? PageProbe.decode(WaitReport.self, from: report), info.gone != true else { return gone }
+                    }
+                    // The element's document was replaced: its element can't come back.
+                    return tab.commits != commits && target.info == nil ? gone : nil
+                }
+            } while met == nil && ContinuousClock.now < deadline
             if met == true { return }
             if met == false, !gone { throw await staleRefIfGone(ref, named, webView, deadline, timeout: timeout, state: state) }
             throw timedOut(named, after: timeout, "\(ref) is not \(state)")

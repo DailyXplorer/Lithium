@@ -260,10 +260,13 @@ extension AgentTab {
         var challenge = main.challenge.map { AgentChallenge(kind: $0, page: true) }
         var unread: Set<String> = []
 
-        func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?) {
+        // Focus goes down from the main frame through the frames focused in their parents: a frame
+        // left may keep its activeElement, as the HTML standard has it. `document.hasFocus()` can't tell:
+        // it is false in every frame of a tab not shown in the key window, as agents' tabs often are.
+        func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?, focusing: Bool) {
             let document = report.token
             let facts = Dictionary((report.frames ?? []).map { ($0.id, $0) }) { first, _ in first }
-            if let element = report.focused { focused = ref(for: ElementAddress(document: document, id: element)) }
+            if focusing, let element = report.focused { focused = ref(for: ElementAddress(document: document, id: element)) }
             let place = { (box: [Double]) -> CGRect in
                 CGRect(x: offset.x + box[0] * scale, y: offset.y + box[1] * scale, width: box[2] * scale, height: box[3] * scale)
             }
@@ -282,7 +285,7 @@ extension AgentTab {
                 let address = ElementAddress(document: document, id: raw.id)
                 var node = SnapshotNode(
                     ref: "", role: raw.role, name: raw.name, level: raw.level, href: raw.href, value: raw.value,
-                    filled: raw.filled == true, state: raw.state ?? [], options: raw.options, guardKind: raw.guard,
+                    filled: raw.filled == true, state: (raw.state ?? []).filter { focusing || $0 != "focused" }, options: raw.options, guardKind: raw.guard,
                     box: [Int(rect.minX.rounded()), Int(rect.minY.rounded()), Int(rect.width.rounded()), Int(rect.height.rounded())],
                     frame: inFrame, depth: depth
                 )
@@ -310,14 +313,15 @@ extension AgentTab {
                 setFrameElement(childRef, address)
                 node.ref = childRef
                 nodes.append(node)
-                if report.focusedFrame == frame.index, child.focused == nil { focused = childRef }
+                let inFocus = focusing && report.focusedFrame == frame.index
+                if inFocus, child.focused == nil { focused = childRef }
                 let content = frame.content
                 let origin = (x: offset.x + content[0] * scale, y: offset.y + content[1] * scale)
                 let inner = CGRect(x: origin.x, y: origin.y, width: content[2] * scale, height: content[3] * scale)
-                add(child, path: childPath, offset: origin, scale: scale * content[4], clip: depth == 0 ? inner : inner.intersection(clip), depth: depth + 1, inFrame: childRef)
+                add(child, path: childPath, offset: origin, scale: scale * content[4], clip: depth == 0 ? inner : inner.intersection(clip), depth: depth + 1, inFrame: childRef, focusing: inFocus)
             }
         }
-        add(main, path: "", offset: (0, 0), scale: 1, clip: .infinite, depth: 0, inFrame: nil)
+        add(main, path: "", offset: (0, 0), scale: 1, clip: .infinite, depth: 0, inFrame: nil, focusing: true)
 
         // Over the cap, the nodes nearest the viewport stay, in page order.
         var dropped = 0

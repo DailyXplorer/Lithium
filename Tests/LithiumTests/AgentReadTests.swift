@@ -179,6 +179,10 @@ struct AgentReadTests {
         "/child?new": (Self.html, """
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">New</button>
             """),
+        "/focus": (Self.html, """
+            <title>Focus</title><input id="search" aria-label="Search"><iframe id="inner" src="/focus-child"></iframe>
+            """),
+        "/focus-child": (Self.html, "<input id=\"field\" aria-label=\"Inner\">"),
         "/object": (Self.html, """
             <title>Object</title><style>body { margin: 0; background: white }</style>
             <object data="/secret-box" type="text/html" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"></object>
@@ -1178,7 +1182,7 @@ struct AgentReadTests {
         try await withAgent { client, base in
             let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
             var refs: [String] = []
-            for page in 1...9 {
+            for page in 1...10 {
                 #expect(state.mainFrameAnswered("p\(page)", asked: state.hellos))
                 refs.append(state.ref(for: ElementAddress(document: "p\(page)", id: 1)))
             }
@@ -1188,6 +1192,106 @@ struct AgentReadTests {
             #expect(state.address(of: refs[6]) == ElementAddress(document: "p7", id: 1))
             #expect(state.mainFrameAnswered("p1", asked: state.hellos))
             #expect(state.address(of: refs[0]) == nil)
+        }
+    }
+
+    /// The oldest of the eight pages kept comes back with its refs.
+    @Test func theOldestPageKeptComesBack() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            var refs: [String] = []
+            for page in 1...9 {
+                #expect(state.mainFrameAnswered("p\(page)", asked: state.hellos))
+                refs.append(state.ref(for: ElementAddress(document: "p\(page)", id: 1)))
+            }
+            #expect(state.mainFrameAnswered("p1", asked: state.hellos))
+            #expect(state.address(of: refs[0]) == ElementAddress(document: "p1", id: 1))
+            #expect(state.mainFrameAnswered("p9", asked: state.hellos))
+            #expect(state.address(of: refs[8]) == ElementAddress(document: "p9", id: 1))
+        }
+    }
+
+    /// A frame left with its activeElement, as the HTML standard keeps it (this WebKit resets it):
+    /// the focus is where the main frame's leads, and only there.
+    @Test func aFrameLeftDoesntHoldTheFocus() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+            let field = { (id: Int, state: [String]?) in FrameReport.Node(id: id, role: "textbox", state: state, box: [10, 10, 100, 20]) }
+            let frame = FrameReport.Node(id: 2, role: "frame", frame: 0, box: [0, 100, 300, 200])
+            let frames = [FrameReport.Frame(id: 2, index: 0, box: [0, 100, 300, 200], content: [0, 100, 300, 200, 1], src: "")]
+            let child = FrameReport(token: "c", path: "0", viewport: viewport, nodes: [field(3, ["focused"])], focused: 3)
+            let left = FrameReport(token: "m", path: "", viewport: viewport, nodes: [field(1, ["focused"]), frame], frames: frames, focused: 1)
+            var snapshot = state.compose(tab: "t1", main: left, children: [child], origins: [:], zoom: 1, maxNodes: 100)
+            let search = state.ref(for: ElementAddress(document: "m", id: 1))
+            #expect(snapshot.focused == search)
+            #expect(snapshot.nodes.filter { $0.state.contains("focused") }.map(\.ref) == [search])
+            // Focus in the frame: the main frame's activeElement is its <iframe>.
+            let into = FrameReport(token: "m", path: "", viewport: viewport, nodes: [field(1, nil), frame], frames: frames, focusedFrame: 0)
+            snapshot = state.compose(tab: "t1", main: into, children: [child], origins: [:], zoom: 1, maxNodes: 100)
+            #expect(snapshot.focused == state.ref(for: ElementAddress(document: "c", id: 3)))
+        }
+    }
+
+    /// Focus going into a frame is seen though its parent has no focusin.
+    @Test func focusIsWhereTheMainFrameLeads() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/focus")
+            let webView = try #require(client.tab(tab)?.webView)
+            var json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "textbox", name: "Inner") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let inner = try #require(node(json, role: "textbox", name: "Inner")?["ref"])
+            let search = try #require(node(json, role: "textbox", name: "Search")?["ref"])
+            _ = try await webView.callAsyncJavaScript("document.getElementById('inner').contentDocument.getElementById('field').focus()", contentWorld: .page)
+            json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(json["focused"] == inner, "\(text(json.content))")
+            _ = try await webView.callAsyncJavaScript("document.getElementById('search').focus()", contentWorld: .page)
+            json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(json["focused"] == search, "\(text(json.content))")
+            #expect(node(json, role: "textbox", name: "Inner")?["state"] == nil, "\(text(json.content))")        }
+    }
+
+    /// A wait on an element of a frame ends when the frame shows another document or is taken
+    /// away, as it does for the main frame.
+    @Test func waitsOnAFramesElementEndWithItsDocument() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let webView = try #require(client.tab(tab)?.webView)
+            var json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "button", name: "Other") == nil || node(json, role: "button", name: "Same") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let same = try #require(node(json, role: "button", name: "Same")?["ref"])
+            let other = try #require(node(json, role: "button", name: "Other")?["ref"])
+            let waiting = { (ref: JSONValue, state: String, script: String) async throws -> (AgentTabsTests.ToolResult, Duration) in
+                let start = ContinuousClock.now
+                let call = Task { await client.call("wait_for", ["tab": .string(tab), "ref": ref, "state": .string(state), "timeoutMs": 8000]) }
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await webView.callAsyncJavaScript(script, contentWorld: .page)
+                return (await call.value, ContinuousClock.now - start)
+            }
+            _ = try await webView.callAsyncJavaScript("document.getElementById('same').contentDocument.querySelector('button').style.display = 'none'", contentWorld: .page)
+            var (result, took) = try await waiting(same, "visible", "document.getElementById('same').src = '/child?new'")
+            #expect(result.code == "stale_ref", "\(result.message)")
+            #expect(took < .seconds(4))
+
+            json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            for _ in 0..<100 where node(json, role: "button", name: "New") == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            }
+            let new = try #require(node(json, role: "button", name: "New")?["ref"])
+            (result, took) = try await waiting(new, "detached", "document.getElementById('same').src = '/child?same'")
+            #expect(!result.isError, "\(result.message)")
+            #expect(took < .seconds(4))
+
+            (result, took) = try await waiting(other, "hidden", "document.getElementById('other').remove()")
+            #expect(!result.isError, "\(result.message)")
+            #expect(took < .seconds(4))
         }
     }
 
@@ -1310,6 +1414,15 @@ struct AgentReadTests {
             let found = await client.call("find_text", ["tab": .string(tab), "text": .string(needle)])
             let context = try #require(items(found["matches"]).first?["context"]?.string)
             #expect(context.contains(needle), "\(context)")
+        }
+    }
+
+    /// Text copied with its line breaks and doubled spaces is found as the page's lines have it.
+    @Test func findTextCollapsesSpacesAsTheLinesHaveThem() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/article")
+            let found = await client.call("find_text", ["tab": .string(tab), "text": " Big  news\n"])
+            #expect(found["count"] == 1, "\(found.message)")
         }
     }
 

@@ -95,11 +95,12 @@ final class AgentTab {
     @ObservationIgnored private var pagesLeft: [(document: String, frames: [String: WKFrameInfo], refs: RefTable)] = []
 
     private func switchPage(to token: String) {
-        if let mainDocument, !frames.isEmpty || !table.refs.isEmpty {
-            if pagesLeft.count >= 8 { pagesLeft.removeFirst() }
-            pagesLeft.append((mainDocument, frames, table))
-        }
+        // Taken out first: the page coming back may be the oldest kept.
         let restored = pagesLeft.firstIndex { $0.document == token }.map { pagesLeft.remove(at: $0) }
+        if let mainDocument, !frames.isEmpty || !table.refs.isEmpty {
+            pagesLeft.append((mainDocument, frames, table))
+            if pagesLeft.count > 8 { pagesLeft.removeFirst() }
+        }
         frames = restored?.frames ?? [:]
         table = restored?.refs ?? RefTable()
         mainDocument = token

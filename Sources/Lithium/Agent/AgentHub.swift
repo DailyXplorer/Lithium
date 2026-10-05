@@ -291,6 +291,12 @@ final class AgentHub {
 
     private func end(_ session: MCPSession) {
         for (key, call) in calls where key.session == session.id { call.task.cancel() }
+        // Its navigations still on their way (`wait: none`) are stopped, so none becomes a
+        // download nobody may allow.
+        for state in tabs.values where state.drive?.session.id == session.id {
+            if let tab = state.tab, drive(of: tab) != nil, !tab.isAsleep { tab.stopLoading() }
+            state.drive = nil
+        }
         confirmations.end(session: session.id)
         sessions.removeAll { $0.id == session.id }
         lastSeen[session.id] = nil
@@ -564,6 +570,20 @@ final class AgentHub {
         confirmations.cancel(tab: tab.id)
         answerDialog(in: tab)
         if state.isBusy { state.interruption = .user }
+    }
+
+    /// The tab's page went (it slept, or its process died), and any load with it: its dialog gets
+    /// its safe default, which nobody reads, so agents no longer see `dialog_open` for a page
+    /// that isn't there.
+    func pageGone(_ tab: Tab) {
+        tabs[tab.id]?.drive = nil
+        answerDialog(in: tab)
+    }
+
+    /// The agent's navigation still under way in `tab`, for a session still connected.
+    func drive(of tab: Tab) -> AgentDrive? {
+        guard let drive = tabs[tab.id]?.drive, drive.isUnderWay(in: tab), sessions.contains(where: { $0.id == drive.session.id }) else { return nil }
+        return drive
     }
 
     /// An agent's `stop`, which doesn't queue: it ends the call running in the tab, unless the

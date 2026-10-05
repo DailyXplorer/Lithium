@@ -18,6 +18,7 @@ struct AgentConfirmationsTests {
     private static let pages: [String: (headers: String, body: String)] = [
         "/one": (html, "<title>One</title><p>one</p>"),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
+        "/mail": ("HTTP/1.1 302 Found\r\nLocation: mailto:x@example.com", ""),
         "/alert": (html, "<title>Before</title><script>alert('Saved'); document.title = 'After alert'</script>"),
         "/confirm": (html, "<title>Before</title><script>document.title = confirm('Leave this page?') ? 'yes' : 'no'</script>"),
         "/prompt": (html, "<title>Before</title><script>document.title = prompt('Name?', 'Ann') ?? 'none'</script>"),
@@ -186,7 +187,58 @@ struct AgentConfirmationsTests {
         }
     }
 
-    // MARK: Uploads
+    /// A download the user starts in the tab: nil when Lithium takes it as the user's own. A
+    /// prompt raised for it is denied, so a wrong answer fails at once rather than in 2 minutes.
+    private func userDownload(_ client: Client, in tab: Tab, from url: URL) async -> Bool? {
+        let hub = client.hub
+        let asking = Task { await hub.confirmDownload(in: tab, fileName: "report.csv", size: nil, from: url) }
+        if await waitUntil(1, { !hub.confirmations.pending.isEmpty }) {
+            hub.confirmations.pending.forEach { hub.confirmations.answer($0.id, .deny) }
+        }
+        return await asking.value
+    }
+
+    /// Whatever the agent's navigation ends with, the tab is the user's again afterwards.
+    @Test func theAgentsClaimEndsWithItsNavigation() async throws {
+        try await withAgent { client, base in
+            let one = base.appending(path: "one")
+            let report = base.appending(path: "report.csv")
+            let id = try await open(client, one)
+            let tab = try #require(client.tab(id))
+
+            let anchor = await client.call("navigate", ["tab": .string(id), "url": .string(one.absoluteString + "#part")])
+            #expect(anchor["state"] == "load", "\(anchor.content)")
+            #expect(await userDownload(client, in: tab, from: report) == nil, "after a move within the page")
+
+            let refused = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "mail").absoluteString)])
+            #expect(refused.code == "navigation_cancelled", "\(refused.content)")
+            #expect(await userDownload(client, in: tab, from: report) == nil, "after a refused scheme")
+
+            let (downloaded, _) = try await call(client, "navigate", ["tab": .string(id), "url": .string(report.absoluteString)], answering: .allowOnce, expecting: .download)
+            #expect(downloaded["download"]?["file"] == "report.csv", "\(downloaded.content)")
+            #expect(client.hub.openPanel(for: tab) == nil, "the user's file chooser after the agent's download")
+            #expect(await userDownload(client, in: tab, from: report) == nil, "after the agent's download")
+        }
+    }
+
+    /// Stop ends the session's load still on its way after `wait: none`: it never becomes a
+    /// download, asked or not.
+    @Test func stopCancelsTheAgentsLoadOnItsWay() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/report.csv": Self.pages["/report.csv"]!], delay: 1)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            let unshown = tab.unshownLoads
+            let started = await client.call("navigate", ["tab": .string(id), "url": .string(slowBase.appending(path: "report.csv").absoluteString), "wait": "none"])
+            #expect(started["state"] == "started", "\(started.content)")
+            client.hub.stop()
+            #expect(!(await waitUntil(2.5) { !client.hub.confirmations.pending.isEmpty }), "no prompt for a stopped session")
+            #expect(tab.unshownLoads == unshown, "no download")
+            #expect(client.hub.tabs[tab.id]?.drive == nil)
+            client.hub.allowAgain()
+        }
+    }
 
     @Test func uploadsAnswerTheChooserOnlyWithAllowedFiles() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString).txt")
@@ -273,6 +325,34 @@ struct AgentConfirmationsTests {
             #expect(await waitUntil(10) { tab.title == "no" })
             #expect(client.hub.tabs[tab.id]?.dialog == nil)
             client.hub.allowAgain()
+        }
+    }
+
+    /// A tab that sleeps, or whose page's process dies, takes the agent's dialog along.
+    @Test func aPageGoneTakesItsDialogAlong() async throws {
+        try await withAgent { client, base in
+            let one = base.appending(path: "one")
+            for crash in [false, true] {
+                let id = try await open(client, one)
+                let tab = try #require(client.tab(id))
+                _ = try await tab.webView.evaluateJavaScript("setTimeout(() => alert('Saved'), 0); 0")
+                #expect(await waitUntil(10) { client.hub.tabs[tab.id]?.dialog != nil })
+                if crash {
+                    // The tab shown reloads rather than sleeping.
+                    client.browser.select(tab)
+                    tab.webViewWebContentProcessDidTerminate(tab.webView)
+                    #expect(!tab.isAsleep)
+                } else {
+                    tab.sleep(configuration: client.browser.makeConfiguration(for: tab.url))
+                    // WebKit takes the alert's answer on a later turn, from the web view let go;
+                    // without this pause the next suite's nested frame wait (AgentReadTests)
+                    // misses its 1 s answer.
+                    try await Task.sleep(for: .milliseconds(300))
+                }
+                #expect(client.hub.tabs[tab.id]?.dialog == nil, crash ? "process died" : "asleep")
+                let navigated = await client.call("navigate", ["tab": .string(id), "url": .string(one.absoluteString)])
+                #expect(!navigated.isError, "\(navigated.content)")
+            }
         }
     }
 

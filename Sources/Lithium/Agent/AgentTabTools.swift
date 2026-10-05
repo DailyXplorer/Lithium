@@ -479,7 +479,9 @@ extension AgentHub {
         let earlierError = tab.loadError
         let state = agentTab(for: tab)
         let answers = state?.downloadAnswers ?? 0
-        if let session = Self.callSession { state?.drive = AgentDrive(session: session, commits: tab.commits, deadline: deadline) }
+        if let session = Self.callSession { state?.drive = AgentDrive(session: session, marks: tab.loadMarks, deadline: deadline) }
+        // A call that ends with nothing loading, however it ends, leaves no load of the agent's.
+        defer { if wait > .none, !tab.isLoading { state?.drive = nil } }
         start()
         // Laid out at the size the user would see it, not in an empty viewport.
         if !tab.isAsleep, tab.loadedWebView != nil { _ = sizedWebView(of: tab) }
@@ -500,6 +502,8 @@ extension AgentHub {
                 guard let error = tab.loadError else { return .document }
                 if error === earlierError {
                     commits = tab.commits
+                    // Still this call's load under way.
+                    state?.drive?.marks = tab.loadMarks
                     return nil
                 }
                 throw AgentToolError(code: "navigation_failed", message: "\(named.id) couldn’t open its page: \(error.localizedDescription)")

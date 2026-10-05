@@ -97,9 +97,9 @@ enum Guardrails {
     }
 
     /// The `guard` the snapshot shows on an element: what its usual action (typing into a field,
-    /// activating anything else) would need.
+    /// activating anything else) would need, as `confirmation(for:)` decides it.
     static func mark(_ element: Element, page: Page) -> ConfirmationKind? {
-        if let field = element.field { return ConfirmationKind(rawValue: field) }
+        if element.field != nil { return confirmation(for: .type, on: element, page: page) }
         guard actionable.contains(element.role) || element.wallet else { return nil }
         return confirmation(for: .activate, on: element, page: page)
     }

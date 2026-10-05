@@ -88,13 +88,32 @@ struct AgentGuardrailsTests {
         }
     }
 
+    /// The mark is the confirmation the element's usual action meets: typing into a field,
+    /// activating anything else. Text and headings have no action, and no mark.
     @Test func marksWhatTheSnapshotShows() {
-        #expect(Guardrails.mark(Element(role: "textbox", field: "password"), page: Self.shop) == .password)
-        #expect(Guardrails.mark(Element(role: "button", name: "Pay €42.00"), page: Self.shop) == .payment)
-        #expect(Guardrails.mark(Element(role: "frame", inPaymentFrame: true), page: Self.shop) == .payment)
-        #expect(Guardrails.mark(Element(role: "heading", name: "Pay now", inPaymentFrame: true), page: Self.shop) == nil)
-        #expect(Guardrails.mark(Element(role: "text", name: "Total €42.00"), page: Self.checkout) == nil)
-        #expect(Guardrails.mark(Element(role: "link", name: "Help"), page: Self.checkout) == nil)
+        let provider = Page(url: URL(string: "https://www.paypal.com/signin"))
+        let password = Element(role: "textbox", name: "Password", field: "password")
+        var framedPassword = password
+        framedPassword.inPaymentFrame = true
+        let cases: [(element: Element, page: Page, expected: ConfirmationKind?, why: String)] = [
+            (password, Self.shop, .password, "a password field"),
+            (password, provider, .payment, "a password field on a provider's tab"),
+            (framedPassword, Self.shop, .payment, "a password field in a provider's frame"),
+            (Element(role: "textbox", name: "Card number", field: "payment"), Self.shop, .payment, "a card field"),
+            (Element(role: "button", name: "Pay €42.00"), Self.shop, .payment, "a commit control with an amount"),
+            (Element(role: "button", name: "Sign in"), provider, .payment, "a button on a provider's tab"),
+            (Element(role: "frame", inPaymentFrame: true), Self.shop, .payment, "a provider's frame"),
+            (Element(role: "link", name: "Help"), Self.checkout, nil, "a plain link"),
+            (Element(role: "heading", name: "Pay now", inPaymentFrame: true), Self.shop, nil, "a heading"),
+            (Element(role: "text", name: "Total €42.00"), Self.checkout, nil, "text"),
+        ]
+        for test in cases {
+            let mark = Guardrails.mark(test.element, page: test.page)
+            #expect(mark == test.expected, "\(test.why)")
+            guard test.expected != nil else { continue }
+            let action: Guardrails.Action = test.element.field == nil ? .activate : .type
+            #expect(mark == Guardrails.confirmation(for: action, on: test.element, page: test.page), "\(test.why)")
+        }
     }
 
     // MARK: Prompts and grants

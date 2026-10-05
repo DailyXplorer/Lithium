@@ -108,6 +108,13 @@ final class Tab: NSObject, Identifiable {
     /// waiting on one; `lastUnshownLoad` tells how the latest ended.
     private(set) var unshownLoads = 0
     @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
+
+    /// The three counts above: any of them moving ends the load under way.
+    struct LoadMarks: Equatable {
+        let commits, moves, unshown: Int
+    }
+
+    var loadMarks: LoadMarks { LoadMarks(commits: commits, moves: sameDocumentNavigations, unshown: unshownLoads) }
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
@@ -397,6 +404,7 @@ final class Tab: NSObject, Identifiable {
         guard !isAsleep else { return }
         browser?.videoPopout.discard(self)
         browser?.nowPlaying.discard(self)
+        browser?.agent?.pageGone(self)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -789,6 +797,7 @@ extension Tab: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // The media died with the process; a reload that never commits would leave it showing as playing.
         browser?.nowPlaying.discard(self)
+        browser?.agent?.pageGone(self)
         guard let browser else { return }
         guard browser.selectedTabID == id else {
             sleep(configuration: browser.makeConfiguration(for: url))

@@ -123,6 +123,11 @@ extension AgentHub {
             let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, session: session, answer: logged, waited: Date().timeIntervalSince(started))
             Task { await self.log.append(entry, at: started) }
         }
+        // Stop, or the session ending, refuses whatever it would still ask.
+        guard sessions.contains(where: { $0.id == session.id }) else {
+            logged.answer = "agent_stopped"
+            throw AgentToolError(code: "agent_stopped", message: "This agent session has ended.")
+        }
         if confirmations.grant(for: kind, site: site, session: session.id) != nil {
             logged = ("allow", .site)
             return .site
@@ -199,12 +204,12 @@ extension AgentHub {
 
     // MARK: Downloads
 
-    /// Hooked from `Tab` before a download starts. One the agent started (its navigation, and from
-    /// PR 5 its input, with no page shown since and no navigation of the user's) waits for the
-    /// user's Allow: true to download, false to cancel. Nil: not the agent's, so Lithium goes on as
-    /// for the user's own. The call that started it, if it still waits, learns the answer.
+    /// Hooked from `Tab` before a download starts. One the agent started (its navigation still
+    /// under way, and from PR 5 its input, for a session still connected) waits for the user's
+    /// Allow: true to download, false to cancel. Nil: not the agent's, so Lithium goes on as for
+    /// the user's own. The call that started it, if it still waits, learns the answer.
     func confirmDownload(in tab: Tab, fileName: String?, size: Int64?, from url: URL?) async -> Bool? {
-        guard let state = tabs[tab.id], let drive = state.drive, drive.commits == tab.commits else { return nil }
+        guard let state = tabs[tab.id], let drive = drive(of: tab) else { return nil }
         let named = NamedTab(tab: tab, id: id(for: tab))
         let host = url?.host() ?? ""
         let file = fileName.map { "“\($0)”" } ?? "a file"
@@ -258,7 +263,7 @@ extension AgentHub {
         }
         // The user can't click in a tab out of sight; in the one shown, only the agent's input counts.
         let unseen = state.isBusy && tab.loadedWebView?.window == nil
-        guard unseen || (state.drive.map { $0.commits == tab.commits } ?? false) else { return nil }
+        guard unseen || drive(of: tab) != nil else { return nil }
         state.fileChoosersCancelled += 1
         return .cancelled
     }

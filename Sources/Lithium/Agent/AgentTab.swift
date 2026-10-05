@@ -29,7 +29,7 @@ final class AgentTab {
     var dialog: AgentDialog?
     @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply, Never>?
     /// The agent gave the tab its last input: its navigation (from PR 5, its events). A download
-    /// before the next page commits is the agent's, and asks the user.
+    /// while that load is under way is the agent's, and asks the user.
     @ObservationIgnored var drive: AgentDrive?
     /// The user's answers to the agent's downloads in the tab, for the call that started one.
     var downloadAnswers = 0
@@ -179,12 +179,20 @@ final class AgentTab {
     }
 }
 
-/// An agent's input in a tab: the session that gave it, the tab's commit count then, and the
-/// deadline of the call that gave it.
+/// An agent's input in a tab: the session that gave it, how far the tab's loads had got then,
+/// and the deadline of the call that gave it.
 struct AgentDrive {
     let session: MCPSession
-    let commits: Int
+    var marks: Tab.LoadMarks
     let deadline: ContinuousClock.Instant
+
+    /// Until the load it started ends: a page shown, a move within the page, a download, a
+    /// scheme refused. A load that ends without a word (cancelled), or never starts, ends it at
+    /// the call's deadline; one still loading then is still the agent's.
+    @MainActor
+    func isUnderWay(in tab: Tab) -> Bool {
+        tab.loadMarks == marks && (tab.isLoading || .now < deadline)
+    }
 }
 
 /// A CAPTCHA or bot check on the page. `page` when the whole page is the check (Cloudflare's

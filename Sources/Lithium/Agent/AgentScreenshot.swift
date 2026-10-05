@@ -54,6 +54,12 @@ struct FrameLayout {
 
     var reports: [MaskReport] { [main] + children.values }
 
+    /// Whether every frame `earlier` read sits at the same scroll here: masks read then still fit.
+    func keepsScroll(of earlier: FrameLayout) -> Bool {
+        let scrolls = Dictionary(reports.map { ($0.path ?? "", [$0.viewport.sx, $0.viewport.sy]) }) { first, _ in first }
+        return earlier.reports.allSatisfy { scrolls[$0.path ?? ""] == [$0.viewport.sx, $0.viewport.sy] }
+    }
+
     /// The placement of the frame at `path` ("" for the main frame, "0.2" for the third frame of
     /// the first), composed down the content boxes of the frames above it; nil once one is gone.
     func placement(of path: String) -> Placement? {

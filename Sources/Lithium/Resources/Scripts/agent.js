@@ -44,6 +44,11 @@
   for (const type of ['scroll', 'resize', 'input', 'change', 'focusin', 'focusout', 'toggle', 'transitionend', 'animationend', 'load']) {
     addEventListener(type, dirty, { capture: true, passive: true });
   }
+  // Layout also changes with no mutation: a web font arriving, the page growing.
+  document.fonts?.addEventListener('loadingdone', dirty);
+  const resizes = new ResizeObserver(dirty);
+  resizes.observe(document.documentElement);
+  if (document.body) resizes.observe(document.body);
 
   const collapse = (text) => (text || '').replace(/\s+/g, ' ').trim();
   const cut = (text, length) => (text.length > length ? `${text.slice(0, length - 1)}…` : text);
@@ -107,10 +112,17 @@
   const namedByContent = new Set(['link', 'button', 'heading', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
     'option', 'treeitem', 'checkbox', 'radio', 'switch', 'row', 'clickable', 'alert', 'status', 'log']);
 
-  const textOf = (element) => collapse(element.innerText ?? element.textContent);
-  const iconName = (element) => collapse(element.querySelector('img[alt], [aria-label], svg title')?.getAttribute?.('alt')
-    || element.querySelector('[aria-label]')?.getAttribute('aria-label')
-    || element.querySelector('svg title')?.textContent);
+  // Names go through the same rules as page text, so hidden text in a link or a button stays out.
+  const textOf = (element) => collapse(lines(element).map((item) => item.text).join(' '));
+  const iconName = (element) => {
+    for (const icon of element.querySelectorAll('img[alt], [aria-label], svg title')) {
+      const title = icon.localName === 'title';
+      if (!isVisible(title ? icon.parentElement : icon)) continue;
+      const name = collapse(title ? icon.textContent : icon.getAttribute('alt') || icon.getAttribute('aria-label'));
+      if (name) return name;
+    }
+    return '';
+  };
 
   // A simplified accessible name: labelledby, aria-label, labels, alt, title, placeholder, text.
   const nameOf = (element, role) => {
@@ -333,11 +345,19 @@
     ? [...element.selectedOptions].map((option) => option.index).join(',')
     : `${element.checked} ${element.indeterminate} ${element.value}`);
   const controlStates = () => (frame.controls ?? []).map(controlState).join('\u0000');
+  // Nor does a layout change: the boxes of what the last snapshot showed are read again, rules
+  // added through the CSSOM counted, and nothing is taken as unchanged while something animates.
+  const boxStates = () => (frame.shown ?? []).map((element) => (element?.isConnected ? round(element.getBoundingClientRect()).join(' ') : '')).join(',');
+  const sheetStates = () => [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])].map((sheet) => {
+    try { return sheet.cssRules.length; } catch { return -1; }
+  }).join(',');
+  const animating = () => document.getAnimations().some((animation) => animation.playState === 'running');
 
   // Snapshot
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
-    if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates) {
+    if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates
+      && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates) {
       return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
     }
     frame.lastKey = key;
@@ -449,6 +469,9 @@
     }
     frame.controls = controls;
     frame.controlStates = controlStates();
+    frame.shown = nodes.map((node) => elementOf(node.id));
+    frame.boxStates = boxStates();
+    frame.sheetStates = sheetStates();
     return {
       token: frame.token, gen: generation, path: framePath(), url: location.href, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit,

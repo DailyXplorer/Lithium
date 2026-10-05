@@ -215,7 +215,7 @@ extension AgentHub {
             let data = try await hub.ask(named, webView, frame, "info", ["id": address.id, "token": address.document], until: deadline)
             let info = try PageProbe.decode(ElementReport.self, from: data)
             guard info.gone != true, let box = info.box else { throw await hub.staleRef(ref, in: named, webView, until: deadline) }
-            let layout = try await hub.layout(of: named, webView, until: deadline)
+            let layout = try await hub.layout(of: named, webView, until: deadline, placing: address.document)
             guard let placement = layout.placement(ofDocument: address.document), let state = hub.agentTab(for: named.tab) else {
                 throw AgentToolError(code: "frame_gone", message: "The frame \(ref) is in has gone. Call snapshot for current refs.")
             }
@@ -286,8 +286,9 @@ extension AgentHub {
                     }
                     data = document
                 } else {
-                    let layout = try await hub.layout(of: named, webView, until: deadline)
-                    let page = try await webView.pdf(configuration: WKPDFConfiguration())
+                    let (layout, page) = try await hub.masked(named, webView, from: try await hub.layout(of: named, webView, until: deadline), until: deadline) {
+                        try await webView.pdf(configuration: WKPDFConfiguration())
+                    }
                     let masks = AgentHub.documentMasks(try AgentHub.masks(layout, of: named), layout.main.viewport)
                     fields["maskedRegions"] = .int(masks.count)
                     if masks.isEmpty {
@@ -389,14 +390,14 @@ extension AgentHub {
 
     /// Asks the main frame and every child frame that said hello, side by side. The main frame
     /// must answer; child frames that are gone or late (`childAnswers`) are left out.
-    func askEveryFrame<Report: Decodable & DocumentReport>(_ named: NamedTab, _ webView: WKWebView, _ operation: String, _ arguments: [String: Any], _ type: Report.Type, until deadline: ContinuousClock.Instant) async throws -> FrameReports<Report> {
+    func askEveryFrame<Report: Decodable & DocumentReport>(_ named: NamedTab, _ webView: WKWebView, _ operation: String, _ arguments: [String: Any], _ type: Report.Type, until deadline: ContinuousClock.Instant, patient: Bool = false) async throws -> FrameReports<Report> {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
         let main = start(webView, .main, operation, arguments)
         let children = state.frames.map { token, info in (token: token, answer: start(webView, .child(info), operation, arguments)) }
         let report = try PageProbe.decode(type, from: try await ask(named, webView, .main, operation, arguments, until: deadline, answered: main))
         state.mainFrameAnswered(report.token)
         var reports = FrameReports(reports: [(report, FrameRefs(state: state, document: report.token, frameRef: nil))])
-        let (answers, late) = try await childAnswers(children, of: state, from: named, until: deadline)
+        let (answers, late) = try await childAnswers(children, of: state, from: named, until: deadline, patient: patient)
         reports.late = late
         for (token, data) in answers {
             guard let data, let child = try? PageProbe.decode(type, from: data) else {
@@ -414,9 +415,9 @@ extension AgentHub {
     /// answered they get `frameTimeout` more; a frame still busy then is late and left out, and
     /// pictures paint it over whole. The tab closing, the user navigating it or `stop` end the
     /// wait as they end any other. Frames of a page the main frame no longer shows are dropped.
-    /// Nil data: the frame is gone or its script failed.
-    func childAnswers(_ children: [(token: String, answer: PageAnswer<Data>)], of state: AgentTab, from named: NamedTab, until deadline: ContinuousClock.Instant) async throws -> (answers: [(token: String, data: Data?)], late: Int) {
-        let budget = min(deadline, .now + AgentHub.frameTimeout)
+    /// `patient` gives them the whole deadline. Nil data: the frame is gone or its script failed.
+    func childAnswers(_ children: [(token: String, answer: PageAnswer<Data>)], of state: AgentTab, from named: NamedTab, until deadline: ContinuousClock.Instant, patient: Bool = false) async throws -> (answers: [(token: String, data: Data?)], late: Int) {
+        let budget = patient ? deadline : min(deadline, .now + AgentHub.frameTimeout)
         var answers: [(token: String, data: Data?)] = []
         var late = 0
         for (token, pending) in children where state.frames[token] != nil {
@@ -558,10 +559,31 @@ extension AgentHub {
         return AgentToolError(code: "stale_ref", message: message + " Call snapshot for current refs.")
     }
 
-    /// Where every frame sits, and what to mask in it.
-    func layout(of named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant) async throws -> FrameLayout {
-        let reports = try await askEveryFrame(named, webView, "masks", [:], MaskReport.self, until: deadline).reports
-        return FrameLayout(main: reports[0].0, children: reports.dropFirst().map(\.0))
+    /// Where every frame sits, and what to mask in it. `placing` an element of a document: when a
+    /// frame too slow for `frameTimeout` leaves it unplaced, the frames get the read's whole
+    /// deadline, as the element's own read just had; only a frame that went away is `frame_gone`.
+    func layout(of named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant, placing document: String? = nil) async throws -> FrameLayout {
+        let read = { (patient: Bool) in
+            let frames = try await self.askEveryFrame(named, webView, "masks", [:], MaskReport.self, until: deadline, patient: patient)
+            return (FrameLayout(main: frames.reports[0].0, children: frames.reports.dropFirst().map(\.0)), frames.late)
+        }
+        let (layout, late) = try await read(false)
+        guard let document, late > 0, layout.placement(ofDocument: document) == nil else { return layout }
+        return try await read(true).0
+    }
+
+    /// What `take` captures, with the layout its masks come from. Every frame's scroll is read
+    /// before and after it; a page that scrolled meanwhile is read and captured again, three
+    /// times at most, then refused: masks read at another scroll would miss the fields.
+    func masked<Value>(_ named: NamedTab, _ webView: WKWebView, from layout: FrameLayout, placing document: String? = nil, until deadline: ContinuousClock.Instant, _ take: () async throws -> Value) async throws -> (layout: FrameLayout, value: Value) {
+        var layout = layout
+        for _ in 0..<3 {
+            let value = try await take()
+            let after = try await self.layout(of: named, webView, until: deadline, placing: document)
+            if after.keepsScroll(of: layout) { return (layout, value) }
+            layout = after
+        }
+        throw AgentToolError(code: "frame_gone", message: "\(named.id)’s page kept scrolling while it was pictured, so its password and card fields couldn’t be painted over. Try again.")
     }
 
     /// What a picture of the page paints over, in top-level viewport CSS pixels.
@@ -664,23 +686,28 @@ extension AgentHub {
             picture = rendered
             fields["page"] = .int(pdf.pageIndex + 1)
         } else {
-            let layout = try await layout(of: named, webView, until: deadline)
-            let viewport = layout.main.viewport
-            let masks = try AgentHub.masks(layout, of: named)
-            var element: CGRect?
+            var document: String?
+            var box: [Double]?
             if let ref {
                 let (address, target) = try await self.element(ref, in: named, webView, until: deadline)
                 let info = try PageProbe.decode(ElementReport.self, from: try await ask(named, webView, target, "info", ["id": address.id, "token": address.document], until: deadline))
-                guard info.gone != true, let box = info.box else { throw await staleRef(ref, in: named, webView, until: deadline) }
-                guard let placement = layout.placement(ofDocument: address.document) else {
+                guard info.gone != true, let found = info.box else { throw await staleRef(ref, in: named, webView, until: deadline) }
+                (document, box) = (address.document, found)
+                fields["ref"] = .string(ref)
+            }
+            let first = try await layout(of: named, webView, until: deadline, placing: document)
+            var element: CGRect?
+            if let ref, let document, let box {
+                guard let placement = first.placement(ofDocument: document) else {
                     throw AgentToolError(code: "frame_gone", message: "The frame \(ref) is in has gone. Call snapshot for current refs.")
                 }
                 element = placement.place(box)
-                fields["ref"] = .string(ref)
             }
-            let inViewport = element.map { CGRect(x: 0, y: 0, width: viewport.w, height: viewport.h).contains($0) } ?? !fullPage
+            let inViewport = element.map { CGRect(x: 0, y: 0, width: first.main.viewport.w, height: first.main.viewport.h).contains($0) } ?? !fullPage
             if inViewport {
-                let image = try await webView.takeSnapshot(configuration: nil)
+                let (layout, image) = try await masked(named, webView, from: first, placing: document, until: deadline) { try await webView.takeSnapshot(configuration: nil) }
+                let viewport = layout.main.viewport
+                let masks = try AgentHub.masks(layout, of: named)
                 guard let cgImage = AgentScreenshot.cgImage(image) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
                 let pixels = Double(cgImage.width) / max(1, webView.bounds.width)
                 let toPixels = { (css: CGRect) in AgentHub.scaled(AgentScreenshot.viewRect(css, viewport: viewport, zoom: webView.pageZoom), by: pixels) }
@@ -690,7 +717,9 @@ extension AgentHub {
                 picture = (rendered.image, rendered.scale * pixels * viewport.vs * webView.pageZoom, rendered.masks)
             } else {
                 // Beyond the viewport: the whole page as a PDF, drawn, without scrolling the user's page.
-                let page = try await webView.pdf(configuration: WKPDFConfiguration())
+                let (layout, page) = try await masked(named, webView, from: first, placing: document, until: deadline) { try await webView.pdf(configuration: WKPDFConfiguration()) }
+                let viewport = layout.main.viewport
+                let masks = try AgentHub.masks(layout, of: named)
                 guard let size = AgentScreenshot.pdfPageSize(page) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
                 let points = size.width / max(1, viewport.pw)
                 let density = min(2, Double(maxWidth) / max(1, (element.map { Double($0.width) } ?? viewport.pw) * points))

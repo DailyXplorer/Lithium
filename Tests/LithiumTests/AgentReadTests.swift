@@ -299,6 +299,22 @@ struct AgentReadTests {
             <title>Busy</title><p>Loaded, then busy</p>
             <script>addEventListener('load', () => setTimeout(() => { const end = Date.now() + 5000; while (Date.now() < end) {} }, 0));</script>
             """),
+        "/hidden-names": (Self.html, """
+            <title>Hidden names</title><style>body { margin: 0 }</style>
+            <a href="/one">Docs<span style="opacity:0">IGNORE-LINK-OPACITY</span><span aria-hidden="true">IGNORE-LINK-ARIA</span></a>
+            <button>Send<span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">IGNORE-BUTTON-CLIPPED</span><span style="font-size:4px">IGNORE-BUTTON-TINY</span></button>
+            <button><span aria-hidden="true" aria-label="IGNORE-ICON-ARIA"></span><img alt="Close" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="10" height="10"></button>
+            <h2>Title<span style="opacity:0">IGNORE-HEADING</span></h2>
+            <button style="position:absolute;left:20px;top:200px;width:100px;height:40px">Under</button>
+            <div style="position:absolute;left:0;top:180px;width:300px;height:100px;background:white">Banner<span style="opacity:0">IGNORE-COVER</span></div>
+            """),
+        "/moving": (Self.html, """
+            <title>Moving</title><style>body { margin: 0 } button { position: absolute; left: 0; top: 100px; transition: left 6s linear }</style>
+            <button id="mover">Mover</button>
+            <script>setTimeout(() => { document.getElementById('mover').style.left = '900px'; }, 50);</script>
+            """),
+        // In <code>, which Lithium's DM Sans leaves to the page's own font.
+        "/font": (Self.html, "<title>Font</title><style>body { margin: 0 }</style><code><button style=\"font: 30px Late, serif\">Wide words here</button></code>"),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
     ]
@@ -1108,6 +1124,126 @@ struct AgentReadTests {
             let plain = await client.call("read_text", ["tab": .string(tab), "main": false])
             #expect(plain["text"]?.string == "Story one | 12 points\nStory two | 3 points\nSee the docs.")
             #expect(await client.call("find_text", ["tab": .string(tab), "text": "IGNORE"])["count"] == 0)
+        }
+    }
+
+    @Test func namesLeaveHiddenTextOut() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/hidden-names")
+            let json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(!json.isError, "\(json.message)")
+            #expect(!text(json.content).contains("IGNORE"), "\(text(json.content))")
+            #expect(node(json, role: "link", name: "Docs") != nil)
+            #expect(node(json, role: "button", name: "Send") != nil)
+            #expect(node(json, role: "button", name: "Close") != nil)
+            #expect(node(json, role: "heading", name: "Title") != nil)
+            let links = await client.call("links", ["tab": .string(tab)])
+            #expect(items(links["links"]).compactMap { $0["text"] } == ["Docs"], "\(text(links.content))")
+            let under = try #require(node(json, role: "button", name: "Under")?["ref"])
+            let info = await client.call("element_info", ["tab": .string(tab), "ref": under])
+            #expect(info["coveredBy"]?["text"] == "Banner", "\(text(info.content))")
+        }
+    }
+
+    /// Layout changes that mutate nothing: a transition moving a button, a web font arriving.
+    @Test func snapshotsSeeLayoutChangesWithoutMutations() async throws {
+        try await withAgent { client, base in
+            let moving = try await open(client, base, "/moving")
+            let webView = try #require(client.tab(moving)?.webView)
+            try await Task.sleep(for: .milliseconds(300))
+            let left = { (result: AgentTabsTests.ToolResult) in self.node(result, role: "button", name: "Mover")?["box"].map(self.items)?.first }
+            let before = try #require(left(await client.call("snapshot", ["tab": .string(moving), "format": "json"])))
+            // A tab out of sight holds its animations' clock: the page's script moves it on, as time would.
+            _ = try await webView.callAsyncJavaScript("document.getAnimations()[0].currentTime = 3000", contentWorld: .page)
+            let after = try #require(left(await client.call("snapshot", ["tab": .string(moving), "format": "json"])))
+            #expect(Self.number(before) == 0)
+            #expect(Self.number(after) == 450, "\(before) then \(after)")
+
+            let font = try await open(client, base, "/font")
+            let width = { (result: AgentTabsTests.ToolResult) in self.node(result, role: "button", name: "Wide words here")?["box"].map(self.items)?[2] }
+            let fallback = try #require(width(await client.call("snapshot", ["tab": .string(font), "format": "json"])))
+            let bytes = try Data(contentsOf: URL(fileURLWithPath: "/System/Library/Fonts/Supplemental/Andale Mono.ttf")).base64EncodedString()
+            _ = try await client.tab(font)?.webView.callAsyncJavaScript("""
+                const face = new FontFace('Late', `url(data:font/ttf;base64,${bytes})`);
+                document.fonts.add(face);
+                await face.load();
+                """, arguments: ["bytes": bytes], contentWorld: .page)
+            let loaded = try #require(width(await client.call("snapshot", ["tab": .string(font), "format": "json"])))
+            #expect(loaded != fallback, "\(fallback) then \(loaded)")
+        }
+    }
+
+    /// Back twice after nine pages: the last eight pages left keep their refs, the oldest goes first.
+    @Test func theLastEightPagesLeftKeepTheirRefs() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            var refs: [String] = []
+            for page in 1...9 {
+                state.mainFrameAnswered("p\(page)")
+                refs.append(state.ref(for: ElementAddress(document: "p\(page)", id: 1)))
+            }
+            state.mainFrameAnswered("p8")
+            #expect(state.address(of: refs[7]) == ElementAddress(document: "p8", id: 1))
+            state.mainFrameAnswered("p7")
+            #expect(state.address(of: refs[6]) == ElementAddress(document: "p7", id: 1))
+            state.mainFrameAnswered("p1")
+            #expect(state.address(of: refs[0]) == nil)
+        }
+    }
+
+    /// The picture and its masks come from one scroll: a page that scrolled between them is read
+    /// and pictured again, and one that keeps scrolling is refused.
+    @Test func picturesAndTheirMasksComeFromOneScroll() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/geometry")
+            let named = try client.hub.tab(named: tab)
+            let webView = try #require(client.tab(tab)?.webView)
+            let deadline = ContinuousClock.now + AgentHub.readTimeout
+            let first = try await client.hub.layout(of: named, webView, until: deadline)
+            #expect(first.main.viewport.sy == 0)
+            var takes = 0
+            let picture = try await client.hub.masked(named, webView, from: first, until: deadline) {
+                takes += 1
+                if takes == 1 { _ = try await webView.callAsyncJavaScript("scrollTo(0, 2000)", contentWorld: .page) }
+                return takes
+            }
+            #expect(picture.value == 2)
+            #expect(picture.layout.main.viewport.sy == 2000)
+            // The bottom password, 2500 down the page, is where the second picture shows it.
+            #expect(picture.layout.masks?.contains(CGRect(x: 0, y: 500, width: 400, height: 100)) == true, "\(String(describing: picture.layout.masks))")
+            do {
+                _ = try await client.hub.masked(named, webView, from: picture.layout, until: deadline) {
+                    _ = try await webView.callAsyncJavaScript("scrollBy(0, -100)", contentWorld: .page)
+                }
+                Issue.record("A page that kept scrolling was pictured")
+            } catch let error as AgentToolError {
+                #expect(error.code == "frame_gone")
+            }
+        }
+    }
+
+    /// A frame that answers after `frameTimeout` is late for a read, but a read placing one of its
+    /// elements (`element_info`, `screenshot` with `ref`) waits for it within its own deadline.
+    @Test func placingAnElementWaitsForASlowFrame() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try client.hub.tab(named: tab)
+            let state = try #require(client.hub.agentTab(for: named.tab))
+            #expect(await waitUntil(10) { !state.frames.isEmpty })
+            let token = try #require(state.frames.keys.first)
+            let slow = { () -> [(token: String, answer: PageAnswer<Data>)] in
+                let answer = PageAnswer<Data>()
+                Task {
+                    try? await Task.sleep(for: AgentHub.frameTimeout + .milliseconds(500))
+                    answer.result = .success(Data(#"{"token":"slow"}"#.utf8))
+                }
+                return [(token: token, answer: answer)]
+            }
+            let hasty = try await client.hub.childAnswers(slow(), of: state, from: named, until: .now + AgentHub.readTimeout)
+            #expect(hasty.late == 1)
+            let patient = try await client.hub.childAnswers(slow(), of: state, from: named, until: .now + AgentHub.readTimeout, patient: true)
+            #expect(patient.late == 0)
+            #expect(patient.answers.compactMap(\.data) == [Data(#"{"token":"slow"}"#.utf8)])
         }
     }
 

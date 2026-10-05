@@ -82,15 +82,16 @@ final class AgentTab {
 
     /// The frames and refs of the pages left, by main document: a restored page's frames say hello
     /// again, maybe before its main frame does, and the frames of a page left must never answer
-    /// for it. Its refs answer `stale_ref` until it comes back.
-    @ObservationIgnored private var pagesLeft: [String: (frames: [String: WKFrameInfo], refs: RefTable)] = [:]
+    /// for it. Its refs answer `stale_ref` until it comes back. The last 8 left are kept, the
+    /// oldest first out.
+    @ObservationIgnored private var pagesLeft: [(document: String, frames: [String: WKFrameInfo], refs: RefTable)] = []
 
     private func switchPage(to token: String) {
         if let mainDocument, !frames.isEmpty || !table.refs.isEmpty {
-            if pagesLeft.count >= 8 { pagesLeft = [:] }
-            pagesLeft[mainDocument] = (frames, table)
+            if pagesLeft.count >= 8 { pagesLeft.removeFirst() }
+            pagesLeft.append((mainDocument, frames, table))
         }
-        let restored = pagesLeft.removeValue(forKey: token)
+        let restored = pagesLeft.firstIndex { $0.document == token }.map { pagesLeft.remove(at: $0) }
         frames = restored?.frames ?? [:]
         table = restored?.refs ?? RefTable()
         mainDocument = token
@@ -98,7 +99,7 @@ final class AgentTab {
 
     /// Refs held for the page shown, and for the pages left that Back may bring back.
     var refCounts: (shown: Int, kept: Int) {
-        (table.refs.count, pagesLeft.values.reduce(0) { $0 + $1.refs.refs.count })
+        (table.refs.count, pagesLeft.reduce(0) { $0 + $1.refs.refs.count })
     }
 
     /// A child frame answered as another document (it navigated), or not at all (it is gone).

@@ -96,7 +96,7 @@ final class AgentTab {
 
     /// A frame's bootstrap said hello. The main frame's starts a new page, whose frames are all
     /// new, or brings back one Back or Forward restored from WebKit's cache, with its frames.
-    func hello(token: String, frame: WKFrameInfo) {
+    func hello(token: String, frame: WKFrameInfo, restored: Bool = false) {
         if frame.isMainFrame {
             guard token != mainDocument else { return }
             hellos += 1
@@ -104,7 +104,7 @@ final class AgentTab {
             shown = [:]
             // The user may have passed the check: the next read says if the new page is one.
             challenge = nil
-            capture?.newPage()
+            capture?.newPage(restored: restored)
             switchPage(to: token)
         } else {
             frames[token] = frame

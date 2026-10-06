@@ -577,6 +577,7 @@ final class Tab: NSObject, Identifiable {
     private func endedUnshown(_ load: UnshownLoad) {
         lastUnshownLoad = load
         unshownLoads += 1
+        browser?.agent?.loadEndedUnshown(in: self)
     }
 
     /// Applied only if the page still has the title the tidy name was made from.
@@ -756,6 +757,7 @@ extension Tab: WKNavigationDelegate {
             }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
+            browser?.agent?.removeConsole(from: webView.configuration.userContentController)
             setWebstoreBridge(false)
             setInternalBridge(true)
             return (.allow, preferences)

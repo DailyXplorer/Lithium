@@ -10,6 +10,8 @@ struct NetworkEntry {
     let frameID: UInt64?
     let type: String
     let method: String
+    /// The method the page asked for, which a redirect may have changed: its script reports that one.
+    let askedMethod: String
     let url: String
     let requestHeaders: [String: String]
     let started: ContinuousClock.Instant
@@ -76,16 +78,17 @@ final class TabCapture {
 
     // MARK: Network
 
-    /// `redirect`: the next leg of a request already listed, which a new page keeps from its first.
-    func requestStarted(_ load: ResourceLoadSpy.Load, method: String, url: URL?, headers: [AnyHashable: Any], redirect: Bool = false) {
+    /// `askedMethod`: the next leg of a request already listed, which a new page keeps from its
+    /// first, and the method its first asked for.
+    func requestStarted(_ load: ResourceLoadSpy.Load, method: String, url: URL?, headers: [AnyHashable: Any], askedMethod: String? = nil) {
         if url?.scheme?.lowercased() == Extensions.scheme {
             if !load.isMainFrame, load.type == "document", let frame = load.frameID { extensionFrames.insert(frame) }
             return
         }
         if let frame = load.frameID, extensionFrames.contains(frame) { return }
-        if load.isMainFrame, load.type == "document", !redirect { pageMark = (nextEntry, nextMessage) }
+        if load.isMainFrame, load.type == "document", askedMethod == nil { pageMark = (nextEntry, nextMessage) }
         let address = String((url?.absoluteString ?? "").prefix(2048))
-        append(NetworkEntry(id: nextEntry, loadID: load.id, frameID: load.frameID, type: load.type, method: method, url: AgentURLs.redacted(address), requestHeaders: AgentRedaction.headers(headers), started: .now))
+        append(NetworkEntry(id: nextEntry, loadID: load.id, frameID: load.frameID, type: load.type, method: method, askedMethod: askedMethod ?? method, url: AgentURLs.redacted(address), requestHeaders: AgentRedaction.headers(headers), started: .now))
         inFlight[load.id] = nextEntry - 1
         lastActivity = .now
     }
@@ -97,7 +100,7 @@ final class TabCapture {
         entries[index].redirectedTo = AgentURLs.redacted(next.absoluteString)
         entries[index].ended = .now
         inFlight[load.id] = nil
-        requestStarted(load, method: request.httpMethod ?? entries[index].method, url: next, headers: request.allHTTPHeaderFields ?? [:], redirect: true)
+        requestStarted(load, method: request.httpMethod ?? entries[index].method, url: next, headers: request.allHTTPHeaderFields ?? [:], askedMethod: entries[index].askedMethod)
     }
 
     func responded(_ load: ResourceLoadSpy.Load, _ response: URLResponse) {
@@ -143,10 +146,11 @@ final class TabCapture {
     }
 
     /// A fetch or XHR body the page's script saw, kept with the latest request it fits that
-    /// has none yet. The text was redacted off the main thread.
+    /// has none yet: the last leg of its redirects, at the address the body came from, under the
+    /// method the page asked for. The text was redacted off the main thread.
     func attach(_ body: CapturedBody, url: String, method: String, frameID: UInt64?) {
         let address = AgentURLs.redacted(url)
-        guard let index = entries.lastIndex(where: { $0.body == nil && $0.url == address && $0.method == method && $0.frameID == frameID && ["fetch", "xhr"].contains($0.type) }) else { return }
+        guard let index = entries.lastIndex(where: { $0.body == nil && $0.url == address && $0.askedMethod == method && $0.frameID == frameID && ["fetch", "xhr"].contains($0.type) }) else { return }
         entries[index].body = body
         bodyBytes += body.text.utf8.count
         for oldest in entries.indices where bodyBytes > Self.maxBodies {
@@ -167,16 +171,22 @@ final class TabCapture {
     // MARK: Pages
 
     /// The main frame shows a new document: what the page before left goes. The new page's own
-    /// request, and what it started before saying hello, stay. Without a request seen (a page
-    /// Back brings from WebKit's cache, or no resource load delegate), everything goes.
-    func newPage() {
-        let mark = pageMark ?? (nextEntry, nextMessage)
+    /// request, and what it started before saying hello, stay. A page Back brings from WebKit's
+    /// cache (`restored`), or one without a request seen (no resource load delegate), keeps nothing.
+    func newPage(restored: Bool = false) {
+        let mark = (restored ? nil : pageMark) ?? (nextEntry, nextMessage)
         pageMark = nil
         entries.removeAll { $0.id < mark.entry }
         messages.removeAll { $0.id < mark.message }
         inFlight = inFlight.filter { $0.value >= mark.entry }
         bodyBytes = entries.reduce(0) { $0 + ($1.body?.text.utf8.count ?? 0) }
         extensionFrames = []
+    }
+
+    /// The main frame's load ended without a page (a download, a stopped load): the page shown
+    /// stays, and the next one starts from its own request.
+    func loadEndedUnshown() {
+        pageMark = nil
     }
 
     /// The tab slept or its page's process died: its page and its requests are gone.

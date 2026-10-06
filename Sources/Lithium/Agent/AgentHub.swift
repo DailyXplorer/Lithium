@@ -720,6 +720,17 @@ final class AgentHub {
         if tabs[tab.id]?.capture != nil { consoleHandler.install(on: controller, bodies: capturesBodies) }
     }
 
+    /// Hooked from `Tab` as it shows one of Lithium's own pages, which takes none of the scripts
+    /// `install` adds: the page doesn't find the console handler either.
+    func removeConsole(from controller: WKUserContentController) {
+        consoleHandler.remove(from: controller)
+    }
+
+    /// Hooked from `Tab`: the main frame's load ended without a page.
+    func loadEndedUnshown(in tab: Tab) {
+        tabs[tab.id]?.capture?.loadEndedUnshown()
+    }
+
     /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
     /// turn. Waiting in line counts against the call's own deadline. Its errors name the tab.
     func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {

@@ -101,12 +101,13 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
         guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub, hub.isOpen(tab),
               message.frameInfo.securityOrigin.protocol != Extensions.scheme else { return }
         if let error = body["console"] as? [String: Any] {
+            guard message.frameInfo.securityOrigin.protocol != Internal.scheme else { return }
             hub.tabs[tab.id]?.capture?.log(
                 level: "error", kind: error["kind"] as? String, text: error["text"] as? String ?? "", source: error["source"] as? String,
                 line: error["line"] as? Int, column: error["column"] as? Int, frameID: ResourceLoadSpy.frameID(of: message.frameInfo)
             )
         } else if let token = body["token"] as? String {
-            hub.agentTab(for: tab)?.hello(token: token, frame: message.frameInfo)
+            hub.agentTab(for: tab)?.hello(token: token, frame: message.frameInfo, restored: body["restored"] as? Bool == true)
         }
     }
 }

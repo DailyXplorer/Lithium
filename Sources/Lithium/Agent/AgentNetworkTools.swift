@@ -40,6 +40,13 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
         controller.addUserScript(Self.errors)
     }
 
+    /// A page that takes no script of the agent's doesn't find the handler either.
+    func remove(from controller: WKUserContentController) {
+        guard controllers.contains(controller) else { return }
+        controller.removeScriptMessageHandler(forName: Self.name, contentWorld: .page)
+        controllers.remove(controller)
+    }
+
     /// Access turned off: pages no longer find the handler. A wrapper already in a page posts
     /// into nothing, without an error, until the page goes.
     func uninstall() {
@@ -51,7 +58,7 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub,
-              let capture = hub.tabs[tab.id]?.capture, message.frameInfo.securityOrigin.protocol != Extensions.scheme else { return }
+              let capture = hub.tabs[tab.id]?.capture, ![Internal.scheme, Extensions.scheme].contains(message.frameInfo.securityOrigin.protocol) else { return }
         let frameID = ResourceLoadSpy.frameID(of: message.frameInfo)
         if let response = body["body"] as? [String: Any] {
             guard hub.capturesBodies, let url = response["url"] as? String, let method = response["method"] as? String, let text = response["text"] as? String else { return }

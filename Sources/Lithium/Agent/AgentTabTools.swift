@@ -403,8 +403,13 @@ extension AgentHub {
             } else if let condition {
                 try await hub.wait(for: condition, in: named, deadline: deadline, timeout: timeout)
             } else if let idle {
-                tab.wake()
-                try await hub.waitForNetworkIdle(named, quiet: .milliseconds(idle), deadline: deadline, timeout: timeout)
+                // A sleeping tab has sent nothing yet: the quiet counts from its page's load.
+                var loaded: ContinuousClock.Instant?
+                if tab.isAsleep {
+                    _ = try await hub.navigation(in: named, wait: .load, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() }
+                    loaded = .now
+                }
+                try await hub.waitForNetworkIdle(named, quiet: .milliseconds(idle), after: loaded, deadline: deadline, timeout: timeout)
             }
             var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true

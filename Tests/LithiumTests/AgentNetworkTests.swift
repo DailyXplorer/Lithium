@@ -245,6 +245,81 @@ struct AgentNetworkTests {
         }
     }
 
+    @Test func aSleepingTabWaitsForWhatItsPageLoads() async throws {
+        let (slowListener, slow) = try await LocalHTTP.serve(["/slow": ("Content-Type: text/plain\r\nAccess-Control-Allow-Origin: *", "late")], delay: 0.3)
+        defer { slowListener.cancel() }
+        let late = slow.appending(path: "slow").absoluteString
+        let pages = Self.pages.merging([
+            "/after-load": (Self.html, "<title>After load</title><script>addEventListener('load', () => fetch('\(late)'))</script>"),
+        ]) { $1 }
+        try await withAgent(pages) { client, base in
+            let id = try await open(client, base.appending(path: "after-load"))
+            let tab = try #require(client.tab(id))
+            #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": 200]))["met"] == true)
+            tab.sleep(configuration: client.browser.makeConfiguration())
+            try await Task.sleep(for: .milliseconds(300))
+            let started = ContinuousClock.now
+            let idle = await client.call("wait_for", ["tab": .string(id), "networkIdle": 200])
+            #expect(idle["met"] == true, "\(idle.content)")
+            #expect(ContinuousClock.now - started >= .milliseconds(500))
+            let fetched = client.hub.tabs[tab.id]?.capture?.entries.filter { $0.url == late } ?? []
+            #expect(fetched.count == 1 && fetched.allSatisfy { $0.ended != nil }, "\(fetched)")
+        }
+    }
+
+    @Test func aBodyFollowsARedirectThatChangesTheMethod() async throws {
+        let pages = Self.pages.merging([
+            "/post": (Self.html, "<title>Post</title><script>fetch('/submit', { method: 'POST', body: 'a=1' }).then((response) => response.text()).then((text) => document.title = text)</script>"),
+            "/submit": ("HTTP/1.1 303 See Other\r\nLocation: /result", ""),
+            "/result": ("Content-Type: text/plain", "after the redirect"),
+        ]) { $1 }
+        UserDefaults.standard.set(true, forKey: Preference.agentCaptureBodies)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.agentCaptureBodies) }
+        try await withAgent(pages) { client, base in
+            let id = try await open(client, base.appending(path: "post"))
+            let tab = try #require(client.tab(id))
+            #expect(await waitUntil(5) { tab.title == "after the redirect" })
+            #expect(await waitUntil(5) { client.hub.tabs[tab.id]?.capture?.entries.contains { $0.body != nil } == true })
+            let all = entries(await client.call("network_log", ["tab": .string(id)]))
+            #expect(entry(all, endingWith: "/submit")?["method"] == "POST")
+            let result = try #require(entry(all, endingWith: "/result"), "\(all)")
+            #expect(result["method"] == "GET")
+            let body = await client.call("network_body", ["tab": .string(id), "id": result["id"] ?? .null])
+            #expect(body["text"] == "after the redirect", "\(body.content)")
+        }
+    }
+
+    /// A load that shows no page (a download the user denies) leaves the log to the page shown,
+    /// and a page Back brings from WebKit's cache starts a log of its own.
+    @Test func aPageBackBringsFromTheCacheStartsAFreshLog() async throws {
+        let pages = Self.pages.merging([
+            "/first": (Self.html, "<title>First</title><p>first</p><script>addEventListener('pageshow', (event) => { if (event.persisted) document.title = 'Restored' })</script>"),
+            "/links": (Self.html, "<title>Links</title><a href='/report.csv'>Report</a><script>console.log('links page')</script>"),
+            "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
+        ]) { $1 }
+        try await withAgent(pages) { client, base in
+            let id = try await open(client, base.appending(path: "first"))
+            let tab = try #require(client.tab(id))
+            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "links").absoluteString)]))["title"] == "Links")
+            let report = try #require(await client.call("snapshot", ["tab": .string(id)])["text"]?.string?.firstMatch(of: /\[(e\d+)\] link "Report"/)?.1)
+            let confirmations = client.hub.confirmations
+            let click = Task { await client.call("click", ["tab": .string(id), "ref": .string(String(report)), "diff": false]) }
+            #expect(await waitUntil(20) { confirmations.pending.first?.kind == .download })
+            if let asked = confirmations.pending.first { confirmations.answer(asked.id, .deny) }
+            #expect(await click.value.code == "denied_by_user")
+            _ = try await tab.webView.evaluateJavaScript("console.log('after the download'); fetch('/api/data'); 0")
+            let capture = try #require(client.hub.tabs[tab.id]?.capture)
+            #expect(await waitUntil(5) { capture.entries.contains { $0.url.hasSuffix("/api/data") && $0.ended != nil } })
+
+            let back = await client.call("go_back", ["tab": .string(id)])
+            #expect(!back.isError, "\(back.content)")
+            #expect(await waitUntil(5) { tab.title == "Restored" })
+            let log = entries(await client.call("network_log", ["tab": .string(id)]))
+            #expect(log.isEmpty, "\(log)")
+            #expect((await client.call("console_log", ["tab": .string(id)]))["messages"] == [])
+        }
+    }
+
     // MARK: Console
 
     @Test func logsConsoleMessagesAndUncaughtErrorsWithoutChangingThePage() async throws {
@@ -279,6 +354,26 @@ struct AgentNetworkTests {
             #expect(Set(serious.compactMap { $0["level"]?.string }) == ["warn", "error"])
             let last = try #require(messages.last?["id"])
             #expect((await client.call("console_log", ["tab": .string(id), "since": last]))["messages"] == [])
+        }
+    }
+
+    /// A tab agents use, sent to one of Lithium's own pages: the page finds no console handler,
+    /// its console stays its own, and nothing it logs is kept.
+    @Test func lithiumsOwnPagesStayOutOfTheConsole() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "plain"))
+            let tab = try #require(client.tab(id))
+            let capture = try #require(client.hub.tabs[tab.id]?.capture)
+            let probe = "typeof webkit.messageHandlers.lithiumAgentConsole + ' ' + (Function.prototype.toString.call(console.log) === Function.prototype.toString.call(console.clear).replace('clear', 'log'))"
+            #expect(try await tab.webView.evaluateJavaScript(probe) as? String == "object true")
+
+            tab.load(Internal.settingsURL)
+            #expect(await waitUntil(10) { tab.webView.url == Internal.settingsURL && !tab.isLoading })
+            let before = capture.messages.count
+            #expect(try await tab.webView.evaluateJavaScript(probe) as? String == "undefined true")
+            _ = try await tab.webView.evaluateJavaScript("console.log('from settings'); setTimeout(() => { throw new Error('settings boom') }); 0")
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(capture.messages.count == before, "\(capture.messages.map(\.text))")
         }
     }
 

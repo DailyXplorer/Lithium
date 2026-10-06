@@ -198,6 +198,7 @@ extension AgentHub {
             "wait": AgentParam.wait,
             "timeoutMs": AgentParam.timeout,
             "steps": ["type": "array", "maxItems": .int(maxBatchSteps), "description": "As batch’s steps, run once the page is ready"],
+            "readyTimeoutMs": AgentParam.integer,
         ])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -211,15 +212,21 @@ extension AgentHub {
         // Steps act on the page's document, which a commit alone doesn't have yet.
         if steps != nil { wait = max(wait, .domcontentloaded) }
         let timeout = try arguments.timeout(default: steps == nil ? 15_000 : 60_000)
+        let ready = try arguments.readyTimeout()
         let deadline = ContinuousClock.now + timeout
         let named = try await hub.openAgentTab(url, ephemeral: ephemeral, session: session, until: deadline)
         // With steps, the batch's one diff stands for the page's snapshot.
         var page = hub.page(named, reached: .load)
         if let url { page = try await hub.load(url, in: named, wait: wait, snapshot: snapshot && steps == nil, session: session, deadline: deadline, timeout: timeout) }
         guard let steps else { return page }
-        let batch = try await hub.runBatch(steps, in: named, stopOnError: true, diff: snapshot, deadline: deadline, timeout: timeout, session: session)
-        // The batch reads the page the steps left; the first load's status may not be its.
         var opened = page.object ?? [:]
+        if url != nil {
+            let prepared = try await hub.readyForSteps(named, within: ready, session: session, deadline: deadline)
+            if prepared["note"] == nil, wait < .load { opened["state"] = .string(LoadWait.load.rawValue) }
+            opened.merge(prepared) { $1 }
+        }
+        let batch = try await hub.runBatch(steps, in: named, stopOnError: true, diff: snapshot, ready: ready, deadline: deadline, timeout: timeout, session: session)
+        // The batch reads the page the steps left; the first load's status may not be its.
         opened["status"] = nil
         return .object(opened.merging(batch) { $1 })
     }
@@ -500,7 +507,21 @@ extension AgentHub {
         // `none`: the navigation has started, and nothing more is known; wait_for tells how it ends.
         if let reached { fields["state"] = .string(reached == LoadWait.none ? "started" : reached.rawValue) }
         if let status = tab.httpStatus { fields["status"] = .int(status) }
+        // Before the commit, the failures known are the page before's.
+        if !tab.isAwaitingCommit, let failed = failedScripts(in: tab) { fields["failedScripts"] = failed }
         return .object(fields)
+    }
+
+    /// Up to 5 of the page's scripts that failed, so an agent knows why a button may be dead;
+    /// nil when none did.
+    func failedScripts(in tab: Tab) -> JSONValue? {
+        let failed = tabs[tab.id]?.capture?.failedScripts ?? []
+        guard !failed.isEmpty else { return nil }
+        return .array(failed.prefix(5).map { entry in
+            var fields: [String: JSONValue] = ["url": .string(entry.url)]
+            if let status = entry.status { fields["status"] = .int(status) } else { fields["error"] = .string(entry.error ?? "failed") }
+            return .object(fields)
+        })
     }
 
     /// Re-checks `check` as the tab changes, inside `exclusive`. The tab closing, the user

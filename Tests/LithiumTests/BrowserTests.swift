@@ -466,9 +466,11 @@ enum LocalHTTP {
         try await serve(routes.mapValues { ($0.headers, Data($0.body.utf8)) }, delay: delay)
     }
 
-    /// `requested` hears the path of every request, for a test counting fetches.
+    /// `requested` hears the path of every request, for a test counting fetches. `answer`, asked
+    /// first, answers a path differently each time (a 503, then 200).
     static func serve(
-        _ routes: [String: (headers: String, body: Data)], delay: TimeInterval = 0, requested: (@Sendable (String) -> Void)? = nil
+        _ routes: [String: (headers: String, body: Data)], delay: TimeInterval = 0, requested: (@Sendable (String) -> Void)? = nil,
+        answer: (@Sendable (String) -> (headers: String, body: Data)?)? = nil
     ) async throws -> (NWListener, URL) {
         let listener = try NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { connection in
@@ -477,7 +479,7 @@ enum LocalHTTP {
                 let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
                 requested?(path)
-                let (headers, body) = routes[path] ?? ("Content-Type: text/plain", Data())
+                let (headers, body) = answer?(path) ?? routes[path] ?? ("Content-Type: text/plain", Data())
                 let status = headers.hasPrefix("HTTP/") ? "" : "HTTP/1.1 200 OK\r\n"
                 let response = Data("\(status)\(headers)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {

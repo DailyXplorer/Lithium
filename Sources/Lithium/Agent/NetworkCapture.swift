@@ -21,8 +21,20 @@ struct NetworkEntry {
     var fromCache = false
     var ended: ContinuousClock.Instant?
     var error: String?
+    /// Stopped by WebKit or the page (a new page, `stop`), which is no failure of the server's.
+    var cancelled = false
     var redirectedTo: String?
     var body: CapturedBody?
+
+    /// An HTTP error, or the network failing.
+    var failed: Bool {
+        (status ?? 0) >= 400 || (error != nil && !cancelled)
+    }
+
+    /// The address and why it failed, as `batch` and `failedScripts` name it.
+    var failure: String {
+        "\(url) \(status.map(String.init) ?? error ?? "failed")"
+    }
 }
 
 /// A response body kept for `network_body`: text only, redacted, cut at `TabCapture.maxBody`.
@@ -112,7 +124,10 @@ final class TabCapture {
         guard let index = index(of: load.id) else { return }
         if let response, entries[index].status == nil { responded(at: index, response, fromCache: load.fromCache) }
         entries[index].ended = .now
-        if let error { entries[index].error = (error as NSError).localizedDescription }
+        if let error = error as NSError? {
+            entries[index].error = error.localizedDescription
+            entries[index].cancelled = error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled
+        }
         inFlight[load.id] = nil
         lastActivity = .now
     }
@@ -158,6 +173,12 @@ final class TabCapture {
             entries[oldest].body = nil
             bodyBytes -= dropped.text.utf8.count
         }
+    }
+
+    /// The main frame's scripts that failed on the page loading, or the page shown when none is:
+    /// handlers they would have attached are missing, and a button may do nothing.
+    var failedScripts: [NetworkEntry] {
+        entries.filter { $0.id >= (pageMark?.entry ?? 0) && $0.frameID == nil && $0.type == "script" && $0.failed }
     }
 
     // MARK: Console

@@ -63,6 +63,7 @@ extension AgentHub {
             ],
             "stopOnError": ["type": "boolean", "description": "Default true: skip the steps after a failure"],
             "timeoutMs": ["type": "integer", "description": "For all steps, default 60000"],
+            "readyTimeoutMs": AgentParam.integer,
             "diff": AgentParam.flag,
         ], required: ["steps"])
     ) { arguments, session, hub in
@@ -79,9 +80,10 @@ extension AgentHub {
         if url == nil, ephemeral || close { throw Arguments.invalid("ephemeral and close go with url: a batch closes only the tab it opened.") }
         if let url { try hub.checkNotBlocked(url) }
         let timeout = try arguments.timeout(default: 60_000)
+        let ready = try arguments.readyTimeout()
         let deadline = ContinuousClock.now + timeout
         if let named {
-            return .object(try await hub.runBatch(steps, in: named, stopOnError: stopOnError, diff: diff, deadline: deadline, timeout: timeout, session: session))
+            return .object(try await hub.runBatch(steps, in: named, stopOnError: stopOnError, diff: diff, ready: ready, deadline: deadline, timeout: timeout, session: session))
         }
         guard let url else { throw Arguments.invalid("Give tab or url.") }
         let opened = try await hub.openAgentTab(url, ephemeral: ephemeral, session: session, until: deadline)
@@ -89,7 +91,9 @@ extension AgentHub {
         defer { if close, hub.isOpen(opened.tab) { hub.browser?.close(opened.tab) } }
         do {
             _ = try await hub.load(url, in: opened, wait: .domcontentloaded, snapshot: false, session: session, deadline: deadline, timeout: timeout)
-            var result = try await hub.runBatch(steps, in: opened, stopOnError: stopOnError, diff: diff, deadline: deadline, timeout: timeout, session: session)
+            let prepared = try await hub.readyForSteps(opened, within: ready, session: session, deadline: deadline)
+            var result = try await hub.runBatch(steps, in: opened, stopOnError: stopOnError, diff: diff, ready: ready, deadline: deadline, timeout: timeout, session: session)
+            result.merge(prepared) { kept, _ in kept }
             if close { result["closed"] = true }
             return .object(result)
         } catch let error as AgentToolError where close {
@@ -98,14 +102,22 @@ extension AgentHub {
     }
 
     /// Runs `steps` in `named`, in order, each within what is left of `deadline`, and reads one
-    /// diff of the tab after the last.
-    func runBatch(_ steps: [BatchStep], in named: NamedTab, stopOnError: Bool, diff: Bool, deadline: ContinuousClock.Instant, timeout: Duration, session: MCPSession) async throws -> [String: JSONValue] {
+    /// diff of the tab after the last. A step that loaded a page lets it fire `load`, within
+    /// `ready`, before the next acts on it.
+    func runBatch(_ steps: [BatchStep], in named: NamedTab, stopOnError: Bool, diff: Bool, ready: Duration, deadline: ContinuousClock.Instant, timeout: Duration, session: MCPSession) async throws -> [String: JSONValue] {
         var outcomes: [BatchOutcome] = []
+        var loadedPage = false
         for step in steps {
             if outcomes.contains(where: { if case .failed = $0 { stopOnError } else { false } }) {
                 outcomes.append(.skipped)
                 continue
             }
+            if loadedPage, try await !loads(named, within: ready, until: deadline), case .done(var fields)? = outcomes.last {
+                fields["note"] = .string(Self.stillLoading(after: ready))
+                outcomes[outcomes.count - 1] = .done(fields)
+            }
+            let marks = (named.tab.loadStarts, named.tab.commits)
+            defer { loadedPage = named.tab.loadStarts > marks.0 || named.tab.commits > marks.1 }
             let left = Int((deadline - .now) / .milliseconds(1))
             // A step that waits a set time needs it whole: less fails as the batch's timeout.
             var needs = 1
@@ -152,6 +164,45 @@ extension AgentHub {
         return result.merging(page(named, reached: nil).object ?? [:]) { _, now in now }
     }
 
+    /// Before the first step in a tab `batch` or `tab_open` opened: the page's `load`, within
+    /// `cap`, since handlers a page attaches once its scripts have loaded (jQuery's) aren't there
+    /// at DOMContentLoaded, and a click before them does nothing. A page that loaded with one of
+    /// its own site's scripts failed (a 503) is reloaded once. Past the cap the steps run anyway,
+    /// and the result says so in `note`; `reloaded` names the script, or is null when the reload
+    /// failed, `note` saying why.
+    func readyForSteps(_ named: NamedTab, within cap: Duration, session: MCPSession, deadline: ContinuousClock.Instant) async throws -> [String: JSONValue] {
+        guard try await loads(named, within: cap, until: deadline) else { return ["note": .string(Self.stillLoading(after: cap))] }
+        let site = named.tab.url?.host().map(SiteInfo.registrable)
+        guard let failed = tabs[named.tab.id]?.capture?.failedScripts.first(where: { URL(string: $0.url)?.host().map(SiteInfo.registrable) == site }) else { return [:] }
+        let left = Int((deadline - .now) / .milliseconds(1))
+        guard left > 0 else { return [:] }
+        var fields: [String: JSONValue] = ["reloaded": .string("script failed: \(failed.failure)")]
+        // A reload of its own, logged as one; still loading at the cap is a note, not a failure.
+        let reload: JSONValue = ["tab": .string(named.id), "wait": "load", "diff": false, "timeoutMs": .int(max(1, min(Int(cap / .milliseconds(1)), left)))]
+        switch try await step("reload", reload, session: session) {
+        case .success: break
+        case .failure(let error) where error.code == "timeout": fields["note"] = .string(Self.stillLoading(after: cap))
+        // The page was usable before: the steps run on it as it is.
+        case .failure(let error): fields = ["reloaded": .null, "note": .string("script failed: \(failed.failure); reload failed: \(error.message)")]
+        }
+        return fields
+    }
+
+    /// Whether the tab's page has fired `load`, waiting for it within `cap` and the call's
+    /// deadline. A tab that closed or slept has nothing to wait for: the next step says why.
+    private func loads(_ named: NamedTab, within cap: Duration, until deadline: ContinuousClock.Instant) async throws -> Bool {
+        let tab = named.tab
+        return try await AgentWait.until(min(deadline, .now + cap)) { () -> Bool? in
+            !self.isOpen(tab) || tab.isAsleep || !tab.isLoading ? true : nil
+        } != nil
+    }
+
+    static func stillLoading(after cap: Duration) -> String {
+        let milliseconds = Int(cap / .milliseconds(1))
+        let time = milliseconds >= 1000 && milliseconds % 1000 == 0 ? "\(milliseconds / 1000) s" : "\(milliseconds) ms"
+        return "page still loading after \(time)"
+    }
+
     /// The steps of a batch, refused before anything runs when one can't: an unknown tool, one a
     /// batch never runs, `evaluate` while the user hasn't turned scripts on, `tab_close` of the
     /// batch's own tab. `tab` is the batch's, nil when it opens one.
@@ -193,6 +244,14 @@ extension AgentHub {
             return 10_000
         default: return 15_000
         }
+    }
+}
+
+extension Arguments {
+    /// `readyTimeoutMs`: how long `batch` and `tab_open` let a page finish loading before a step
+    /// acts on it, 10 s by default, at most 30.
+    func readyTimeout() throws -> Duration {
+        .milliseconds(try int("readyTimeoutMs", default: 10_000, in: 0...30_000))
     }
 }
 

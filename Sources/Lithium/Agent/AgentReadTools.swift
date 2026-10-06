@@ -7,13 +7,15 @@ enum DOMCondition {
     case text(String, present: Bool)
 
     /// Nil when the call waits for something else (load, url).
-    init?(ref: String?, text: String?, arguments: Arguments) throws {
+    /// `gone`: the text came as `textGone`, which waits for it to go.
+    init?(ref: String?, text: String?, gone: Bool = false, arguments: Arguments) throws {
         if let ref {
             guard AgentTab.isRef(ref) else { throw Arguments.invalid("ref must be a ref from snapshot, such as e9 or f2:e7.") }
             self = .element(ref: ref, state: try arguments.choice("state", ["visible", "hidden", "enabled", "attached", "detached"], default: "visible"))
         } else if let text {
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Arguments.invalid("text must not be empty.") }
-            self = .text(text.split(whereSeparator: \.isWhitespace).joined(separator: " "), present: try arguments.bool("present", default: true))
+            if gone, arguments.value["present"] != nil { throw Arguments.invalid("textGone takes no present: it waits for the text to go.") }
+            self = .text(text.split(whereSeparator: \.isWhitespace).joined(separator: " "), present: gone ? false : try arguments.bool("present", default: true))
         } else {
             return nil
         }
@@ -349,7 +351,21 @@ extension AgentHub {
         if webView.superview == nil, webView.frame.width < 1 || webView.frame.height < 1 {
             webView.frame = CGRect(origin: .zero, size: pageAreaSize)
         }
+        fitViewport(of: webView, in: tab)
         return webView
+    }
+
+    /// A tab out of the user's window keeps the size `resize` gave its page, in the stage too,
+    /// where the other pages follow the stage's size.
+    func fitViewport(of webView: WKWebView, in tab: Tab) {
+        guard webView.userWindow == nil, let size = tabs[tab.id]?.viewport else { return }
+        webView.autoresizingMask = []
+        if webView.frame.size != size { webView.setFrameSize(size) }
+    }
+
+    /// Hooked from `Tab.didComeIntoView`: the user's window gives the page its own size.
+    func cameIntoView(_ tab: Tab) {
+        tabs[tab.id]?.viewport = nil
     }
 
     /// Starts a call to `agent.js`; its answer comes in the returned box.

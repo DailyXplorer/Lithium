@@ -7,7 +7,7 @@ struct SiteInfoPanel: View {
 
     var body: some View {
         if let url = tab.url {
-            LiveSiteInfo(tab: tab, info: SiteInfo(url: url, loadError: tab.loadError))
+            LiveSiteInfo(tab: tab, info: SiteInfo(url: url, loadError: tab.loadError, store: tab.dataStore))
                 .id("\(url.absoluteString) \(tab.connection)")
         }
     }

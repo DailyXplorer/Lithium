@@ -215,7 +215,7 @@ final class Browser {
     func setAgentAccess(_ enabled: Bool) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools + AgentHub.networkTools)
+            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools + AgentHub.parityTools + AgentHub.networkTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {
@@ -321,8 +321,8 @@ final class Browser {
     // MARK: Tabs
 
     @discardableResult
-    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil) -> Tab {
-        let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url))
+    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil) -> Tab {
+        let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore)
         if let url { tab.load(url) }
         if selecting { select(tab) }
         return tab
@@ -330,8 +330,8 @@ final class Browser {
 
     /// `index` is a place in the tab list, clamped to it. `tabs` also holds favorites' pages, in
     /// no particular order, so the new tab goes just before the one it pushes down.
-    private func insertTab(at index: Int, configuration: WKWebViewConfiguration) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration)
+    private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore)
         tabs.insert(tab, at: Self.position(inTabList: index, of: tabs))
         extensions.didOpen(tab)
         return tab
@@ -344,8 +344,9 @@ final class Browser {
 
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
     /// stay as they were. Agents open only web pages, which load in Lithium's own configuration.
-    func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration())
+    /// With `privateStore` the tab is private (`Tab.privateStore`).
+    func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore)
         tab.openedByAgent = session
         tabs.append(tab)
         extensions.didOpen(tab)
@@ -464,7 +465,7 @@ final class Browser {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)
         nowPlaying.discard(tab)
-        if let url = tab.url {
+        if let url = tab.url, !tab.isEphemeral {
             // An agent's tab comes back the user's, at the bottom of the list, next to where it was.
             let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? regularTabs.count : order.firstIndex { $0 === tab }
             let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle, index: place, history: tab.history)
@@ -487,6 +488,14 @@ final class Browser {
         tab.tearDown()
         tabs.remove(at: index)
         extensions.didClose(tab)
+        dropPrivateData(of: tab)
+    }
+
+    /// The last open tab of a private store gone, its cookies and storage go at once, rather
+    /// than whenever WebKit frees the store.
+    private func dropPrivateData(of tab: Tab) {
+        guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
+        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
     }
 
     func closeSelectedTab() {
@@ -536,7 +545,8 @@ final class Browser {
         guard let url = tab.url else { return }
         let list = regularTabs
         let index = tab.isInAgentGroup ? list.count : list.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
-        let copy = insertTab(at: index, configuration: makeConfiguration(for: url))
+        // A private tab's copy shares its store, and is private too.
+        let copy = insertTab(at: index, configuration: makeConfiguration(for: url), privateStore: tab.privateStore)
         copy.customTitle = tab.customTitle
         copy.load(url, history: tab.history)
         select(copy)
@@ -591,7 +601,7 @@ final class Browser {
     private var session: Session {
         var session = Session()
         for tab in tabs {
-            guard let url = tab.url else { continue }
+            guard let url = tab.url, !tab.isEphemeral else { continue }
             if tab.id == selectedTabID { session.selectedIndex = session.tabs.count }
             session.tabs.append(Session.Tab(url: url, title: tab.title, customTitle: tab.customTitle, pinID: tab.pinID))
         }
@@ -642,8 +652,9 @@ final class Browser {
     }
 
     /// Without an index the favorite goes at the end of the grid; with one it takes that slot.
+    /// A private tab can't be pinned: a favorite is saved, with its address and icon.
     func pin(_ tab: Tab, at index: Int? = nil) {
-        guard tab.pinID == nil, let url = tab.url else { return }
+        guard tab.pinID == nil, !tab.isEphemeral, let url = tab.url else { return }
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
         pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
         tab.pinID = pin.id

@@ -585,7 +585,7 @@ struct AgentTabsTests {
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "timeoutMs": 0])).code == "invalid_params")
             #expect((await client.call("wait_for", ["tab": .string(id)])).code == "invalid_params")
             #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": -1])).code == "invalid_params")
-            #expect((await client.call("tab_open", ["ephemeral": true])).code == "unsupported")
+            #expect((await client.call("tab_open", ["ephemeral": "yes"])).code == "invalid_params")
         }
     }
 

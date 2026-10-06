@@ -1,4 +1,5 @@
 import Foundation
+import LithiumProcess
 import Network
 import os
 import Testing
@@ -115,6 +116,7 @@ struct AgentServerTests {
             "name": "lithium_status",
             "description": .string(AgentHub.statusTool.description),
             "inputSchema": ["type": "object", "properties": [:], "additionalProperties": false],
+            "annotations": ["title": "Lithium status", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false],
         ]])
 
         let reply = try await fixture.post(Self.call("lithium_status", id: 3), session: session)
@@ -396,6 +398,8 @@ struct AgentServerTests {
         let endpoint = fixture.endpoint
         #expect(endpoint.url == "http://127.0.0.1:\(fixture.hub.port!)/mcp")
         #expect(endpoint.pid == ProcessInfo.processInfo.processIdentifier)
+        #expect(endpoint.started != nil)
+        #expect(endpoint.started == LithiumProcess.started(endpoint.pid))
         #expect(endpoint.version == 1)
         #expect(endpoint.token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil)
         #expect(try permissions(fixture.folder) == 0o700)

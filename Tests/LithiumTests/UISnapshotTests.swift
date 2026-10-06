@@ -156,6 +156,26 @@ struct UISnapshotTests {
         }
     }
 
+    /// A private tab's row: the private badge at its end.
+    @Test func privateTabSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let row = HStack(spacing: 8) {
+            Favicon(image: nil, fallback: "shop.example", size: 16)
+                .frame(width: 16, height: 16)
+            Text("Checkout · Shop").lineLimit(1)
+            Spacer(minLength: 0)
+            PrivateTabBadge()
+        }
+        .font(Theme.font(13))
+        .padding(.horizontal, 10)
+        .frame(width: 240, height: 32)
+        .padding(8)
+        for isDark in [false, true] {
+            try render(row, isDark: isDark).write(to: directory.appending(path: "private-tab-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))
@@ -213,7 +233,8 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "modelAvailable": false,
             "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",
         ] as [String: Any],
-        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false] as [String: Any],
+        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false,
+                   "bridge": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp"] as [String: Any],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],
     ]

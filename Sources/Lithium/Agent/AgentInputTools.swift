@@ -695,7 +695,10 @@ extension AgentHub {
     @discardableResult
     func staged(_ tab: Tab) -> WKWebView {
         let webView = sizedWebView(of: tab)
-        if webView.userWindow == nil { stage.host(webView, size: pageAreaSize) }
+        if webView.userWindow == nil {
+            stage.host(webView, size: pageAreaSize)
+            fitViewport(of: webView, in: tab)
+        }
         return webView
     }
 

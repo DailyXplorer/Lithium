@@ -166,8 +166,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             await info.load()
             if action == "clearSiteData" {
                 await info.clear()
-                // Its open pages would go on without the data they expect.
-                browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
+                // Its open pages would go on without the data they expect; private tabs keep theirs.
+                browser.tabs.filter { !$0.isAsleep && !$0.isEphemeral && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
             }
             return (["host": host, "cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
         case "setTidyTitles":
@@ -192,6 +192,11 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.openAgentLog()
         case "setAgentCaptureBodies":
             defaults.set(value as? Bool ?? false, forKey: Preference.agentCaptureBodies)
+        case "copyAgentSetup":
+            guard let text = value as? String else { return (nil, "No text") }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            return (nil, nil)
         case "agentLog":
             // As JSON text: the entries are `JSONValue`s, which don't cross to the page as they are.
             let entries = await agentLog(browser).entries(limit: Self.agentLogPageLength)
@@ -320,6 +325,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "status": AgentStatus.text(browser.agent),
                 "url": browser.agent?.url ?? "",
                 "captureBodies": defaults.bool(forKey: Preference.agentCaptureBodies),
+                // Beside Lithium's own executable: Contents/MacOS in the app, the build folder in development.
+                "bridge": Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "lithium-mcp").path ?? "",
             ] as [String: Any],
             "extensions": browser.extensions.installed.map { entry in
                 let context = browser.extensions.contexts[entry.id]

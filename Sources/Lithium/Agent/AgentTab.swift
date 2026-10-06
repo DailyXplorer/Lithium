@@ -42,6 +42,9 @@ final class AgentTab {
     @ObservationIgnored var armedUpload: (files: [URL], expires: ContinuousClock.Instant)?
     /// File choosers the agent's action opened without allowed files, cancelled.
     @ObservationIgnored var fileChoosersCancelled = 0
+    /// The page size an agent asked for with `resize`, while the tab is out of the user's window;
+    /// shown to the user, the page takes the window's size again and this goes.
+    @ObservationIgnored var viewport: CGSize?
     /// The agent action running in it, for the border, caption and pointer dot the user sees.
     var acting: AgentActing?
     /// Tabs its page opened during that action.

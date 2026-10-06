@@ -64,6 +64,8 @@ enum Preference {
     static let agentAccess = "agentAccess"
     static let agentCaptureBodies = "agentCaptureBodies"
     static let agentRunScripts = "agentRunScripts"
+    /// Benchmark mode, set only with `defaults write` (docs/design/agent-mcp.md).
+    static let agentScriptsAutoAllowUntil = "agentScriptsAutoAllowUntil"
     static let agentPort = "agentPort"
 }
 

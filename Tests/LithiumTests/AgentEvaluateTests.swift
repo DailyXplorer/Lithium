@@ -4,7 +4,7 @@ import WebKit
 @testable import Lithium
 
 /// `evaluate` on a whole Browser through the hub, on pages served from 127.0.0.1: the switch, the
-/// prompt and the site grant, the two worlds, no script while a password or card value is on the
+/// prompt and the site grant, benchmark mode, the two worlds, no script while a password or card value is on the
 /// page, card and cookie values kept out of results and the log, the pages it never runs on, and
 /// a script that never ends. Prompts are answered through
 /// `AgentConfirmations`, never through UI.
@@ -33,12 +33,17 @@ struct AgentEvaluateTests {
             <title>Provider</title><body>
             <script>document.body.append(Object.assign(document.createElement('iframe'), { src: location.protocol + '//localhost:' + location.port + '/page' }))</script>
             """),
+        "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
     ]
 
-    private func withAgent(scripts: Bool = true, _ body: (Client, URL) async throws -> Void) async throws {
+    private func withAgent(scripts: Bool = true, benchmarkUntil: Date? = nil, _ body: (Client, URL) async throws -> Void) async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         UserDefaults.standard.set(scripts, forKey: Preference.agentRunScripts)
-        defer { UserDefaults.standard.removeObject(forKey: Preference.agentRunScripts) }
+        UserDefaults.standard.set(benchmarkUntil, forKey: Preference.agentScriptsAutoAllowUntil)
+        defer {
+            UserDefaults.standard.removeObject(forKey: Preference.agentRunScripts)
+            UserDefaults.standard.removeObject(forKey: Preference.agentScriptsAutoAllowUntil)
+        }
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
         defer { listener.cancel() }
         let browser = Browser()
@@ -122,6 +127,91 @@ struct AgentEvaluateTests {
             #expect(covered["result"] == [1, "two", .null], "\(covered.content)")
             #expect(covered["grant"] == "site")
             #expect(client.hub.confirmations.grants.map(\.kind) == [.script])
+        }
+    }
+
+    // MARK: Benchmark mode
+
+    private func lastConfirmation() -> JSONValue? {
+        let log = (try? String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)) ?? ""
+        return log.split(separator: "\n").compactMap { try? JSONValue.decode(Data($0.utf8)) }.last { $0["event"] == "confirmation" }
+    }
+
+    @Test func benchmarkModeAllowsScriptsUnaskedAndNothingElse() async throws {
+        let until = Date().addingTimeInterval(10 * 60)
+        try await withAgent(benchmarkUntil: until) { client, base in
+            let shown = try #require(client.hub.scriptsAutoAllowedUntil())
+            #expect(abs(shown.timeIntervalSince(until)) < 1)
+            #expect(AgentStatus.benchmarkMode(client.hub)?.hasPrefix("Benchmark mode: scripts auto-allowed until ") == true)
+
+            let id = try await open(client, base.appending(path: "page"))
+            let ran = await evaluate(client, id, "() => document.title", answering: nil)
+            #expect(ran["result"] == "Page", "\(ran.content)")
+            #expect(ran["grant"] == "once")
+            #expect(client.hub.confirmations.pending.isEmpty)
+            #expect(client.hub.confirmations.grants.isEmpty)
+            #expect(client.hub.recentLog.last { $0.tool.hasPrefix("confirm") }?.tool == "confirm script (benchmark mode)")
+            #expect(await waitUntil(5) { lastConfirmation()?["confirmation"]?["allowedBy"] == "benchmark mode" })
+
+            // A download still asks.
+            let report = base.appending(path: "report.csv").absoluteString
+            let download = Task { await client.call("navigate", ["tab": .string(id), "url": .string(report)]) }
+            #expect(await waitUntil(20) { !client.hub.confirmations.pending.isEmpty })
+            let asked = try #require(client.hub.confirmations.pending.first)
+            #expect(asked.kind == .download)
+            client.hub.confirmations.answer(asked.id, .deny)
+            let denied = await download.value
+            #expect(denied.code == "denied_by_user", "\(denied.content)")
+
+            // A password value still keeps every script from running.
+            let login = try await open(client, base.appending(path: "login"))
+            let refused = await evaluate(client, login, "() => document.querySelector('#pw').value", answering: nil)
+            #expect(refused.code == "blocked", "\(refused.content)")
+            #expect(refused.message.contains("a password or card field holds a value on this page"), "\(refused.content)")
+        }
+    }
+
+    @Test func anExpiredOrDistantBenchmarkDateAsksAsUsual() async throws {
+        try await withAgent(benchmarkUntil: Date().addingTimeInterval(-60)) { client, base in
+            let id = try await open(client, base.appending(path: "page"))
+            let expired = await evaluate(client, id, "() => 1", answering: .allowOnce)
+            #expect(expired["result"] == 1, "\(expired.content)")
+            #expect(UserDefaults.standard.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
+            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
+
+            UserDefaults.standard.set(Date().addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
+            let distant = await evaluate(client, id, "() => 2", answering: .allowOnce)
+            #expect(distant["result"] == 2, "\(distant.content)")
+            #expect(UserDefaults.standard.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
+            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
+        }
+    }
+
+    @Test func aDistantBenchmarkDateNeverComesOnLater() throws {
+        let suite = "agent-bench-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: Preference.agentRunScripts)
+        let start = Date()
+        var clock = start
+        let hub = AgentHub(folder: FileManager.default.temporaryDirectory.appending(path: suite), defaults: defaults, now: { clock })
+        defaults.set(start.addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
+
+        #expect(hub.scriptsAutoAllowedUntil() == nil)
+        #expect(defaults.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
+        clock = start.addingTimeInterval(90 * 60)
+        #expect(hub.scriptsAutoAllowedUntil() == nil)
+    }
+
+    @Test func benchmarkModeNeedsTheScriptsSwitch() async throws {
+        try await withAgent(scripts: false, benchmarkUntil: Date().addingTimeInterval(10 * 60)) { client, base in
+            let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
+            let names = (reply.body?["result"]?["tools"]?.items ?? []).compactMap { $0["name"]?.string }
+            #expect(!names.contains("evaluate"))
+            let id = try await open(client, base.appending(path: "page"))
+            let refused = await client.call("evaluate", ["tab": .string(id), "function": "() => 1"])
+            #expect(refused.code == "unsupported", "\(refused.content)")
+            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
         }
     }
 

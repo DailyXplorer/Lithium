@@ -250,7 +250,7 @@ private struct TabRow: View {
                 .disabled(tab.url == nil)
             MuteButton(tab: tab)
             Button("Sleep Other Tabs") { browser.sleepOtherTabs(than: tab) }
-                .disabled(!browser.regularTabs.contains { $0 !== tab && !$0.isAsleep })
+                .disabled(!browser.canSleepOtherTabs(than: tab))
             Divider()
             Button("Copy Link") { browser.copyLink(of: tab) }
                 .disabled(tab.url == nil)

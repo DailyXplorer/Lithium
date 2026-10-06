@@ -22,6 +22,7 @@ final class RecentTabs {
     @ObservationIgnored private weak var opened: Tab?
     @ObservationIgnored private weak var opener: Tab?
     @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private var focusObservers: [any NSObjectProtocol] = []
 
     private struct Opening {
         weak var opener: Tab?
@@ -72,7 +73,9 @@ final class RecentTabs {
     }
 
     /// Only while a cycle is open. Letting go of Control ends it on the highlighted tab, as does a
-    /// key pressed without Control (it was let go outside the window); a click ends it where it was.
+    /// key pressed without Control (it was let go outside the window); a click ends it where it was,
+    /// and so does the window losing the keyboard, since Control may then be let go where Lithium
+    /// never hears it.
     func watchControl(_ end: @escaping @MainActor (_ commit: Bool) -> Void) {
         guard monitor == nil, !cycle.isEmpty else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown]) { event in
@@ -84,6 +87,11 @@ final class RecentTabs {
             }
             return event
         }
+        focusObservers = [NSApplication.didResignActiveNotification, NSWindow.didResignKeyNotification].map {
+            NotificationCenter.default.addObserver(forName: $0, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { end(false) }
+            }
+        }
     }
 
     /// The tab the cycle was on, and the keyboard is left alone again.
@@ -93,6 +101,8 @@ final class RecentTabs {
         cycleIndex = 0
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        focusObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        focusObservers = []
         return tab
     }
 }

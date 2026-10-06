@@ -121,8 +121,22 @@ struct TabCommandsTests {
         let all = browser.tabs
         #expect(await waitUntil(30) { all.allSatisfy { !$0.webView.isLoading && $0.webView.url != nil } })
 
-        browser.sleepOtherTabs(than: tab("clicked", in: browser))
+        let clicked = tab("clicked", in: browser)
+        #expect(browser.canSleepOtherTabs(than: clicked))
+        browser.sleepOtherTabs(than: clicked)
         #expect(browser.tabs.filter { $0.isAsleep }.map(name) == ["other"])
+        #expect(!browser.canSleepOtherTabs(than: clicked), "only the shown tab is left awake")
+    }
+
+    @Test func losingFocusEndsTheCycleWhereItWas() {
+        let browser = browser(with: ["a", "b", "c"])
+        for notification in [(NSApplication.didResignActiveNotification, NSApp as Any), (NSWindow.didResignKeyNotification, NSWindow() as Any)] {
+            browser.cycleRecentTabs(backward: false, holdingControl: true)
+            #expect(name(browser.recentTabs.target) == "b")
+            NotificationCenter.default.post(name: notification.0, object: notification.1)
+            #expect(browser.recentTabs.target == nil, "\(notification.0.rawValue)")
+            #expect(name(browser.selectedTab) == "a")
+        }
     }
 
     @Test func copyLinkPutsOneAddressPerLine() {

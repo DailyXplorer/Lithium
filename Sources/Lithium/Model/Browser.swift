@@ -140,6 +140,12 @@ final class Browser {
     /// are open, unless memory is critical.
     private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool = { _ in true }) {
         tabs.forEach { $0.noteSound() }
+        for tab in tabsThatCanSleep(idleFor: interval, sparingPopups: sparingPopups, among: candidates) {
+            tab.sleep(configuration: makeConfiguration(for: tab.url))
+        }
+    }
+
+    private func tabsThatCanSleep(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool) -> [Tab] {
         var paired: Set<ObjectIdentifier> = []
         if sparingPopups {
             let open = Set(tabs.map { ObjectIdentifier($0) })
@@ -149,10 +155,10 @@ final class Browser {
             }
         }
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
-        for tab in tabs where candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab
-            && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
-            && tab.canSleep(idleFor: interval) {
-            tab.sleep(configuration: makeConfiguration(for: tab.url))
+        return tabs.filter { tab in
+            candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab
+                && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
+                && tab.canSleep(idleFor: interval)
         }
     }
 
@@ -196,6 +202,11 @@ final class Browser {
     /// Agent group are left alone.
     func sleepOtherTabs(than tab: Tab) {
         sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
+    }
+
+    /// Whether Sleep Other Tabs would put any tab to sleep, with sound as last noted.
+    func canSleepOtherTabs(than tab: Tab) -> Bool {
+        !tabsThatCanSleep(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }.isEmpty
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.

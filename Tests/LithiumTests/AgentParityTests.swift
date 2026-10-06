@@ -207,6 +207,13 @@ struct AgentParityTests {
     /// The lock's panel on a private tab counts and clears the private store's cookies; the
     /// user's own cookie for the same site stays.
     @Test func siteInfoOfAPrivateTabUsesItsOwnStore() async throws {
+        // The user's cookie lands in the shared default store (cookies ignore the port): remove it
+        // before and after, so other tests that expect that store clean pass in any order.
+        let removeUserCookies = {
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            for cookie in await store.allCookies() where cookie.name.hasPrefix(Self.cookie) { await store.deleteCookie(cookie) }
+        }
+        await removeUserCookies()
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "set"), ephemeral: true)
             _ = try await open(client, base.appending(path: "set-user"))
@@ -224,6 +231,7 @@ struct AgentParityTests {
             #expect(await names(tab.dataStore) == [])
             #expect(await names(.default()) == ["\(Self.cookie)user"], "the user's cookie stays")
         }
+        await removeUserCookies()
     }
 
     // MARK: resize

@@ -208,19 +208,20 @@ final class AgentHub {
     var capturesBodies: Bool { defaults.bool(forKey: Preference.agentCaptureBodies) }
     /// Settings › Agents › Let agents run scripts in pages, off by default: `evaluate` (PR 10).
     var runsScripts: Bool { defaults.bool(forKey: Preference.agentRunScripts) }
-    /// Benchmark mode lasts at most this long: a date set further ahead is ignored.
+    /// Benchmark mode lasts at most this long: a date set further ahead is removed.
     static let benchmarkModeLimit: TimeInterval = 2 * 60 * 60
 
     /// Until when `script` prompts are answered Allow once without asking (benchmark mode), or
-    /// nil. An expired date is removed, so the mode never comes back on its own.
+    /// nil. An expired date, or one beyond the limit, is removed, so the mode never comes on later
+    /// by itself.
     func scriptsAutoAllowedUntil() -> Date? {
         guard let until = defaults.object(forKey: Preference.agentScriptsAutoAllowUntil) as? Date else { return nil }
-        let now = now()
-        if until <= now {
+        let left = until.timeIntervalSince(now())
+        if left <= 0 || left > Self.benchmarkModeLimit {
             defaults.removeObject(forKey: Preference.agentScriptsAutoAllowUntil)
             return nil
         }
-        return runsScripts && until.timeIntervalSince(now) <= Self.benchmarkModeLimit ? until : nil
+        return runsScripts ? until : nil
     }
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog

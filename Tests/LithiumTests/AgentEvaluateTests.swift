@@ -182,8 +182,25 @@ struct AgentEvaluateTests {
             UserDefaults.standard.set(Date().addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
             let distant = await evaluate(client, id, "() => 2", answering: .allowOnce)
             #expect(distant["result"] == 2, "\(distant.content)")
+            #expect(UserDefaults.standard.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
             #expect(AgentStatus.benchmarkMode(client.hub) == nil)
         }
+    }
+
+    @Test func aDistantBenchmarkDateNeverComesOnLater() throws {
+        let suite = "agent-bench-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: Preference.agentRunScripts)
+        let start = Date()
+        var clock = start
+        let hub = AgentHub(folder: FileManager.default.temporaryDirectory.appending(path: suite), defaults: defaults, now: { clock })
+        defaults.set(start.addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
+
+        #expect(hub.scriptsAutoAllowedUntil() == nil)
+        #expect(defaults.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
+        clock = start.addingTimeInterval(90 * 60)
+        #expect(hub.scriptsAutoAllowedUntil() == nil)
     }
 
     @Test func benchmarkModeNeedsTheScriptsSwitch() async throws {

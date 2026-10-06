@@ -1,4 +1,5 @@
 import Foundation
+import LithiumProcess
 import os
 import Testing
 @testable import Lithium
@@ -63,6 +64,8 @@ struct AgentBridgeTests {
             var environment = ProcessInfo.processInfo.environment
             environment["LITHIUM_MCP_ENDPOINT"] = folder.appending(path: AgentEndpoint.fileName).path
             environment["LITHIUM_MCP_OPEN"] = open.path
+            // The hubs run in this process, so it is the Lithium the bridge looks for.
+            environment["LITHIUM_MCP_APP"] = LithiumProcess.executable(ProcessInfo.processInfo.processIdentifier)
             process.environment = environment
             let stdout = Pipe()
             let stderr = Pipe()
@@ -273,10 +276,7 @@ struct AgentBridgeTests {
         try exited.run()
         exited.waitUntilExit()
         try AgentEndpoint(port: 9, token: "kept-from-the-last-run", pid: exited.processIdentifier).write(in: folder)
-        let stub = folder.appending(path: "open")
-        try Data("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0-arguments\"\n".utf8).write(to: stub)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
-        let bridge = try Bridge(folder: folder, open: stub)
+        let bridge = try Bridge(folder: folder, open: Self.openStub(in: folder))
         defer { bridge.close() }
 
         bridge.send(Self.initialize)
@@ -286,5 +286,59 @@ struct AgentBridgeTests {
         #expect(try await bridge.next()["result"]?["serverInfo"]?["name"] == "lithium")
         #expect(lithium.endpoint.token == "kept-from-the-last-run")
         #expect(try String(contentsOf: folder.appending(path: "open-arguments"), encoding: .utf8) == "-g\n-j\n-b\napp.lithium.browser\n")
+    }
+
+    /// After a quit or a restart, the file's pid runs another program, and another server holds
+    /// the old port and would take the old token: the bridge sends it nothing and starts Lithium.
+    @Test func startsLithiumWhenItsPidRunsAnotherProgram() async throws {
+        let folder = Self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let impostor = try await Lithium(folder: Self.temporaryFolder())
+        defer { try? FileManager.default.removeItem(at: impostor.folder) }
+        defer { impostor.hub.shutdown() }
+        let other = Process()
+        other.executableURL = URL(filePath: "/bin/sleep")
+        other.arguments = ["60"]
+        try other.run()
+        defer { other.terminate() }
+        try AgentEndpoint(port: try #require(impostor.hub.port), token: impostor.endpoint.token, pid: other.processIdentifier).write(in: folder)
+
+        try await expectStartsLithium(in: folder, sparing: impostor)
+    }
+
+    /// The pid is Lithium's executable again, but not the run that wrote the file.
+    @Test func startsLithiumWhenItsPidStartedAnotherTime() async throws {
+        let folder = Self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let impostor = try await Lithium(folder: Self.temporaryFolder())
+        defer { try? FileManager.default.removeItem(at: impostor.folder) }
+        defer { impostor.hub.shutdown() }
+        var endpoint = AgentEndpoint(port: try #require(impostor.hub.port), token: impostor.endpoint.token)
+        endpoint.started = try #require(endpoint.started) + 1
+        try endpoint.write(in: folder)
+
+        try await expectStartsLithium(in: folder, sparing: impostor)
+    }
+
+    private func expectStartsLithium(in folder: URL, sparing impostor: Lithium) async throws {
+        let bridge = try Bridge(folder: folder, open: Self.openStub(in: folder))
+        defer { bridge.close() }
+        bridge.send(Self.initialize)
+        #expect(await bridge.nextDiagnostic() == "lithium-mcp: Lithium isn’t running; starting it in the background.")
+
+        let lithium = try await Lithium(folder: folder)
+        defer { lithium.hub.shutdown() }
+        #expect(try await bridge.next()["result"]?["serverInfo"]?["name"] == "lithium")
+        #expect(FileManager.default.fileExists(atPath: folder.appending(path: "open-arguments").path))
+        #expect(lithium.hub.sessions.map(\.clientName) == ["test-client"])
+        #expect(impostor.hub.sessions.isEmpty)
+    }
+
+    /// Stands in for `open`: writes its arguments next to itself and starts nothing.
+    private static func openStub(in folder: URL) throws -> URL {
+        let stub = folder.appending(path: "open")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0-arguments\"\n".utf8).write(to: stub)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
+        return stub
     }
 }

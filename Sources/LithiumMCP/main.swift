@@ -4,14 +4,15 @@ import Foundation
 // (`claude mcp add lithium -- /Applications/Lithium.app/Contents/MacOS/lithium-mcp`). It reads
 // the token from Lithium's endpoint file each time it connects, so no client config holds it.
 //
-// LITHIUM_MCP_ENDPOINT names another endpoint file and LITHIUM_MCP_OPEN another program in
-// place of /usr/bin/open: the tests use both, so they never touch the real file or start an app.
+// LITHIUM_MCP_ENDPOINT names another endpoint file, LITHIUM_MCP_OPEN another program in place
+// of /usr/bin/open and LITHIUM_MCP_APP the executable Lithium runs as: the tests use all three,
+// so they never touch the real file or start an app, and their own process counts as Lithium.
 
 let environment = ProcessInfo.processInfo.environment
 let endpointFile = environment["LITHIUM_MCP_ENDPOINT"].map { URL(filePath: $0) }
     ?? URL.applicationSupportDirectory.appending(path: "Lithium/Agent/endpoint.json")
 let launcher = Launcher.standard(program: URL(filePath: environment["LITHIUM_MCP_OPEN"] ?? "/usr/bin/open"))
-let bridge = Bridge(file: endpointFile, launcher: launcher)
+let bridge = Bridge(file: endpointFile, launcher: launcher, lithium: environment["LITHIUM_MCP_APP"])
 
 // A client that quits stops the bridge with a signal more often than by closing stdin; the
 // session still ends in Lithium, rather than showing as connected until its idle timeout.

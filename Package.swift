@@ -12,6 +12,7 @@ let package = Package(
         .executableTarget(
             name: "Lithium",
             dependencies: [
+                "LithiumProcess",
                 .product(name: "ContentBlockerConverter", package: "SafariConverterLib"),
                 .product(name: "PublicSuffixList", package: "swift-psl"),
             ],
@@ -26,9 +27,11 @@ let package = Package(
             ]
         ),
         // The stdio bridge agents start (`claude mcp add lithium -- …/lithium-mcp`), shipped in the app.
-        .executableTarget(name: "lithium-mcp", path: "Sources/LithiumMCP"),
+        .executableTarget(name: "lithium-mcp", dependencies: ["LithiumProcess"], path: "Sources/LithiumMCP"),
+        // Tells the Lithium that wrote the endpoint file from a process that took its pid since.
+        .target(name: "LithiumProcess", path: "Sources/LithiumProcess"),
         // Loaded with the tests, before any runs: NSWorkspace opens nothing in the test process.
         .target(name: "LithiumTestGuard", path: "Tests/LithiumTestGuard", linkerSettings: [.linkedFramework("AppKit")]),
-        .testTarget(name: "LithiumTests", dependencies: ["Lithium", "LithiumTestGuard"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "LithiumTests", dependencies: ["Lithium", "LithiumProcess", "LithiumTestGuard"], resources: [.copy("Fixtures")]),
     ]
 )

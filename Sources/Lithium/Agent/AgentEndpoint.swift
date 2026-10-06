@@ -1,4 +1,5 @@
 import Foundation
+import LithiumProcess
 import Security
 
 /// Where agents find Lithium: `endpoint.json` in the agent folder, which only the user can read.
@@ -7,6 +8,9 @@ struct AgentEndpoint: Codable, Equatable {
     var url: String
     var token: String
     var pid: Int32
+    /// When `pid` started, so `lithium-mcp` can tell this Lithium from a process that took its pid
+    /// after a quit or a restart. Files from before it was added lack it.
+    var started: UInt64?
     var version = 1
 
     static let fileName = "endpoint.json"
@@ -15,6 +19,7 @@ struct AgentEndpoint: Codable, Equatable {
         url = "http://127.0.0.1:\(port)/mcp"
         self.token = token
         self.pid = pid
+        started = LithiumProcess.started(pid)
     }
 
     static func read(in folder: URL) -> AgentEndpoint? {

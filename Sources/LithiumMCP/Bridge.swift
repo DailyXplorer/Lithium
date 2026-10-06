@@ -46,6 +46,8 @@ struct Session: Sendable {
 actor Bridge {
     private let file: URL
     private let launcher: Launcher
+    /// The executable Lithium runs as; nil for any app's `Contents/MacOS/Lithium`.
+    private let lithium: String?
     private let launchTimeout: Duration
     private let http: URLSession
     private var session: Session?
@@ -56,9 +58,10 @@ actor Bridge {
     private var protocolVersion: String?
     private var reconnecting: Task<Result<Session, Failure>, Never>?
 
-    init(file: URL, launcher: Launcher, launchTimeout: Duration = .seconds(10)) {
+    init(file: URL, launcher: Launcher, lithium: String? = nil, launchTimeout: Duration = .seconds(10)) {
         self.file = file
         self.launcher = launcher
+        self.lithium = lithium
         self.launchTimeout = launchTimeout
         let configuration = URLSessionConfiguration.ephemeral
         // The token goes to 127.0.0.1 only, never through a proxy.
@@ -129,14 +132,14 @@ actor Bridge {
     /// endpoint that just refused the connection, is waited past.
     private func discover(avoiding stale: Endpoint?) async throws(Failure) -> Endpoint {
         let endpoint = try Endpoint.read(file)
-        if !endpoint.isRunning {
+        if !endpoint.isRunning(as: lithium) {
             log("Lithium isn’t running; starting it in the background.")
             guard await launcher.launch() else { throw .launchFailed }
-            return try await waitForEndpoint { $0.isRunning }
+            return try await waitForEndpoint { [lithium] in $0.isRunning(as: lithium) }
         }
         guard let stale, stale == endpoint else { return endpoint }
         // Running, but not taking connections: starting, or listening again elsewhere.
-        return try await waitForEndpoint { $0 != stale && $0.isRunning }
+        return try await waitForEndpoint { [lithium] in $0 != stale && $0.isRunning(as: lithium) }
     }
 
     /// The one wait the bridge has: Lithium writes a fresh file once its server listens.
@@ -189,7 +192,7 @@ actor Bridge {
             // with the same Lithium still running, the request never reached it.
             do {
                 let endpoint = try Endpoint.read(file)
-                guard endpoint.isRunning else { return answer(message, .quit) }
+                guard endpoint.isRunning(as: lithium) else { return answer(message, .quit) }
                 if endpoint == session.endpoint {
                     await relay(message, on: session, retrying: false)
                 } else {

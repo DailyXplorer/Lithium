@@ -1,4 +1,5 @@
 import Foundation
+import LithiumProcess
 
 /// What Lithium writes to `endpoint.json` (`AgentEndpoint` in the app). Read again whenever
 /// Lithium stops answering, so a relaunch or Reset Token needs no change in the client.
@@ -6,10 +7,14 @@ struct Endpoint: Decodable, Equatable, Sendable {
     let url: String
     let token: String
     let pid: Int32
+    let started: UInt64?
 
     /// The token only ever goes to the process that wrote it: a file left by a Lithium that
-    /// quit names a port anyone may have taken since.
-    var isRunning: Bool { kill(pid, 0) == 0 || errno == EPERM }
+    /// quit names a pid and a port anyone may have taken since. A file without `started` counts
+    /// as not running, so the bridge starts Lithium, which writes it again.
+    func isRunning(as executable: String?) -> Bool {
+        LithiumProcess.isLithium(pid, started: started, executable: executable)
+    }
 
     /// Refuses a file other accounts could have written, and any address but this Mac's
     /// loopback, so a tampered file can't send the token elsewhere.

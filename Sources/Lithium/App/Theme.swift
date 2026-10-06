@@ -65,6 +65,7 @@ enum Preference {
     static let agentCaptureBodies = "agentCaptureBodies"
     static let agentRunScripts = "agentRunScripts"
     static let agentPort = "agentPort"
+    static let developerTools = "developerTools"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

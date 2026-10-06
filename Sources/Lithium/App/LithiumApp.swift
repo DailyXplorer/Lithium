@@ -130,6 +130,14 @@ struct BrowserCommands: Commands {
             }
                 .keyboardShortcut("0")
             Divider()
+            Menu("Developer") {
+                Button("Show Web Inspector") { showDeveloperTools(.inspector) }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
+                Button("Show JavaScript Console") { showDeveloperTools(.console) }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+            }
+            .disabled(!browser.canShowWebInspector)
+            Divider()
         }
         CommandMenu("History") {
             Button("Show All History") { browser.openHistory() }
@@ -175,6 +183,11 @@ struct BrowserCommands: Commands {
         guard let tab = browser.selectedTab else { return }
         browser.find.show()
         Task { await browser.find.step(forward: forward, in: tab.findTarget) }
+    }
+
+    private func showDeveloperTools(_ panel: DeveloperTools.Panel) {
+        guard browser.canShowWebInspector, let tab = browser.selectedTab else { return }
+        DeveloperTools.show(panel, in: tab.webView)
     }
 
     private func zoom(by delta: Double) {

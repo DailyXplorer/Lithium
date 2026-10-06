@@ -215,6 +215,14 @@
     </div>
   </section>
 
+  <section id="advanced" class="page">
+    <h2>Advanced</h2>
+    <div class="row">
+      <div><div class="title">Developer tools</div><div class="hint">Adds Inspect Element to the page menu, and Web Inspector to View › Developer.</div></div>
+      <label class="switch" for="developer-tools"><input type="checkbox" id="developer-tools" role="switch"><span></span></label>
+    </div>
+  </section>
+
   <section id="about" class="page">
     <h2>About Lithium</h2>
     <div class="about"><img src="lithium://pages/app-icon" alt=""><div><div class="name">Lithium</div><div class="hint" id="version"></div></div></div>
@@ -416,6 +424,8 @@
       ]);
     }) : [el('div', { className: 'empty', textContent: 'No extensions yet.' })]));
 
+    $('#developer-tools').checked = state.advanced.developerTools;
+
     $('#version').textContent = `Version ${about.version}`;
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
     $('#system').textContent = about.macOS;
@@ -449,6 +459,7 @@
   $('#agent-log').onclick = () => call('openAgentLog');
   $('#agent-bodies').onchange = (event) => call('setAgentCaptureBodies', event.target.checked).then(render);
   $('#agent-scripts').onchange = (event) => call('setAgentRunScripts', event.target.checked).then(render);
+  $('#developer-tools').onchange = (event) => call('setDeveloperTools', event.target.checked).then(render);
   document.querySelectorAll('[data-copy]').forEach((button) => {
     button.onclick = () => call('copyAgentSetup', $('#' + button.dataset.copy).textContent).then(() => {
       button.textContent = 'Copied';

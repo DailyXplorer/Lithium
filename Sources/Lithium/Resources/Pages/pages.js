@@ -16,6 +16,7 @@ const NAV = [
   ['max', 'sparkle', 'Max'],
   ['agents', 'robot', 'Agents'],
   ['permissions', 'video-camera', 'Site permissions'],
+  ['advanced', 'code', 'Advanced'],
   ['history', 'clock-counter-clockwise', 'History', 'lithium://history'],
   ['about', 'info', 'About Lithium'],
 ];

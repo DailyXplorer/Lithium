@@ -51,6 +51,7 @@ final class Tab: NSObject, Identifiable {
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
         webView.tab = self
+        DeveloperTools.apply(browser?.developerTools ?? false, to: webView)
         loadedWebView = webView
         attach(webView)
         return webView

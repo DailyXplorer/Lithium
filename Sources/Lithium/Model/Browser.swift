@@ -27,6 +27,14 @@ final class Browser {
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
     var renamingTabID: Tab.ID?
+    /// Settings › Advanced › Developer tools, on unless turned off. Pages already open follow at once.
+    var developerTools = UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(developerTools, forKey: Preference.developerTools)
+            for case let webView? in tabs.map(\.loadedWebView) { DeveloperTools.apply(developerTools, to: webView) }
+        }
+    }
+    var canShowWebInspector: Bool { developerTools && selectedTab != nil }
 
     let privacy = Privacy()
     let history = HistoryStore()

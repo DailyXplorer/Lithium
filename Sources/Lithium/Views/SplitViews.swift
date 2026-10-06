@@ -152,7 +152,8 @@ private struct SplitPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        // The selected side woke as it was selected; the other wakes as it comes on screen.
+        // Both sides wake as one of them is selected (`Browser.select`); this covers a split
+        // shown some other way, as the window opens.
         .onAppear { tab.markActive() }
     }
 }
@@ -210,7 +211,7 @@ struct SplitDropLayer: View {
     var body: some View {
         if let dragged = browser.splits.draggedTabID, let selected = browser.selectedTab,
            selected.id != dragged, selected.isInTabList {
-            SplitDropZone { item, side in
+            SplitDropZone(isDragging: { browser.splits.draggedTabID != nil }) { item, side in
                 withAnimation(.snappy(duration: 0.2)) { browser.dropForSplit(item, on: side) }
             }
         }
@@ -219,16 +220,22 @@ struct SplitDropLayer: View {
 
 /// AppKit, not SwiftUI's drop modifiers: the web view under it takes text drops itself, and
 /// only a view above it in hit-testing order sees the drag first.
-private struct SplitDropZone: NSViewRepresentable {
+struct SplitDropZone: NSViewRepresentable {
+    let isDragging: () -> Bool
     let drop: (String, TabSplit.Side) -> Bool
 
     func makeNSView(context: Context) -> DropView { DropView() }
 
     func updateNSView(_ view: DropView, context: Context) {
+        view.isDragging = isDragging
         view.drop = drop
     }
 
     final class DropView: NSView {
+        /// Read as the mouse goes down: a drag that ended off the page (in the sidebar, or with
+        /// Escape) is over once the click monitor has seen the next click, though SwiftUI has
+        /// yet to take this view away.
+        var isDragging: () -> Bool = { false }
         var drop: (String, TabSplit.Side) -> Bool = { _, _ in false }
         private let highlight = CALayer()
 
@@ -248,7 +255,11 @@ private struct SplitDropZone: NSViewRepresentable {
 
         /// Clicks go on to the page; only a drag, with the button down, lands here.
         override func hitTest(_ point: NSPoint) -> NSView? {
-            NSEvent.pressedMouseButtons & 1 != 0 ? super.hitTest(point) : nil
+            takesMouse(buttons: NSEvent.pressedMouseButtons) ? super.hitTest(point) : nil
+        }
+
+        func takesMouse(buttons: Int) -> Bool {
+            buttons & 1 != 0 && isDragging()
         }
 
         /// The outer two fifths of each side; the middle drops nothing.

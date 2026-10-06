@@ -135,6 +135,23 @@ struct SplitViewTests {
         #expect(!browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .first))
     }
 
+    /// A drag dropped off the page leaves the drop zone in the window until SwiftUI next draws;
+    /// the click that ends the drag goes through it to the page.
+    @Test func theClickAfterADragDroppedElsewhereReachesThePage() throws {
+        let browser = browser(with: ["a", "b"])
+        browser.select(tab("a", in: browser))
+        _ = browser.startDragging(tab("b", in: browser))
+        let zone = SplitDropZone.DropView()
+        zone.isDragging = { browser.splits.draggedTabID != nil }
+        #expect(zone.takesMouse(buttons: 1))
+
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        browser.noteClick(event)
+        #expect(!zone.takesMouse(buttons: 1))
+    }
+
     /// The address bar, Reload and the rest act on the selected tab: in split view the focused
     /// side, which a click in the other side moves.
     @Test func addressBarActsOnTheFocusedSideAndAClickMovesIt() async throws {
@@ -193,6 +210,26 @@ struct SplitViewTests {
         browser.relieveMemoryPressure(critical: true)
         #expect(tab("b", in: browser).isAsleep)
         #expect(!tab("c", in: browser).isAsleep)
+    }
+
+    /// From one split straight to another, the panes are reused and don't appear again: the new
+    /// split's other side wakes as its first is selected.
+    @Test func goingToAnotherSplitWakesItsOtherSide() async throws {
+        let browser = browser(with: ["a", "b", "c", "d"])
+        browser.select(tab("a", in: browser))
+        browser.openInSplit(tab("b", in: browser))
+        browser.select(tab("c", in: browser))
+        browser.openInSplit(tab("d", in: browser))
+        browser.select(tab("a", in: browser))
+        let d = tab("d", in: browser)
+        for _ in 0..<500 where d.webView.isLoading || d.webView.url == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        browser.relieveMemoryPressure(critical: true)
+        try #require(d.isAsleep)
+
+        browser.select(tab("c", in: browser))
+        #expect(!d.isAsleep)
     }
 
     @Test func theSplitComesBackWithTheSession() async throws {

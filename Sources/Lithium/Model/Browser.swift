@@ -466,6 +466,9 @@ final class Browser {
         }
         selectedTabID = tab.id
         tab.markActive()
+        // In split view the other side comes on screen too, maybe from another split: its pane
+        // is reused, so it doesn't wake as it appears.
+        shownPartner?.markActive()
         if previous !== tab { extensions.didActivate(tab, previous: previous) }
     }
 

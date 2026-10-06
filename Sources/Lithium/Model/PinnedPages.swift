@@ -58,8 +58,8 @@ final class PinnedPages: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// The content controllers that have the channel. A popup's configuration is copied from
-    /// its opener's, controller included, so one may already have it.
+    /// The content controllers that have the channel. Each tab has its own, a popup too
+    /// (`Privacy.harden` replaces the one WebKit copied from its opener).
     private let channels = NSHashTable<WKUserContentController>.weakObjects()
 
     /// Opens the channel when a tab is pinned, closes it when it is unpinned; nothing otherwise.

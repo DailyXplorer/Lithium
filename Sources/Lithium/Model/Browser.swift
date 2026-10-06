@@ -700,11 +700,11 @@ final class Browser {
     }
 
     /// The pinned page's icon, fetched afresh from where it says it is. A fetch that outlasts
-    /// the page's site or the pin isn't theirs.
+    /// the page's site, the pin or the icon (a later one may come back first) isn't theirs.
     func refreshIcon(of tab: Tab, from url: URL) async {
         guard let pinID = tab.pinID, let host = tab.url?.host(),
               let data = await favicons.refresh(host: host, from: url),
-              tab.pinID == pinID, tab.url?.host() == host else { return }
+              tab.pinID == pinID, tab.url?.host() == host, tab.liveIcon == url else { return }
         tab.showFavicon(data)
         if let index = pins.firstIndex(where: { $0.id == pinID }), pins[index].url.host() == host {
             storeIcon(data, from: url, inPinAt: index)
@@ -725,7 +725,8 @@ final class Browser {
             for (id, url) in due {
                 guard let host = pins.first(where: { $0.id == id })?.url.host(),
                       let data = await favicons.refresh(host: host, from: url),
-                      let index = pins.firstIndex(where: { $0.id == id }) else { continue }
+                      // The tab may have woken meanwhile and its page named another.
+                      let index = pins.firstIndex(where: { $0.id == id }), pins[index].iconURL == url else { continue }
                 if let tab = liveTab(for: pins[index]), tab.isAsleep, tab.url?.host() == host { tab.showFavicon(data) }
                 storeIcon(data, from: url, inPinAt: index)
             }

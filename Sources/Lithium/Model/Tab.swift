@@ -20,7 +20,7 @@ final class Tab: NSObject, Identifiable {
     private(set) var unread = UnreadBadge()
     /// The icon address the page declares, as last fetched for this web view: the page's word
     /// wins over the icon cached for its site, which may be a day old.
-    @ObservationIgnored private var liveIcon: URL?
+    @ObservationIgnored private(set) var liveIcon: URL?
     /// Made on first use and dropped while the tab sleeps, which frees the page's memory. A tab
     /// restored asleep at launch holds no web view at all until it is selected.
     var webView: WKWebView {

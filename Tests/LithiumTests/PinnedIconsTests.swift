@@ -95,6 +95,61 @@ struct PinnedIcons {
         #expect(await waitUntil(30) { tab.faviconData == red && pin()?.favicon == red })
     }
 
+    /// Unpinned and pinned again without a reload, the page's next icon is still followed.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func repinnedPageStillReportsItsIcon() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Calendar</title><link rel="icon" href="/red.png">"#)
+        defer { server.cancel() }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        let red = try #require(Favicons.normalized(Self.red))
+        let blue = try #require(Favicons.normalized(Self.blue))
+        #expect(await waitUntil(30) { tab.faviconData == red })
+
+        browser.unpin(try #require(browser.pins.first { $0.id == tab.pinID }))
+        browser.pin(tab)
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = '/blue.png'; 0")
+        #expect(await waitUntil(30) { tab.faviconData == blue && pin()?.iconURL == base.appending(path: "blue.png") })
+    }
+
+    /// Two quick swaps, the first icon slower to come: the second one stays, on the tab and the pin.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func slowerOlderIconDoesNotWin() async throws {
+        let (server, base) = try await Self.serveIcons(page: "<!doctype html><title>Mail</title>")
+        defer { server.cancel() }
+        let requests = Requests()
+        let (slow, slowBase) = try await LocalHTTP.serve(["/red.png": ("Content-Type: image/png", Self.red)], delay: 1, requested: { requests.record($0) })
+        defer { slow.cancel() }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        let blue = try #require(Favicons.normalized(Self.blue))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { tab.webView.url != nil && !tab.isLoading })
+
+        let slowRed = slowBase.appending(path: "red.png").absoluteString
+        _ = try await tab.webView.evaluateJavaScript("""
+            const link = document.createElement('link');
+            link.rel = 'icon';
+            link.href = '\(slowRed)';
+            document.head.append(link);
+            0
+            """)
+        #expect(await waitUntil(10) { requests["/red.png"] == 1 })
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = '/blue.png'; 0")
+        #expect(await waitUntil(30) { tab.faviconData == blue && pin()?.iconURL == base.appending(path: "blue.png") })
+
+        // Past the slow answer, and the time to draw it.
+        try await Task.sleep(for: .seconds(2))
+        #expect(tab.faviconData == blue)
+        #expect(pin()?.favicon == blue)
+        #expect(pin()?.iconURL == base.appending(path: "blue.png"))
+    }
+
     /// Each favorite asleep or without a page fetches the icon its page last named, once, at the
     /// change of day; without it nothing is fetched, and no tab wakes.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))

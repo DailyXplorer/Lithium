@@ -181,6 +181,44 @@ struct PinnedBadges {
         #expect(tab.unread == UnreadBadge())
     }
 
+    /// A link opening in a new tab, as Gmail opens a message's link: the new tab's page has no
+    /// say on the pinned page's channel.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func popupLeavesTheOpenersChannel() async throws {
+        let (browser, tab, server) = try await browserWithPinnedPage()
+        defer { server.cancel() }
+        let count = browser.tabs.count
+        _ = try await tab.webView.evaluateJavaScript("""
+            const link = document.createElement('a');
+            link.href = '/popup';
+            link.target = '_blank';
+            document.body.append(link);
+            link.click();
+            0
+            """)
+        #expect(await waitUntil(10) { browser.tabs.count == count + 1 })
+        let popup = try #require(browser.tabs.first { $0 !== tab && $0.pinID == nil && $0.loadedWebView != nil })
+        #expect(await waitUntil(10) { popup.url?.path() == "/popup" && !popup.isLoading })
+
+        _ = try await tab.webView.evaluateJavaScript("navigator.setAppBadge(2); 0")
+        #expect(await waitUntil(5) { tab.unread.shown == .count(2) })
+    }
+
+    /// Unpinned and pinned again without a reload, the page's script posts to the new channel.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func repinnedPageStillReports() async throws {
+        let (browser, tab, server) = try await browserWithPinnedPage()
+        defer { server.cancel() }
+        let pin = try #require(browser.pins.first { $0.id == tab.pinID })
+        browser.unpin(pin)
+        #expect(tab.pinID == nil)
+        browser.pin(tab)
+        try #require(tab.pinID != nil)
+
+        _ = try await tab.webView.evaluateJavaScript("navigator.setAppBadge(4); 0")
+        #expect(await waitUntil(5) { tab.unread.shown == .count(4) })
+    }
+
     /// Pictures of the badge on a stand-in pin tile, in light and dark:
     /// `LITHIUM_SNAPSHOT_DIR=/tmp/shots ./scripts/test --filter PinnedBadges`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] != nil, "Writes PNGs only when LITHIUM_SNAPSHOT_DIR is set"))

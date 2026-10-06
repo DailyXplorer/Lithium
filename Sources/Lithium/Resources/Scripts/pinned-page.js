@@ -5,12 +5,13 @@
 // when the page's <head> changes it, never on a timer.
 (() => {
   const key = Symbol.for('lithium.pinnedPage');
-  if (globalThis[key]) return;
   // Taken now, before the page can replace it.
   const channel = globalThis.webkit?.messageHandlers?.lithiumPinned;
   if (!channel) return;
-  globalThis[key] = true;
-  const post = channel.postMessage.bind(channel);
+  // Pinned again without a reload: what the first run installed posts to the new channel, the
+  // old one died with the unpinning.
+  if (globalThis[key]) return globalThis[key](channel);
+  let post = channel.postMessage.bind(channel);
   // Unpinned, the app drops the channel and the page goes on without it.
   const send = (message) => { try { post(message); } catch {} };
   const define = (target, name, value) => Object.defineProperty(target, name, { value, configurable: true, writable: true });
@@ -71,6 +72,12 @@
     lastIcon = href;
     send({ type: 'icon', href });
   };
+  // The app forgot the icon when it was unpinned, so it is told again.
+  define(globalThis, key, (next) => {
+    post = next.postMessage.bind(next);
+    lastIcon = '';
+    reportIcon();
+  });
   const isLink = (node) => node.nodeName === 'LINK';
   const touchesLink = (record) => isLink(record.target) || [...record.addedNodes].some(isLink) || [...record.removedNodes].some(isLink);
   const watch = () => {

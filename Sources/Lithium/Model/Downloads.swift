@@ -21,11 +21,14 @@ final class DownloadItem: Identifiable {
     private(set) var totalBytes: Int64 = -1
 
     @ObservationIgnored fileprivate weak var download: WKDownload?
+    /// Asks where to save before it starts, as a download from the page menu does.
+    @ObservationIgnored fileprivate let asksWhere: Bool
     @ObservationIgnored private var observation: NSKeyValueObservation?
 
-    fileprivate init(download: WKDownload, filename: String) {
+    fileprivate init(download: WKDownload, filename: String, asksWhere: Bool) {
         self.download = download
         self.filename = filename
+        self.asksWhere = asksWhere
         observation = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
             let completed = progress.completedUnitCount
             let total = progress.totalUnitCount
@@ -39,6 +42,7 @@ final class DownloadItem: Identifiable {
     /// A file Lithium already holds, written at once.
     fileprivate init(filename: String, size: Int) {
         self.filename = filename
+        asksWhere = false
         completedBytes = Int64(size)
         totalBytes = Int64(size)
     }
@@ -67,7 +71,8 @@ final class DownloadItem: Identifiable {
     }
 }
 
-/// Every download of the session, newest first. Files land in ~/Downloads.
+/// Every download of the session, newest first. Files land in ~/Downloads, or where the user
+/// picks for a download from the page menu.
 @MainActor
 @Observable
 final class Downloads: NSObject, WKDownloadDelegate {
@@ -77,9 +82,16 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Set when a download finishes while the list is closed; the toolbar button shows a dot.
     var hasUnseen = false
 
-    @ObservationIgnored private var byDownload: [ObjectIdentifier: DownloadItem] = [:]
+    /// Transfers still running. An entry goes when its download ends, and `track` replaces any
+    /// left by a download whose address a new one reuses.
+    @ObservationIgnored private(set) var byDownload: [ObjectIdentifier: DownloadItem] = [:]
     /// Names taken by files still being written, which don't exist on disk yet.
     @ObservationIgnored private var reserved: Set<URL> = []
+    /// Where downloads replacing a file are written until they finish; the item shows the file replaced.
+    @ObservationIgnored private var partials: [ObjectIdentifier: URL] = [:]
+    /// Asks where to save, starting from the name and folder given; nil when the user cancels.
+    /// Tests replace it, so no panel shows.
+    @ObservationIgnored var chooseDestination: @MainActor (URL, NSWindow?) async -> URL? = Downloads.savePanel(suggesting:in:)
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
@@ -91,9 +103,9 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return Double(running.reduce(Int64(0)) { $0 + $1.completedBytes }) / Double(total)
     }
 
-    func track(_ download: WKDownload) {
+    func track(_ download: WKDownload, askingWhere: Bool = false) {
         download.delegate = self
-        let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download")
+        let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download", asksWhere: askingWhere)
         byDownload[ObjectIdentifier(download)] = item
         items.insert(item, at: 0)
     }
@@ -126,9 +138,38 @@ final class Downloads: NSObject, WKDownloadDelegate {
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
-        let destination = destination(for: suggestedFilename)
-        byDownload[ObjectIdentifier(download)]?.setDestination(destination)
+        let id = ObjectIdentifier(download)
+        var destination = destination(for: suggestedFilename)
+        if byDownload[id]?.asksWhere == true {
+            // Cancelled from the list before WebKit asked.
+            guard byDownload[id]?.state == .downloading else { return nil }
+            guard let chosen = await chooseDestination(destination, download.webView?.window) else {
+                if let item = byDownload.removeValue(forKey: id) { items.removeAll { $0 === item } }
+                return nil
+            }
+            // Cancelled from the list while the panel was open.
+            guard byDownload[id]?.state == .downloading else { return nil }
+            destination = chosen
+            // The panel already asked whether to replace a file of that name. WebKit won't write
+            // over it, and the old one must stay until the new one is complete: the download goes
+            // to a hidden file beside it, swapped in when it finishes.
+            if FileManager.default.fileExists(atPath: chosen.path) {
+                let partial = chosen.deletingLastPathComponent().appending(path: ".\(chosen.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
+                partials[id] = partial
+                byDownload[id]?.setDestination(chosen)
+                return partial
+            }
+        }
+        byDownload[id]?.setDestination(destination)
         return destination
+    }
+
+    private static func savePanel(suggesting destination: URL, in window: NSWindow?) async -> URL? {
+        let panel = NSSavePanel()
+        panel.directoryURL = destination.deletingLastPathComponent()
+        panel.nameFieldStringValue = destination.lastPathComponent
+        let response = if let window { await panel.beginSheetModal(for: window) } else { await panel.begin() }
+        return response == .OK ? panel.url : nil
     }
 
     /// In ~/Downloads, numbered when the name is taken.
@@ -146,7 +187,21 @@ final class Downloads: NSObject, WKDownloadDelegate {
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        guard let item = byDownload.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        let id = ObjectIdentifier(download)
+        guard let item = byDownload.removeValue(forKey: id) else { return }
+        if let partial = partials.removeValue(forKey: id), let destination = item.destination {
+            do {
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    _ = try FileManager.default.replaceItemAt(destination, withItemAt: partial)
+                } else {
+                    try FileManager.default.moveItem(at: partial, to: destination)
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: partial)
+                item.finish(.failed(error.localizedDescription))
+                return
+            }
+        }
         item.finish(.finished)
         didFinish(item)
     }
@@ -160,7 +215,9 @@ final class Downloads: NSObject, WKDownloadDelegate {
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        guard let item = byDownload.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        let id = ObjectIdentifier(download)
+        if let partial = partials.removeValue(forKey: id) { try? FileManager.default.removeItem(at: partial) }
+        guard let item = byDownload.removeValue(forKey: id) else { return }
         if item.state == .downloading { item.finish(.failed(error.localizedDescription)) }
     }
 }

@@ -233,7 +233,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "modelAvailable": false,
             "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",
         ] as [String: Any],
-        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp",
+        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false,
                    "bridge": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp"] as [String: Any],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],

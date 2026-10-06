@@ -16,6 +16,6 @@
   webkit.messageHandlers.lithiumAgent.postMessage({ token });
   // A page Back or Forward brings back from WebKit's cache runs no document-start script again.
   addEventListener('pageshow', (event) => {
-    if (event.persisted) webkit.messageHandlers.lithiumAgent.postMessage({ token });
+    if (event.persisted) webkit.messageHandlers.lithiumAgent.postMessage({ token, restored: true });
   });
 })();

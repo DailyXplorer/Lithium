@@ -213,6 +213,7 @@ final class Tab: NSObject, Identifiable {
         webView.allowsMagnification = true
         observeWebView()
         if isMuted { applyMute(to: webView) }
+        browser?.agent?.didAttach(webView, to: self)
     }
 
     private func applyMute(to webView: WKWebView) {
@@ -562,7 +563,7 @@ final class Tab: NSObject, Identifiable {
         browser?.nowPlaying.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, to: controller)
-        browser?.agent?.install(on: controller)
+        browser?.agent?.install(on: controller, for: self)
     }
 
     /// Sends a tab an extension woke without its history on to the extension's address. Called
@@ -590,6 +591,7 @@ final class Tab: NSObject, Identifiable {
     private func endedUnshown(_ load: UnshownLoad) {
         lastUnshownLoad = load
         unshownLoads += 1
+        browser?.agent?.loadEndedUnshown(in: self)
     }
 
     /// Applied only if the page still has the title the tidy name was made from.
@@ -772,6 +774,7 @@ extension Tab: WKNavigationDelegate {
             }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
+            browser?.agent?.removeConsole(from: webView.configuration.userContentController)
             setWebstoreBridge(false)
             setInternalBridge(true)
             return (.allow, preferences)

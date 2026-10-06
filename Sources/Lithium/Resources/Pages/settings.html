@@ -168,6 +168,10 @@
       <div><div class="title">Agent log</div><div class="hint">Every agent action, kept on this Mac for 30 days.</div></div>
       <button class="button" id="agent-log">Show Agent Log</button>
     </div>
+    <div class="row">
+      <div><div class="title">Capture response bodies</div><div class="hint">Agents can read the text pages get back from websites, with passwords, tokens and card numbers hidden. Applies to pages loaded after you turn it on.</div></div>
+      <label class="switch" for="agent-bodies"><input type="checkbox" id="agent-bodies" role="switch"><span></span></label>
+    </div>
     <div id="agent-connect">
       <h3>Connect an agent</h3>
       <div class="row snippet">
@@ -372,6 +376,7 @@
 
     const { agents } = state;
     $('#agent-access').checked = agents.enabled;
+    $('#agent-bodies').checked = agents.captureBodies;
     $('#agent-status').textContent = agents.status;
     $('#agent-allow-row').style.display = agents.stopped ? '' : 'none';
     $('#agent-endpoint-row').style.display = agents.url ? '' : 'none';
@@ -437,6 +442,7 @@
   $('#agent-access').onchange = (event) => call('setAgentAccess', event.target.checked).then(render);
   $('#agent-allow').onclick = () => call('allowAgents').then(render);
   $('#agent-log').onclick = () => call('openAgentLog');
+  $('#agent-bodies').onchange = (event) => call('setAgentCaptureBodies', event.target.checked).then(render);
   document.querySelectorAll('[data-copy]').forEach((button) => {
     button.onclick = () => call('copyAgentSetup', $('#' + button.dataset.copy).textContent).then(() => {
       button.textContent = 'Copied';

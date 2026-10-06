@@ -1070,7 +1070,18 @@
     }).map((element) => element.src).filter(Boolean),
   });
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files };
+  // The network log without Lithium's resource load delegate: the document's performance
+  // timeline, read when asked, so it costs nothing until then. No headers, and no status in
+  // WebKits that leave `responseStatus` undefined.
+  const resources = () => ({
+    token: frame.token,
+    entries: [...performance.getEntriesByType('navigation'), ...performance.getEntriesByType('resource')].map((entry) => ({
+      url: entry.name, type: entry.initiatorType, start: Math.round(entry.startTime), ms: Math.round(entry.duration),
+      status: entry.responseStatus || undefined, size: entry.transferSize || undefined,
+    })),
+  });
+
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources };
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.

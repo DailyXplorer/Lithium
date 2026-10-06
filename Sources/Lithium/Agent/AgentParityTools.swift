@@ -55,6 +55,9 @@ enum AgentToolHints {
         "dialog_respond": Hint(title: "Answer a page’s dialog", effect: .acts),
         "fill_form": Hint(title: "Fill a form", effect: .acts, idempotent: true),
         "resize": Hint(title: "Resize a page", effect: .shows, idempotent: true),
+        "network_log": Hint(title: "List a tab’s requests", effect: .reads, idempotent: true),
+        "network_body": Hint(title: "Read a response body", effect: .reads, idempotent: true),
+        "console_log": Hint(title: "Read a tab’s console", effect: .reads, idempotent: true),
     ]
 
     /// Nil for a tool the table doesn't know, which then goes without.

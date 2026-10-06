@@ -88,6 +88,9 @@ struct AgentParityTests {
     // MARK: Private tabs
 
     @Test func privateTabsKeepTheirOwnCookiesAndLeaveNoTrace() async throws {
+        // History is shared by every test in the process and ports get reused: only this test's
+        // own visits to /set can say whether the private tab left a trace.
+        let started = Date()
         try await withAgent { client, base in
             let browser = client.browser
             let id = try await open(client, base.appending(path: "set"), ephemeral: true)
@@ -113,7 +116,7 @@ struct AgentParityTests {
             #expect(tab.title.contains("\(Self.cookie)=private-value"))
 
             // Nothing saved: no visit, no session entry, no favorite, no reopening.
-            #expect(!browser.history.visits(matching: "set").contains { $0.url.port == base.port })
+            #expect(!browser.history.visits(matching: "set").contains { $0.url.port == base.port && $0.url.lastPathComponent == "set" && $0.date >= started })
             browser.pin(tab)
             #expect(tab.pinID == nil)
             await Task.yield()

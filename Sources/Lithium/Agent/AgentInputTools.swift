@@ -192,8 +192,8 @@ extension AgentHub {
     private static let coordinate: JSONValue = ["type": "number", "description": "Top-level viewport CSS pixels, as snapshot boxes give them; with the other coordinate instead of ref."]
     private static let actionTimeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default, including the user’s answer when Lithium asks them."]
     private static let actionWaitParam: JSONValue = [
-        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load"],
-        "description": "When the action starts a page load: how far the page must get before the call returns (commit by default).",
+        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load", "networkidle"],
+        "description": "When the action starts a page load: how far the page must get before the call returns (commit by default). networkidle also waits, load or not, until the page’s requests have been done for 500 ms, such as those a Save button sends.",
     ]
     private static let trusted = "Lithium sends real input events to the page, which can’t tell them from the user’s. The user sees a border, a caption and a pointer dot while it acts, and can take over at any time (user_interrupted)."
 
@@ -1081,6 +1081,7 @@ extension AgentHub {
         // tab and its web view left the stage: the action places its target again, every check
         // with it, and their answers stand.
         guard ctx.webView.window === target.window, ctx.state.prompts == target.prompts else { throw NativeInput.WindowChanged(afterPress: false) }
+        try checkNetworkIdle(wait)
         let tab = ctx.named.tab
         let since = LoadProgress(of: tab, ctx.state)
         let choosers = ctx.state.fileChoosersCancelled
@@ -1117,6 +1118,11 @@ extension AgentHub {
                     // answer): the action happened, and the page stayed.
                     guard case .dropped? = tab.lastUnshownLoad else { throw error }
                 }
+            }
+            // The requests the action sent (a Save button's fetch), which WebKit reports a moment
+            // after the page handled the events: quiet is counted from now, not from before.
+            if page == nil, wait == .networkidle {
+                try await waitForNetworkIdle(ctx.named, after: .now, deadline: ctx.deadline, timeout: ctx.timeout)
             }
             if let page {
                 result.merge(page.object ?? [:]) { _, new in new }

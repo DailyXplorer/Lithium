@@ -55,7 +55,8 @@ enum AgentInterruption {
 
 /// How far a navigation has to get before the tool answers.
 enum LoadWait: String, Comparable, CaseIterable {
-    case none, commit, domcontentloaded, load
+    /// `networkidle`: loaded, then no request of the page in flight for 500 ms.
+    case none, commit, domcontentloaded, load, networkidle
 
     static func < (lhs: Self, rhs: Self) -> Bool {
         allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
@@ -120,10 +121,7 @@ struct Arguments {
 
     func wait(default fallback: LoadWait) throws -> LoadWait {
         guard let name = try optionalString("wait") else { return fallback }
-        if name == "networkidle" {
-            throw AgentToolError(code: "unsupported", message: "wait: networkidle needs the network log, which this version of Lithium doesn't have yet. Use load.")
-        }
-        guard let wait = LoadWait(rawValue: name) else { throw Self.invalid("wait must be none, commit, domcontentloaded or load.") }
+        guard let wait = LoadWait(rawValue: name) else { throw Self.invalid("wait must be none, commit, domcontentloaded, load or networkidle.") }
         return wait
     }
 
@@ -137,8 +135,8 @@ extension AgentHub {
 
     private static let tabParam: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
     private static let waitParam: JSONValue = [
-        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load"],
-        "description": "How far the page must get before the call returns. A page that fails to open is navigation_failed. none returns at once, with state started, before anything is known: call wait_for to learn whether the page opened.",
+        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load", "networkidle"],
+        "description": "How far the page must get before the call returns. A page that fails to open is navigation_failed. none returns at once, with state started, before anything is known: call wait_for to learn whether the page opened. networkidle waits for load, then until none of the page’s requests has been in flight for 500 ms.",
     ]
     private static let timeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default."]
     static let diffParam: JSONValue = [
@@ -345,7 +343,7 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load), its address matches url (a glob such as https://example.com/done*), an element reaches a state (ref with state), text shows (text) or goes (textGone, or text with present: false), or for a time in milliseconds (time). Give exactly one of load, url, ref, text, textGone and time. A sleeping tab wakes, which loads its page. Text waits read the main frame and go on across its navigations.",
+        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load), its address matches url (a glob such as https://example.com/done*), an element reaches a state (ref with state), text shows (text) or goes (textGone, or text with present: false), none of the page’s requests has been in flight for networkIdle ms, or for a time in milliseconds (time). Give exactly one of load, url, ref, text, textGone, networkIdle and time. A sleeping tab wakes, which loads its page. Text waits read the main frame and go on across its navigations.",
         inputSchema: schema([
             "tab": tabParam,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
@@ -355,6 +353,7 @@ extension AgentHub {
             "text": ["type": "string", "description": "Text to wait for on the page, as a snapshot would show it; case and spacing don’t matter."],
             "present": ["type": "boolean", "description": "With text: true (default) waits until it shows, false until it is gone."],
             "textGone": ["type": "string", "description": "Text to wait for until it is gone from the page; the same as text with present: false."],
+            "networkIdle": ["type": "integer", "minimum": 0, "maximum": 30000, "description": "Milliseconds with no request of the page in flight, such as 500."],
             "time": ["type": "integer", "minimum": 1, "maximum": 59000, "description": "Milliseconds to wait, whatever the page does. The tab closing, the user navigating it, stop and Stop still end it."],
             "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 10000 by default (with time, time plus 10000, at most 60000)."],
             "diff": diffParam,
@@ -367,17 +366,16 @@ extension AgentHub {
         let timeout = try arguments.timeout(default: time.map { min(60_000, $0 + 10_000) } ?? 10_000)
         if let time, .milliseconds(time) >= timeout { throw Arguments.invalid("time must be shorter than timeoutMs.") }
         let diff = try arguments.bool("diff", default: true)
-        if arguments.value["networkIdle"] != nil {
-            throw AgentToolError(code: "unsupported", message: "wait_for networkIdle needs the network log, which this version of Lithium doesn’t have yet.")
-        }
         let load = try arguments.optionalString("load")
         let pattern = try arguments.optionalString("url")
         let element = try arguments.optionalString("ref")
         let text = try arguments.optionalString("text")
         let textGone = try arguments.optionalString("textGone")
-        guard [load, pattern, element, text, textGone, time.map(String.init)].compactMap({ $0 }).count == 1 else {
-            throw Arguments.invalid("Give exactly one condition: load, url, ref, text, textGone or time.")
+        let idle = try arguments.value["networkIdle"].flatMap { $0 == .null ? nil : try arguments.int("networkIdle", default: 500, in: 0...30_000) }
+        guard [load, pattern, element, text, textGone, idle.map(String.init), time.map(String.init)].compactMap({ $0 }).count == 1 else {
+            throw Arguments.invalid("Give exactly one condition: load, url, ref, text, textGone, networkIdle or time.")
         }
+        if idle != nil { try hub.checkNetworkIdle(.networkidle) }
         let condition = try DOMCondition(ref: element, text: text ?? textGone, gone: textGone != nil, arguments: arguments)
         let state = try load.map { load in
             guard let state = LoadWait(rawValue: load), state >= .domcontentloaded else { throw Arguments.invalid("load must be domcontentloaded or load.") }
@@ -409,6 +407,14 @@ extension AgentHub {
                 }
             } else if let condition {
                 try await hub.wait(for: condition, in: named, deadline: deadline, timeout: timeout)
+            } else if let idle {
+                // A sleeping tab has sent nothing yet: the quiet counts from its page's load.
+                var loaded: ContinuousClock.Instant?
+                if tab.isAsleep {
+                    _ = try await hub.navigation(in: named, wait: .load, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() }
+                    loaded = .now
+                }
+                try await hub.waitForNetworkIdle(named, quiet: .milliseconds(idle), after: loaded, deadline: deadline, timeout: timeout)
             } else if let time {
                 // Counted from the call's turn in the tab; the wait in line may have used the margin.
                 let end = ContinuousClock.now + .milliseconds(time)
@@ -487,6 +493,7 @@ extension AgentHub {
     /// download asks the user (`confirmDownload`): allowed, the result names the file instead of
     /// a state; denied or unanswered, the call fails with the user's answer.
     func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
+        try checkNetworkIdle(wait)
         let tab = named.tab
         let since = LoadProgress(of: tab, agentTab(for: tab))
         let state = agentTab(for: tab)
@@ -575,10 +582,11 @@ extension AgentHub {
             fields["loading"] = false
             return .object(fields)
         case .document:
-            if wait > .commit { try await waitForLoad(of: named, wait, deadline: deadline, timeout: timeout) }
+            if wait > .commit { try await waitForLoad(of: named, min(wait, .load), deadline: deadline, timeout: timeout) }
         case .withinPage:
             break
         }
+        if wait == .networkidle { try await waitForNetworkIdle(named, deadline: deadline, timeout: timeout) }
         return page(named, reached: wait)
     }
 

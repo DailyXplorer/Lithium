@@ -81,6 +81,7 @@ struct AgentSpeedTests {
             <ul><li><a href="/travel">Travel</a> (11)</li><li><a href="/poetry">Poetry</a> (19)</li></ul>
             """),
         "/travel": (html, "<title>Travel</title><h1>Travel</h1>"),
+        "/onward": (html, "<title>Onward</title><a href='/travel' style='display: block; height: 100vh'>Travel</a>"),
         "/lines": (html, """
             <title>Lines</title><style>body { margin: 0; font: 16px sans-serif }</style>
             <ul><li>Settings: <a href="/travel">Open settings</a></li></ul>
@@ -144,18 +145,23 @@ struct AgentSpeedTests {
     /// `tools/list` goes to the model on every turn: it stays small, one sentence per tool and
     /// short parameter descriptions, the rules being in the server's instructions.
     @Test func toolsListStaysWithinItsBudget() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.agentRunScripts) }
         try await withAgent { client, _ in
-            let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
-            let tools = try #require(reply.body?["result"]?["tools"])
-            let size = String(decoding: tools.encoded(), as: UTF8.self).count
-            print("tools/list: \(size) characters for \(tools.items?.count ?? 0) tools")
-            #expect(size <= 18_000, "tools/list is \(size) characters")
-            for tool in tools.items ?? [] {
-                let name = tool["name"]?.string ?? ""
-                let description = tool["description"]?.string ?? ""
-                #expect(description.count <= 110 && description.filter { $0 == "." }.count <= 1, "\(name): \(description)")
-                for (parameter, schema) in tool["inputSchema"]?["properties"]?.object ?? [:] {
-                    #expect((schema["description"]?.string ?? "").count <= 80, "\(name).\(parameter)")
+            // Without evaluate (scripts off, the default), then with it.
+            for scripts in [false, true] {
+                UserDefaults.standard.set(scripts, forKey: Preference.agentRunScripts)
+                let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
+                let tools = try #require(reply.body?["result"]?["tools"])
+                let size = String(decoding: tools.encoded(), as: UTF8.self).count
+                print("tools/list (scripts \(scripts ? "on" : "off")): \(size) characters for \(tools.items?.count ?? 0) tools")
+                #expect(size <= 18_000, "tools/list is \(size) characters")
+                for tool in tools.items ?? [] {
+                    let name = tool["name"]?.string ?? ""
+                    let description = tool["description"]?.string ?? ""
+                    #expect(description.count <= 110 && description.filter { $0 == "." }.count <= 1, "\(name): \(description)")
+                    for (parameter, schema) in tool["inputSchema"]?["properties"]?.object ?? [:] {
+                        #expect((schema["description"]?.string ?? "").count <= 80, "\(name).\(parameter)")
+                    }
                 }
             }
             let initialized = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "other", "version": "1"]]], session: nil, protocolVersion: nil))
@@ -293,10 +299,11 @@ struct AgentSpeedTests {
             #expect(client.tab(id)?.title.contains("Never") == false)
             #expect(client.tab(id)?.title.hasSuffix("o First") == true)
 
-            // Refused before anything runs.
-            for refused: JSONValue in [["tool": "batch"], ["tool": "evaluate"], ["tool": "tab_close"], ["tool": "nothing"]] {
+            // Refused before anything runs; evaluate while the user hasn't turned scripts on.
+            let refusals: [(JSONValue, String)] = [(["tool": "batch"], "invalid_params"), (["tool": "evaluate", "args": ["function": "() => 1"]], "unsupported"), (["tool": "tab_close"], "invalid_params"), (["tool": "nothing"], "invalid_params")]
+            for (refused, code) in refusals {
                 let answer = await client.call("batch", ["tab": .string(id), "steps": [["tool": "type", "args": ["ref": .string(field), "text": "Not typed"]], refused]])
-                #expect(answer.code == "invalid_params", "\(refused): \(answer.content)")
+                #expect(answer.code == code, "\(refused): \(answer.content)")
             }
             #expect(client.tab(id)?.title.contains("Not typed") == false)
             let empty = try await page(client, id, "return document.querySelector('.new-todo').value") as? String
@@ -345,6 +352,97 @@ struct AgentSpeedTests {
             let text = logged.map { String(decoding: $0.encoded(), as: UTF8.self) }.joined()
             #expect(!text.contains("hunter2-batch"), "\(text)")
             #expect(logged.dropFirst().first?["params"]?["text"] == "[redacted]", "\(logged)")
+        }
+    }
+
+    // MARK: One-call tasks
+
+    /// A whole read-and-report task in one call: the batch opens its tab, runs its steps, answers
+    /// with their results, and closes the tab, also when a step fails.
+    @Test func aBatchWithAURLOpensRunsAndClosesItsTab() async throws {
+        try await withAgent { client, base in
+            let url = JSONValue.string(base.appending(path: "books").absoluteString)
+            let before = client.browser.tabs.count
+            let batch = await client.call("batch", ["url": url, "close": true, "steps": [["tool": "find_text", "args": ["text": "Travel"]]]])
+            #expect(!batch.isError, "\(batch.content)")
+            let id = try #require(batch["tab"]?.string)
+            #expect(batch["closed"] == true && batch["ok"] == 1 && batch["title"] == "Books", "\(batch.content)")
+            #expect(batch["steps"]?.items?.first?["matches"]?.items?.first?["role"] == "link", "\(batch.content)")
+            #expect(batch["diff"]?.string?.contains("link \"Travel\"") == true, "\(batch.content)")
+            #expect(client.browser.tabs.count == before)
+            let gone = await client.call("snapshot", ["tab": .string(id)])
+            #expect(gone.code == "tab_closed", "\(gone.content)")
+
+            let failed = await client.call("batch", ["url": url, "close": true, "steps": [
+                ["tool": "click", "args": ["ref": "e9999"]],
+                ["tool": "find_text", "args": ["text": "Travel"]],
+            ]])
+            #expect(!failed.isError, "\(failed.content)")
+            #expect(failed["steps"]?.items?.first?["code"] == "stale_ref", "\(failed.content)")
+            #expect(failed["steps"]?.items?.last == ["tool": "find_text", "skipped": true], "\(failed.content)")
+            #expect(client.browser.tabs.count == before)
+
+            // Kept without close, and refused before opening anything when it can't run.
+            let kept = await client.call("batch", ["url": url, "steps": [["tool": "find_text", "args": ["text": "Poetry"]]]])
+            let keptID = try #require(kept["tab"]?.string)
+            #expect(client.tab(keptID)?.title == "Books", "\(kept.content)")
+            for (arguments, code): ([String: JSONValue], String) in [
+                (["url": url, "steps": [["tool": "tab_close"]]], "invalid_params"),
+                (["url": url, "tab": .string(keptID), "steps": [["tool": "find_text", "args": ["text": "x"]]]], "invalid_params"),
+                (["tab": .string(keptID), "close": true, "steps": [["tool": "find_text", "args": ["text": "x"]]]], "invalid_params"),
+                (["url": url, "steps": [["tool": "evaluate", "args": ["function": "() => 1"]]]], "unsupported"),
+            ] {
+                let refused = await client.call("batch", .object(arguments))
+                #expect(refused.code == code, "\(arguments): \(refused.content)")
+            }
+            #expect(client.browser.tabs.count == before + 1)
+        }
+    }
+
+    @Test func tabOpenRunsItsStepsOnceThePageIsReady() async throws {
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "todos").absoluteString), "steps": [
+                ["tool": "click", "args": ["x": 200, "y": 70]],
+                ["tool": "type", "args": ["text": "Feed the cat", "submit": true]],
+            ]])
+            #expect(!opened.isError, "\(opened.content)")
+            #expect(opened["steps"]?.items?.map { $0["ok"] } == [true, true], "\(opened.content)")
+            #expect(opened["ok"] == 2 && opened["state"] == "domcontentloaded", "\(opened.content)")
+            #expect(opened["diff"]?.string?.contains("Feed the cat") == true, "\(opened.content)")
+            let id = try #require(opened["tab"]?.string)
+            #expect(client.tab(id)?.title.hasSuffix("o Feed the cat") == true)
+        }
+    }
+
+    /// A step that follows a link: the result names the page the agent is on, not the one opened.
+    @Test func afterItsStepsTheResultNamesThePageTheTabIsOn() async throws {
+        try await withAgent { client, base in
+            let onward = JSONValue.string(base.appending(path: "onward").absoluteString)
+            let travel = JSONValue.string(base.appending(path: "travel").absoluteString)
+            let follow: JSONValue = [["tool": "click", "args": ["x": 200, "y": 200, "wait": "load"]]]
+            for (tool, arguments): (String, [String: JSONValue]) in [("batch", ["url": onward, "steps": follow]), ("tab_open", ["url": onward, "steps": follow])] {
+                let result = await client.call(tool, .object(arguments))
+                #expect(result["steps"]?.items?.first?["navigated"] == true, "\(tool): \(result.content)")
+                #expect(result["url"] == travel && result["title"] == "Travel" && result["status"] == 200, "\(tool): \(result.content)")
+            }
+        }
+    }
+
+    /// Stop while a step of `batch {url, close}` runs ends the call and closes the tab it opened.
+    @Test func stopDuringABatchThatClosesItsTabClosesIt() async throws {
+        try await withAgent { client, base in
+            let before = client.browser.tabs
+            let call = Task { await client.call("batch", ["url": .string(base.appending(path: "books").absoluteString), "close": true, "steps": [
+                ["tool": "wait_for", "args": ["time": 30_000]],
+            ]]) }
+            let started = try await AgentWait.until(.now + .seconds(20)) {
+                client.browser.tabs.contains { tab in !before.contains { $0 === tab } && tab.title == "Books" && !tab.isLoading } ? true : nil
+            }
+            #expect(started == true)
+            client.hub.stop()
+            #expect((await call.value).code == "agent_stopped")
+            #expect(client.browser.tabs.count == before.count)
+            client.hub.allowAgain()
         }
     }
 

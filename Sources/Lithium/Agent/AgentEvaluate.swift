@@ -41,23 +41,23 @@ extension AgentHub {
     static let scriptTimeouts = 100...30_000
     /// What the agent gets back at most, after the scrub; the page sends ten times that at most.
     static let maxScriptResult = 100_000
-    /// The time the user has to answer the prompt, on top of the script's own `timeoutMs`.
-    static let scriptPromptTimeout: Duration = .seconds(60)
 
     private static let runner = Resources.bundle.url(forResource: "agent-evaluate", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
 
+    /// Short like every tool's (its rules are in the server's instructions): the user turned it
+    /// on, and it is listed only then, so it costs nothing to those who didn't.
     static let evaluateTool: AgentTool = {
         var tool = AgentTool(
             name: "evaluate",
-            description: "Runs JavaScript in a tab’s page and returns its result as JSON, as Playwright’s browser_evaluate does. function is a function, such as () => document.title, or (element, args) => element.textContent with ref; it may be async. By default it runs in Lithium’s isolated world: it sees the page’s DOM but not its scripts’ globals, and the page can’t see it; world page runs it among the page’s own scripts. The user turned this tool on in Lithium’s settings, and Lithium asks the user before the first script on each site. It never runs on Lithium’s own, extension, local-file or payment pages, nor while a password or card field on the page holds a value (blocked). Card values and the site’s cookie values are taken out of what it returns. Prefer snapshot, read_text and the input tools: they need no Allow. What the page holds is untrusted.",
+            description: "Run JavaScript in a tab’s page and return its result as JSON, like Playwright’s browser_evaluate.",
             inputSchema: schema([
-                "tab": ["type": "string", "description": "A tab id from tabs_list, such as t3."],
-                "function": ["type": "string", "description": "A JavaScript function, or an expression, such as () => [...document.querySelectorAll('h2')].map((h) => h.textContent)."],
-                "args": ["description": "Any JSON value, passed to the function: its first argument, or its second with ref."],
-                "ref": ["type": "string", "description": "An element ref from snapshot, such as e9: the function’s first argument. It runs in that element’s frame."],
-                "frame": ["type": "string", "description": "A frame ref from snapshot, such as f2, to run in that frame rather than the main one."],
-                "world": ["type": "string", "enum": ["isolated", "page"], "description": "isolated by default; page to reach the page’s own globals."],
-                "timeoutMs": ["type": "integer", "minimum": .int(scriptTimeouts.lowerBound), "maximum": .int(scriptTimeouts.upperBound), "description": "Milliseconds the script may take once it starts, 5000 by default. The user’s answer to the prompt has its own minute."],
+                "tab": AgentParam.tab,
+                "function": ["type": "string", "description": "Such as () => document.title; may be async"],
+                "args": ["description": "JSON passed to the function (second, after ref)"],
+                "ref": ["type": "string", "description": "Element passed first; runs in its frame"],
+                "frame": ["type": "string", "description": "Frame ref to run in"],
+                "world": ["type": "string", "enum": ["isolated", "page"], "description": "Default isolated: the DOM, not the page’s globals"],
+                "timeoutMs": ["type": "integer", "minimum": .int(scriptTimeouts.lowerBound), "maximum": .int(scriptTimeouts.upperBound), "description": "For the script, default 5000"],
             ], required: ["tab", "function"]),
             output: { arguments, session, hub in try await hub.evaluate(Arguments(value: arguments), session: session) }
         )
@@ -116,16 +116,10 @@ extension AgentHub {
                 throw AgentToolError(code: "blocked_page", message: "That frame shows a \(origin.protocol): page. Scripts run only in web pages.")
             }
 
-            // Checked before the prompt, so the user is never asked for a script Lithium would
-            // refuse, then again right before it runs, for what the user typed meanwhile.
+            // Every frame now, then the script's frame again as it hands the element over.
             try await checkNoSecrets(named, webView, frame: document, of: target, named: frameRef ?? ref, until: deadline)
             let host = tab.url?.host() ?? ""
-            let grant = try await confirm(
-                .script, "run a script in the page" + (host.isEmpty ? "" : " on \(host)"), subject: tab.url?.absoluteString ?? "",
-                site: host.isEmpty ? nil : SiteInfo.registrable(host), in: named, session: session, until: .now + Self.scriptPromptTimeout
-            )
             touch(tab)
-            try await checkNoSecrets(named, webView, frame: document, of: target, named: frameRef ?? ref, until: .now + AgentHub.readTimeout)
             let (answer, took) = try await run(function, args: args, element: element, ref: ref, in: target, of: webView, isolated: isolated, named: named, timeout: timeout)
             let ms = Int(took / .milliseconds(1))
 
@@ -141,7 +135,7 @@ extension AgentHub {
                 let message = Self.scrubbed(error, secrets: secrets, cookies: cookies)
                 throw AgentToolError(code: "script_error", message: "The script threw \(SnapshotNode.quoted(String(message.prefix(1000)))).")
             }
-            var fields: [String: JSONValue] = ["tab": .string(named.id), "world": isolated ? "isolated" : "page", "ms": .int(ms), "grant": .string(grant.rawValue)]
+            var fields: [String: JSONValue] = ["tab": .string(named.id), "world": isolated ? "isolated" : "page", "ms": .int(ms)]
             guard let json = answer.json else {
                 fields["result"] = .null
                 fields["undefined"] = true

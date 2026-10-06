@@ -115,14 +115,12 @@ extension AgentHub {
     /// waits for the answer within `deadline` and `AgentConfirmations.timeout`. Deny is
     /// `denied_by_user`, no answer `confirmation_timeout`; the tab closing, the user navigating it,
     /// Stop and the session ending end the wait as they end any other. Every prompt and its
-    /// answer goes in the log. In benchmark mode a `script` prompt is answered Allow once
-    /// without a banner, and logged as such.
+    /// answer goes in the log.
     func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
         let started = Date()
         var logged: (answer: String, grant: ConfirmationGrant?) = ("cancelled", nil)
-        var benchmark = false
         defer {
-            let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, session: session, answer: logged, benchmark: benchmark, waited: Date().timeIntervalSince(started))
+            let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, session: session, answer: logged, waited: Date().timeIntervalSince(started))
             Task { await self.log.append(entry, at: started) }
         }
         // Stop, or the session ending, refuses whatever it would still ask.
@@ -133,10 +131,6 @@ extension AgentHub {
         if confirmations.grant(for: kind, site: site, session: session.id) != nil {
             logged = ("allow", .site)
             return .site
-        }
-        if kind == .script, scriptsAutoAllowedUntil() != nil {
-            (logged, benchmark) = (("allow", .once), true)
-            return .once
         }
         let request = AgentConfirmation(
             kind: kind, session: session.id, sessionLabel: session.label, client: session.clientName,
@@ -180,10 +174,9 @@ extension AgentHub {
         }
     }
 
-    private func confirmationEntry(_ kind: ConfirmationKind, subject: String, site: String?, tab: String?, session: MCPSession, answer: (answer: String, grant: ConfirmationGrant?), benchmark: Bool, waited: TimeInterval) -> [String: JSONValue] {
+    private func confirmationEntry(_ kind: ConfirmationKind, subject: String, site: String?, tab: String?, session: MCPSession, answer: (answer: String, grant: ConfirmationGrant?), waited: TimeInterval) -> [String: JSONValue] {
         var confirmation: [String: JSONValue] = ["kind": .string(kind.rawValue), "answer": .string(answer.answer), "waitedMs": .int(Int(waited * 1000))]
         if let grant = answer.grant { confirmation["grant"] = .string(grant.rawValue) }
-        if benchmark { confirmation["allowedBy"] = "benchmark mode" }
         var entry: [String: JSONValue] = [
             "event": "confirmation",
             "session": ["id": .string(session.label), "client": .string(session.clientName), "version": .string(session.clientVersion), "selfReported": true],
@@ -192,7 +185,7 @@ extension AgentHub {
         ]
         if let site { entry["site"] = .string(site) }
         if let tab { entry["tab"] = ["id": .string(tab)] }
-        noteInPanel(AgentLogLine(date: Date().addingTimeInterval(-waited), session: session.label, tool: "confirm \(kind.rawValue)" + (benchmark ? " (benchmark mode)" : ""), tab: tab, host: site, error: answer.answer == "allow" ? nil : answer.answer))
+        noteInPanel(AgentLogLine(date: Date().addingTimeInterval(-waited), session: session.label, tool: "confirm \(kind.rawValue)", tab: tab, host: site, error: answer.answer == "allow" ? nil : answer.answer))
         return entry
     }
 

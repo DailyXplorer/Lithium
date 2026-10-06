@@ -3,11 +3,10 @@ import Testing
 import WebKit
 @testable import Lithium
 
-/// `evaluate` on a whole Browser through the hub, on pages served from 127.0.0.1: the switch, the
-/// prompt and the site grant, benchmark mode, the two worlds, no script while a password or card value is on the
-/// page, card and cookie values kept out of results and the log, the pages it never runs on, and
-/// a script that never ends. Prompts are answered through
-/// `AgentConfirmations`, never through UI.
+/// `evaluate` on a whole Browser through the hub, on pages served from 127.0.0.1: the one switch
+/// and no prompt, in the user's tabs too and inside `batch`, the two worlds, no script while a
+/// password or card value is on the page, card and cookie values kept out of results and the
+/// log, the pages it never runs on, and a script that never ends.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct AgentEvaluateTests {
@@ -36,13 +35,15 @@ struct AgentEvaluateTests {
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
     ]
 
-    private func withAgent(scripts: Bool = true, benchmarkUntil: Date? = nil, _ body: (Client, URL) async throws -> Void) async throws {
+    /// PR 10's benchmark mode, removed in PR 11: its key must change nothing.
+    private static let oldBenchmarkKey = "agentScriptsAutoAllowUntil"
+
+    private func withAgent(scripts: Bool = true, _ body: (Client, URL) async throws -> Void) async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         UserDefaults.standard.set(scripts, forKey: Preference.agentRunScripts)
-        UserDefaults.standard.set(benchmarkUntil, forKey: Preference.agentScriptsAutoAllowUntil)
         defer {
             UserDefaults.standard.removeObject(forKey: Preference.agentRunScripts)
-            UserDefaults.standard.removeObject(forKey: Preference.agentScriptsAutoAllowUntil)
+            UserDefaults.standard.removeObject(forKey: Self.oldBenchmarkKey)
         }
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
         defer { listener.cancel() }
@@ -72,146 +73,103 @@ struct AgentEvaluateTests {
         return condition()
     }
 
-    /// Runs `function` in `tab`, answering the prompt with `answer` when one comes; a site grant
-    /// already given means none does.
-    private func evaluate(_ client: Client, _ tab: String, _ function: String, _ extra: [String: JSONValue] = [:], answering answer: ConfirmationAnswer? = .allowOnce) async -> AgentTabsTests.ToolResult {
+    /// Runs `function` in `tab`. Nothing ever asks the user.
+    private func evaluate(_ client: Client, _ tab: String, _ function: String, _ extra: [String: JSONValue] = [:]) async -> AgentTabsTests.ToolResult {
         var arguments: [String: JSONValue] = ["tab": .string(tab), "function": .string(function)]
         arguments.merge(extra) { $1 }
-        let confirmations = client.hub.confirmations
-        let task = Task { await client.call("evaluate", .object(arguments)) }
-        if let answer {
-            if await waitUntil(20, { !confirmations.pending.isEmpty }), let asked = confirmations.pending.first {
-                #expect(asked.kind == .script)
-                confirmations.answer(asked.id, answer)
-            } else {
-                Issue.record("evaluate asked nothing")
-            }
-        }
-        return await task.value
+        let result = await client.call("evaluate", .object(arguments))
+        #expect(client.hub.confirmations.pending.isEmpty && client.hub.confirmations.grants.isEmpty)
+        return result
+    }
+
+    private func toolNames(_ client: Client) async -> [String] {
+        let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
+        return (reply.body?["result"]?["tools"]?.items ?? []).compactMap { $0["name"]?.string }
     }
 
     // MARK: The switch
 
-    @Test func isListedOnlyWhileTheUserLetsAgentsRunScripts() async throws {
+    /// Off: not listed, refused alone and inside a batch, before any step runs. PR 10's
+    /// benchmark-mode date, still set, changes none of it.
+    @Test func offItIsUnlistedAndRefusedEvenInABatch() async throws {
         try await withAgent(scripts: false) { client, base in
-            let names = { () async in
-                let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
-                return (reply.body?["result"]?["tools"]?.items ?? []).compactMap { $0["name"]?.string }
-            }
-            #expect(await !names().contains("evaluate"))
+            UserDefaults.standard.set(Date().addingTimeInterval(10 * 60), forKey: Self.oldBenchmarkKey)
+            #expect(await !toolNames(client).contains("evaluate"))
             let id = try await open(client, base.appending(path: "page"))
             let refused = await client.call("evaluate", ["tab": .string(id), "function": "() => 1"])
             #expect(refused.code == "unsupported", "\(refused.content)")
+            let batch = await client.call("batch", ["tab": .string(id), "steps": [
+                ["tool": "wait_for", "args": ["text": "Hello"]],
+                ["tool": "evaluate", "args": ["function": "() => { document.title = 'Ran' }"]],
+            ]])
+            #expect(batch.code == "unsupported", "\(batch.content)")
+            #expect(client.tab(id)?.title == "Page")
             #expect(client.hub.confirmations.pending.isEmpty)
 
             UserDefaults.standard.set(true, forKey: Preference.agentRunScripts)
-            #expect(await names().contains("evaluate"))
+            #expect(await toolNames(client).contains("evaluate"))
         }
     }
 
-    // MARK: The prompt
-
-    @Test func asksBeforeTheFirstScriptOnASiteThenTheGrantCovers() async throws {
+    /// On: in the user's own tab as in the agent's, with no banner and no site grant, and the
+    /// benchmark-mode key adds nothing.
+    @Test func onItRunsInTheUsersTabWithoutAsking() async throws {
         try await withAgent { client, base in
+            UserDefaults.standard.set(Date().addingTimeInterval(10 * 60), forKey: Self.oldBenchmarkKey)
+            let browser = client.browser
+            let mine = browser.newTab()
+            mine.load(base.appending(path: "page"))
+            #expect(await waitUntil(20) { mine.title == "Page" && !mine.isLoading })
+            #expect(!mine.isInAgentGroup)
+            let ran = await evaluate(client, client.hub.id(for: mine), "() => document.querySelector('#greeting').textContent")
+            #expect(ran["result"] == "Hello", "\(ran.content)")
+            #expect(ran["grant"] == nil)
             let id = try await open(client, base.appending(path: "page"))
-            let denied = await evaluate(client, id, "() => document.title", answering: .deny)
-            #expect(denied.code == "denied_by_user", "\(denied.content)")
-
-            let once = await evaluate(client, id, "() => document.title", answering: .allowOnce)
-            #expect(once["result"] == "Page", "\(once.content)")
-            #expect(once["grant"] == "once")
-
-            let site = await evaluate(client, id, "() => 1 + 1", answering: .allowOnSite)
-            #expect(site["result"] == 2, "\(site.content)")
-            let covered = await evaluate(client, id, "async () => { await new Promise((done) => setTimeout(done, 10)); return [1, 'two', null] }", answering: nil)
-            #expect(covered["result"] == [1, "two", .null], "\(covered.content)")
-            #expect(covered["grant"] == "site")
-            #expect(client.hub.confirmations.grants.map(\.kind) == [.script])
+            let again = await evaluate(client, id, "async () => { await new Promise((done) => setTimeout(done, 10)); return [1, 'two', null] }")
+            #expect(again["result"] == [1, "two", .null], "\(again.content)")
+            #expect(!client.hub.recentLog.contains { $0.tool.hasPrefix("confirm") })
         }
     }
 
-    // MARK: Benchmark mode
+    /// A step of its own in a batch, with its own log line; the secret check holds there too.
+    @Test func inABatchItIsAStepWithItsOwnLogLine() async throws {
+        try await withAgent { client, base in
+            let batch = await client.call("batch", ["url": .string(base.appending(path: "page").absoluteString), "close": true, "steps": [
+                ["tool": "evaluate", "args": ["function": "() => document.querySelector('#greeting').textContent"]],
+            ]])
+            #expect(!batch.isError, "\(batch.content)")
+            #expect(batch["steps"]?.items?.first?["result"] == "Hello", "\(batch.content)")
+            let logged = await client.hub.log.entries(limit: 2)
+            #expect(logged.map { $0["tool"]?.string ?? "" } == ["batch", "evaluate"], "\(logged)")
 
-    private func lastConfirmation() -> JSONValue? {
-        let log = (try? String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)) ?? ""
-        return log.split(separator: "\n").compactMap { try? JSONValue.decode(Data($0.utf8)) }.last { $0["event"] == "confirmation" }
-    }
-
-    @Test func benchmarkModeAllowsScriptsUnaskedAndNothingElse() async throws {
-        let until = Date().addingTimeInterval(10 * 60)
-        try await withAgent(benchmarkUntil: until) { client, base in
-            let shown = try #require(client.hub.scriptsAutoAllowedUntil())
-            #expect(abs(shown.timeIntervalSince(until)) < 1)
-            #expect(AgentStatus.benchmarkMode(client.hub)?.hasPrefix("Benchmark mode: scripts auto-allowed until ") == true)
-
-            let id = try await open(client, base.appending(path: "page"))
-            let ran = await evaluate(client, id, "() => document.title", answering: nil)
-            #expect(ran["result"] == "Page", "\(ran.content)")
-            #expect(ran["grant"] == "once")
-            #expect(client.hub.confirmations.pending.isEmpty)
-            #expect(client.hub.confirmations.grants.isEmpty)
-            #expect(client.hub.recentLog.last { $0.tool.hasPrefix("confirm") }?.tool == "confirm script (benchmark mode)")
-            #expect(await waitUntil(5) { lastConfirmation()?["confirmation"]?["allowedBy"] == "benchmark mode" })
-
-            // A download still asks.
-            let report = base.appending(path: "report.csv").absoluteString
-            let download = Task { await client.call("navigate", ["tab": .string(id), "url": .string(report)]) }
-            #expect(await waitUntil(20) { !client.hub.confirmations.pending.isEmpty })
-            let asked = try #require(client.hub.confirmations.pending.first)
-            #expect(asked.kind == .download)
-            client.hub.confirmations.answer(asked.id, .deny)
-            let denied = await download.value
-            #expect(denied.code == "denied_by_user", "\(denied.content)")
-
-            // A password value still keeps every script from running.
             let login = try await open(client, base.appending(path: "login"))
-            let refused = await evaluate(client, login, "() => document.querySelector('#pw').value", answering: nil)
-            #expect(refused.code == "blocked", "\(refused.content)")
-            #expect(refused.message.contains("a password or card field holds a value on this page"), "\(refused.content)")
+            let refused = await client.call("batch", ["tab": .string(login), "steps": [
+                ["tool": "evaluate", "args": ["function": "() => document.querySelector('#pw').value"]],
+            ]])
+            let step = refused["steps"]?.items?.first
+            #expect(step?["code"] == "blocked", "\(refused.content)")
+            #expect(step?["message"]?.string?.contains("a password or card field holds a value on this page") == true, "\(refused.content)")
+            #expect(!String(decoding: refused.content.encoded(), as: UTF8.self).contains(Self.password))
         }
     }
 
-    @Test func anExpiredOrDistantBenchmarkDateAsksAsUsual() async throws {
-        try await withAgent(benchmarkUntil: Date().addingTimeInterval(-60)) { client, base in
-            let id = try await open(client, base.appending(path: "page"))
-            let expired = await evaluate(client, id, "() => 1", answering: .allowOnce)
-            #expect(expired["result"] == 1, "\(expired.content)")
-            #expect(UserDefaults.standard.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
-            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
-
-            UserDefaults.standard.set(Date().addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
-            let distant = await evaluate(client, id, "() => 2", answering: .allowOnce)
-            #expect(distant["result"] == 2, "\(distant.content)")
-            #expect(UserDefaults.standard.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
-            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
-        }
-    }
-
-    @Test func aDistantBenchmarkDateNeverComesOnLater() throws {
-        let suite = "agent-bench-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(true, forKey: Preference.agentRunScripts)
-        let start = Date()
-        var clock = start
-        let hub = AgentHub(folder: FileManager.default.temporaryDirectory.appending(path: suite), defaults: defaults, now: { clock })
-        defaults.set(start.addingTimeInterval(3 * 60 * 60), forKey: Preference.agentScriptsAutoAllowUntil)
-
-        #expect(hub.scriptsAutoAllowedUntil() == nil)
-        #expect(defaults.object(forKey: Preference.agentScriptsAutoAllowUntil) == nil)
-        clock = start.addingTimeInterval(90 * 60)
-        #expect(hub.scriptsAutoAllowedUntil() == nil)
-    }
-
-    @Test func benchmarkModeNeedsTheScriptsSwitch() async throws {
-        try await withAgent(scripts: false, benchmarkUntil: Date().addingTimeInterval(10 * 60)) { client, base in
-            let reply = await client.hub.handle(.message(["jsonrpc": "2.0", "id": 2, "method": "tools/list"], session: client.session, protocolVersion: nil))
-            let names = (reply.body?["result"]?["tools"]?.items ?? []).compactMap { $0["name"]?.string }
-            #expect(!names.contains("evaluate"))
-            let id = try await open(client, base.appending(path: "page"))
-            let refused = await client.call("evaluate", ["tab": .string(id), "function": "() => 1"])
-            #expect(refused.code == "unsupported", "\(refused.content)")
-            #expect(AgentStatus.benchmarkMode(client.hub) == nil)
+    /// `tab_open`'s line names its steps' tools alone, as `batch`'s does: the values typed, the
+    /// form's and the script's are each in their step's own line, redacted there, or nowhere.
+    @Test func tabOpenLogsItsStepsToolsAlone() async throws {
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "signin").absoluteString), "steps": [
+                ["tool": "evaluate", "args": ["function": "(a) => 'fn-secret' + a", "args": ["arg-secret"]]],
+                ["tool": "type", "args": ["ref": "e9999", "text": "typed-secret"]],
+                ["tool": "fill_form", "args": ["fields": [["ref": "e9999", "value": "form-secret"]]]],
+            ]])
+            #expect(opened["steps"]?.items?.map { $0["ok"] ?? .null } == [true, false, .null], "\(opened.content)")
+            let logged = await client.hub.log.entries(limit: 3)
+            #expect(logged.map { $0["tool"]?.string ?? "" } == ["tab_open", "type", "evaluate"], "\(logged)")
+            let line = try #require(logged.first)
+            #expect(line["params"]?["steps"] == [["tool": "evaluate"], ["tool": "type"], ["tool": "fill_form"]], "\(line)")
+            let text = String(decoding: line.encoded(), as: UTF8.self)
+            for secret in ["fn-secret", "arg-secret", "typed-secret", "form-secret"] { #expect(!text.contains(secret), "\(text)") }
+            #expect(logged.dropFirst().first?["params"]?["text"] == "[redacted]", "\(logged)")
         }
     }
 
@@ -220,21 +178,21 @@ struct AgentEvaluateTests {
     @Test func theIsolatedWorldReadsTheDOMButNotThePagesGlobals() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "page"))
-            let isolated = await evaluate(client, id, "() => [typeof window.pageGlobal, document.querySelector('#greeting').textContent]", answering: .allowOnSite)
+            let isolated = await evaluate(client, id, "() => [typeof window.pageGlobal, document.querySelector('#greeting').textContent]")
             #expect(isolated["result"] == ["undefined", "Hello"], "\(isolated.content)")
             #expect(isolated["world"] == "isolated")
-            let page = await evaluate(client, id, "() => window.pageGlobal", ["world": "page"], answering: nil)
+            let page = await evaluate(client, id, "() => window.pageGlobal", ["world": "page"])
             #expect(page["result"] == "from the page", "\(page.content)")
 
             // A ref is the function's first argument, args its second.
             let snapshot = await client.call("snapshot", ["tab": .string(id), "format": "json"])
             let heading = try #require(snapshot["nodes"]?.items?.first { $0["role"] == "heading" }?["ref"])
-            let element = await evaluate(client, id, "(element, args) => element.textContent + args.mark", ["ref": heading, "args": ["mark": "!"]], answering: nil)
+            let element = await evaluate(client, id, "(element, args) => element.textContent + args.mark", ["ref": heading, "args": ["mark": "!"]])
             #expect(element["result"] == "Hello!", "\(element.content)")
-            let thrown = await evaluate(client, id, "() => { throw new TypeError('nope') }", answering: nil)
+            let thrown = await evaluate(client, id, "() => { throw new TypeError('nope') }")
             #expect(thrown.code == "script_error", "\(thrown.content)")
             #expect(thrown.message.contains("TypeError: nope"))
-            let undefined = await evaluate(client, id, "() => { document.title = 'Changed' }", answering: nil)
+            let undefined = await evaluate(client, id, "() => { document.title = 'Changed' }")
             #expect(undefined["undefined"] == true, "\(undefined.content)")
             #expect(client.tab(id)?.title == "Changed")
         }
@@ -254,7 +212,7 @@ struct AgentEvaluateTests {
                 ("() => { setTimeout(() => { document.title = btoa(document.querySelector('#pw').value) }) }", [:]),
             ]
             for (function, extra) in attempts {
-                let refused = await evaluate(client, id, function, extra, answering: nil)
+                let refused = await evaluate(client, id, function, extra)
                 #expect(refused.code == "blocked", "\(function): \(refused.content)")
                 #expect(refused.message.contains("a password or card field holds a value on this page"), "\(refused.content)")
             }
@@ -266,7 +224,7 @@ struct AgentEvaluateTests {
             let framed = try await open(client, base.appending(path: "framed"))
             #expect(await waitUntil(20) { client.tab(framed)?.isLoading == false })
             for world: JSONValue in ["isolated", "page"] {
-                let refused = await evaluate(client, framed, "() => document.querySelector('iframe').contentDocument.querySelector('#pw').value", ["world": world], answering: nil)
+                let refused = await evaluate(client, framed, "() => document.querySelector('iframe').contentDocument.querySelector('#pw').value", ["world": world])
                 #expect(refused.code == "blocked", "\(world): \(refused.content)")
             }
         }
@@ -275,10 +233,10 @@ struct AgentEvaluateTests {
     @Test func anEmptyPasswordFieldLeavesThePageOpenUntilItHoldsAValue() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
-            let empty = await evaluate(client, id, "() => [document.title, document.querySelector('#pw').value]", answering: .allowOnSite)
+            let empty = await evaluate(client, id, "() => [document.title, document.querySelector('#pw').value]")
             #expect(empty["result"] == ["Sign in", ""], "\(empty.content)")
             _ = try await client.tab(id)?.webView.callAsyncJavaScript("document.querySelector('#pw').value = 'typed by the user'", contentWorld: .page)
-            let filled = await evaluate(client, id, "() => document.querySelector('#pw').value", answering: nil)
+            let filled = await evaluate(client, id, "() => document.querySelector('#pw').value")
             #expect(filled.code == "blocked", "\(filled.content)")
         }
     }
@@ -286,8 +244,8 @@ struct AgentEvaluateTests {
     @Test func cardAndCookieValuesNeverComeBack() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "account"))
-            for (world, answer): (JSONValue, ConfirmationAnswer?) in [("isolated", .allowOnSite), ("page", nil)] {
-                let result = await evaluate(client, id, "() => [document.querySelector('#note').textContent, document.cookie, JSON.stringify({ c: document.cookie })]", ["world": world], answering: answer)
+            for world: JSONValue in ["isolated", "page"] {
+                let result = await evaluate(client, id, "() => [document.querySelector('#note').textContent, document.cookie, JSON.stringify({ c: document.cookie })]", ["world": world])
                 let text = String(decoding: result.content.encoded(), as: UTF8.self)
                 #expect(!text.contains(Self.cookie), "\(world): \(text)")
                 #expect(!text.contains("4242"), "\(world): \(text)")
@@ -316,23 +274,23 @@ struct AgentEvaluateTests {
             local.load(file)
             #expect(await waitUntil(20) { settings.url?.scheme == "lithium" && local.url?.isFileURL == true && !local.isLoading })
             for (tab, what) in [(settings, "Lithium’s page"), (local, "local file")] {
-                let refused = await evaluate(client, client.hub.id(for: tab), "() => 1", answering: nil)
+                let refused = await evaluate(client, client.hub.id(for: tab), "() => 1")
                 #expect(refused.code == "blocked_page", "\(what): \(refused.content)")
             }
 
             let checkout = try await open(client, base.appending(path: "checkout"))
             // An empty card field nobody is in leaves the page open to scripts.
-            let empty = await evaluate(client, checkout, "() => document.title", answering: .allowOnSite)
+            let empty = await evaluate(client, checkout, "() => document.title")
             #expect(empty["result"] == "Checkout", "\(empty.content)")
             _ = try await client.tab(checkout)?.webView.callAsyncJavaScript("document.querySelector('#cc').value = '4242 4242 4242 4242'", contentWorld: .page)
-            let filled = await evaluate(client, checkout, "() => document.querySelector('#cc').value", answering: nil)
+            let filled = await evaluate(client, checkout, "() => document.querySelector('#cc').value")
             #expect(filled.code == "blocked", "\(filled.content)")
             #expect(filled.message.contains("a password or card field holds a value on this page"), "\(filled.content)")
 
             client.hub.paymentProviders = PaymentProviders(hosts: ["localhost"])
             let provider = try await open(client, base.appending(path: "provider"))
             #expect(await waitUntil(20) { client.tab(provider)?.isLoading == false })
-            let framed = await evaluate(client, provider, "() => 1", answering: nil)
+            let framed = await evaluate(client, provider, "() => 1")
             #expect(framed.code == "blocked", "\(framed.content)")
             #expect(client.hub.confirmations.pending.isEmpty)
         }
@@ -343,13 +301,12 @@ struct AgentEvaluateTests {
     @Test func aScriptThatNeverEndsEndsTheCallOnTime() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "page"))
-            _ = await evaluate(client, id, "() => 0", answering: .allowOnSite)
             // Kept reachable: WebKit fails a promise nothing can settle any more on its own.
             let started = ContinuousClock.now
-            let stuck = await evaluate(client, id, "() => new Promise((settle) => { window.neverSettled = settle })", ["timeoutMs": 300], answering: nil)
+            let stuck = await evaluate(client, id, "() => new Promise((settle) => { window.neverSettled = settle })", ["timeoutMs": 300])
             #expect(stuck.code == "timeout", "\(stuck.content)")
             #expect(ContinuousClock.now - started < .seconds(3))
-            let next = await evaluate(client, id, "() => 'free'", answering: nil)
+            let next = await evaluate(client, id, "() => 'free'")
             #expect(next["result"] == "free", "\(next.content)")
         }
     }
@@ -357,9 +314,9 @@ struct AgentEvaluateTests {
     @Test func timeoutMsCountsTheScriptAlone() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "page"))
-            let quick = await evaluate(client, id, "() => 1", ["timeoutMs": 100], answering: .allowOnSite)
+            let quick = await evaluate(client, id, "() => 1", ["timeoutMs": 100])
             #expect(quick["result"] == 1, "\(quick.content)")
-            let short = await evaluate(client, id, "() => 1", ["timeoutMs": 99], answering: nil)
+            let short = await evaluate(client, id, "() => 1", ["timeoutMs": 99])
             #expect(short.code == "invalid_params", "\(short.content)")
         }
     }
@@ -371,7 +328,7 @@ struct AgentEvaluateTests {
             let id = try await open(client, base.appending(path: "login"))
             let padding = String(repeating: " ", count: 400)
             let function = "() => '\(Self.password)' === document.title\(padding)"
-            let result = await evaluate(client, id, function, ["world": "page"], answering: nil)
+            let result = await evaluate(client, id, function, ["world": "page"])
             #expect(result.code == "blocked", "\(result.content)")
             let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
             #expect(!log.contains(Self.password))

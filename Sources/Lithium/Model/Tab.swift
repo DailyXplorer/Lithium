@@ -46,6 +46,8 @@ final class Tab: NSObject, Identifiable {
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
+        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store.
+        if let privateStore { configuration.websiteDataStore = privateStore }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
         webView.tab = self
@@ -186,11 +188,23 @@ final class Tab: NSObject, Identifiable {
         return "New Tab"
     }
 
-    init(browser: Browser, configuration: WKWebViewConfiguration) {
+    /// A private (ephemeral) tab's own non-persistent data store, shared only with the tabs it
+    /// opens: its cookies and storage live in memory and go once no open tab holds it. Such a tab
+    /// is never saved in the session, the history, the closed tabs or the favicon cache.
+    @ObservationIgnored let privateStore: WKWebsiteDataStore?
+    var isEphemeral: Bool { privateStore != nil }
+    /// Where visits are recorded; a private tab records none.
+    private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
+
+    init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) {
         self.browser = browser
         self.configuration = configuration
+        self.privateStore = privateStore
         super.init()
     }
+
+    /// Cookies and storage the page sees, without making a web view.
+    var dataStore: WKWebsiteDataStore { privateStore ?? configuration.websiteDataStore }
 
     private func attach(_ webView: WKWebView) {
         hasShownPage = false
@@ -315,7 +329,7 @@ final class Tab: NSObject, Identifiable {
         if favicon == nil { favicon = PDFReader.icon }
         if title.isEmpty {
             title = reader.title
-            if let url { browser?.history.updateTitle(title, for: url) }
+            if let url { historyStore?.updateTitle(title, for: url) }
             browser?.tidyTitles.update(self)
             tellExtensions(.title)
         }
@@ -488,7 +502,7 @@ final class Tab: NSObject, Identifiable {
                     if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.tidyTitle = nil
                     self.browser?.tidyTitles.update(self)
-                    if let url = self.url { self.browser?.history.updateTitle(self.title, for: url) }
+                    if let url = self.url { self.historyStore?.updateTitle(self.title, for: url) }
                     self.tellExtensions(.title)
                 }
             },
@@ -498,7 +512,7 @@ final class Tab: NSObject, Identifiable {
                     if url.host() != self.url?.host() { self.favicon = nil; self.faviconData = nil }
                     self.url = url
                     // Same-document navigations (pushState) never reach didFinish.
-                    if !webView.isLoading { self.browser?.history.record(url, title: self.title) }
+                    if !webView.isLoading { self.historyStore?.record(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -615,7 +629,10 @@ final class Tab: NSObject, Identifiable {
         }
         // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
         let host = url?.host()
-        guard let data = await (browser?.favicons ?? .shared).favicon(for: webView), url?.host() == host,
+        let favicons = browser?.favicons ?? .shared
+        // A private tab shows an icon already cached, and fetches and stores none.
+        let found = isEphemeral ? host.flatMap(favicons.cachedData(host:)) : await favicons.favicon(for: webView)
+        guard let data = found, url?.host() == host,
               liveIcon == nil, data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
@@ -766,7 +783,7 @@ extension Tab: WKNavigationDelegate {
         // mask 4); the user's own middle click follows it here.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
             if await browser?.agent?.open(url, from: self) != true {
-                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
+                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore)
             }
             return (.cancel, preferences)
         }
@@ -895,7 +912,7 @@ extension Tab: WKNavigationDelegate {
             switch scheme {
             case "http", "https", "file":
                 guard scheme != "file" || isLocal else { return }
-                if inNewTab { self.browser?.newTab(url: url, selecting: false) } else { self.load(url) }
+                if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore) } else { self.load(url) }
             case Internal.scheme, Extensions.scheme:
                 break
             default:
@@ -915,7 +932,7 @@ extension Tab: WKNavigationDelegate {
             }
         }
         guard failedURL == nil else { return }
-        if let url = webView.url { browser?.history.record(url, title: webView.title ?? "") }
+        if let url = webView.url { historyStore?.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         Task { await refreshFavicon() }
     }
@@ -992,16 +1009,18 @@ extension Tab: WKUIDelegate {
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
             if let agentSession {
-                let tab = browser.newAgentTab(session: agentSession)
+                let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore)
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
             } else {
-                browser.newTab(url: url)
+                browser.newTab(url: url, privateStore: privateStore)
             }
             return nil
         }
         browser.prepare(popup: configuration)
-        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration) } ?? browser.newTab(configuration: configuration)
+        // A private tab's popup shares its store, so a sign-in window's cookies reach its opener.
+        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
+            ?? browser.newTab(configuration: configuration, privateStore: privateStore)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
@@ -1084,9 +1103,11 @@ extension Tab: WKUIDelegate {
         return reply.accepted ? reply.text ?? "" : nil
     }
 
-    /// Its web view came into a window: the agent's dialog waiting in the page is the user's now.
+    /// Its web view came into a window: the agent's dialog waiting in the page is the user's now,
+    /// and the page has the window's size, not one an agent gave it.
     func didComeIntoView() {
         dialogOwner?.handDialogToUser(in: self)
+        browser?.agent?.cameIntoView(self)
     }
 
     /// Its web view moved to another window, or out of any: out of the agent's stage, if it was there.

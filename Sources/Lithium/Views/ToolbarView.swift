@@ -206,7 +206,7 @@ private struct PageMenu: View {
             Button(tab?.pinID == nil ? "Pin Tab" : "Unpin Tab") {
                 browser.togglePinForSelectedTab()
             }
-            .disabled(tab?.url == nil)
+            .disabled(tab?.url == nil || tab?.isEphemeral == true)
             Button("Pop Out Video") { browser.videoPopout.showSelected() }
                 .disabled(!browser.videoPopout.canShowSelected)
             Divider()

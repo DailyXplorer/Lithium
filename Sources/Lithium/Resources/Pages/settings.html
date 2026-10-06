@@ -39,6 +39,9 @@
   .extension img { width: 24px; height: 24px; flex: none; }
   .extension .actions { display: flex; align-items: center; gap: 10px; }
   #start-kind button { padding: 5px 11px; white-space: nowrap; }
+  .snippet > div { min-width: 0; }
+  .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
+    white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 </style>
 </head>
 <body>
@@ -165,8 +168,24 @@
       <div><div class="title">Agent log</div><div class="hint">Every agent action, kept on this Mac for 30 days.</div></div>
       <button class="button" id="agent-log">Show Agent Log</button>
     </div>
+    <div id="agent-connect">
+      <h3>Connect an agent</h3>
+      <div class="row snippet">
+        <div><div class="title">Claude Code</div><code id="agent-claude"></code></div>
+        <button class="button" data-copy="agent-claude">Copy</button>
+      </div>
+      <div class="row snippet">
+        <div><div class="title">Codex</div><code id="agent-codex"></code></div>
+        <button class="button" data-copy="agent-codex">Copy</button>
+      </div>
+      <div class="row snippet">
+        <div><div class="title">Other apps</div><div class="hint">For any app that starts an MCP server as a command.</div><code id="agent-json"></code></div>
+        <button class="button" data-copy="agent-json">Copy</button>
+      </div>
+    </div>
     <details id="agent-details">
       <summary>Details</summary>
+      <p>Agents run lithium-mcp, which reads the token from Lithium when it connects, so their settings never hold it. If Lithium isn’t open, lithium-mcp opens it in the background, without a window.</p>
       <p>Only apps on this Mac can connect, with the token in ~/Library/Application Support/Lithium/Agent/endpoint.json, which only your account can read. Turning access off deletes it; turning it on again makes a new token.</p>
     </details>
   </section>
@@ -246,6 +265,8 @@
     $('#site-cookies').textContent = site.cookies === 1 ? '1 cookie' : `${site.cookies} cookies`;
     $('#site-clear').disabled = !site.hasData;
   };
+
+  const shellQuote = (text) => /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
 
   const relative = (ms) => {
     if (!ms) return 'Not updated yet';
@@ -356,6 +377,12 @@
     $('#agent-endpoint-row').style.display = agents.url ? '' : 'none';
     $('#agent-details').style.display = agents.url ? '' : 'none';
     $('#agent-url').textContent = agents.url;
+    // The bridge's path only: it reads the token itself, so no snippet ever holds one.
+    $('#agent-connect').style.display = agents.url && agents.bridge ? '' : 'none';
+    const command = shellQuote(agents.bridge);
+    $('#agent-claude').textContent = `claude mcp add lithium -- ${command}`;
+    $('#agent-codex').textContent = `codex mcp add lithium -- ${command}`;
+    $('#agent-json').textContent = JSON.stringify({ mcpServers: { lithium: { command: agents.bridge } } }, null, 2);
 
     $('#extension-list').replaceChildren(...(state.extensions.length ? state.extensions.map((extension) => {
       const toggle = el('input', { type: 'checkbox', role: 'switch', checked: extension.enabled });
@@ -410,6 +437,12 @@
   $('#agent-access').onchange = (event) => call('setAgentAccess', event.target.checked).then(render);
   $('#agent-allow').onclick = () => call('allowAgents').then(render);
   $('#agent-log').onclick = () => call('openAgentLog');
+  document.querySelectorAll('[data-copy]').forEach((button) => {
+    button.onclick = () => call('copyAgentSetup', $('#' + button.dataset.copy).textContent).then(() => {
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+    });
+  });
   $('#agent-reset').onclick = () => {
     if (confirm('Make a new token? Connected agents are disconnected.')) call('resetAgentToken').then(render);
   };

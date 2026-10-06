@@ -138,9 +138,12 @@ final class Favicons {
         }
 
         for candidate in candidates {
+            let page = webView as? PageWebView
+            page?.iconsDrawn.insert(candidate.url)
             let result = try? await webView.callAsyncJavaScript(
                 Self.drawScript, arguments: ["href": candidate.url.absoluteString, "side": Self.side], contentWorld: .defaultClient
             )
+            page?.iconsDrawn.remove(candidate.url)
             guard let dataURL = result as? String,
                   let encoded = dataURL.split(separator: ",").last,
                   let data = Data(base64Encoded: String(encoded)),

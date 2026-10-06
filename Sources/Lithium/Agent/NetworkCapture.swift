@@ -266,6 +266,8 @@ final class ResourceLoadSpy: NSObject {
     @objc(webView:resourceLoad:didSendRequest:)
     func webView(_ webView: WKWebView, resourceLoad info: NSObject, didSendRequest request: URLRequest) {
         guard let load = Load(info) else { return }
+        // Lithium's own icon drawing; only its first load, so the page's of the same icon stays.
+        if load.isMainFrame, load.type == "image", let url = request.url, (webView as? PageWebView)?.iconsDrawn.remove(url) != nil { return }
         capture?.requestStarted(load, method: request.httpMethod ?? "GET", url: request.url, headers: request.allHTTPHeaderFields ?? [:])
     }
 

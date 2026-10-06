@@ -12,6 +12,9 @@ final class PageWebView: WKWebView {
     weak var translation: PageTranslation?
     /// The tab showing this page, for the messages it sends.
     weak var tab: Tab?
+    /// Icons `Favicons` is drawing in the page: the load each starts is Lithium's, not the page's,
+    /// and stays out of its network log.
+    var iconsDrawn: Set<URL> = []
 
     /// An agent's right click opens no menu until then: WebKit opens it once the page has
     /// handled `contextmenu`, which may be after the click returned.

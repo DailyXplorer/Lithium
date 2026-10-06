@@ -25,6 +25,8 @@ let package = Package(
                 .process("Resources/Scripts"),
             ]
         ),
+        // The stdio bridge agents start (`claude mcp add lithium -- …/lithium-mcp`), shipped in the app.
+        .executableTarget(name: "lithium-mcp", path: "Sources/LithiumMCP"),
         // Loaded with the tests, before any runs: NSWorkspace opens nothing in the test process.
         .target(name: "LithiumTestGuard", path: "Tests/LithiumTestGuard", linkerSettings: [.linkedFramework("AppKit")]),
         .testTarget(name: "LithiumTests", dependencies: ["Lithium", "LithiumTestGuard"], resources: [.copy("Fixtures")]),

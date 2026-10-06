@@ -79,6 +79,25 @@ The puzzle-piece button in the toolbar lists the extensions with their badges an
 
 `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension` adds SponsorBlock from the real store, through its button and Lithium's dialog, and watches it skip a sponsor on YouTube.
 
+## Connecting agents (lithium-mcp)
+
+With Settings › Agents › Allow agents on, MCP clients on this Mac can use Lithium (`docs/design/agent-mcp.md`). Clients that start a command connect through `lithium-mcp`, a small bridge inside the app (`Sources/LithiumMCP`, Foundation only):
+
+```sh
+claude mcp add lithium -- /Applications/Lithium.app/Contents/MacOS/lithium-mcp
+codex mcp add lithium -- /Applications/Lithium.app/Contents/MacOS/lithium-mcp
+```
+
+Other clients take `{ "mcpServers": { "lithium": { "command": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp" } } }`. Settings › Agents shows all three with Copy buttons and the path of the app they're in. None of them holds the token.
+
+- **What it does.** It reads newline-delimited JSON-RPC on stdin, posts each message to Lithium's Streamable HTTP endpoint on `127.0.0.1` with the bearer token, and writes each answer as one line on stdout. stdout carries the protocol only; its diagnostics go to stderr and never show the token.
+- **Discovery.** It reads `~/Library/Application Support/Lithium/Agent/endpoint.json` (0600) each time it connects, and again when Lithium refuses it, so a relaunch, a new port or Reset Token needs no change in the client. It won't use a file other accounts can read, or one pointing anywhere but this Mac.
+- **Lithium closed.** When the file names a Lithium that quit, the bridge opens it with `open -g -j`: not brought to the front, launched hidden, so nothing shows over your work. It waits up to 10 seconds for Lithium's server. With agent access off (no file), the client gets "Agent access is off. Turn it on in Lithium › Settings › Agents."
+- **Reconnecting.** The client keeps its session. When Lithium's ends (relaunch, Reset Token, Stop then Allow Again), the bridge sends the client's own `initialize` and `notifications/initialized` again, then the request. What Lithium kept for the old session (snapshot baselines, site grants) starts over; after a relaunch, tab ids do too. A call cut short because Lithium quit answers an error saying it may or may not have run, and is never sent twice.
+- **HTTP clients** can skip the bridge: `claude mcp add --transport http lithium http://127.0.0.1:<port>/mcp --header "Authorization: Bearer <token>"`, with the address from Settings and the token from the endpoint file. That puts the token in the client's settings, and turning access off and on retires it.
+
+`scripts/build-app.sh` copies the bridge into `Contents/MacOS` and signs it with the same local identity before the app, so rebuilds still ask for no keychain password. `AgentBridgeTests` runs the built bridge against a test server, with `LITHIUM_MCP_ENDPOINT` naming a temporary endpoint file and `LITHIUM_MCP_OPEN` a stub in place of `open`, so tests never start an app.
+
 ## Settings and internal pages
 
 Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) are web pages, served from `Resources/Pages`. Websites cannot open `lithium://` pages or load their files, and the page's bridge to the app (`InternalBridge`) only exists while a tab shows one.

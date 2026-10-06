@@ -473,6 +473,14 @@ struct AgentInputTests {
             let webView = try #require(tab.webView as? PageWebView)
             #expect(webView.agentMenusCancelled == 0)
 
+            // With Shift too, which opens the user's menu past the page's handlers: an agent's is
+            // still the page's, and `agent.js` spends its arm, so the user's next right click is theirs.
+            try await clearLog(tab)
+            #expect(!(await client.call("click", ["tab": .string(id), "ref": .string(press), "button": "right", "modifiers": ["Shift"]])).isError)
+            #expect(Set(try await log(tab, ["contextmenu", "mouseup"])) == ["contextmenu:true:b", "mouseup:true:b"])
+            #expect(webView.agentMenusCancelled == 0)
+            #expect(try await webView.callAsyncJavaScript("return lithiumAgentFrame.agentMenu", contentWorld: PageProbe.world) as? Int == 0)
+
             // Typing works right after a right click (design section 3, item 11).
             let field = try await ref(client, id, "textbox", "Field")
             #expect(!(await client.call("type", ["tab": .string(id), "ref": .string(field), "text": "ok"])).isError)

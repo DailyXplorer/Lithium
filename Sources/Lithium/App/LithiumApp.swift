@@ -76,8 +76,8 @@ struct BrowserCommands: Commands {
         }
         CommandGroup(after: .pasteboard) {
             // The focused page's, through the responder chain: nothing happens in the address bar.
+            // No shortcut: ⌥⇧⌘V is Paste and Match Style, which editors handle as a paste.
             Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
-                .keyboardShortcut("v", modifiers: [.command, .option, .shift])
                 .disabled(browser.selectedTab == nil)
         }
         CommandGroup(after: .textEditing) {

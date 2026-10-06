@@ -90,6 +90,10 @@ struct PageOverridesTests {
             #expect(shown == [false, true, false, true])
             #expect(try await page(webView, "return log") as? [String] == ["contextmenu", "frame:contextmenu"])
 
+            // An agent's right click, armed in `agent.js`'s world, is the page's even with Shift.
+            _ = try await webView.callAsyncJavaScript("globalThis.lithiumAgentFrame = { agentMenu: Date.now() + 2000 }", contentWorld: PageProbe.world)
+            #expect(try await page(webView, "return document.body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true }))") as? Bool == false)
+
             // One listener, in Lithium's world, added again with each page and nothing else.
             let scripts = { webView.configuration.userContentController.userScripts.filter { $0.source == PageOverrides.script.source } }
             #expect(scripts().count == 1)
@@ -103,15 +107,19 @@ struct PageOverridesTests {
 
     @Test func forcePasteTypesTheClipboardWhereThePageBlocksPasting() async throws {
         try await withPage { webView, clipboard in
+            // Nothing editable has the focus: the clipboard isn't read.
+            #expect(await !PageOverrides.forcePaste(into: webView))
+            #expect(clipboard.reads == 0)
+
             try await focus("field", in: webView)
-            #expect(PageOverrides.forcePaste(into: webView))
+            #expect(await PageOverrides.forcePaste(into: webView))
             #expect(try await page(webView, "return await typed") as? String == "hunter2")
             // Typed text, not a paste: the page's paste handlers never ran.
             #expect(try await page(webView, "return log") as? [String] == ["beforeinput:insertText"])
             #expect(clipboard.reads == 1)
 
             clipboard.board.clearContents()
-            #expect(!PageOverrides.forcePaste(into: webView))
+            #expect(await !PageOverrides.forcePaste(into: webView))
         }
     }
 
@@ -146,25 +154,21 @@ struct PageOverridesTests {
         }
     }
 
-    @Test func optionShiftCommandVForcePastesInTheFocusedPageOnly() async throws {
+    /// ⌥⇧⌘V stays Paste and Match Style, which editors handle as a paste: no Force Paste.
+    @Test func optionShiftCommandVDoesNotForcePaste() async throws {
         try await withPage { webView, clipboard in
             let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.contentView = nil }
             window.contentView = webView
+            window.makeFirstResponder(webView)
+            try await focus("field", in: webView)
             let key = try #require(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [.command, .option, .shift], timestamp: 0,
                 windowNumber: window.windowNumber, context: nil, characters: "◊", charactersIgnoringModifiers: "V", isARepeat: false, keyCode: 9
             ))
-            window.makeFirstResponder(nil)
             _ = webView.performKeyEquivalent(with: key)
             #expect(clipboard.reads == 0)
-
-            window.makeFirstResponder(webView)
-            try await focus("field", in: webView)
-            #expect(webView.performKeyEquivalent(with: key))
-            #expect(try await page(webView, "return await typed") as? String == "hunter2")
-            #expect(clipboard.reads == 1)
         }
     }
 }

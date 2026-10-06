@@ -1,4 +1,5 @@
 import Foundation
+import LithiumProcess
 import Network
 import os
 import Testing
@@ -397,6 +398,8 @@ struct AgentServerTests {
         let endpoint = fixture.endpoint
         #expect(endpoint.url == "http://127.0.0.1:\(fixture.hub.port!)/mcp")
         #expect(endpoint.pid == ProcessInfo.processInfo.processIdentifier)
+        #expect(endpoint.started != nil)
+        #expect(endpoint.started == LithiumProcess.started(endpoint.pid))
         #expect(endpoint.version == 1)
         #expect(endpoint.token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil)
         #expect(try permissions(fixture.folder) == 0o700)

@@ -190,6 +190,11 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.agent?.allowAgain()
         case "openAgentLog":
             browser.openAgentLog()
+        case "copyAgentSetup":
+            guard let text = value as? String else { return (nil, "No text") }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            return (nil, nil)
         case "agentLog":
             // As JSON text: the entries are `JSONValue`s, which don't cross to the page as they are.
             let entries = await agentLog(browser).entries(limit: Self.agentLogPageLength)
@@ -317,6 +322,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "stopped": browser.agent?.state == .stopped,
                 "status": AgentStatus.text(browser.agent),
                 "url": browser.agent?.url ?? "",
+                // Beside Lithium's own executable: Contents/MacOS in the app, the build folder in development.
+                "bridge": Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "lithium-mcp").path ?? "",
             ] as [String: Any],
             "extensions": browser.extensions.installed.map { entry in
                 let context = browser.extensions.contexts[entry.id]

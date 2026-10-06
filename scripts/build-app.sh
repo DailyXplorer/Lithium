@@ -35,6 +35,8 @@ trap 'rm -rf "$stage"' EXIT
 app="$stage/Lithium.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_path/Lithium" "$app/Contents/MacOS/Lithium"
+# The stdio bridge agents start, at a path that stays put across updates.
+cp "$bin_path/lithium-mcp" "$app/Contents/MacOS/lithium-mcp"
 cp Support/Info.plist "$app/Contents/Info.plist"
 cp Support/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 for bundle in "$bin_path"/*.bundle; do
@@ -73,6 +75,9 @@ fi
 sign_hash=$(security find-identity -p codesigning | grep "\"$identity\"" | awk '{ print $2; exit }')
 
 xattr -cr "$app"
+# Nested code first: the app's signature seals the bridge's. Same identity, so neither asks for
+# the keychain, and the app's designated requirement stays what it was.
+codesign --force --sign "$sign_hash" --identifier app.lithium.browser.mcp "$app/Contents/MacOS/lithium-mcp"
 codesign --force --sign "$sign_hash" "$app"
 codesign --verify --deep --strict "$app"
 

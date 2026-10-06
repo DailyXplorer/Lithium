@@ -197,6 +197,6 @@ struct BrowserCommands: Commands {
             return
         }
         let webView = tab.webView
-        webView.pageZoom = min(max(webView.pageZoom + delta, 0.5), 3)
+        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
     }
 }

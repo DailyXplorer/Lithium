@@ -788,7 +788,7 @@ extension Tab: WKNavigationDelegate {
         // mask 4); the user's own middle click follows it here.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
             if await browser?.agent?.open(url, from: self) != true {
-                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore)
+                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore, openedFrom: self)
             }
             return (.cancel, preferences)
         }
@@ -917,7 +917,7 @@ extension Tab: WKNavigationDelegate {
             switch scheme {
             case "http", "https", "file":
                 guard scheme != "file" || isLocal else { return }
-                if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore) } else { self.load(url) }
+                if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore, openedFrom: self) } else { self.load(url) }
             case Internal.scheme, Extensions.scheme:
                 break
             default:
@@ -1018,14 +1018,14 @@ extension Tab: WKUIDelegate {
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
             } else {
-                browser.newTab(url: url, privateStore: privateStore)
+                browser.newTab(url: url, privateStore: privateStore, openedFrom: self)
             }
             return nil
         }
         browser.prepare(popup: configuration)
         // A private tab's popup shares its store, so a sign-in window's cookies reach its opener.
         let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
-            ?? browser.newTab(configuration: configuration, privateStore: privateStore)
+            ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a

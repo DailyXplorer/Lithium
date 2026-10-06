@@ -47,6 +47,7 @@ final class Browser {
     let videoPopout = VideoPopout()
     let nowPlaying = NowPlaying()
     let pinnedPages = PinnedPages()
+    let recentTabs = RecentTabs()
     let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
@@ -137,8 +138,14 @@ final class Browser {
     /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
     /// window) and the page that opened it talk to each other, so neither sleeps while both
     /// are open, unless memory is critical.
-    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool) {
+    private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool = { _ in true }) {
         tabs.forEach { $0.noteSound() }
+        for tab in tabsThatCanSleep(idleFor: interval, sparingPopups: sparingPopups, among: candidates) {
+            tab.sleep(configuration: makeConfiguration(for: tab.url))
+        }
+    }
+
+    private func tabsThatCanSleep(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool) -> [Tab] {
         var paired: Set<ObjectIdentifier> = []
         if sparingPopups {
             let open = Set(tabs.map { ObjectIdentifier($0) })
@@ -148,10 +155,10 @@ final class Browser {
             }
         }
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
-        for tab in tabs where tab.id != selectedTabID && tab !== videoPopout.tab
-            && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
-            && tab.canSleep(idleFor: interval) {
-            tab.sleep(configuration: makeConfiguration(for: tab.url))
+        return tabs.filter { tab in
+            candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab
+                && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
+                && tab.canSleep(idleFor: interval)
         }
     }
 
@@ -188,6 +195,18 @@ final class Browser {
         memoryLevel = critical ? .critical : .warning
         sleepTabs()
         memoryLevel = .normal
+    }
+
+    /// The rest of the tab list sleeps now, sparing what any sleep pass spares: the tab shown, a
+    /// tab playing sound, in a call or loading, a popup and its opener. Favorites' pages and the
+    /// Agent group are left alone.
+    func sleepOtherTabs(than tab: Tab) {
+        sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
+    }
+
+    /// Whether Sleep Other Tabs would put any tab to sleep, with sound as last noted.
+    func canSleepOtherTabs(than tab: Tab) -> Bool {
+        !tabsThatCanSleep(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }.isEmpty
     }
 
     /// Pages of an extension get that extension's configuration; everything else Lithium's own.
@@ -285,6 +304,10 @@ final class Browser {
 
     /// Closes the topmost Lithium overlay. Returns false when there was none.
     func dismissOverlay() -> Bool {
+        if recentTabs.target != nil {
+            endTabCycle(commit: false)
+            return true
+        }
         if renamingTabID != nil {
             renamingTabID = nil
             return true
@@ -328,9 +351,11 @@ final class Browser {
 
     // MARK: Tabs
 
+    /// `opener` is the tab whose page opened this one (a link, ⌘-click or `window.open`).
     @discardableResult
-    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil) -> Tab {
+    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil) -> Tab {
         let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore)
+        if let opener { recentTabs.didOpen(tab, from: opener) }
         if let url { tab.load(url) }
         if selecting { select(tab) }
         return tab
@@ -458,6 +483,7 @@ final class Browser {
             if picked { tabPickToken &+= 1 }
             find.hide()
             previous?.markActive()
+            recentTabs.didShow(tab, after: previous)
         }
         selectedTabID = tab.id
         tab.markActive()
@@ -467,7 +493,8 @@ final class Browser {
     /// The selection falls back on the tab's group, never on a favorite: the tab below the
     /// closed one (above, at the bottom). Once the Agent group is empty it falls on the bottom of
     /// the tab list, just above, and once the list is empty on the start page. Closing a
-    /// favorite's page selects the top of the list.
+    /// favorite's page selects the top of the list. A tab the user went to straight from the one
+    /// that opened it, and left for no other, goes back to its opener instead.
     func close(_ tab: Tab) {
         let order = peers(of: tab)
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
@@ -483,11 +510,14 @@ final class Browser {
         if tab.id == selectedTabID {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
-            selectedTabID = remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
-                : remaining[min(position, remaining.count - 1)].id
+            let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
+            selectedTabID = opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
+                : remaining[min(position, remaining.count - 1)].id)
             // The tab shown next may be asleep.
             selectedTab?.markActive()
+            if let selectedTab { recentTabs.didShow(selectedTab, after: nil) }
         }
+        recentTabs.didClose(tab)
         tab.unpair()
         tab.dialogOwner?.answerDialog(in: tab)
         agent?.didClose(tab)
@@ -532,6 +562,20 @@ final class Browser {
         return list[(index + 1)...]
     }
 
+    /// Bottom up like the tabs below, so ⇧⌘T brings them back top down, each where it was.
+    func closeTabs(above tab: Tab) {
+        let above = tabs(above: tab)
+        if above.contains(where: { $0.id == selectedTabID }) { select(tab, picked: false) }
+        above.reversed().forEach(close)
+    }
+
+    /// Above it in its group.
+    func tabs(above tab: Tab) -> ArraySlice<Tab> {
+        let list = peers(of: tab)
+        guard let index = list.firstIndex(where: { $0 === tab }) else { return [] }
+        return list[..<index]
+    }
+
     var canReopenClosedTab: Bool { !closedTabs.isEmpty }
 
     /// Like Chrome: back in its place, with its history. A favorite's page goes back to its
@@ -561,9 +605,19 @@ final class Browser {
     }
 
     func copyLink(of tab: Tab?) {
-        guard let url = tab?.url else { return }
+        copyLinks(of: tab.map { [$0] } ?? [])
+    }
+
+    /// One address per line, in the order given; tabs without one are skipped.
+    func copyLinks(of tabs: [Tab]) {
+        let links = Self.links(of: tabs)
+        guard !links.isEmpty else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        NSPasteboard.general.setString(links, forType: .string)
+    }
+
+    static func links(of tabs: [Tab]) -> String {
+        tabs.compactMap { $0.url?.absoluteString }.joined(separator: "\n")
     }
 
     /// Empty or whitespace-only names give the tab back its page title.
@@ -592,6 +646,23 @@ final class Browser {
             return
         }
         select(order[(current + offset + order.count) % order.count])
+    }
+
+    /// Control-Tab and Control-Shift-Tab: through the tabs in the order they were last shown, as
+    /// long as Control is held, and to the highlighted one when it is let go. Without Control held
+    /// (the menu clicked), one step and done.
+    func cycleRecentTabs(backward: Bool, holdingControl: Bool = NSEvent.modifierFlags.contains(.control)) {
+        recentTabs.step(backward: backward, among: navigationOrder, current: selectedTab)
+        if holdingControl {
+            recentTabs.watchControl { [weak self] in self?.endTabCycle(commit: $0) }
+        } else {
+            endTabCycle(commit: true)
+        }
+    }
+
+    func endTabCycle(commit: Bool) {
+        guard let tab = recentTabs.endCycle(), commit, tabs.contains(where: { $0 === tab }) else { return }
+        select(tab)
     }
 
     /// ⌘1…⌘9 walk the favorites grid, then the tab list and the Agent group, as the sidebar reads.

@@ -261,6 +261,17 @@ struct AgentInputTests {
             </form>
             <script>document.getElementById('account').addEventListener('focus', () => document.getElementById('real').focus());</script>
             """),
+        "/later": (html, """
+            <title>Later</title><style>body { margin: 0 } input { position: absolute; left: 40px; width: 160px }</style>
+            <form action="/done">
+              <input id="account" aria-label="Account" style="top: 40px" data-next="real"><input type="password" id="real" aria-label="Real" style="top: 100px">
+              <input id="card" autocomplete="cc-number" aria-label="Card number" style="top: 160px">
+            </form>
+            <script>
+              const account = document.getElementById('account');
+              account.addEventListener('click', () => setTimeout(() => document.getElementById(account.dataset.next).focus(), 0));
+            </script>
+            """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
         "/pay": (html, """
             <title>Shop</title><style>body { margin: 0 }</style>
@@ -1514,6 +1525,62 @@ struct AgentInputTests {
             let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
             #expect(!logged.contains("hunter2decoy"), "\(logged)")
             #expect(entries.allSatisfy { $0["params"]?["text"] == "[redacted]" }, "\(entries)")
+        }
+    }
+
+    /// A field whose click moves focus to a password field a moment later: the keys go where
+    /// focus is before the first, so typing and clearing ask for the password field.
+    @Test func typingWhereFocusMovesAfterTheClickAsksForTheFieldFocused() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "later"))
+            let account = try await ref(client, id, "textbox", "Account")
+            _ = try await page(tab, "document.getElementById('real').value = 'kept'")
+            for clear in [false, true] {
+                _ = try await page(tab, "document.activeElement.blur()")
+                let denied = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2later", "clear": .bool(clear)], answering: .deny, expecting: .password)
+                #expect(denied.code == "denied_by_user", "clear \(clear): \(denied.content)")
+                #expect(try await page(tab, "return [document.getElementById('account').value, document.getElementById('real').value]") as? [String] == ["", "kept"], "clear \(clear)")
+            }
+            _ = try await page(tab, "document.activeElement.blur()")
+            let typed = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2later", "clear": true], answering: .allowOnce, expecting: .password)
+            #expect(!typed.isError, "\(typed.content)")
+            #expect(typed["typed"] == 12)
+            #expect(try await page(tab, "return [document.getElementById('account').value, document.getElementById('real').value]") as? [String] == ["", "hunter2later"])
+
+            var entries: [JSONValue] = []
+            #expect(await eventually {
+                entries = await client.hub.log.entries(limit: 100).filter { $0["tool"] == "type" && $0["tab"]?["url"] == .string(tab.url?.absoluteString ?? "") }
+                return entries.count == 3
+            })
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            #expect(!logged.contains("hunter2later"), "\(logged)")
+            #expect(entries.allSatisfy { $0["params"]?["text"] == "[redacted]" }, "\(entries)")
+        }
+    }
+
+    /// Focus moved to a password field while the user answers for the field focused before:
+    /// the password field asks on its own, and nothing is typed without its Allow.
+    @Test func focusMovedDuringTheAllowAsksForTheFieldFocusedNow() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "later"))
+            let account = try await ref(client, id, "textbox", "Account")
+            _ = try await page(tab, "document.getElementById('account').dataset.next = 'card'")
+            let confirmations = client.hub.confirmations
+            let typing = Task { await client.call("type", ["tab": .string(id), "ref": .string(account), "text": "hunter2during"]) }
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            #expect(confirmations.pending.map(\.kind) == [.payment])
+            _ = try await page(tab, "document.getElementById('real').focus()")
+            confirmations.pending.forEach { confirmations.answer($0.id, .allowOnce) }
+            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            #expect(confirmations.pending.map(\.kind) == [.password])
+            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+            #expect((await typing.value).code == "denied_by_user")
+            #expect(try await page(tab, "return ['account', 'real', 'card'].map((id) => document.getElementById(id).value)") as? [String] == ["", "", ""])
+
+            let entries = await client.hub.log.entries(limit: 100)
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            #expect(!logged.contains("hunter2during"))
+            #expect(logged.contains("\"text\":\"[redacted]\""))
         }
     }
 

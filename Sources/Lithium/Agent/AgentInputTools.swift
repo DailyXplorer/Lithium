@@ -338,9 +338,8 @@ extension AgentHub {
             if submit { steps.append((.keys(into: target, .press(enter: true), submitting: target.report.form), "submit the form of \(target.shortName)")) }
             if target.report.focused != true { steps.append((.press(on: [target], .left), "click \(target.shortName)")) }
             let gate = try await hub.gate(steps, ctx)
-            let fields: [String: JSONValue] = Guardrails.confirmation(for: .type, on: target.element, page: target.page) == nil ? [:] : ["typed": .int(text.count)]
-            return try await hub.deliver(ctx, target, gate, wait: wait, diff: diff, fields: fields) { input in
-                var into = target
+            var into = target
+            var result = try await hub.deliver(ctx, target, gate, wait: wait, diff: diff) { input in
                 var keys = target.counts["keyup"] ?? 0
                 var inserted = target.counts["beforeinput"] ?? 0
                 var last = "keyup"
@@ -348,28 +347,32 @@ extension AgentHub {
                     try input.move(to: target.point)
                     try input.click(at: target.point, button: .left, count: 1, modifiers: [])
                     try await hub.settle(ctx, target.frame, Settle(type: "mouseup", count: (target.counts["mouseup"] ?? 0) + 1), timeout: 1000, frame: false)
-                    // The page may move focus on the click (a decoy field that focuses a password
-                    // field): the keys go where focus is, and ask as typing there does.
-                    let focused = try await hub.resolve(.focused, ctx, checks: [.editable])
-                    if focused.address != target.address {
-                        guard !focused.inUnreadFrame, focused.address?.document == target.address?.document else {
-                            AgentHub.callNotes?.noteFields(unguarded: false)
-                            throw AgentToolError(code: "not_editable", message: "Clicking \(target.label) moved focus into another frame. Give the ref of the field to type into.")
-                        }
-                        var moved: [(Delivery, describing: String)] = [(.keys(into: focused, .type, submitting: nil), "type into \(focused.shortName)" + (submit ? " and submit its form" : ""))]
-                        if submit { moved.append((.keys(into: focused, .press(enter: true), submitting: focused.report.form), "submit the form of \(focused.shortName)")) }
-                        _ = try await hub.gate(moved, ctx)
-                        into = focused
-                        keys = focused.counts["keyup"] ?? 0
-                        inserted = focused.counts["beforeinput"] ?? 0
+                }
+                // The page may move focus on the click (a decoy field that focuses a password
+                // field), a moment after it, or while the user answers: the first key goes where
+                // focus is right before it, once a gate has weighed that element as typing there
+                // asks. A page that keeps moving focus gets nothing.
+                for attempt in 1... {
+                    if !clear, ref != nil, let address = into.address {
+                        _ = try await hub.ask(ctx.named, ctx.webView, into.frame, "caretEnd", ["id": address.id, "token": address.document], until: ctx.deadline)
                     }
+                    let focused = try await hub.resolve(.focused, ctx, checks: [.editable])
+                    if focused.address == into.address { break }
+                    guard attempt < 3, !focused.inUnreadFrame, focused.address?.document == target.address?.document else {
+                        AgentHub.callNotes?.noteFields(unguarded: false)
+                        throw AgentToolError(code: "not_editable", message: attempt < 3 ? "Focus moved from \(target.label) into another frame. Give the ref of the field to type into." : "The page keeps moving focus away from \(target.label).")
+                    }
+                    var moved: [(Delivery, describing: String)] = [(.keys(into: focused, .type, submitting: nil), "type into \(focused.shortName)" + (submit ? " and submit its form" : ""))]
+                    if submit { moved.append((.keys(into: focused, .press(enter: true), submitting: focused.report.form), "submit the form of \(focused.shortName)")) }
+                    _ = try await hub.gate(moved, ctx)
+                    into = focused
+                    keys = focused.counts["keyup"] ?? 0
+                    inserted = focused.counts["beforeinput"] ?? 0
                 }
                 if clear {
                     ctx.webView.selectAll(nil)
                     try input.key(NativeKey.named["Backspace"]!)
                     keys += 1
-                } else if ref != nil, let address = into.address {
-                    _ = try await hub.ask(ctx.named, ctx.webView, into.frame, "caretEnd", ["id": address.id, "token": address.document], until: ctx.deadline)
                 }
                 var pending = ""
                 for character in text {
@@ -393,7 +396,9 @@ extension AgentHub {
                     last = "keyup"
                 }
                 return last == "keyup" ? Settle(type: "keyup", count: keys) : Settle(type: "beforeinput", count: inserted)
-            }
+            }.object ?? [:]
+            if Guardrails.confirmation(for: .type, on: into.element, page: into.page) != nil { result["typed"] = .int(text.count) }
+            return .object(result)
         }
     }
 

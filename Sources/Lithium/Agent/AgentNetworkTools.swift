@@ -356,7 +356,7 @@ extension AgentHub {
 
     /// Cookie values of the hosts' sites, kept out of bodies and console messages: a page can
     /// log `document.cookie`, and a server can echo a cookie it got.
-    private func cookieValues(of tab: Tab, hosts: [String]) async -> [String] {
+    func cookieValues(of tab: Tab, hosts: [String]) async -> [String] {
         let sites = Set(hosts.map(SiteInfo.registrable))
         guard !sites.isEmpty else { return [] }
         let store = (tab.isAsleep ? nil : tab.loadedWebView)?.configuration.websiteDataStore ?? .default()

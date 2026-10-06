@@ -192,6 +192,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.openAgentLog()
         case "setAgentCaptureBodies":
             defaults.set(value as? Bool ?? false, forKey: Preference.agentCaptureBodies)
+        case "setAgentRunScripts":
+            defaults.set(value as? Bool ?? false, forKey: Preference.agentRunScripts)
         case "copyAgentSetup":
             guard let text = value as? String else { return (nil, "No text") }
             NSPasteboard.general.clearContents()
@@ -325,6 +327,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "status": AgentStatus.text(browser.agent),
                 "url": browser.agent?.url ?? "",
                 "captureBodies": defaults.bool(forKey: Preference.agentCaptureBodies),
+                "runScripts": defaults.bool(forKey: Preference.agentRunScripts),
                 // Beside Lithium's own executable: Contents/MacOS in the app, the build folder in development.
                 "bridge": Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "lithium-mcp").path ?? "",
             ] as [String: Any],

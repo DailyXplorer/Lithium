@@ -301,7 +301,8 @@ struct AgentParityTests {
             let byName = Dictionary(uniqueKeysWithValues: tools.compactMap { tool in tool["name"]?.string.map { ($0, tool["annotations"] ?? .null) } })
             #expect(byName["snapshot"]?["readOnlyHint"] == true)
             #expect(byName["snapshot"]?["destructiveHint"] == nil)
-            #expect(byName["click"]?["readOnlyHint"] == false && byName["click"]?["destructiveHint"] == true)
+            // MCP's defaults (not read-only, destructive) go without saying.
+            #expect(byName["click"]?["readOnlyHint"] == nil && byName["click"]?["destructiveHint"] == nil)
             #expect(byName["scroll"]?["destructiveHint"] == false)
             #expect(byName["lithium_status"]?["openWorldHint"] == false)
             #expect(byName["fill_form"] != nil && byName["resize"] != nil)

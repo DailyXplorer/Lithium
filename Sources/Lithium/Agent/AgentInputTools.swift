@@ -39,6 +39,8 @@ struct TargetReport: Decodable {
     var inViewport: Bool?
     var unstable: Bool?
     var coveredBy: ElementReport.Cover?
+    /// Why the point that stands for the element would press something else instead.
+    var notActionable: String?
     var viewport: PageViewport?
     var counts: [String: Int]?
     var pay: FrameReport.Pay?
@@ -187,27 +189,23 @@ private struct SettleReport: Decodable {
 extension AgentHub {
     static let inputTools: [AgentTool] = [clickTool, hoverTool, dragTool, typeTool, pressTool, selectOptionTool, setCheckedTool, scrollTool, focusTool, uploadFilesTool]
 
-    private static let tabParam: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
-    private static let refParam: JSONValue = ["type": "string", "description": "An element ref from snapshot, such as e9 or f2:e7."]
-    private static let coordinate: JSONValue = ["type": "number", "description": "Top-level viewport CSS pixels, as snapshot boxes give them; with the other coordinate instead of ref."]
-    private static let actionTimeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default, including the user’s answer when Lithium asks them."]
-    private static let actionWaitParam: JSONValue = [
-        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load", "networkidle"],
-        "description": "When the action starts a page load: how far the page must get before the call returns (commit by default). networkidle also waits, load or not, until the page’s requests have been done for 500 ms, such as those a Save button sends.",
-    ]
-    private static let trusted = "Lithium sends real input events to the page, which can’t tell them from the user’s. The user sees a border, a caption and a pointer dot while it acts, and can take over at any time (user_interrupted)."
+    private static let tabParam = AgentParam.tab
+    private static let refParam = AgentParam.ref
+    private static let coordinate = AgentParam.number
+    private static let actionTimeoutParam = AgentParam.timeout
+    private static let actionWaitParam = AgentParam.wait
 
     // MARK: Tools
 
     static let clickTool = AgentTool(
         name: "click",
-        description: "Clicks an element (ref) or a point (x, y): the pointer moves there, then presses. It must be visible, enabled and not covered; Lithium scrolls it into view first. The result says whether a page load, new tabs, a dialog or a download followed, with the viewport’s diff. Payment controls, a submit of a filled password and downloads wait for the user’s Allow. \(trusted)",
+        description: "Click an element (ref) or a point (x, y).",
         inputSchema: schema([
             "tab": tabParam, "ref": refParam, "x": coordinate, "y": coordinate,
             "button": ["type": "string", "enum": ["left", "right", "middle"]],
-            "clickCount": ["type": "integer", "minimum": 1, "maximum": 3, "description": "2 for a double click."],
+            "clickCount": ["type": "integer", "description": "2 for a double click"],
             "modifiers": ["type": "array", "items": ["type": "string", "enum": ["Meta", "Shift", "Alt", "Control"]]],
-            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -240,8 +238,8 @@ extension AgentHub {
 
     static let hoverTool = AgentTool(
         name: "hover",
-        description: "Moves the pointer over an element (ref) or a point (x, y), in a few steps, so the page shows what it shows on hover (menus, tooltips). \(trusted)",
-        inputSchema: schema(["tab": tabParam, "ref": refParam, "x": coordinate, "y": coordinate, "timeoutMs": actionTimeoutParam, "diff": diffParam], required: ["tab"])
+        description: "Move the pointer over an element (ref) or a point (x, y).",
+        inputSchema: schema(["tab": tabParam, "ref": refParam, "x": coordinate, "y": coordinate, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
@@ -263,13 +261,13 @@ extension AgentHub {
 
     static let dragTool = AgentTool(
         name: "drag",
-        description: "Presses on from, moves to to in steps, and lets go: pointer drags such as sliders, sortable lists and canvases. from and to are each a ref or {x, y}. HTML drag and drop (draggable elements) isn’t supported. \(trusted)",
+        description: "Drag with the pointer from one element or point to another (not HTML drag and drop).",
         inputSchema: schema([
             "tab": tabParam,
-            "from": ["description": "A ref, or {\"x\": …, \"y\": …} in top-level viewport CSS pixels."],
-            "to": ["description": "A ref, or {\"x\": …, \"y\": …} in top-level viewport CSS pixels."],
-            "steps": ["type": "integer", "minimum": 1, "maximum": 100, "description": "Moves between the two, 10 by default."],
-            "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "from": ["description": "A ref, or {x, y}"],
+            "to": ["description": "A ref, or {x, y}"],
+            "steps": ["type": "integer", "description": "Moves, default 10"],
+            "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab", "from", "to"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -312,11 +310,11 @@ extension AgentHub {
 
     static let typeTool = AgentTool(
         name: "type",
-        description: "Types text into a field (ref), or into the focused element without ref: a click focuses the field first, the caret goes to its end, and each character is a real key press (characters no key types are inserted as an input method would). clear replaces what the field holds; submit presses Enter after. \\n types a line break in a text area or an editable element. Password and card fields wait for the user’s Allow, and what is typed there is never logged. \(trusted)",
+        description: "Type text into a field (ref), or the focused element, with real key presses.",
         inputSchema: schema([
-            "tab": tabParam, "ref": refParam, "text": ["type": "string"],
-            "clear": ["type": "boolean", "description": "false by default."], "submit": ["type": "boolean", "description": "false by default: true presses Enter after the text."],
-            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "tab": tabParam, "ref": refParam, "text": AgentParam.text,
+            "clear": ["type": "boolean", "description": "Replace what the field holds"], "submit": ["type": "boolean", "description": "Press Enter after"],
+            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab", "text"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -404,11 +402,11 @@ extension AgentHub {
 
     static let pressTool = AgentTool(
         name: "press",
-        description: "Presses a key or a combination in the focused element: Enter, Tab, Shift+Tab, Escape, ArrowDown, PageDown, Backspace, F5, Meta+K. Meta+A, Meta+Z and Shift+Meta+Z select all, undo and redo; copy, cut and paste are disabled. Lithium’s own shortcuts never fire. A character typed into a password or card field, and Enter or Space that submits a password or payment form or activates a payment control, wait for the user’s Allow, as type and click do. Character keys are never logged. \(trusted)",
+        description: "Press a key or combination in the focused element (copy, cut and paste are disabled).",
         inputSchema: schema([
-            "tab": tabParam, "keys": ["type": "string", "description": "One key, with modifiers joined by +, such as Meta+K."],
-            "repeat": ["type": "integer", "minimum": 1, "maximum": 100, "description": "1 by default."],
-            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "tab": tabParam, "keys": ["type": "string", "description": "Such as Enter, Tab, ArrowDown, Shift+Tab, Meta+K"],
+            "repeat": AgentParam.integer,
+            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab", "keys"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -458,11 +456,11 @@ extension AgentHub {
 
     static let selectOptionTool = AgentTool(
         name: "select_option",
-        description: "Chooses options in a <select> by their values or their labels (several for a multiple select). The page gets input and change events that are not trusted: its native menu would open on the user’s screen. Custom dropdowns and listboxes are clicked instead. Card fields wait for the user’s Allow.",
+        description: "Choose options of a <select> by values or labels (click custom dropdowns instead).",
         inputSchema: schema([
             "tab": tabParam, "ref": refParam,
-            "values": ["type": "array", "items": ["type": "string"]], "labels": ["type": "array", "items": ["type": "string"]],
-            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "values": AgentParam.strings, "labels": AgentParam.strings,
+            "wait": actionWaitParam, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab", "ref"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -501,8 +499,8 @@ extension AgentHub {
 
     static let setCheckedTool = AgentTool(
         name: "set_checked",
-        description: "Checks or unchecks a checkbox, switch or radio button with a click, only when its state differs. \(trusted)",
-        inputSchema: schema(["tab": tabParam, "ref": refParam, "checked": ["type": "boolean"], "timeoutMs": actionTimeoutParam, "diff": diffParam], required: ["tab", "ref", "checked"])
+        description: "Check or uncheck a checkbox, switch or radio button, clicking only if its state differs.",
+        inputSchema: schema(["tab": tabParam, "ref": refParam, "checked": AgentParam.flag, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag], required: ["tab", "ref", "checked"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
@@ -537,12 +535,12 @@ extension AgentHub {
 
     static let scrollTool = AgentTool(
         name: "scroll",
-        description: "Scrolls: ref alone brings that element into view; dx and dy (CSS pixels, positive is right and down) scroll with the wheel where the pointer is, at the ref or point given by at, x and y, else the middle of the viewport. \(trusted)",
+        description: "Bring an element (ref) into view, or scroll the wheel by dx, dy at a ref (at), a point or the middle.",
         inputSchema: schema([
             "tab": tabParam, "ref": refParam,
-            "dx": ["type": "number"], "dy": ["type": "number"],
+            "dx": AgentParam.number, "dy": AgentParam.number,
             "at": refParam, "x": coordinate, "y": coordinate,
-            "timeoutMs": actionTimeoutParam, "diff": diffParam,
+            "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag,
         ], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -577,8 +575,8 @@ extension AgentHub {
 
     static let focusTool = AgentTool(
         name: "focus",
-        description: "Focuses an element as tabbing into it would, without a click.",
-        inputSchema: schema(["tab": tabParam, "ref": refParam, "timeoutMs": actionTimeoutParam, "diff": diffParam], required: ["tab", "ref"])
+        description: "Focus an element without clicking it.",
+        inputSchema: schema(["tab": tabParam, "ref": refParam, "timeoutMs": actionTimeoutParam, "diff": AgentParam.flag], required: ["tab", "ref"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
@@ -595,12 +593,12 @@ extension AgentHub {
 
     static let uploadFilesTool = AgentTool(
         name: "upload_files",
-        description: "Gives files to a file input, or to the control that opens its chooser (ref): the user is asked first, with the files’ names, sizes and folder, then Lithium clicks it and its chooser gets those files without showing a panel. paths are absolute.",
+        description: "Give files (absolute paths) to a file input or the button that opens it; the user is asked first.",
         inputSchema: schema([
             "tab": tabParam, "ref": refParam,
-            "paths": ["type": "array", "items": ["type": "string"], "minItems": 1],
-            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 60000 by default, including the user’s answer."],
-            "diff": diffParam,
+            "paths": AgentParam.strings,
+            "timeoutMs": ["type": "integer", "description": "Default 60000"],
+            "diff": AgentParam.flag,
         ], required: ["tab", "ref", "paths"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -792,6 +790,9 @@ extension AgentHub {
         if checks.contains(.editable) {
             if report.readonly == true { throw AgentToolError(code: "readonly", message: "\(target.label) is read-only.") }
             if report.editable != true { throw AgentToolError(code: "not_editable", message: "\(target.label) isn’t a field text can be typed into.") }
+        }
+        if checks.contains(.hitTest), let reason = report.notActionable {
+            throw AgentToolError(code: "not_actionable", message: "\(target.label) can’t be pressed: \(reason).")
         }
         if checks.contains(.hitTest), let cover = report.coveredBy { throw covered(target, by: cover, in: report.token, ctx) }
     }

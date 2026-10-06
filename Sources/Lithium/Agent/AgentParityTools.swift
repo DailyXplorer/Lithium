@@ -54,6 +54,7 @@ enum AgentToolHints {
         "upload_files": Hint(title: "Upload files", effect: .acts),
         "dialog_respond": Hint(title: "Answer a page’s dialog", effect: .acts),
         "fill_form": Hint(title: "Fill a form", effect: .acts, idempotent: true),
+        "batch": Hint(title: "Run several steps", effect: .acts),
         "resize": Hint(title: "Resize a page", effect: .shows, idempotent: true),
         "network_log": Hint(title: "List a tab’s requests", effect: .reads, idempotent: true),
         "network_body": Hint(title: "Read a response body", effect: .reads, idempotent: true),
@@ -61,17 +62,17 @@ enum AgentToolHints {
         "evaluate": Hint(title: "Run a script in a page", effect: .acts),
     ]
 
-    /// Nil for a tool the table doesn't know, which then goes without.
+    /// Nil for a tool the table doesn't know, which then goes without. A hint is given only where
+    /// it differs from MCP's default (not read-only, destructive, not idempotent, open world), as
+    /// `tools/list` goes to the model with every turn.
     static func annotations(for tool: String) -> JSONValue? {
         guard let hint = table[tool] else { return nil }
-        var fields: [String: JSONValue] = [
-            "title": .string(hint.title),
-            "readOnlyHint": .bool(hint.effect == .reads),
-            "idempotentHint": .bool(hint.idempotent),
-            "openWorldHint": .bool(hint.openWorld),
-        ]
+        var fields: [String: JSONValue] = ["title": .string(hint.title)]
+        if hint.effect == .reads { fields["readOnlyHint"] = true }
         // The spec gives destructiveHint a meaning only for a tool that isn't read-only.
-        if hint.effect != .reads { fields["destructiveHint"] = .bool(hint.effect == .acts) }
+        if hint.effect == .shows { fields["destructiveHint"] = false }
+        if hint.idempotent { fields["idempotentHint"] = true }
+        if !hint.openWorld { fields["openWorldHint"] = false }
         return .object(fields)
     }
 }
@@ -79,7 +80,6 @@ enum AgentToolHints {
 extension AgentHub {
     static let parityTools: [AgentTool] = [fillForm, resizeTool]
 
-    private static let tabArgument: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
     static let maxFormFields = 50
 
     // MARK: Filling a form
@@ -94,24 +94,23 @@ extension AgentHub {
 
     static let fillForm = AgentTool(
         name: "fill_form",
-        description: "Fills several fields in turn, as type (with clear), select_option and set_checked would one by one: textbox values are typed with real key presses, combobox values choose a <select> option by its label, checkbox and radio values (true or false) click when the state differs. It stops at the first field that fails and says which; the fields before it stay filled. Password and card fields wait for the user’s Allow, and no value is ever logged.",
+        description: "Fill several fields in turn, stopping at the first that fails.",
         inputSchema: schema([
-            "tab": tabArgument,
+            "tab": AgentParam.tab,
             "fields": [
-                "type": "array", "minItems": 1, "maxItems": .int(maxFormFields),
+                "type": "array", "maxItems": .int(maxFormFields),
                 "items": [
                     "type": "object",
                     "properties": [
-                        "ref": ["type": "string", "description": "The field’s ref from snapshot or forms."],
+                        "ref": AgentParam.ref,
                         "type": ["type": "string", "enum": ["textbox", "checkbox", "radio", "combobox"]],
-                        "value": ["description": "Text for a textbox, an option’s label for a combobox, true or false for a checkbox or radio."],
+                        "value": ["description": "Text, an option’s label, or true or false"],
                     ],
                     "required": ["ref", "type", "value"],
-                    "additionalProperties": false,
                 ],
             ],
-            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds for all the fields, 60000 by default, including the user’s answers."],
-            "diff": diffParam,
+            "timeoutMs": ["type": "integer", "description": "For all fields, default 60000"],
+            "diff": AgentParam.flag,
         ], required: ["tab", "fields"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
@@ -192,12 +191,12 @@ extension AgentHub {
 
     static let resizeTool = AgentTool(
         name: "resize",
-        description: "Lays a tab’s page out at a size, in CSS pixels at zoom 1, as a window of that size would show it: to see a site at a phone’s or a small laptop’s width. Only for a tab the user isn’t looking at: Lithium never resizes the user’s window. The size holds until the user shows the tab, which gives the page the window’s size again.",
+        description: "Lay a background tab’s page out at a width and height in CSS pixels (200 to 4000).",
         inputSchema: schema([
-            "tab": tabArgument,
-            "width": ["type": "integer", "minimum": .int(resizeLimits.lowerBound), "maximum": .int(resizeLimits.upperBound)],
-            "height": ["type": "integer", "minimum": .int(resizeLimits.lowerBound), "maximum": .int(resizeLimits.upperBound)],
-            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default."],
+            "tab": AgentParam.tab,
+            "width": AgentParam.integer,
+            "height": AgentParam.integer,
+            "timeoutMs": AgentParam.timeout,
         ], required: ["tab", "width", "height"])
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)

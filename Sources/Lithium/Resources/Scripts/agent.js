@@ -1081,7 +1081,56 @@
     })),
   });
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources };
+  // What `evaluate` needs before and after an agent's script. The values of password and card
+  // fields go to Lithium alone, which takes them out of what the script returns; same-origin
+  // child documents count, since the script can reach them. A card field filled or focused, and
+  // the frames' addresses, tell Lithium the page is one scripts never run in.
+  const isSecretField = (element) => isField(element) && (isPassword(element) || isCard(element));
+  const guards = () => {
+    const secrets = new Set();
+    const frames = [];
+    let card = false;
+    const visit = (root, depth) => {
+      let focused = root.activeElement;
+      while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+      for (const element of allElements(root)) {
+        if (/^i?frame$/.test(element.localName)) {
+          if (element.src) frames.push(element.src);
+          let inner = null;
+          try { inner = element.contentDocument; } catch { /* cross-origin */ }
+          if (inner && depth < 4) visit(inner, depth + 1);
+        } else if (isSecretField(element)) {
+          const value = element.localName === 'select' ? (element.selectedIndex > 0 ? element.value : '') : element.value;
+          if (value) secrets.add(value);
+          if (!isPassword(element) && (value || element === focused)) card = true;
+        }
+      }
+    };
+    visit(document, 0);
+    return { token: frame.token, path: framePath(), secrets: [...secrets], card, frames };
+  };
+  // Hands `evaluate`'s world what it can't find on its own, by events only that world listens
+  // for (random names, so the page can't): every password and card field of the document, and
+  // the element `id` names. The event for the element goes to `document` when no element is
+  // asked for, and to `window` when it is gone or is extension UI.
+  const handOver = ({ id, guard, element: name }) => {
+    for (const element of allElements(document)) {
+      if (isSecretField(element)) element.dispatchEvent(new CustomEvent(guard, { composed: true }));
+    }
+    if (id === undefined) {
+      document.dispatchEvent(new CustomEvent(name));
+      return { token: frame.token };
+    }
+    const element = elementOf(id);
+    if (!element || inExtensionUI(element)) {
+      window.dispatchEvent(new CustomEvent(name));
+      return { token: frame.token, gone: !element, extensionUI: Boolean(element) };
+    }
+    element.dispatchEvent(new CustomEvent(name, { composed: true }));
+    return { token: frame.token, found: true };
+  };
+
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.

@@ -2,7 +2,8 @@ import Foundation
 
 /// What an agent can't do without the user's Allow (design section 7.3).
 enum ConfirmationKind: String, CaseIterable {
-    case payment, password, download, upload, file
+    /// `script`: an agent's `evaluate` on a site, asked the first time (PR 10).
+    case payment, password, download, upload, file, script
 
     /// Payments always ask; a `file:` address has no site to allow.
     var allowsSiteGrant: Bool { self != .payment && self != .file }

@@ -105,6 +105,7 @@ struct UISnapshotTests {
             (.download, "download “report.csv” (1.2 MB) from files.example.com", "example.com"),
             (.upload, "upload invoice.pdf (88 KB) from /Users/ann/Documents to forms.example.com", "example.com"),
             (.file, "open the local file “notes.html” (its folder becomes readable to the page)", nil),
+            (.script, "run a script in the page on shop.example", "shop.example"),
         ]
         for ask in asks {
             let confirmation = AgentConfirmation(kind: ask.kind, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: ask.action, site: ask.site)
@@ -233,7 +234,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "modelAvailable": false,
             "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",
         ] as [String: Any],
-        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false,
+        "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false, "runScripts": true,
                    "bridge": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp"] as [String: Any],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],

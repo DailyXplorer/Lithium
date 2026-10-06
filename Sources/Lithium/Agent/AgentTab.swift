@@ -186,6 +186,11 @@ final class AgentTab {
         return ref
     }
 
+    /// The document a frame ref (`f3`) names, while the page that issued it is shown.
+    func document(ofFrame ref: String) -> String? {
+        table.frameRefs.first { $0.value == ref }?.key
+    }
+
     /// The element a ref names. A frame ref names its `<iframe>` element in the parent, as last
     /// reported, so element tools work on it like on any element.
     func address(of ref: String) -> ElementAddress? {

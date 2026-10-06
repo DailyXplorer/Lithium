@@ -132,30 +132,43 @@
     }
   };
 
-  // A page whose changes answer every pass (an editor this script doesn't recognize) stops
-  // being followed rather than spinning: past FLUSH_BUDGET passes in two seconds without the
-  // user's input, new content keeps the rule's font, whatever it is. A page still loading isn't
-  // counted, since it changes on every frame.
-  const FLUSH_BUDGET = 30;
-  let budgetStart = 0;
-  let flushes = 0;
-  let stopped = false;
+  // A page that changes all the time (a chat, a live feed, an editor this script doesn't
+  // recognize answering every pass) is checked at most every THROTTLE ms rather than on every
+  // frame: past BUSY bursts of changes in two seconds without the user's input, until a two-second
+  // window with fewer than CALM. Changes keep accumulating meanwhile, so nothing is missed. A page
+  // still loading isn't counted, since it changes on every frame.
+  const BUSY = 30;
+  const CALM = 10;
+  const THROTTLE = 500;
+  let windowStart = 0;
+  let bursts = 0;
+  let throttled = false;
+  let lastFlush = -Infinity;
+  const countBurst = () => {
+    if (document.readyState !== 'complete') return;
+    const now = performance.now();
+    const elapsed = now - windowStart;
+    if (elapsed > 2000) {
+      // Past four seconds, the last full window had no burst at all.
+      if (elapsed > 4000 || bursts < CALM) throttled = false;
+      windowStart = now;
+      bursts = 0;
+    }
+    if (++bursts > BUSY) throttled = true;
+  };
   for (const type of ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart']) {
-    addEventListener(type, () => { flushes = 0; budgetStart = performance.now(); }, { capture: true, passive: true });
+    addEventListener(type, () => {
+      bursts = 0;
+      windowStart = performance.now();
+      throttled = false;
+      if (scheduled) requestAnimationFrame(flush);
+    }, { capture: true, passive: true });
   }
 
   const flush = () => {
     if (!scheduled) return;
     scheduled = false;
-    const now = performance.now();
-    if (now - budgetStart > 2000) { budgetStart = now; flushes = 0; }
-    if (document.readyState === 'complete' && ++flushes > FLUSH_BUDGET) {
-      stopped = true;
-      observer.disconnect();
-      pending.clear();
-      changed.clear();
-      return;
-    }
+    lastFlush = performance.now();
     if (changed.size) {
       const elements = [...changed];
       changed.clear();
@@ -181,8 +194,12 @@
   };
 
   const schedule = () => {
-    if (scheduled || stopped) return;
+    if (scheduled) return;
     scheduled = true;
+    if (throttled) {
+      setTimeout(flush, lastFlush + THROTTLE - performance.now());
+      return;
+    }
     requestAnimationFrame(flush);
     // Pages in background tabs get no animation frames.
     setTimeout(flush, 100);
@@ -279,6 +296,7 @@
   };
 
   observer = new MutationObserver((records) => {
+    countBurst();
     for (const record of records) {
       if (inEditor(record.target)) continue;
       if (record.type === 'childList') {

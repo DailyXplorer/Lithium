@@ -39,6 +39,9 @@
   .extension img { width: 24px; height: 24px; flex: none; }
   .extension .actions { display: flex; align-items: center; gap: 10px; }
   #start-kind button { padding: 5px 11px; white-space: nowrap; }
+  #site-font-site { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--line); background: none;
+    padding: 6px 0; font: inherit; color: inherit; outline: none; transition: border .12s; }
+  #site-font-site:focus { border-color: var(--accent); }
   .snippet > div { min-width: 0; }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -93,6 +96,12 @@
       <div><div class="title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
       <label class="switch" for="website-font"><input type="checkbox" id="website-font" role="switch"><span></span></label>
     </div>
+    <h3>Keep the site's font on</h3>
+    <div class="rows" id="site-fonts"></div>
+    <form class="row" id="site-font-form">
+      <input type="text" id="site-font-site" placeholder="example.com" autocomplete="off" spellcheck="false">
+      <button class="button">Add</button>
+    </form>
   </section>
 
   <section id="search" class="page">
@@ -297,6 +306,11 @@
     $('#mini-player').checked = appearance.miniPlayer;
     $('#tab-usage').checked = appearance.tabUsage;
     $('#website-font').checked = appearance.websiteFont;
+    $('#site-fonts').replaceChildren(...(appearance.siteFontDomains.length ? appearance.siteFontDomains.map((site) => {
+      const button = el('button', { className: 'button', textContent: 'Remove' });
+      button.onclick = () => call('setSiteFont', { site, keep: false }).then(render);
+      return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: site }), button]);
+    }) : [el('div', { className: 'empty', textContent: 'No sites. Pages on this Mac always keep theirs.' })]));
     $('#swatches').querySelectorAll('.swatch').forEach((s) => s.remove());
     [appearance.defaultColor, ...SWATCHES.filter((c) => c !== appearance.defaultColor)].forEach((color) => {
       const swatch = el('button', { className: 'swatch' + (color.toUpperCase() === appearance.sidebarColor.toUpperCase() ? ' on' : ''), title: color });
@@ -439,6 +453,11 @@
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
   $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#site-font-form').onsubmit = (event) => {
+    event.preventDefault();
+    const site = $('#site-font-site').value.trim();
+    if (site) call('setSiteFont', { site, keep: true }).then((state) => { $('#site-font-site').value = ''; render(state); });
+  };
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);

@@ -41,7 +41,8 @@ struct HeadlessPerformanceTests {
         for variant in variants {
             let configuration = variant == "webkit" ? WKWebViewConfiguration() : privacy.makeConfiguration()
             if variant == "current" {
-                PageStyle.scripts(for: URL(string: "http://127.0.0.1/")!).forEach(configuration.userContentController.addUserScript)
+                // Not the bench server's own address: loopback pages keep their font.
+                PageStyle.scripts(for: URL(string: "https://example.com/")!).forEach(configuration.userContentController.addUserScript)
                 privacy.scripts(true, for: URL(string: "http://127.0.0.1/")!).forEach(configuration.userContentController.addUserScript)
                 Privacy.setEngineProtections(true, on: configuration.defaultWebpagePreferences)
             } else if variant == "previous" {

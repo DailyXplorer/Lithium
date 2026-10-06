@@ -7,6 +7,8 @@
 // on a large element rechecks that element alone (PROBE_SELF) and the elements the page's font
 // rules for that class select; restyling its whole subtree twice on every toggle made class
 // changes three times slower than with DM Sans off.
+// Nothing is written inside an editable region: rich-text editors (ProseMirror, TipTap) re-render
+// on any attribute change in their content, whose new nodes were probed again, forever.
 (() => {
   'use strict';
   const FAMILY = 'Lithium DM Sans';
@@ -20,6 +22,9 @@
   // Icon fonts with names we don't know still put their glyphs in the Private Use Area.
   const PRIVATE_USE = /[\uE000-\uF8FF]|[\u{F0000}-\u{10FFFD}]/u;
   const UNRENDERED = new Set(['head', 'script', 'style', 'link', 'meta', 'title', 'noscript', 'template', 'br', 'wbr', 'svg', 'math']);
+  // Inside an editor the rule alone decides: code keeps its font, icon fonts don't.
+  const EDITABLE = '[contenteditable]:not([contenteditable="false" i])';
+  const inEditor = (node) => Boolean((node.host ?? node).closest?.(EDITABLE));
 
   const base64 = '__LITHIUM_FONT__';
   const bytes = Uint8Array.fromBase64
@@ -71,6 +76,7 @@
   // A shadow tree's rule can't see attributes outside it, so its top elements are probed.
   const probe = (root) => {
     for (const element of root.nodeType === Node.ELEMENT_NODE ? [root] : root.children) {
+      if (element.matches(EDITABLE)) continue;
       element.setAttribute(PROBE, '');
       probed.push(element);
     }
@@ -82,7 +88,7 @@
 
   // Returns whether to look inside the element.
   const visit = (element, seen) => {
-    if (seen.has(element) || UNRENDERED.has(element.localName)) return false;
+    if (seen.has(element) || UNRENDERED.has(element.localName) || element.matches(EDITABLE)) return false;
     seen.add(element);
     const keep = keepsOwnFont(element);
     if (keep !== element.hasAttribute(KEEP)) element.toggleAttribute(KEEP, keep);
@@ -112,7 +118,7 @@
   // An element that stops keeping its font hands its subtree back, which then needs a full scan.
   const recheck = (elements) => {
     const targets = elements.filter((element) => element.isConnected && !UNRENDERED.has(element.localName)
-      && !element.closest(`[${KEEP}]:not(:scope), [${PROBE}]`));
+      && !element.closest(`[${KEEP}]:not(:scope), [${PROBE}], ${EDITABLE}`));
     for (const element of targets) element.setAttribute(PROBE_SELF, '');
     try {
       for (const element of targets) {
@@ -126,9 +132,30 @@
     }
   };
 
+  // A page whose changes answer every pass (an editor this script doesn't recognize) stops
+  // being followed rather than spinning: past FLUSH_BUDGET passes in two seconds without the
+  // user's input, new content keeps the rule's font, whatever it is. A page still loading isn't
+  // counted, since it changes on every frame.
+  const FLUSH_BUDGET = 30;
+  let budgetStart = 0;
+  let flushes = 0;
+  let stopped = false;
+  for (const type of ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart']) {
+    addEventListener(type, () => { flushes = 0; budgetStart = performance.now(); }, { capture: true, passive: true });
+  }
+
   const flush = () => {
     if (!scheduled) return;
     scheduled = false;
+    const now = performance.now();
+    if (now - budgetStart > 2000) { budgetStart = now; flushes = 0; }
+    if (document.readyState === 'complete' && ++flushes > FLUSH_BUDGET) {
+      stopped = true;
+      observer.disconnect();
+      pending.clear();
+      changed.clear();
+      return;
+    }
     if (changed.size) {
       const elements = [...changed];
       changed.clear();
@@ -138,7 +165,7 @@
     adopt(document);
     // Content added inside other new content is covered by its ancestor's probe and scan.
     const roots = [...pending].filter((root) => {
-      if (!root.isConnected) return false;
+      if (!root.isConnected || inEditor(root)) return false;
       for (let node = root.parentNode; node; node = node.parentNode) if (pending.has(node)) return false;
       return true;
     });
@@ -154,7 +181,7 @@
   };
 
   const schedule = () => {
-    if (scheduled) return;
+    if (scheduled || stopped) return;
     scheduled = true;
     requestAnimationFrame(flush);
     // Pages in background tabs get no animation frames.
@@ -253,6 +280,7 @@
 
   observer = new MutationObserver((records) => {
     for (const record of records) {
+      if (inEditor(record.target)) continue;
       if (record.type === 'childList') {
         for (const node of record.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;

@@ -68,6 +68,46 @@ struct PageFontTests {
         #expect(fonts["shadowIcon"] == "Font Awesome 6 Free")
     }
 
+    /// Like ProseMirror, the editor re-renders its content on any change it didn't make, and
+    /// ignores its own. Probing the nodes it renders made the two answer each other forever.
+    @Test func richTextEditorStaysIdle() async throws {
+        let page = """
+            <div id="editor" contenteditable="true"><p>Hello <span class="mark">world</span></p></div>
+            <script>
+              window.renders = 0;
+              const editor = document.getElementById('editor');
+              const options = { attributes: true, childList: true, subtree: true, characterData: true };
+              const observer = new MutationObserver(() => {
+                observer.disconnect();
+                window.renders++;
+                editor.replaceChildren(editor.firstElementChild.cloneNode(true));
+                editor.firstElementChild.setAttribute('data-render', String(window.renders));
+                observer.observe(editor, options);
+              });
+              observer.observe(editor, options);
+            </script>
+            """
+        let probe = """
+            const editor = document.getElementById('editor');
+            // Typed once the page's first scan is done; before it, the scan covers the new nodes.
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            editor.firstElementChild.append(document.createElement('span'));
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            return { renders: window.renders, font: getComputedStyle(editor.querySelector('.mark')).fontFamily.split(',')[0].replace(/"/g, '').trim() };
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        #expect(result["renders"] as? Int == 1)
+        #expect(result["font"] as? String == "Lithium DM Sans")
+    }
+
     /// Large containers don't rescan their whole subtree when their class changes, yet a switch to
     /// a code font still reaches everything inside them, and so does a font rule for one descendant.
     @Test func largeContainerFollowsItsClassChanges() async throws {

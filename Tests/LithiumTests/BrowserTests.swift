@@ -463,17 +463,25 @@ struct BrowserTests {
 enum LocalHTTP {
     /// `delay` holds every answer back, for a page still on its way.
     static func serve(_ routes: [String: (headers: String, body: String)], delay: TimeInterval = 0) async throws -> (NWListener, URL) {
+        try await serve(routes.mapValues { ($0.headers, Data($0.body.utf8)) }, delay: delay)
+    }
+
+    /// `requested` hears the path of every request, for a test counting fetches.
+    static func serve(
+        _ routes: [String: (headers: String, body: Data)], delay: TimeInterval = 0, requested: (@Sendable (String) -> Void)? = nil
+    ) async throws -> (NWListener, URL) {
         let listener = try NWListener(using: .tcp, on: .any)
         listener.newConnectionHandler = { connection in
             connection.start(queue: .global())
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
                 let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
-                let (headers, body) = routes[path] ?? ("Content-Type: text/plain", "")
+                requested?(path)
+                let (headers, body) = routes[path] ?? ("Content-Type: text/plain", Data())
                 let status = headers.hasPrefix("HTTP/") ? "" : "HTTP/1.1 200 OK\r\n"
-                let response = "\(status)\(headers)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                let response = Data("\(status)\(headers)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                    connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                    connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
                 }
             }
         }

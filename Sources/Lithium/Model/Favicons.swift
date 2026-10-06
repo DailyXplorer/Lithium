@@ -76,18 +76,13 @@ final class Favicons {
 
         let session = session
         let task = Task<Data?, Never> {
-            func fetchIcon(_ url: URL) async -> Data? {
-                guard let (data, response) = try? await session.data(from: url),
-                      (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
-                return await Self.normalizedInBackground(data)
-            }
             for path in ["/apple-touch-icon.png", "/favicon.ico", "/favicon.png"] {
-                if let url = URL(string: path, relativeTo: site), let png = await fetchIcon(url) { return png }
+                if let url = URL(string: path, relativeTo: site), let png = await Self.fetch(url, with: session) { return png }
             }
             // Some sites only declare their icons in the page, often on a CDN.
             guard let (html, _) = try? await session.data(from: site) else { return nil }
             for url in Self.declaredIcons(in: String(decoding: html.prefix(200_000), as: UTF8.self), base: site) {
-                if let png = await fetchIcon(url) { return png }
+                if let png = await Self.fetch(url, with: session) { return png }
             }
             return nil
         }
@@ -137,9 +132,7 @@ final class Favicons {
         }
 
         for candidate in candidates.sorted(by: Candidate.preferred) {
-            guard let (data, response) = try? await session.data(from: candidate.url),
-                  (response as? HTTPURLResponse)?.statusCode ?? 200 < 400,
-                  let png = await Self.normalizedInBackground(data) else { continue }
+            guard let png = await Self.fetch(candidate.url, with: session) else { continue }
             store(png, for: host)
             return png
         }
@@ -156,6 +149,25 @@ final class Favicons {
             return png
         }
         return nil
+    }
+
+    /// The icon a page declares, fetched afresh past the cache: a calendar's changes with the
+    /// date, at a new address or the same one. Stored for the host only when its pixels changed.
+    func refresh(host: String, from url: URL) async -> Data? {
+        guard Self.isFetchable(url), let png = await Self.fetch(url, with: session) else { return nil }
+        if cachedData(host: host) != png { store(png, for: host) }
+        return png
+    }
+
+    /// The addresses icons are fetched from, as a page's `<link>` names them.
+    nonisolated static func isFetchable(_ url: URL) -> Bool {
+        ["http", "https", "data"].contains(url.scheme?.lowercased())
+    }
+
+    nonisolated private static func fetch(_ url: URL, with session: URLSession) async -> Data? {
+        guard let (data, response) = try? await session.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
+        return await normalizedInBackground(data)
     }
 
     /// Decoding, redrawing and encoding a large ICO or touch icon takes a few milliseconds, so it

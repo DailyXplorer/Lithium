@@ -33,7 +33,14 @@ final class PutAwayWebView: NSObject, WKNavigationDelegate {
 @Observable
 final class Tab: NSObject, Identifiable {
     let id = UUID()
-    var pinID: Pin.ID?
+    var pinID: Pin.ID? {
+        didSet { if (oldValue == nil) != (pinID == nil) { pinnedChanged() } }
+    }
+    /// The tile's badge, for a pinned tab only.
+    private(set) var unread = UnreadBadge()
+    /// The icon address the page declares, as last fetched for this web view: the page's word
+    /// wins over the icon cached for its site, which may be a day old.
+    @ObservationIgnored private(set) var liveIcon: URL?
     /// Made on first use and dropped while the tab sleeps, which frees the page's memory. A tab
     /// restored asleep at launch holds no web view at all until it is selected.
     var webView: WKWebView {
@@ -252,7 +259,7 @@ final class Tab: NSObject, Identifiable {
     func restore(url: URL, title: String) {
         self.url = url
         self.title = title
-        faviconData = Favicons.shared.cachedData(host: url.host() ?? "")
+        faviconData = (browser?.favicons ?? .shared).cachedData(host: url.host() ?? "")
         favicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : faviconData.flatMap(NSImage.init(data:))
         isAsleep = true
     }
@@ -328,6 +335,9 @@ final class Tab: NSObject, Identifiable {
     private func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)
+        // A pinned page's icon may have changed while it slept (a calendar's date): fetched
+        // once, and not again when the page names the same one.
+        if let saved = browser?.savedIconURL(of: self) { followIcon(saved) }
     }
 
     /// What `load(_:history:)` takes to bring this page back elsewhere (a reopened or duplicated
@@ -449,6 +459,7 @@ final class Tab: NSObject, Identifiable {
         pdfHistory = [:]
         hasInternalBridge = false
         hasWebstoreBridge = false
+        liveIcon = nil
         isAsleep = true
         appliedProtections = nil
         canGoBack = false
@@ -474,6 +485,7 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep else { return }
                     self.title = webView.title ?? ""
+                    if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.tidyTitle = nil
                     self.browser?.tidyTitles.update(self)
                     if let url = self.url { self.browser?.history.updateTitle(self.title, for: url) }
@@ -534,6 +546,7 @@ final class Tab: NSObject, Identifiable {
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
         browser?.nowPlaying.install(on: controller)
+        if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, to: controller)
         browser?.agent?.install(on: controller)
     }
@@ -602,10 +615,66 @@ final class Tab: NSObject, Identifiable {
         }
         // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
         let host = url?.host()
-        guard let data = await Favicons.shared.favicon(for: webView), url?.host() == host, data != faviconData else { return }
+        guard let data = await (browser?.favicons ?? .shared).favicon(for: webView), url?.host() == host,
+              liveIcon == nil, data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
         browser?.didLoadFavicon(data, in: self)
+    }
+
+    /// Shows an icon fetched for the pinned page; an unchanged one is left alone.
+    func showFavicon(_ data: Data) {
+        guard data != faviconData else { return }
+        faviconData = data
+        favicon = NSImage(data: data)
+    }
+
+    /// Fetches the icon the page names, once per address for this web view.
+    private func followIcon(_ url: URL) {
+        guard url != liveIcon else { return }
+        liveIcon = url
+        Task { await browser?.refreshIcon(of: self, from: url) }
+    }
+
+    /// Assigned only when the badge changes, so the sidebar doesn't redraw for nothing.
+    private func updateUnread(_ change: (inout UnreadBadge) -> Void) {
+        var next = unread
+        change(&next)
+        if next != unread { unread = next }
+    }
+
+    func receive(_ signal: PinnedPages.Signal) {
+        switch signal {
+        case .badge(let count): updateUnread { $0.setAppBadge(count) }
+        case .clearBadge: updateUnread { $0.clearAppBadge() }
+        case .notification:
+            // The user is looking at it already.
+            guard browser?.selectedTabID != id || loadedWebView?.window?.isKeyWindow != true else { return }
+            updateUnread { $0.notify() }
+        case .icon(let url): followIcon(url)
+        }
+    }
+
+    /// The user picked the tab: its notifications have been seen.
+    func didOpen() {
+        updateUnread { $0.open() }
+    }
+
+    /// Pinned, the page gets its script and channel at once, without a reload; unpinned, the
+    /// channel closes and the badge goes. A tab restored asleep counts nothing from the title it
+    /// was saved with: the badge only says what a page said since launch.
+    private func pinnedChanged() {
+        if pinID == nil {
+            updateUnread { $0 = UnreadBadge() }
+            liveIcon = nil
+        }
+        guard let browser, let webView = loadedWebView, !isAsleep else { return }
+        browser.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
+        guard pinID != nil else { return }
+        updateUnread { $0.setTitle(title) }
+        if ["http", "https"].contains(webView.url?.scheme?.lowercased()) {
+            webView.evaluateJavaScript(PinnedPages.script.source, in: nil, in: .page)
+        }
     }
 
     private func showError(_ error: Error, for url: URL?) {
@@ -709,6 +778,8 @@ extension Tab: WKNavigationDelegate {
         }
         setInternalBridge(false)
         setWebstoreBridge(ChromeWebStore.isStore(url))
+        // A woken tab's new web view gets the channel at its first page.
+        browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
         if action.request.httpMethod == "GET", let clean = TrackingParameters.stripped(url) {
             Task { webView.load(URLRequest(url: clean)) }
@@ -795,6 +866,10 @@ extension Tab: WKNavigationDelegate {
         browser?.permissions.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
+        if let old = shownHost, old != webView.url?.host() {
+            updateUnread { $0.leaveSite() }
+            liveIcon = nil
+        }
         shownHost = webView.url?.host()
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })

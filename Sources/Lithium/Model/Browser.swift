@@ -38,6 +38,8 @@ final class Browser {
     let extensions = Extensions()
     let videoPopout = VideoPopout()
     let nowPlaying = NowPlaying()
+    let pinnedPages = PinnedPages()
+    let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
@@ -56,6 +58,9 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
+    /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
+    @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
 
     struct ClosedTab {
         let url: URL
@@ -82,7 +87,9 @@ final class Browser {
     }
     private static let closedTabsLimit = 25
 
-    init() {
+    /// `notifications` posts the change of day (`NSCalendarDayChanged`); tests post it themselves.
+    init(favicons: Favicons = .shared, notifications: NotificationCenter = .default) {
+        self.favicons = favicons
         pins = PinStore.load()
         privacy.start()
         extensions.browser = self
@@ -103,6 +110,10 @@ final class Browser {
             }
         }
         watchMemoryPressure()
+        let observer = notifications.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSleepingPinIcons() }
+        }
+        dayChange = (notifications, observer)
         if UserDefaults.standard.bool(forKey: Preference.agentAccess) {
             Task { await setAgentAccess(true) }
         }
@@ -111,6 +122,7 @@ final class Browser {
     deinit {
         sleepLoop?.cancel()
         memoryPressure?.cancel()
+        if let dayChange { dayChange.center.removeObserver(dayChange.observer) }
     }
 
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
@@ -432,6 +444,7 @@ final class Browser {
 
     func select(_ tab: Tab, picked: Bool = true) {
         let previous = selectedTab
+        if picked { tab.didOpen() }
         if tab.id != selectedTabID {
             if picked { tabPickToken &+= 1 }
             find.hide()
@@ -666,10 +679,59 @@ final class Browser {
 
     func didLoadFavicon(_ data: Data, in tab: Tab) {
         guard let index = pins.firstIndex(where: { $0.id == tab.pinID }),
-              pins[index].url.host() == tab.url?.host(),
-              pins[index].favicon != data else { return }
-        pins[index].favicon = data
-        pinIcons[pins[index].id] = nil
+              pins[index].url.host() == tab.url?.host() else { return }
+        storeIcon(data, from: nil, inPinAt: index)
+    }
+
+    /// Saved once, and only when something changed. `url` is where the page said its icon is.
+    private func storeIcon(_ data: Data, from url: URL?, inPinAt index: Int) {
+        var pin = pins[index]
+        pin.favicon = data
+        if let url { pin.iconURL = url }
+        guard pin != pins[index] else { return }
+        if pin.favicon != pins[index].favicon { pinIcons[pin.id] = nil }
+        pins[index] = pin
+    }
+
+    /// The icon a pinned tab's page last named, for the tab to fetch when it wakes.
+    func savedIconURL(of tab: Tab) -> URL? {
+        guard let pin = pins.first(where: { $0.id == tab.pinID }), pin.url.host() == tab.url?.host(),
+              let url = pin.iconURL, ["http", "https"].contains(url.scheme?.lowercased()) else { return nil }
+        return url
+    }
+
+    /// The pinned page's icon, fetched afresh from where it says it is. A fetch that outlasts
+    /// the page's site, the pin or the icon (a later one may come back first) isn't theirs.
+    func refreshIcon(of tab: Tab, from url: URL) async {
+        guard let pinID = tab.pinID, let host = tab.url?.host(),
+              let data = await favicons.refresh(host: host, from: url),
+              tab.pinID == pinID, tab.url?.host() == host, tab.liveIcon == url else { return }
+        tab.showFavicon(data)
+        if let index = pins.firstIndex(where: { $0.id == pinID }), pins[index].url.host() == host {
+            storeIcon(data, from: url, inPinAt: index)
+        }
+    }
+
+    /// A sleeping tab runs no script, so at each new day the icon its page last named is fetched
+    /// once more for each favorite asleep or without a page; it stays asleep. Favorites whose
+    /// page never named one are left alone.
+    private func refreshSleepingPinIcons() {
+        let due = pins.compactMap { pin -> (Pin.ID, URL)? in
+            guard liveTab(for: pin)?.isAsleep != false, let url = pin.iconURL,
+                  ["http", "https"].contains(url.scheme?.lowercased()) else { return nil }
+            return (pin.id, url)
+        }
+        guard !due.isEmpty else { return }
+        sleepingIconsRefresh = Task {
+            for (id, url) in due {
+                guard let host = pins.first(where: { $0.id == id })?.url.host(),
+                      let data = await favicons.refresh(host: host, from: url),
+                      // The tab may have woken meanwhile and its page named another.
+                      let index = pins.firstIndex(where: { $0.id == id }), pins[index].iconURL == url else { continue }
+                if let tab = liveTab(for: pins[index]), tab.isAsleep, tab.url?.host() == host { tab.showFavicon(data) }
+                storeIcon(data, from: url, inPinAt: index)
+            }
+        }
     }
 }
 

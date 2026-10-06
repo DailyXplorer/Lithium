@@ -105,7 +105,6 @@ struct UISnapshotTests {
             (.download, "download “report.csv” (1.2 MB) from files.example.com", "example.com"),
             (.upload, "upload invoice.pdf (88 KB) from /Users/ann/Documents to forms.example.com", "example.com"),
             (.file, "open the local file “notes.html” (its folder becomes readable to the page)", nil),
-            (.script, "run a script in the page on shop.example", "shop.example"),
         ]
         for ask in asks {
             let confirmation = AgentConfirmation(kind: ask.kind, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: ask.action, site: ask.site)

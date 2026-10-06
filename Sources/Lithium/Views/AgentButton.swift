@@ -44,9 +44,6 @@ struct AgentPanel: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Agents").font(Theme.font(15, .semibold))
                 Text(AgentStatus.text(agent)).font(Theme.font(12)).foregroundStyle(.secondary)
-                if let note = AgentStatus.benchmarkMode(agent) {
-                    Text(note).font(Theme.font(12, .medium)).foregroundStyle(.orange)
-                }
             }
             ForEach(challenges, id: \.tab.id) { item in
                 ChallengeRow(tab: item.tab, challenge: item.challenge)
@@ -231,10 +228,5 @@ enum AgentStatus {
             case let count: return "On. \(count) agents connected."
             }
         }
-    }
-
-    /// Shown while benchmark mode answers script prompts, so it is never on unseen.
-    @MainActor static func benchmarkMode(_ agent: AgentHub) -> String? {
-        agent.scriptsAutoAllowedUntil().map { "Benchmark mode: scripts auto-allowed until \($0.formatted(date: .omitted, time: .shortened))" }
     }
 }

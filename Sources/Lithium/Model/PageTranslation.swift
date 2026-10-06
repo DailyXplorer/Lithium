@@ -13,15 +13,116 @@ final class PageWebView: WKWebView {
     /// The tab showing this page, for the messages it sends.
     weak var tab: Tab?
 
+    /// An agent's right click opens no menu until then: WebKit opens it once the page has
+    /// handled `contextmenu`, which may be after the click returned.
+    var agentMenuUntil: ContinuousClock.Instant?
+    private(set) var agentMenusCancelled = 0
+    /// The user's mouse button is down in the page: an agent action waits (`user_busy`). The
+    /// button as it really is decides: a drag of a link, a native `<select>` or a context menu
+    /// tracks the press in its own loop, and the view never gets its `mouseUp`.
+    var isUserPressing: Bool {
+        if userPressed, Self.pressedMouseButtons() & 1 == 0 { userPressed = false }
+        return userPressed
+    }
+    private var userPressed = false
+    static var pressedMouseButtons = { NSEvent.pressedMouseButtons }
+    /// The last button or key pressed in the page was `NativeInput`'s: what the page opens
+    /// is an agent's only then, never on the user's own click during an agent's action.
+    private(set) var agentPressedLast = false
+
+    /// The page's own undo stack. WebKit records its edits with the view's undo manager, else
+    /// the window's: shared with the address bar, and in the stage with every page an agent
+    /// acts in, where one page's Undo would undo another's typing.
+    private let pageUndoManager = UndoManager()
+    override var undoManager: UndoManager? { pageUndoManager }
+
+    @objc func undo(_ sender: Any?) { pageUndoManager.undo() }
+    @objc func redo(_ sender: Any?) { pageUndoManager.redo() }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            (item as? NSMenuItem)?.title = pageUndoManager.undoMenuItemTitle
+            return pageUndoManager.canUndo
+        case #selector(redo(_:)):
+            (item as? NSMenuItem)?.title = pageUndoManager.redoMenuItemTitle
+            return pageUndoManager.canRedo
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
+
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        if NativeInput.isAgents(event) || agentMenuUntil.map({ $0 > .now }) == true {
+            agentMenuUntil = nil
+            agentMenusCancelled += 1
+            // `agent.js` prevents the page's default, so WebKit asks for no menu. One that comes
+            // anyway (the page stopped the event before Lithium's listener) is closed as soon as
+            // it tracks: cancelling before that is ignored, and the menu would stay open on the
+            // user's screen, holding the main thread in its loop.
+            NotificationCenter.default.addObserver(self, selector: #selector(agentMenuDidBeginTracking(_:)), name: NSMenu.didBeginTrackingNotification, object: menu)
+            return
+        }
         super.willOpenMenu(menu, with: event)
         translation?.adjust(menu, in: self, at: convert(event.locationInWindow, from: nil))
         menuSelection = ""
     }
 
+    @objc private func agentMenuDidBeginTracking(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didBeginTrackingNotification, object: notification.object)
+        (notification.object as? NSMenu)?.cancelTrackingWithoutAnimation()
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window != nil { tab?.didComeIntoView() }
+        if userWindow != nil { tab?.didComeIntoView() }
+        tab?.webViewDidMove(self)
+    }
+
+    // User input wins (design section 2.7): input that `NativeInput` isn't delivering ends the
+    // agent action running in the tab.
+    override func mouseDown(with event: NSEvent) {
+        if noteUser(event, pressing: true) { userPressed = true }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !NativeInput.isAgents(event) {
+            if userPressed { tab?.noteUserActivation() }
+            userPressed = false
+        }
+        super.mouseUp(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if noteUser(event, pressing: true) { agentMenuUntil = nil }
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        noteUser(event, pressing: true)
+        super.otherMouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Only Enter, of the user's keys, takes a load back from the agent: Space activates
+        // only a focused control, which the view can't tell before the page acts on it.
+        if noteUser(event, pressing: true), [36, 76].contains(event.keyCode) || event.characters == "\r" { tab?.noteUserActivation() }
+        super.keyDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        noteUser(event, pressing: false)
+        super.scrollWheel(with: event)
+    }
+
+    @discardableResult
+    private func noteUser(_ event: NSEvent, pressing: Bool) -> Bool {
+        let agents = NativeInput.isAgents(event)
+        if pressing { agentPressedLast = agents }
+        guard !agents else { return false }
+        tab?.noteUserInput()
+        return true
     }
 }
 

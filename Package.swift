@@ -25,6 +25,8 @@ let package = Package(
                 .process("Resources/Scripts"),
             ]
         ),
-        .testTarget(name: "LithiumTests", dependencies: ["Lithium"], resources: [.copy("Fixtures")]),
+        // Loaded with the tests, before any runs: NSWorkspace opens nothing in the test process.
+        .target(name: "LithiumTestGuard", path: "Tests/LithiumTestGuard", linkerSettings: [.linkedFramework("AppKit")]),
+        .testTarget(name: "LithiumTests", dependencies: ["Lithium", "LithiumTestGuard"], resources: [.copy("Fixtures")]),
     ]
 )

@@ -347,14 +347,13 @@ extension AgentHub {
     func sizedWebView(of tab: Tab) -> WKWebView {
         let webView = tab.webView
         if webView.superview == nil, webView.frame.width < 1 || webView.frame.height < 1 {
-            let shown = browser?.selectedTab?.loadedWebView.flatMap { $0.window == nil ? nil : $0.bounds.size }
-            webView.frame = CGRect(origin: .zero, size: shown ?? CGSize(width: 1280, height: 800))
+            webView.frame = CGRect(origin: .zero, size: pageAreaSize)
         }
         return webView
     }
 
     /// Starts a call to `agent.js`; its answer comes in the returned box.
-    private func start(_ webView: WKWebView, _ target: FrameTarget, _ operation: String, _ arguments: [String: Any]) -> PageAnswer<Data> {
+    func start(_ webView: WKWebView, _ target: FrameTarget, _ operation: String, _ arguments: [String: Any]) -> PageAnswer<Data> {
         let answer = PageAnswer<Data>()
         Task {
             do { answer.result = .success(try await PageProbe.run(operation, arguments, in: target, of: webView)) } catch { answer.result = .failure(error) }

@@ -55,7 +55,7 @@ extension AgentHub {
     /// It becomes the user's when the user looks at the tab or no connected session holds it any
     /// more (`handDialogToUser`). Nil when the dialog is the user's.
     func agentReply(to dialog: AgentDialog, in tab: Tab) async -> DialogReply? {
-        guard tab.loadedWebView?.window == nil, isHeldBySession(tab), let state = agentTab(for: tab) else { return nil }
+        guard tab.loadedWebView?.userWindow == nil, isHeldBySession(tab), let state = agentTab(for: tab) else { return nil }
         // Pages show one dialog at a time; another frame's would be the second.
         guard state.dialog == nil else { return dialog.safeDefault }
         state.dialog = dialog
@@ -73,7 +73,7 @@ extension AgentHub {
     /// (the user navigating, the tab closing, sleeping or its process dying) answers it.
     func handDialogToUser(in tab: Tab) {
         guard let state = tabs[tab.id], var dialog = state.dialog, let continuation = state.dialogReply else { return }
-        if tab.loadedWebView?.window != nil {
+        if tab.loadedWebView?.userWindow != nil {
             state.dialog = nil
             state.dialogReply = nil
             continuation.resume(returning: nil)

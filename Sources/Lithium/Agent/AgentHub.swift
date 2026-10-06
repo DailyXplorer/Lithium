@@ -50,6 +50,43 @@ struct AgentTool {
     }
 }
 
+/// What a tool call tells the log about its own arguments. What an agent puts in a field (text
+/// typed, an option chosen) is logged only once the call knows its field isn't guarded (design
+/// section 7.6): a call that fails before it finds out logs `[redacted]`. A key `press` names
+/// is logged the same way, and a character key never is.
+@MainActor
+final class CallNotes {
+    /// The field the values go to in this attempt is known not to be a password or card field,
+    /// nor one in a frame Lithium can't read, and no earlier attempt's was one.
+    var intoUnguardedField: Bool { attemptUnguarded && !everGuarded }
+    private var attemptUnguarded = false
+    private var everGuarded = false
+
+    /// `gate` weighed the fields the attempt's values go to.
+    func noteFields(unguarded: Bool) {
+        attemptUnguarded = unguarded
+        if !unguarded { everGuarded = true }
+    }
+
+    /// An action tries again, maybe into another field: it decides afresh.
+    func startAttempt() {
+        attemptUnguarded = false
+    }
+
+    /// The arguments that carry what goes into a field, by tool.
+    private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"]]
+
+    func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
+        guard var fields = arguments.object, let keys = Self.values[tool] else { return arguments }
+        for key in keys {
+            guard let value = fields[key] else { continue }
+            let shown = intoUnguardedField && (tool != "press" || value.string.flatMap(NativeKey.parse).map { NativeKey.named[$0.name] != nil } == true)
+            if !shown { fields[key] = "[redacted]" }
+        }
+        return .object(fields)
+    }
+}
+
 /// A failure the agent reads: `code` from the design's error list, then a sentence.
 struct AgentToolError: Error, Equatable {
     let code: String
@@ -113,6 +150,12 @@ final class AgentHub {
     /// The session whose tool call is running, for what the call starts that outlives it (a
     /// download after `wait: none`) and for confirmations deep inside it.
     @TaskLocal static var callSession: MCPSession?
+    /// What the running call tells the log about its arguments.
+    @TaskLocal static var callNotes: CallNotes?
+    /// Where background tabs' web views take an agent's events.
+    @ObservationIgnored private(set) lazy var stage = AgentStage()
+    /// Keeps an agent's keys from Lithium's menus while access is on.
+    @ObservationIgnored private var keyGuard: Any?
 
     @ObservationIgnored weak var browser: Browser?
     @ObservationIgnored private var tabIDs = AgentTabIDs()
@@ -148,6 +191,7 @@ final class AgentHub {
     /// Listens on the port of the last run when it is free, else on a new one, and writes the
     /// endpoint file. A token left by the last run is kept, so HTTP clients survive a relaunch.
     func start() async {
+        if keyGuard == nil { keyGuard = NativeInput.installKeyGuard() }
         token = AgentEndpoint.read(in: folder)?.token ?? AgentEndpoint.makeToken()
         let server = AgentServer(token: token, listenerDidFail: { [weak self] error in
             Task { @MainActor in await self?.listenerDied(error) }
@@ -259,6 +303,9 @@ final class AgentHub {
         server?.stop()
         server = nil
         AgentEndpoint.delete(in: folder)
+        stage.releaseAll()
+        if let keyGuard { NSEvent.removeMonitor(keyGuard) }
+        keyGuard = nil
     }
 
     /// The user's Stop: cancels every call in flight, denies every prompt and drops every site
@@ -429,12 +476,15 @@ final class AgentHub {
             return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
         }
         var result: Result<AgentToolOutput, AgentToolError>
+        let notes = CallNotes()
         if isRateLimited(session.id, at: started) {
             result = .failure(AgentToolError(code: "rate_limited", message: "More than \(Self.maxCallsPerSecond) tool calls in a second. Slow down."))
         } else {
             let task = Task { () -> Result<AgentToolOutput, AgentToolError>? in
                 do {
-                    return .success(try await AgentHub.$callSession.withValue(session) { try await tool.run(arguments, session, self) })
+                    return .success(try await AgentHub.$callSession.withValue(session) {
+                        try await AgentHub.$callNotes.withValue(notes) { try await tool.run(arguments, session, self) }
+                    })
                 } catch let error as AgentToolError {
                     return .failure(error)
                 } catch {
@@ -473,7 +523,7 @@ final class AgentHub {
         var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": AgentURLs.redacted(arguments),
+            "params": AgentURLs.redacted(notes.logged(arguments, tool: name)),
             "result": .object(logged),
             "ms": .int(ms),
         ]
@@ -582,6 +632,56 @@ final class AgentHub {
         state.drive = nil
         confirmations.cancel(tab: tab.id)
         if state.isBusy { state.interruption = .user }
+    }
+
+    /// The user clicked, typed or scrolled in the tab's page: their input wins over an agent
+    /// action running there. A load the agent started stays the agent's.
+    func userInput(in tab: Tab) {
+        guard let state = tabs[tab.id], state.acting != nil, state.interruption == nil else { return }
+        state.interruption = .userInput
+    }
+
+    /// The user clicked in the tab's page, or pressed Enter there: a load the page starts next
+    /// may be theirs. Scrolling, arrows and typing never are.
+    func userActivated(in tab: Tab) {
+        tabs[tab.id]?.drive?.userActivated = true
+    }
+
+    /// The user's own click or Enter, pressed since the agent's load started, started a load in
+    /// the tab's page: what it downloads is theirs.
+    func userStartedLoad(in tab: Tab) {
+        guard tabs[tab.id]?.drive?.userActivated == true else { return }
+        tabs[tab.id]?.drive = nil
+    }
+
+    /// The label of the session whose action runs in `tab`, when the agent pressed last in its
+    /// page: what the page opens is the agent's. The user's own click meanwhile opens theirs.
+    func actingSession(in tab: Tab) -> String? {
+        guard let acting = tabs[tab.id]?.acting, (tab.loadedWebView as? PageWebView)?.agentPressedLast == true else { return nil }
+        return sessions.first { $0.id == acting.session }?.label
+    }
+
+    /// A tab the page opened during an agent action, for the action's result.
+    func didOpen(_ tab: Tab, from opener: Tab) {
+        tabs[opener.id]?.opened.append(tab)
+        touch(tab)
+    }
+
+    /// A tab an agent action in `opener` asks for without a popup (a ⌘-click), or for an address
+    /// it can't open as it is: as `tab_open` opens one, in the Agent group, unselected, after
+    /// `checkOpenable`, and named in the action's result. False when no agent action runs in
+    /// `opener`, or the user pressed last in it: the tab is the user's to open.
+    func open(_ url: URL, from opener: Tab) async -> Bool {
+        guard actingSession(in: opener) != nil, let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
+        guard (try? await checkOpenable(url, in: nil, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
+        let tab = browser.newAgentTab(session: session.label)
+        tab.load(url)
+        didOpen(tab, from: opener)
+        return true
+    }
+
+    func isActing(in tab: Tab) -> Bool {
+        tabs[tab.id]?.acting != nil
     }
 
     /// The tab's page went (it slept, or its process died), and any load with it. Its

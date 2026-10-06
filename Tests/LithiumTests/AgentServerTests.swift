@@ -475,7 +475,7 @@ struct AgentServerTests {
         let port = fixture.port
         fixture.hub.shutdown()
         #expect(AgentEndpoint.read(in: fixture.folder) == nil)
-        #expect(await !RawHTTP.canConnect(host: "127.0.0.1", port: port))
+        #expect(await RawHTTP.refusesSoon(host: "127.0.0.1", port: port))
     }
 
     // MARK: Stop
@@ -947,7 +947,7 @@ struct AgentAccessTests {
         #expect(browser.agent == nil)
         #expect(!UserDefaults.standard.bool(forKey: Preference.agentAccess))
         #expect(AgentEndpoint.read(in: AgentFiles.folder) == nil)
-        #expect(await !RawHTTP.canConnect(host: "127.0.0.1", port: port))
+        #expect(await RawHTTP.refusesSoon(host: "127.0.0.1", port: port))
     }
 }
 
@@ -969,6 +969,16 @@ enum RawHTTP {
         let head = "\(method) \(path) HTTP/1.1\r\n" + all.map { "\($0): \($1)\r\n" }.joined() + "\r\n"
         let data = try await exchange(port: port, request: Data(head.utf8) + body)
         return try parse(data)
+    }
+
+    /// `NWListener.cancel()` closes its socket asynchronously, so a connection made right after a
+    /// stop can still land while the machine is busy (tests running side by side). Waits up to 5 s.
+    static func refusesSoon(host: String, port: UInt16) async -> Bool {
+        for _ in 0..<50 {
+            if await !canConnect(host: host, port: port) { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
     }
 
     static func canConnect(host: String, port: UInt16) async -> Bool {

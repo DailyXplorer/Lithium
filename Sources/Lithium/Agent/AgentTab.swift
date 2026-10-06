@@ -31,8 +31,9 @@ final class AgentTab {
     /// it to the user, as the page's own dialog.
     var dialog: AgentDialog?
     @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?
-    /// The agent gave the tab its last input: its navigation (from PR 5, its events). A download
-    /// while that load is under way is the agent's, and asks the user.
+    /// The agent started the tab's load: its navigation or its events. A download while that
+    /// load is under way is the agent's, and asks the user, until the user's own click or Enter
+    /// starts another load.
     @ObservationIgnored var drive: AgentDrive?
     /// The user's answers to the agent's downloads in the tab, for the call that started one.
     var downloadAnswers = 0
@@ -41,6 +42,23 @@ final class AgentTab {
     @ObservationIgnored var armedUpload: (files: [URL], expires: ContinuousClock.Instant)?
     /// File choosers the agent's action opened without allowed files, cancelled.
     @ObservationIgnored var fileChoosersCancelled = 0
+    /// The agent action running in it, for the border, caption and pointer dot the user sees.
+    var acting: AgentActing?
+    /// Tabs its page opened during that action.
+    @ObservationIgnored var opened: [Tab] = []
+    /// Forms whose fields the user allowed an agent to fill, for 2 minutes after the first Allow
+    /// (card number, expiry and CVC ask once), by form, session and kind.
+    @ObservationIgnored var formCovers: [FormCover] = []
+    /// Prompts the user was shown for it, so an action knows it waited on them.
+    @ObservationIgnored var prompts = 0
+    /// The Allows `gate` and an upload got during the action running in it, by kind, prompt and
+    /// subject: the action run again (`AgentHub.action`) takes each once, without asking twice.
+    /// A download or a file never comes from it: each asks.
+    @ObservationIgnored var answered: [String: ConfirmationGrant] = [:]
+
+    static func prompt(_ kind: ConfirmationKind, _ action: String, subject: String) -> String {
+        "\(kind.rawValue)\n\(action)\n\(subject)"
+    }
 
     /// The child frames that said hello, by document token; the main frame needs no `WKFrameInfo`.
     @ObservationIgnored private(set) var frames: [String: WKFrameInfo] = [:]
@@ -182,12 +200,31 @@ final class AgentTab {
     }
 }
 
+/// An agent action in progress in a tab, as the user sees it in the page.
+struct AgentActing: Equatable {
+    let session: String
+    /// "Clicking “Pay €42.00”".
+    var caption: String
+    /// The agent's pointer, in the web view's points.
+    var pointer: CGPoint?
+}
+
+/// Typing into one form's fields, allowed once by the user for a while.
+struct FormCover {
+    let form: ElementAddress
+    let session: String
+    let kind: ConfirmationKind
+    let until: ContinuousClock.Instant
+}
+
 /// An agent's input in a tab: the session that gave it, how far the tab's loads had got then,
 /// and the deadline of the call that gave it.
 struct AgentDrive {
     let session: MCPSession
     var marks: Tab.LoadMarks
     let deadline: ContinuousClock.Instant
+    /// The user clicked in the page since, or pressed Enter there.
+    var userActivated = false
 
     /// Until the load it started ends: a page shown, a move within the page, a download, a
     /// scheme refused. A load that ends without a word (cancelled), or never starts, ends it at

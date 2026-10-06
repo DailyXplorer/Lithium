@@ -126,7 +126,9 @@ struct AgentReadTests {
     typealias Client = AgentTabsTests.Client
 
     private static let html = "Content-Type: text/html; charset=utf-8"
-    private static let secrets = ["hunter2secret", "4242424242424242", "4242 4242 4242 4242", "987", "toggled-secret", "shadow-secret"]
+    /// Each one something no log timestamp, duration, port or id can spell by chance: a CVC of
+    /// "987" turned up in some runs, as the milliseconds of an entry's `ts`.
+    private static let secrets = ["hunter2secret", "4242424242424242", "4242 4242 4242 4242", "cvc-secret", "toggled-secret", "shadow-secret"]
 
     /// The second origin: the frame's page names the host the main page isn't on.
     private static let otherOrigin = "location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port"
@@ -141,7 +143,7 @@ struct AgentReadTests {
               <label>Email <input id="email" value="ann@example.com" required></label>
               <label>Password <input type="password" id="password" value="hunter2secret"></label>
               <label>Card number <input autocomplete="cc-number" id="card" value="4242424242424242"></label>
-              <label>CVC <input name="cvc" id="cvc" value="987"></label>
+              <label>CVC <input name="cvc" id="cvc" value="cvc-secret"></label>
               <label><input type="checkbox" checked> Keep me signed in</label>
               <select id="country"><option>Belgium</option><option selected>France</option><option>Spain</option></select>
               <input type="hidden" name="csrf" value="csrf-token-value">

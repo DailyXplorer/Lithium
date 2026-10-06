@@ -45,9 +45,41 @@ enum PageStyle {
     }
 
     static func usesDMSans(_ url: URL) -> Bool {
-        if usesDMSansEverywhere { return true }
-        guard let host = url.host()?.lowercased() else { return false }
-        return host == "search.brave.com" || host.hasSuffix(".search.brave.com")
+        guard let host = url.host()?.lowercased() else { return usesDMSansEverywhere }
+        return choosesDMSans(host) && !keepsSiteFont(host)
+    }
+
+    /// Whether the site menu offers "Use this site's font": DM Sans would apply but for it.
+    static func offersSiteFont(_ url: URL) -> Bool {
+        guard url.scheme == "http" || url.scheme == "https", let host = url.host()?.lowercased() else { return false }
+        return choosesDMSans(host)
+    }
+
+    /// Sites that keep their own font, by registrable domain.
+    static var siteFontDomains: [String] {
+        UserDefaults.standard.stringArray(forKey: siteFontKey) ?? []
+    }
+
+    /// Pages served from this Mac are a developer's own: they keep their font, whatever the list says.
+    static func isLoopback(_ host: String) -> Bool {
+        ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
+    }
+
+    static func keepsSiteFont(_ host: String) -> Bool {
+        isLoopback(host) || siteFontDomains.contains(SiteInfo.registrable(host))
+    }
+
+    static func setKeepsSiteFont(_ keeps: Bool, for host: String) {
+        let domain = SiteInfo.registrable(host)
+        var domains = Set(siteFontDomains)
+        if keeps { domains.insert(domain) } else { domains.remove(domain) }
+        UserDefaults.standard.set(domains.sorted(), forKey: siteFontKey)
+    }
+
+    private static let siteFontKey = "siteFontDomains"
+
+    private static func choosesDMSans(_ host: String) -> Bool {
+        usesDMSansEverywhere || host == "search.brave.com" || host.hasSuffix(".search.brave.com")
     }
 
     private static func script(css: String) -> WKUserScript {

@@ -68,6 +68,140 @@ struct PageFontTests {
         #expect(fonts["shadowIcon"] == "Font Awesome 6 Free")
     }
 
+    /// Like ProseMirror, the editor re-renders its content on any change it didn't make, and
+    /// ignores its own. Probing the nodes it renders made the two answer each other forever.
+    @Test func richTextEditorStaysIdle() async throws {
+        let page = """
+            <div id="editor" contenteditable="true"><p>Hello <span class="mark">world</span></p></div>
+            <script>
+              window.renders = 0;
+              const editor = document.getElementById('editor');
+              const options = { attributes: true, childList: true, subtree: true, characterData: true };
+              const observer = new MutationObserver(() => {
+                observer.disconnect();
+                window.renders++;
+                editor.replaceChildren(editor.firstElementChild.cloneNode(true));
+                editor.firstElementChild.setAttribute('data-render', String(window.renders));
+                observer.observe(editor, options);
+              });
+              observer.observe(editor, options);
+            </script>
+            """
+        let probe = """
+            const editor = document.getElementById('editor');
+            // Typed once the page's first scan is done; before it, the scan covers the new nodes.
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            editor.firstElementChild.append(document.createElement('span'));
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            return { renders: window.renders, font: getComputedStyle(editor.querySelector('.mark')).fontFamily.split(',')[0].replace(/"/g, '').trim() };
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        #expect(result["renders"] as? Int == 1)
+        #expect(result["font"] as? String == "Lithium DM Sans")
+    }
+
+    /// An editor this script can't recognize (no contenteditable) rewrites its class whenever
+    /// anyone else touches its attributes, so every pass brings another one. The throttle must hold:
+    /// fewer passes lower the burst count, and that alone must not lift it.
+    @Test func unrecognizedEditorStaysThrottled() async throws {
+        let page = """
+            <div id="editor" class="pass-0"><p>Hello</p></div>
+            <script>
+              window.passes = 0;
+              const editor = document.getElementById('editor');
+              const options = { attributes: true, subtree: true };
+              const observer = new MutationObserver(() => {
+                observer.disconnect();
+                editor.className = 'pass-' + ++window.passes;
+                observer.observe(editor, options);
+              });
+              observer.observe(editor, options);
+            </script>
+            """
+        let probe = """
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            await wait(400);
+            document.getElementById('editor').className = 'start';
+            await wait(3000);
+            const before = window.passes;
+            await wait(6000);
+            return { passes: window.passes - before };
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        // In a window WebKit takes for visible, so animation frames run and the loop goes at full
+        // speed until throttled; hidden, timers alone would keep it below the throttle's threshold.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        let occlusion = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        if webView.responds(to: occlusion) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(webView.method(for: occlusion), to: Setter.self)(webView, occlusion, false)
+        }
+        window.orderFrontRegardless()
+        defer { window.close() }
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        let passes = try #require(result["passes"] as? Int)
+        #expect(passes > 0)
+        #expect(passes <= 14)
+    }
+
+    /// A chat or live feed appends content on every frame for good: its icons must still keep their
+    /// font once the page has been busy longer than the anti-loop budget.
+    @Test func streamingPageKeepsLateIconFonts() async throws {
+        let page = """
+            <style>.material { font-family: "Material Symbols Outlined"; }</style>
+            <div id="feed"></div>
+            """
+        let probe = """
+            const feed = document.getElementById('feed');
+            const first = (element) => getComputedStyle(element).fontFamily.split(',')[0].replace(/"/g, '').trim();
+            const start = performance.now();
+            // Timers are slowed in a web view outside a window: each one carries several bursts.
+            while (performance.now() - start < 3000) {
+              for (let i = 0; i < 10; i++) {
+                const line = document.createElement('p');
+                line.innerHTML = 'Message <span class="material">home</span>';
+                feed.append(line);
+                await Promise.resolve();
+              }
+              await new Promise((resolve) => setTimeout(resolve, 16));
+            }
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            const last = feed.lastElementChild;
+            const lost = [...feed.querySelectorAll('.material')].filter((icon) => first(icon) !== 'Material Symbols Outlined').length;
+            return { lines: feed.children.length, lost, icon: first(last.querySelector('.material')), text: first(last) };
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        #expect((result["lines"] as? Int ?? 0) > 100)
+        #expect(result["lost"] as? Int == 0)
+        #expect(result["icon"] as? String == "Material Symbols Outlined")
+        #expect(result["text"] as? String == "Lithium DM Sans")
+    }
+
     /// Large containers don't rescan their whole subtree when their class changes, yet a switch to
     /// a code font still reaches everything inside them, and so does a font rule for one descendant.
     @Test func largeContainerFollowsItsClassChanges() async throws {

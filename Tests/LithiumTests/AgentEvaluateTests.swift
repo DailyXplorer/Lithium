@@ -153,6 +153,26 @@ struct AgentEvaluateTests {
         }
     }
 
+    /// `tab_open`'s line names its steps' tools alone, as `batch`'s does: the values typed, the
+    /// form's and the script's are each in their step's own line, redacted there, or nowhere.
+    @Test func tabOpenLogsItsStepsToolsAlone() async throws {
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "signin").absoluteString), "steps": [
+                ["tool": "evaluate", "args": ["function": "(a) => 'fn-secret' + a", "args": ["arg-secret"]]],
+                ["tool": "type", "args": ["ref": "e9999", "text": "typed-secret"]],
+                ["tool": "fill_form", "args": ["fields": [["ref": "e9999", "value": "form-secret"]]]],
+            ]])
+            #expect(opened["steps"]?.items?.map { $0["ok"] ?? .null } == [true, false, .null], "\(opened.content)")
+            let logged = await client.hub.log.entries(limit: 3)
+            #expect(logged.map { $0["tool"]?.string ?? "" } == ["tab_open", "type", "evaluate"], "\(logged)")
+            let line = try #require(logged.first)
+            #expect(line["params"]?["steps"] == [["tool": "evaluate"], ["tool": "type"], ["tool": "fill_form"]], "\(line)")
+            let text = String(decoding: line.encoded(), as: UTF8.self)
+            for secret in ["fn-secret", "arg-secret", "typed-secret", "form-secret"] { #expect(!text.contains(secret), "\(text)") }
+            #expect(logged.dropFirst().first?["params"]?["text"] == "[redacted]", "\(logged)")
+        }
+    }
+
     // MARK: Worlds
 
     @Test func theIsolatedWorldReadsTheDOMButNotThePagesGlobals() async throws {

@@ -88,9 +88,8 @@ extension AgentHub {
         // On every way out, a cancellation (Stop) included.
         defer { if close, hub.isOpen(opened.tab) { hub.browser?.close(opened.tab) } }
         do {
-            let page = try await hub.load(url, in: opened, wait: .domcontentloaded, snapshot: false, session: session, deadline: deadline, timeout: timeout)
+            _ = try await hub.load(url, in: opened, wait: .domcontentloaded, snapshot: false, session: session, deadline: deadline, timeout: timeout)
             var result = try await hub.runBatch(steps, in: opened, stopOnError: stopOnError, diff: diff, deadline: deadline, timeout: timeout, session: session)
-            for key in ["url", "title", "status"] where result[key] == nil { result[key] = page[key] }
             if close { result["closed"] = true }
             return .object(result)
         } catch let error as AgentToolError where close {
@@ -138,17 +137,19 @@ extension AgentHub {
             "steps": .array(zip(steps, outcomes).map { $1.json($0.tool) }),
             "ok": .int(outcomes.filter { if case .done = $0 { true } else { false } }.count),
         ]
-        guard diff, isOpen(named.tab) else { return result }
-        // A page read once after the last step; a page too busy to answer leaves it out.
-        do {
-            let until = max(deadline, .now + .seconds(3))
-            result = try await exclusive(named, until: until, timeout: .seconds(3)) {
-                try await addingDiff(to: .object(result), of: named, for: session, if: true, until: until)
-            }.object ?? result
-        } catch let error as AgentToolError {
-            result["diffNote"] = .string("No diff: \(error.message) Call snapshot.")
+        if diff, isOpen(named.tab) {
+            // A page read once after the last step; a page too busy to answer leaves it out.
+            do {
+                let until = max(deadline, .now + .seconds(3))
+                result = try await exclusive(named, until: until, timeout: .seconds(3)) {
+                    try await addingDiff(to: .object(result), of: named, for: session, if: true, until: until)
+                }.object ?? result
+            } catch let error as AgentToolError {
+                result["diffNote"] = .string("No diff: \(error.message) Call snapshot.")
+            }
         }
-        return result
+        // The page a step may have gone to, not the one the batch began on.
+        return result.merging(page(named, reached: nil).object ?? [:]) { _, now in now }
     }
 
     /// The steps of a batch, refused before anything runs when one can't: an unknown tool, one a

@@ -85,11 +85,13 @@ final class CallNotes {
     /// function or args quote one.
     var secrets: [String] = []
     static let loggedScriptLength = 300
+    /// Tools whose `steps` are other tools' calls (`drag`'s is a count).
+    private static let runSteps: Set<String> = ["batch", "tab_open"]
 
     func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
         // Each step has a log line of its own, which redacts it as that tool's call: the batch's
         // line names the tools alone.
-        if tool == "batch", var fields = arguments.object {
+        if Self.runSteps.contains(tool), var fields = arguments.object {
             if case .array(let steps)? = fields["steps"] {
                 fields["steps"] = .array(steps.map { ["tool": $0["tool"] ?? .null] })
             } else if fields["steps"] != nil {

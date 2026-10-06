@@ -81,6 +81,7 @@ struct AgentSpeedTests {
             <ul><li><a href="/travel">Travel</a> (11)</li><li><a href="/poetry">Poetry</a> (19)</li></ul>
             """),
         "/travel": (html, "<title>Travel</title><h1>Travel</h1>"),
+        "/onward": (html, "<title>Onward</title><a href='/travel' style='display: block; height: 100vh'>Travel</a>"),
         "/lines": (html, """
             <title>Lines</title><style>body { margin: 0; font: 16px sans-serif }</style>
             <ul><li>Settings: <a href="/travel">Open settings</a></li></ul>
@@ -410,6 +411,38 @@ struct AgentSpeedTests {
             #expect(opened["diff"]?.string?.contains("Feed the cat") == true, "\(opened.content)")
             let id = try #require(opened["tab"]?.string)
             #expect(client.tab(id)?.title.hasSuffix("o Feed the cat") == true)
+        }
+    }
+
+    /// A step that follows a link: the result names the page the agent is on, not the one opened.
+    @Test func afterItsStepsTheResultNamesThePageTheTabIsOn() async throws {
+        try await withAgent { client, base in
+            let onward = JSONValue.string(base.appending(path: "onward").absoluteString)
+            let travel = JSONValue.string(base.appending(path: "travel").absoluteString)
+            let follow: JSONValue = [["tool": "click", "args": ["x": 200, "y": 200, "wait": "load"]]]
+            for (tool, arguments): (String, [String: JSONValue]) in [("batch", ["url": onward, "steps": follow]), ("tab_open", ["url": onward, "steps": follow])] {
+                let result = await client.call(tool, .object(arguments))
+                #expect(result["steps"]?.items?.first?["navigated"] == true, "\(tool): \(result.content)")
+                #expect(result["url"] == travel && result["title"] == "Travel" && result["status"] == 200, "\(tool): \(result.content)")
+            }
+        }
+    }
+
+    /// Stop while a step of `batch {url, close}` runs ends the call and closes the tab it opened.
+    @Test func stopDuringABatchThatClosesItsTabClosesIt() async throws {
+        try await withAgent { client, base in
+            let before = client.browser.tabs
+            let call = Task { await client.call("batch", ["url": .string(base.appending(path: "books").absoluteString), "close": true, "steps": [
+                ["tool": "wait_for", "args": ["time": 30_000]],
+            ]]) }
+            let started = try await AgentWait.until(.now + .seconds(20)) {
+                client.browser.tabs.contains { tab in !before.contains { $0 === tab } && tab.title == "Books" && !tab.isLoading } ? true : nil
+            }
+            #expect(started == true)
+            client.hub.stop()
+            #expect((await call.value).code == "agent_stopped")
+            #expect(client.browser.tabs.count == before.count)
+            client.hub.allowAgain()
         }
     }
 

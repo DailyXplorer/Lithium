@@ -218,7 +218,10 @@ extension AgentHub {
         if let url { page = try await hub.load(url, in: named, wait: wait, snapshot: snapshot && steps == nil, session: session, deadline: deadline, timeout: timeout) }
         guard let steps else { return page }
         let batch = try await hub.runBatch(steps, in: named, stopOnError: true, diff: snapshot, deadline: deadline, timeout: timeout, session: session)
-        return .object((page.object ?? [:]).merging(batch) { $1 })
+        // The batch reads the page the steps left; the first load's status may not be its.
+        var opened = page.object ?? [:]
+        opened["status"] = nil
+        return .object(opened.merging(batch) { $1 })
     }
 
     /// A new background tab in the Agent group, touched. A `file:` address is asked before it

@@ -207,7 +207,7 @@ private struct TabRow: View {
             }
             .frame(width: 16, height: 16)
             .overlay(alignment: .bottomTrailing) {
-                if browser.agent?.isTouched(tab) == true { AgentBadge() }
+                if browser.agent?.isTouched(tab) == true { AgentBadge(isActing: browser.agent?.isActing(in: tab) == true) }
             }
             if browser.renamingTabID == tab.id {
                 TabNameField(tab: tab)
@@ -291,12 +291,15 @@ private struct AgentGroupHeader: View {
 
 /// On the favicon of a tab an agent acted in, until the tab closes.
 struct AgentBadge: View {
+    /// An agent action runs in the tab: an accent ring around the badge.
+    var isActing = false
     @Environment(\.sidebarPalette) private var palette
 
     var body: some View {
         Icon(.robotFill, size: 8)
             .frame(width: 11, height: 11)
             .background(Circle().fill(palette.isDark ? Color(white: 0.17) : .white))
+            .overlay { if isActing { Circle().strokeBorder(Color.accentColor, lineWidth: 1.5).padding(-1.5) } }
             .offset(x: 4, y: 4)
             .help("Used by an agent")
     }

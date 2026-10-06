@@ -13,6 +13,10 @@ A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView)
 
 `scripts/test` runs the tests one at a time, in a throwaway home folder (the suites running a whole Browser only run in one), and stops them if they still run after 20 minutes (`LITHIUM_TEST_MINUTES`). Run side by side, as plain `swift test` does, the Browser suites share settings and break each other. A page a test waits for that fails or never loads fails the test after 30 seconds (`Tests/LithiumTests/Support/PageLoad.swift`) instead of waiting forever.
 
+### Running tests
+
+While iterating, run `scripts/test-fast` (same arguments, plus `--jobs N` and `--list-shards`). It runs the suites in about six processes side by side, each with its own home, temporary folder and settings, so the full run takes about as long as its longest suite (about 75 seconds instead of 5 minutes). Suites that play audio or video share one shard and run one after another. It prints one line per shard, the failed tests with the path of their shard's log, and the usual `Test run with … tests` summary. Before a merge, run `scripts/test`: it stays the reference.
+
 On the first build, `scripts/update-filters.py` downloads the filter lists and converts them (into `Sources/Lithium/Resources/Filters`, not versioned). Run it again to refresh the lists, then rebuild.
 
 `.build` is a symlink to `~/Library/Caches/Lithium/build`: iCloud-synced folders tag build products with extended attributes that break code signing.

@@ -396,8 +396,8 @@ struct AgentTabsTests {
     }
 
     /// The page on its way out moving to its own anchors isn't the page the agent was sent to.
-    /// WebKit drops the load when that happens, so the call times out: it never answers for
-    /// the page shown as if the load had completed.
+    /// WebKit drops the load when that happens, so the call answers `navigation_cancelled` at
+    /// once: it never answers for the page shown as if the load had completed.
     @Test func theOldPagesOwnAnchorMovesDontAnswerForTheNextPage() async throws {
         let (listener, slow) = try await LocalHTTP.serve(["/late": ("Content-Type: text/html", "<title>Late</title>")], delay: 1)
         defer { listener.cancel() }
@@ -407,8 +407,8 @@ struct AgentTabsTests {
             let tab: JSONValue = .string(id)
             let late = slow.appending(path: "late").absoluteString
             let dropped = await client.call("navigate", ["tab": tab, "url": .string(late), "timeoutMs": 3000])
-            #expect(dropped.code == "timeout", "\(dropped.content)")
-            #expect(dropped.message == "\(id) after 3000 ms: no page had started to show.")
+            #expect(dropped.code == "navigation_cancelled", "\(dropped.content)")
+            #expect(dropped.message.hasPrefix("\(id)’s load stopped before it showed a page"), "\(dropped.message)")
             #expect(client.tab(id)?.url?.absoluteString.hasPrefix(ticking + "#tick") == true)
 
             // From a page that keeps still, the same address loads.

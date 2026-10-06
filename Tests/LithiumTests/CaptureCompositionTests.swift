@@ -4,6 +4,10 @@ import Testing
 
 @MainActor
 struct CaptureCompositionTests {
+    /// The badge draws `NSApp.applicationIconImage`, and `NSApp` is nil until something creates
+    /// the application: run alone (or in a parallel shard) the suite would crash on it.
+    init() { _ = NSApplication.shared }
+
     /// 100 × 50 points of one color at 2×.
     private static func image(red: CGFloat, blue: CGFloat, green: CGFloat = 0) -> CGImage {
         let context = CGContext(

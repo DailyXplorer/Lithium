@@ -137,6 +137,7 @@ extension AgentHub {
             tabID: named?.tab.id, action: action, site: kind.allowsSiteGrant ? site : nil
         )
         confirmations.ask(request)
+        if let named { tabs[named.tab.id]?.prompts += 1 }
         defer { confirmations.finish(request.id) }
         if NSApp?.isActive == false, NSApp.activationPolicy() == .regular { NSApp.requestUserAttention(.informationalRequest) }
         let limit = min(deadline, .now + AgentConfirmations.timeout)
@@ -190,10 +191,10 @@ extension AgentHub {
 
     /// `file:` addresses ask each time; other addresses agents may open go through, and the
     /// rest are `blocked_page`. `named` is the tab the address loads in, nil for a tab not open yet.
-    func checkOpenable(_ url: URL, in named: NamedTab?, until deadline: ContinuousClock.Instant) async throws {
+    func checkOpenable(_ url: URL, in named: NamedTab?, session: MCPSession? = AgentHub.callSession, until deadline: ContinuousClock.Instant) async throws {
         try checkNotBlocked(url)
         guard AgentURLs.verdict(for: url) == .needsConfirmation else { return }
-        guard let session = AgentHub.callSession else { throw AgentToolError(code: "denied_by_user", message: "file: addresses need the user’s Allow.") }
+        guard let session else { throw AgentToolError(code: "denied_by_user", message: "file: addresses need the user’s Allow.") }
         let name = url.lastPathComponent.isEmpty ? url.path() : url.lastPathComponent
         _ = try await confirm(.file, "open the local file “\(name)” (its folder becomes readable to the page)", subject: url.absoluteString, site: nil, in: named, session: session, until: deadline)
     }
@@ -246,8 +247,18 @@ extension AgentHub {
         let folders = Set(files.map { $0.deletingLastPathComponent().path(percentEncoded: false) })
         let host = named.tab.url?.host() ?? ""
         let action = "upload \(described.joined(separator: ", ")) from \(folders.sorted().joined(separator: ", "))" + (host.isEmpty ? "" : " to \(host)")
-        let grant = try await confirm(.upload, action, subject: files.map(\.lastPathComponent).joined(separator: ", "), site: host.isEmpty ? nil : SiteInfo.registrable(host), in: named, session: session, until: deadline)
-        agentTab(for: named.tab)?.armedUpload = (files, .now + .seconds(5))
+        let subject = files.map(\.lastPathComponent).joined(separator: ", ")
+        let state = agentTab(for: named.tab)
+        // The action run again (`AgentHub.action`) takes the answer its last attempt got, once.
+        let prompt = AgentTab.prompt(.upload, action, subject: subject)
+        let grant: ConfirmationGrant
+        if let given = state?.answered.removeValue(forKey: prompt) {
+            grant = given
+        } else {
+            grant = try await confirm(.upload, action, subject: subject, site: host.isEmpty ? nil : SiteInfo.registrable(host), in: named, session: session, until: deadline)
+            state?.answered[prompt] = grant
+        }
+        state?.armedUpload = (files, .now + .seconds(5))
         return grant
     }
 
@@ -262,7 +273,7 @@ extension AgentHub {
             if armed.expires > .now { return .files(armed.files) }
         }
         // The user can't click in a tab out of sight; in the one shown, only the agent's input counts.
-        let unseen = state.isBusy && tab.loadedWebView?.window == nil
+        let unseen = state.isBusy && tab.loadedWebView?.userWindow == nil
         guard unseen || drive(of: tab) != nil else { return nil }
         state.fileChoosersCancelled += 1
         return .cancelled

@@ -61,16 +61,18 @@ final class SiteInfo {
 
     @ObservationIgnored private var cookies: [HTTPCookie] = []
     @ObservationIgnored private var records: [WKWebsiteDataRecord] = []
-    private let store = WKWebsiteDataStore.default()
+    /// The tab's own: a private tab's panel reads and clears its private store, never the user's.
+    private let store: WKWebsiteDataStore
 
-    init(host: String, connection: Connection = .secure) {
+    init(host: String, connection: Connection = .secure, store: WKWebsiteDataStore = .default()) {
         self.host = host
         site = Self.registrable(host)
         self.connection = connection
+        self.store = store
     }
 
-    convenience init(url: URL, loadError: NSError? = nil) {
-        self.init(host: url.host() ?? "", connection: Connection(url: url, loadError: loadError))
+    convenience init(url: URL, loadError: NSError? = nil, store: WKWebsiteDataStore = .default()) {
+        self.init(host: url.host() ?? "", connection: Connection(url: url, loadError: loadError), store: store)
         certificateURL = Self.certificateURL(for: url)
     }
 

@@ -16,6 +16,24 @@ struct AgentParityTests {
 
     private static let pages: [String: (headers: String, body: String)] = [
         "/set": ("\(html)\r\nSet-Cookie: \(cookie)=private-value; Path=/", "<title>Set</title>"),
+        "/set-user": ("\(html)\r\nSet-Cookie: \(cookie)user=user-value; Path=/", "<title>Set user</title>"),
+        "/filter": (html, """
+            <title>Filter</title><style>body { margin: 0; font: 16px sans-serif } input, select { display: block; margin: 8px }</style>
+            <input aria-label="Search" id="q">
+            <input type="checkbox" aria-label="Open now" id="openNow">
+            <select aria-label="Sort" id="sort"><option value="new">Newest</option><option value="near">Nearest</option></select>
+            <script>
+            const show = () => { document.title = [q.value, openNow.checked, sort.value].join('|') };
+            q.addEventListener('input', () => { history.replaceState(null, '', '?q=' + encodeURIComponent(q.value)); show() });
+            openNow.addEventListener('change', () => { location.hash = 'open=' + openNow.checked; show() });
+            sort.addEventListener('change', () => { history.pushState(null, '', '?sort=' + sort.value); show() });
+            </script>
+            """),
+        "/jump": (html, """
+            <title>Jump</title><style>body { margin: 0; font: 16px sans-serif } input, select { display: block; margin: 8px }</style>
+            <select aria-label="Go to" onchange="location = '/show'"><option value="">Choose</option><option>Show</option></select>
+            <input aria-label="Note">
+            """),
         "/show": (html, "<title>Show</title><script>document.title = 'cookies:' + document.cookie</script>"),
         "/form": (html, """
             <title>Form</title><style>body { margin: 0; font: 16px sans-serif } input, select { display: block; margin: 8px }</style>
@@ -155,6 +173,56 @@ struct AgentParityTests {
             #expect(!logged.isEmpty)
             let text = logged.map { String(decoding: $0.encoded(), as: UTF8.self) }.joined()
             #expect(!text.contains("Ann Lee") && !text.contains("Spain") && !text.contains("\"Bo\""), "\(text)")
+        }
+    }
+
+    /// A filter form writing its state in the address (replaceState, pushState, a hash) stays the
+    /// same document: every field is filled. A field that loads another page stops the rest.
+    @Test func fillsAFormThatWritesTheAddressButStopsAtANewPage() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "filter"))
+            let filled = await client.call("fill_form", ["tab": .string(id), "fields": [
+                ["ref": .string(try await ref(client, id, "Search")), "type": "textbox", "value": "cafe"],
+                ["ref": .string(try await ref(client, id, "Open now")), "type": "checkbox", "value": true],
+                ["ref": .string(try await ref(client, id, "Sort")), "type": "combobox", "value": "Nearest"],
+            ]])
+            #expect(!filled.isError, "\(filled.content)")
+            #expect(filled["filled"]?.items?.count == 3)
+            #expect(client.tab(id)?.title == "cafe|true|near", "\(filled.content)")
+            #expect(client.tab(id)?.url?.query() == "sort=near", "\(client.tab(id)?.url?.absoluteString ?? "")")
+
+            let jump = try await open(client, base.appending(path: "jump"))
+            let goTo = try await ref(client, jump, "Go to")
+            let stopped = await client.call("fill_form", ["tab": .string(jump), "fields": [
+                ["ref": .string(goTo), "type": "combobox", "value": "Show"],
+                ["ref": .string(try await ref(client, jump, "Note")), "type": "textbox", "value": "x"],
+            ]])
+            #expect(stopped.code == "navigation_failed", "\(stopped.content)")
+            #expect(stopped.message == "Field 1 of 2 (\(goTo)) made \(jump) load another page: the fields after it weren’t filled.", "\(stopped.content)")
+        }
+    }
+
+    // MARK: Site info
+
+    /// The lock's panel on a private tab counts and clears the private store's cookies; the
+    /// user's own cookie for the same site stays.
+    @Test func siteInfoOfAPrivateTabUsesItsOwnStore() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "set"), ephemeral: true)
+            _ = try await open(client, base.appending(path: "set-user"))
+            let tab = try #require(client.tab(id))
+            let names = { (store: WKWebsiteDataStore) in await store.httpCookieStore.allCookies().map(\.name).filter { $0.hasPrefix(Self.cookie) } }
+            #expect(await names(.default()) == ["\(Self.cookie)user"])
+            #expect(await names(tab.dataStore) == [Self.cookie])
+
+            let info = SiteInfo(url: try #require(tab.url), loadError: tab.loadError, store: tab.dataStore)
+            await info.load()
+            #expect(info.cookieCount == 1)
+            #expect(info.hasData)
+            await info.clear()
+            #expect(info.cookieCount == 0)
+            #expect(await names(tab.dataStore) == [])
+            #expect(await names(.default()) == ["\(Self.cookie)user"], "the user's cookie stays")
         }
     }
 

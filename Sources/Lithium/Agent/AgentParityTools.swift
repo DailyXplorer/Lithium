@@ -132,6 +132,7 @@ extension AgentHub {
             stepArguments["timeoutMs"] = .int(min(60_000, left))
             // Only the last field's result says what changed, for the whole form.
             stepArguments["diff"] = .bool(diff && index == steps.count - 1)
+            let commits = named.tab.commits
             do {
                 last = try await step.tool.run(.object(stepArguments), session, hub).structured.object ?? [:]
             } catch let error as AgentToolError {
@@ -142,8 +143,9 @@ extension AgentHub {
             if let grant = last["grant"] { entry["grant"] = grant }
             if let changed = last["changed"] { entry["changed"] = changed }
             filled.append(.object(entry))
-            // A field that sent the page elsewhere leaves nothing to fill.
-            if last["navigated"] == true, index < steps.count - 1 {
+            // A field that brought another document leaves nothing to fill; one that only moved
+            // within the page (a filter writing its state in the address) keeps the refs alive.
+            if named.tab.commits > commits, index < steps.count - 1 {
                 throw AgentToolError(code: "navigation_failed", message: "Field \(index + 1) of \(steps.count) (\(step.ref)) made \(named.id) load another page: the fields after it weren’t filled.", tab: id)
             }
         }

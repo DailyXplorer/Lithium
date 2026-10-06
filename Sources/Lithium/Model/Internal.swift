@@ -166,8 +166,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             await info.load()
             if action == "clearSiteData" {
                 await info.clear()
-                // Its open pages would go on without the data they expect.
-                browser.tabs.filter { !$0.isAsleep && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
+                // Its open pages would go on without the data they expect; private tabs keep theirs.
+                browser.tabs.filter { !$0.isAsleep && !$0.isEphemeral && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
             }
             return (["host": host, "cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
         case "setTidyTitles":

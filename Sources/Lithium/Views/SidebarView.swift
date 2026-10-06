@@ -249,6 +249,8 @@ private struct TabRow: View {
             Button("Duplicate Tab") { browser.duplicate(tab) }
                 .disabled(tab.url == nil)
             MuteButton(tab: tab)
+            Button("Sleep Other Tabs") { browser.sleepOtherTabs(than: tab) }
+                .disabled(!browser.regularTabs.contains { $0 !== tab && !$0.isAsleep })
             Divider()
             Button("Copy Link") { browser.copyLink(of: tab) }
                 .disabled(tab.url == nil)
@@ -266,6 +268,8 @@ private struct TabRow: View {
             Button("Close Tab") { browser.close(tab) }
             Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
                 .disabled(browser.peers(of: tab).allSatisfy { $0 === tab })
+            Button("Close Tabs Above") { browser.closeTabs(above: tab) }
+                .disabled(browser.tabs(above: tab).isEmpty)
             Button("Close Tabs Below") { browser.closeTabs(below: tab) }
                 .disabled(browser.tabs(below: tab).isEmpty)
             Divider()

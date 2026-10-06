@@ -150,8 +150,12 @@ struct BrowserCommands: Commands {
         }
         CommandMenu("Tabs") {
             Button("Next Tab") { browser.selectAdjacentTab(1) }
-                .keyboardShortcut(.tab, modifiers: .control)
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
             Button("Previous Tab") { browser.selectAdjacentTab(-1) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            Button("Next Recent Tab") { browser.cycleRecentTabs(backward: false) }
+                .keyboardShortcut(.tab, modifiers: .control)
+            Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Divider()
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }

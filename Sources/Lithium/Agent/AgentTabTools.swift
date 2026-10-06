@@ -194,7 +194,7 @@ extension AgentHub {
         inputSchema: schema([
             "url": AgentParam.text,
             "ephemeral": ["type": "boolean", "description": "Private tab: own cookies, none of the user’s, nothing saved"],
-            "snapshot": ["type": "boolean", "description": "Default true: the page’s snapshot as diff, after load"],
+            "snapshot": ["type": "boolean", "description": "Default true: the page’s snapshot as diff, once its document is ready"],
             "wait": AgentParam.wait,
             "timeoutMs": AgentParam.timeout,
         ])
@@ -203,9 +203,8 @@ extension AgentHub {
         let ephemeral = try arguments.bool("ephemeral", default: false)
         let url = try arguments.optionalString("url").map { _ in try arguments.url("url") }
         if let url { try hub.checkNotBlocked(url) }
-        // The snapshot saves the agent a call, once the page has loaded enough to show it.
         let snapshot = try arguments.bool("snapshot", default: true)
-        let wait = try arguments.wait(default: snapshot ? .load : .commit)
+        let wait = try arguments.wait(default: .commit)
         let timeout = try arguments.timeout(default: 15_000)
         let deadline = ContinuousClock.now + timeout
         guard let browser = hub.browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
@@ -216,8 +215,23 @@ extension AgentHub {
         hub.touch(tab)
         guard let url else { return hub.page(named, reached: .load) }
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
-            let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.go(to: url) }
-            return try await hub.addingDiff(to: page, of: named, for: session, if: snapshot && wait > .commit && page["download"] == nil, until: deadline)
+            var page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.go(to: url) }
+            guard snapshot, wait > .none, page["download"] == nil else { return page }
+            // The snapshot saves the agent a call once the page has its document. The tab is
+            // open either way: a page slower than the call answers without one rather than
+            // failing, so the agent doesn't open it again.
+            if wait < .domcontentloaded {
+                do {
+                    try await hub.waitForLoad(of: named, .domcontentloaded, deadline: deadline, timeout: timeout)
+                    page = hub.page(named, reached: .domcontentloaded)
+                } catch let error as AgentToolError where error.code == "timeout" {
+                    guard var fields = page.object else { return page }
+                    fields["diff"] = .null
+                    fields["diffNote"] = .string("No diff: the page was still loading. Call snapshot.")
+                    return .object(fields)
+                }
+            }
+            return try await hub.addingDiff(to: page, of: named, for: session, if: true, until: deadline)
         }
     }
 

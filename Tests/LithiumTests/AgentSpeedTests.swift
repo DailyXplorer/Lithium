@@ -81,6 +81,24 @@ struct AgentSpeedTests {
             <ul><li><a href="/travel">Travel</a> (11)</li><li><a href="/poetry">Poetry</a> (19)</li></ul>
             """),
         "/travel": (html, "<title>Travel</title><h1>Travel</h1>"),
+        "/lines": (html, """
+            <title>Lines</title><style>body { margin: 0; font: 16px sans-serif }</style>
+            <ul><li>Settings: <a href="/travel">Open settings</a></li></ul>
+            <p><a href="/travel">Reply</a> now, or reply later</p>
+            """),
+        // A link in the label of a field hidden behind it.
+        "/terms": (html, """
+            <title>Terms</title>
+            <style>
+            body { margin: 0; font: 16px sans-serif }
+            .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0) }
+            label { display: block; width: 400px; padding: 8px }
+            a { padding: 0 120px }
+            </style>
+            <label><input type="checkbox" id="agree" class="sr">I agree to the <a href="/travel">Terms</a></label>
+            <label style="display: inline; padding: 0"><input type="checkbox" id="only" class="sr"><a href="/travel" style="padding: 0">Privacy</a></label>
+            <script>document.addEventListener('change', () => { document.title = [agree.checked, only.checked].join('|') })</script>
+            """),
         "/signin": (html, """
             <title>Sign in</title><style>body { margin: 0; font: 16px sans-serif } input { display: block; margin: 8px }</style>
             <form action="/travel"><input aria-label="User" id="user"><input type="password" aria-label="Password" id="pw"><button>Sign in</button></form>
@@ -189,6 +207,29 @@ struct AgentSpeedTests {
         }
     }
 
+    /// The label is pressed on its own text, not on the link in it, which would leave the page.
+    @Test func aLabelIsPressedBesideTheLinkInIt() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "terms"))
+            let shown = await nodes(client, id)
+            let checkboxes = shown.filter { $0["role"] == "checkbox" }.compactMap { $0["ref"]?.string }
+            #expect(checkboxes.count == 2, "\(shown)")
+            let agree = try #require(checkboxes.first)
+            let checked = await client.call("set_checked", ["tab": .string(id), "ref": .string(agree), "checked": true])
+            #expect(!checked.isError, "\(checked.content)")
+            #expect(checked["checked"] == true)
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(client.tab(id)?.url?.path == "/terms")
+            #expect(client.tab(id)?.title == "true|false")
+
+            let only = try #require(checkboxes.last)
+            let refused = await client.call("set_checked", ["tab": .string(id), "ref": .string(only), "checked": true])
+            #expect(refused.code == "not_actionable", "\(refused.content)")
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(client.tab(id)?.url?.path == "/terms")
+        }
+    }
+
     @Test func hiddenTextStaysOutWhereControlsComeIn() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "trap"))
@@ -263,6 +304,24 @@ struct AgentSpeedTests {
         }
     }
 
+    /// A wait the batch has no time left for fails as the batch's timeout, not on a timeoutMs
+    /// the agent never gave.
+    @Test func aWaitLongerThanTheBatchHasLeftTimesOut() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "todos"))
+            let batch = await client.call("batch", ["tab": .string(id), "timeoutMs": 3000, "steps": [
+                ["tool": "wait_for", "args": ["time": 1500]],
+                ["tool": "wait_for", "args": ["time": 2000]],
+                ["tool": "wait_for", "args": ["time": 10]],
+            ]])
+            #expect(!batch.isError, "\(batch.content)")
+            let results = batch["steps"]?.items ?? []
+            #expect(results.first?["ok"] == true, "\(batch.content)")
+            #expect(results.dropFirst().first?["code"] == "timeout", "\(batch.content)")
+            #expect(results.last == ["tool": "wait_for", "skipped": true], "\(batch.content)")
+        }
+    }
+
     @Test func aPasswordStepInABatchAsksAndIsRedacted() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
@@ -294,7 +353,7 @@ struct AgentSpeedTests {
     @Test func tabOpenGivesThePageAndFindTextGivesClickableRefs() async throws {
         try await withAgent { client, base in
             let opened = await client.call("tab_open", ["url": .string(base.appending(path: "books").absoluteString)])
-            #expect(opened["state"] == "load", "\(opened.content)")
+            #expect(opened["state"] == "domcontentloaded", "\(opened.content)")
             #expect(opened["diff"]?.string?.contains("link \"Travel\"") == true, "\(opened.content)")
             let id = try #require(opened["tab"]?.string)
             let bare = await client.call("tab_open", ["url": .string(base.appending(path: "books").absoluteString), "snapshot": false])
@@ -306,6 +365,36 @@ struct AgentSpeedTests {
             let clicked = await client.call("click", ["tab": .string(id), "ref": match["ref"] ?? .null, "wait": "load"])
             #expect(!clicked.isError, "\(clicked.content)")
             #expect(client.tab(id)?.title == "Travel")
+        }
+    }
+
+    /// Each match gets the control its own text is in.
+    @Test func findTextGivesEachMatchItsOwnControl() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "lines"))
+            let settings = await client.call("find_text", ["tab": .string(id), "text": "settings"])
+            #expect(settings["matches"]?.items?.map { $0["role"] ?? .null } == [.null, "link"], "\(settings.content)")
+            let reply = await client.call("find_text", ["tab": .string(id), "text": "reply"])
+            let matches = reply["matches"]?.items ?? []
+            #expect(matches.map { $0["role"] ?? .null } == ["link", .null],"\(reply.content)")
+            let link = try #require(matches.first?["ref"])
+            #expect(matches.last?["ref"] != link, "\(reply.content)")
+        }
+    }
+
+    /// A page whose load never ends still opens at once: the snapshot comes with its document.
+    @Test func tabOpenAnswersBeforeASlowLoadEnds() async throws {
+        let (held, heldBase) = try await LocalHTTP.serve(["/held.png": ("Content-Type: image/png", "")], delay: 20)
+        defer { held.cancel() }
+        let (listener, base) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title><p>Ready</p><img src=\"\(heldBase.appending(path: "held.png").absoluteString)\">")])
+        defer { listener.cancel() }
+        try await withAgent { client, _ in
+            let started = ContinuousClock.now
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "slow").absoluteString)])
+            #expect(!opened.isError, "\(opened.content)")
+            #expect(ContinuousClock.now - started < .seconds(10))
+            #expect(opened["tab"]?.string != nil, "\(opened.content)")
+            #expect(opened["diff"]?.string?.contains("Ready") == true, "\(opened.content)")
         }
     }
 }

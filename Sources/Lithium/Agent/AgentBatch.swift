@@ -76,8 +76,12 @@ extension AgentHub {
                 continue
             }
             let left = Int((deadline - .now) / .milliseconds(1))
-            guard left >= 1 else {
-                outcomes.append(.failed(AgentToolError(code: "timeout", message: "The batch’s \(Int(timeout / .milliseconds(1))) ms ran out before this step.")))
+            // A step that waits a set time needs it whole: less fails as the batch's timeout.
+            var needs = 1
+            if step.tool == "wait_for", case .int(let time)? = step.arguments["time"] { needs = time + 1 }
+            guard left >= needs else {
+                let ranOut = left < 1 ? "ran out before this step" : "had \(left) ms left, less than this step’s time"
+                outcomes.append(.failed(AgentToolError(code: "timeout", message: "The batch’s \(Int(timeout / .milliseconds(1))) ms \(ranOut).")))
                 continue
             }
             var stepArguments = step.arguments

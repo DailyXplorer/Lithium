@@ -585,17 +585,35 @@
 
   // Readable text, as lines, each with the block it came from: read_text, find_text, waits.
   const excludedFromMain = 'nav, footer, aside, header, dialog, menu, [role=navigation], [role=contentinfo], [role=complementary], [role=search], [role=banner], [role=dialog], [role=alertdialog], [aria-modal=true]';
-  const lines = (root, { markdown = false, main = false } = {}) => {
+  // `sources`: each line also gets `nodes`, the text node each of its characters comes from.
+  const lines = (root, { markdown = false, main = false, sources = false } = {}) => {
     const out = [];
     let line = '';
+    let pieces = [];
     let block = root;
+    // Follows collapse(): a run of whitespace is one space, and none at either end.
+    const nodesOf = () => {
+      const nodes = [];
+      let piece = -1;
+      let space = true;
+      for (let i = 0; i < line.length; i++) {
+        while (piece + 1 < pieces.length && pieces[piece + 1].at <= i) piece++;
+        const blank = /\s/.test(line[i]);
+        if (!blank || !space) nodes.push(pieces[piece]?.node ?? null);
+        space = blank;
+      }
+      if (space && nodes.length) nodes.pop();
+      return nodes;
+    };
     const flush = (prefix = '') => {
       const text = collapse(line);
-      if (text) out.push({ text: prefix + text, element: block });
+      if (text) out.push(sources ? { text: prefix + text, element: block, nodes: [...prefix].map(() => null).concat(nodesOf()) } : { text: prefix + text, element: block });
       line = '';
+      pieces = [];
     };
     const visit = (node, depth) => {
       if (node.nodeType === Node.TEXT_NODE) {
+        if (sources) pieces.push({ node, at: line.length });
         line += node.data;
         return;
       }
@@ -619,9 +637,16 @@
       // Cells and link text go through the same rules, so hidden text in them stays out too.
       const visibleText = (child, inMarkdown) => collapse(lines(child, { markdown: inMarkdown }).map((item) => item.text).join(' '));
       if (tag === 'tr') {
-        const cells = [...element.cells].map((cell) => visibleText(cell, markdown));
+        const cellLines = [...element.cells].map((cell) => lines(cell, { markdown, sources }));
+        const cells = cellLines.map((items) => items.map((item) => item.text).join(' '));
         // Spacer rows (Hacker News has one between stories) have nothing to read.
-        if (cells.some(Boolean)) out.push({ text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element });
+        if (!cells.some(Boolean)) return;
+        const row = { text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element };
+        if (sources) {
+          row.nodes = (markdown ? [null, null] : []).concat(...cellLines.map((items, i) => (i ? [null, null, null] : [])
+            .concat(...items.map((item, j) => (j ? [null] : []).concat(item.nodes)))));
+        }
+        out.push(row);
         return;
       }
       const href = markdown && tag === 'a' ? hrefOf(element) : '';
@@ -738,17 +763,12 @@
     return { token: frame.token, forms: found, loose };
   };
 
-  // The link or button a match is in, so its ref is one to click: the block a line comes from is
-  // often the list item or paragraph around it. Nil for a match outside one, or across several.
-  const controlAround = (block, needle, caseSensitive) => {
-    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const data = caseSensitive ? node.data : node.data.toLowerCase();
-      if (!data.includes(needle) || !isVisible(node.parentElement)) continue;
-      for (let element = node.parentElement; element && element !== block.parentElement; element = element.parentElement) {
-        if (isControl(element)) return element;
-      }
-      return null;
+  // The link or button a text node is in, up to the block its line comes from (often the list
+  // item or paragraph around it), so a match's ref is one to click.
+  const controlOf = (node, block) => {
+    for (let element = node?.parentElement ?? node?.getRootNode?.()?.host; element; element = element.parentElement ?? element.getRootNode()?.host) {
+      if (isControl(element)) return element;
+      if (element === block) break;
     }
     return null;
   };
@@ -757,7 +777,7 @@
     const matches = [];
     let count = 0;
     if (document.body && needle) {
-      for (const line of lines(document.body)) {
+      for (const line of lines(document.body, { sources: true })) {
         const haystack = caseSensitive ? line.text : line.text.toLowerCase();
         for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
           count++;
@@ -765,7 +785,9 @@
             // About 80 characters around the match, and the whole match with 10 on each side when it is longer.
             const around = Math.max(10, Math.floor((80 - needle.length) / 2));
             const start = Math.max(0, at - around);
-            const control = controlAround(line.element, needle, caseSensitive);
+            // Nil for a match outside a control, or across two.
+            const first = controlOf(line.nodes[at], line.element);
+            const control = first === controlOf(line.nodes[at + needle.length - 1], line.element) ? first : null;
             const match = { id: idOf(control ?? line.element), context: line.text.slice(start, Math.max(start + 80, at + needle.length + around)) };
             if (control) match.role = roleOf(control);
             matches.push(match);
@@ -962,17 +984,33 @@
     const largest = clipped.sort((a, b) => b.width * b.height - a.width * a.height)[0] ?? rect;
     const points = [center(largest)];
     for (const [fx, fy] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) points.push([largest.left + largest.width * fx, largest.top + largest.height * fy]);
+    // A label reaches its field only where no link or button inside it takes the click: its own text.
+    const plain = (node) => {
+      for (let current = node; current && current !== face; current = current.parentElement ?? current.getRootNode()?.host) if (isControl(current)) return false;
+      return true;
+    };
+    if (face !== element) {
+      const walker = document.createTreeWalker(face, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.data.trim() || !plain(node.parentElement)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) points.push(center(r));
+      }
+    }
+    const reaches = (hit) => contains(element, hit) || (contains(face, hit) && (face === element || plain(hit)));
     let firstHit = null;
     for (const point of points.filter(inside)) {
       const hit = hitAt(point[0], point[1]);
       firstHit ??= hit;
-      if (hit && (contains(element, hit) || contains(face, hit))) {
+      if (hit && reaches(hit)) {
         facts.point = point;
         return facts;
       }
     }
     facts.point = points[0];
-    if (firstHit) facts.coveredBy = cover(firstHit);
+    if (firstHit && face !== element && contains(face, firstHit)) facts.notActionable = 'its label holds only links or buttons, which would take the click';
+    else if (firstHit) facts.coveredBy = cover(firstHit);
     else facts.inViewport = false;
     return facts;
   };

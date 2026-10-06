@@ -39,6 +39,8 @@ struct TargetReport: Decodable {
     var inViewport: Bool?
     var unstable: Bool?
     var coveredBy: ElementReport.Cover?
+    /// Why the point that stands for the element would press something else instead.
+    var notActionable: String?
     var viewport: PageViewport?
     var counts: [String: Int]?
     var pay: FrameReport.Pay?
@@ -788,6 +790,9 @@ extension AgentHub {
         if checks.contains(.editable) {
             if report.readonly == true { throw AgentToolError(code: "readonly", message: "\(target.label) is read-only.") }
             if report.editable != true { throw AgentToolError(code: "not_editable", message: "\(target.label) isn’t a field text can be typed into.") }
+        }
+        if checks.contains(.hitTest), let reason = report.notActionable {
+            throw AgentToolError(code: "not_actionable", message: "\(target.label) can’t be pressed: \(reason).")
         }
         if checks.contains(.hitTest), let cover = report.coveredBy { throw covered(target, by: cover, in: report.token, ctx) }
     }

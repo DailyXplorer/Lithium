@@ -4,8 +4,9 @@ import WebKit
 @testable import Lithium
 
 /// `evaluate` on a whole Browser through the hub, on pages served from 127.0.0.1: the switch, the
-/// prompt and the site grant, the two worlds, secrets kept out of results and the log, the pages
-/// it never runs on, and a script that never ends. Prompts are answered through
+/// prompt and the site grant, the two worlds, no script while a password or card value is on the
+/// page, card and cookie values kept out of results and the log, the pages it never runs on, and
+/// a script that never ends. Prompts are answered through
 /// `AgentConfirmations`, never through UI.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
@@ -19,12 +20,14 @@ struct AgentEvaluateTests {
 
     private static let pages: [String: (headers: String, body: String)] = [
         "/page": (html, "<title>Page</title><h1 id='greeting'>Hello</h1><script>window.pageGlobal = 'from the page'</script>"),
-        "/login": ("\(html)\r\nSet-Cookie: session=\(cookie); Path=/", """
+        "/login": (html, """
             <title>Sign in</title>
             <form><input id="user" name="user" value="ann"><input type="password" id="pw" name="pw"></form>
-            <p id="note">Card on file 4242 4242 4242 4242</p>
             <script>pw.value = '\(password)'</script>
             """),
+        "/signin": (html, "<title>Sign in</title><form><input id='user' name='user'><input type='password' id='pw' name='pw'></form>"),
+        "/framed": (html, "<title>Framed</title><iframe src='/login'></iframe>"),
+        "/account": ("\(html)\r\nSet-Cookie: session=\(cookie); Path=/", "<title>Account</title><p id='note'>Card on file 4242 4242 4242 4242</p>"),
         "/checkout": (html, "<title>Checkout</title><label>Card number <input id='cc' autocomplete='cc-number'></label>"),
         "/provider": (html, """
             <title>Provider</title><body>
@@ -149,40 +152,57 @@ struct AgentEvaluateTests {
 
     // MARK: Secrets
 
-    @Test func passwordCardAndCookieValuesNeverComeBack() async throws {
+    @Test func aPasswordValueOnThePageKeepsEveryScriptFromRunning() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "login"))
-            let isolated = await evaluate(client, id, """
-                () => ({
-                  value: document.querySelector('#pw').value,
-                  attribute: document.querySelector('#pw').getAttribute('value'),
-                  form: [...new FormData(document.querySelector('form')).keys()],
-                  user: document.querySelector('#user').value,
-                  note: document.querySelector('#note').textContent,
-                })
-                """, answering: .allowOnSite)
-            #expect(isolated["result"] == ["value": "", "attribute": .null, "form": ["user"], "user": "ann", "note": "Card on file [card]"], "\(isolated.content)")
-            // A getter from a fresh frame's realm gets past the blank one; the scrub still holds.
-            let around = await evaluate(client, id, """
-                () => {
-                  const frame = document.body.appendChild(document.createElement('iframe'));
-                  return Object.getOwnPropertyDescriptor(frame.contentWindow.HTMLInputElement.prototype, 'value').get.call(document.querySelector('#pw'));
-                }
-                """, answering: nil)
-            #expect(around["result"] == "[redacted]", "\(around.content)")
+            // The ways around the first design's blank getters: none of them runs at all.
+            let attempts: [(String, [String: JSONValue])] = [
+                ("() => document.querySelector('#pw').value", [:]),
+                ("() => document.querySelector('#pw').value", ["world": "page"]),
+                ("document.title = btoa(document.querySelector('#pw').value)", [:]),
+                ("document.title = btoa(document.querySelector('#pw').value)", ["world": "page"]),
+                ("() => { setTimeout(() => { document.title = btoa(document.querySelector('#pw').value) }) }", [:]),
+            ]
+            for (function, extra) in attempts {
+                let refused = await evaluate(client, id, function, extra, answering: nil)
+                #expect(refused.code == "blocked", "\(function): \(refused.content)")
+                #expect(refused.message.contains("a password or card field holds a value on this page"), "\(refused.content)")
+            }
+            #expect(client.hub.confirmations.pending.isEmpty)
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(client.tab(id)?.title == "Sign in")
 
-            // The page's world can't be blinded: what comes back is scrubbed instead, as written
-            // and inside JSON strings.
-            let page = await evaluate(client, id, "() => [document.querySelector('#pw').value, JSON.stringify({ pw: document.querySelector('#pw').value }), document.cookie]", ["world": "page"], answering: nil)
-            let text = String(decoding: page.content.encoded(), as: UTF8.self)
-            #expect(!text.contains(Self.password), "\(text)")
-            #expect(!text.contains(Self.cookie), "\(text)")
-            #expect(!text.contains("4242"))
-            #expect(page["result"]?.items?.first == "[redacted]", "\(text)")
-            #expect(page["result"]?.items?.last == "session=[redacted]", "\(text)")
-            // The getter is back as it was once the script ended.
-            let after = try await client.tab(id)?.webView.callAsyncJavaScript("return document.querySelector('#pw').value", contentWorld: AgentHub.scriptWorld) as? String
-            #expect(after == Self.password)
+            // A same-origin frame's password counts: the script could reach it.
+            let framed = try await open(client, base.appending(path: "framed"))
+            #expect(await waitUntil(20) { client.tab(framed)?.isLoading == false })
+            for world: JSONValue in ["isolated", "page"] {
+                let refused = await evaluate(client, framed, "() => document.querySelector('iframe').contentDocument.querySelector('#pw').value", ["world": world], answering: nil)
+                #expect(refused.code == "blocked", "\(world): \(refused.content)")
+            }
+        }
+    }
+
+    @Test func anEmptyPasswordFieldLeavesThePageOpenUntilItHoldsAValue() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "signin"))
+            let empty = await evaluate(client, id, "() => [document.title, document.querySelector('#pw').value]", answering: .allowOnSite)
+            #expect(empty["result"] == ["Sign in", ""], "\(empty.content)")
+            _ = try await client.tab(id)?.webView.callAsyncJavaScript("document.querySelector('#pw').value = 'typed by the user'", contentWorld: .page)
+            let filled = await evaluate(client, id, "() => document.querySelector('#pw').value", answering: nil)
+            #expect(filled.code == "blocked", "\(filled.content)")
+        }
+    }
+
+    @Test func cardAndCookieValuesNeverComeBack() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "account"))
+            for (world, answer): (JSONValue, ConfirmationAnswer?) in [("isolated", .allowOnSite), ("page", nil)] {
+                let result = await evaluate(client, id, "() => [document.querySelector('#note').textContent, document.cookie, JSON.stringify({ c: document.cookie })]", ["world": world], answering: answer)
+                let text = String(decoding: result.content.encoded(), as: UTF8.self)
+                #expect(!text.contains(Self.cookie), "\(world): \(text)")
+                #expect(!text.contains("4242"), "\(world): \(text)")
+                #expect(result["result"]?.items?.prefix(2) == ["Card on file [card]", "session=[redacted]"], "\(world): \(text)")
+            }
         }
     }
 
@@ -216,13 +236,14 @@ struct AgentEvaluateTests {
             #expect(empty["result"] == "Checkout", "\(empty.content)")
             _ = try await client.tab(checkout)?.webView.callAsyncJavaScript("document.querySelector('#cc').value = '4242 4242 4242 4242'", contentWorld: .page)
             let filled = await evaluate(client, checkout, "() => document.querySelector('#cc').value", answering: nil)
-            #expect(filled.code == "blocked_payment", "\(filled.content)")
+            #expect(filled.code == "blocked", "\(filled.content)")
+            #expect(filled.message.contains("a password or card field holds a value on this page"), "\(filled.content)")
 
             client.hub.paymentProviders = PaymentProviders(hosts: ["localhost"])
             let provider = try await open(client, base.appending(path: "provider"))
             #expect(await waitUntil(20) { client.tab(provider)?.isLoading == false })
             let framed = await evaluate(client, provider, "() => 1", answering: nil)
-            #expect(framed.code == "blocked_payment", "\(framed.content)")
+            #expect(framed.code == "blocked", "\(framed.content)")
             #expect(client.hub.confirmations.pending.isEmpty)
         }
     }
@@ -243,6 +264,16 @@ struct AgentEvaluateTests {
         }
     }
 
+    @Test func timeoutMsCountsTheScriptAlone() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "page"))
+            let quick = await evaluate(client, id, "() => 1", ["timeoutMs": 100], answering: .allowOnSite)
+            #expect(quick["result"] == 1, "\(quick.content)")
+            let short = await evaluate(client, id, "() => 1", ["timeoutMs": 99], answering: nil)
+            #expect(short.code == "invalid_params", "\(short.content)")
+        }
+    }
+
     // MARK: Log
 
     @Test func theLogLineMasksSecretsAndCutsTheFunction() async throws {
@@ -250,8 +281,8 @@ struct AgentEvaluateTests {
             let id = try await open(client, base.appending(path: "login"))
             let padding = String(repeating: " ", count: 400)
             let function = "() => '\(Self.password)' === document.title\(padding)"
-            let result = await evaluate(client, id, function, ["world": "page"], answering: .allowOnce)
-            #expect(result["result"] == false, "\(result.content)")
+            let result = await evaluate(client, id, function, ["world": "page"], answering: nil)
+            #expect(result.code == "blocked", "\(result.content)")
             let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
             #expect(!log.contains(Self.password))
             let line = try #require(log.split(separator: "\n").last { $0.contains("\"evaluate\"") }.map { try JSONValue.decode(Data($0.utf8)) })
@@ -259,7 +290,7 @@ struct AgentEvaluateTests {
             #expect(logged.hasPrefix("() => '[redacted]' === document.title"), "\(logged)")
             #expect(logged.count == CallNotes.loggedScriptLength + 1)
             #expect(line["params"]?["world"] == "page")
-            #expect(line["result"]?["ok"] == true)
+            #expect(line["result"]?["ok"] == false)
             #expect(line["ms"]?.int != nil)
         }
     }

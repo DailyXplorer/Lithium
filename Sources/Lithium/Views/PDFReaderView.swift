@@ -34,7 +34,7 @@ struct PDFReaderView: View {
     }
 }
 
-private struct PDFToolbar: View {
+struct PDFToolbar: View {
     let reader: PDFReader
     @Binding var showsSidebar: Bool
 
@@ -74,10 +74,9 @@ private struct PDFToolbar: View {
             HStack(spacing: 2) {
                 if reader.isLocalFile {
                     PDFButton(icon: .folder, help: "Show in Finder") { reader.showInFinder() }
-                } else {
-                    PDFButton(icon: .download, help: "Download") { reader.download() }
-                        .disabled(reader.document == nil)
                 }
+                PDFButton(icon: .download, help: "Download") { reader.download() }
+                    .disabled(reader.document == nil)
                 PDFButton(icon: .printer, help: "Print (⌘P)") { reader.print() }
                     .disabled(!isReady)
                 MoreMenu(reader: reader)
@@ -174,6 +173,7 @@ private struct MoreMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .opacity(0.85)
+        .help("More")
     }
 }
 

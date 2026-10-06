@@ -1000,6 +1000,16 @@ struct AgentInputTests {
         }
     }
 
+    /// The app itself hands off for real: system frameworks every AppKit app loads don't pass for a test runner.
+    @Test func onlyTestFrameworksMarkATestRun() {
+        #expect(ExternalApps.isTestImage("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks/Testing.framework/Versions/A/Testing"))
+        #expect(ExternalApps.isTestImage("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework/Versions/A/XCTest"))
+        #expect(ExternalApps.isTestImage("/Applications/Xcode.app/Contents/Developer/usr/lib/lib_TestingInterop.dylib"))
+        #expect(ExternalApps.isTestImage("/tmp/build/debug/LithiumPackageTests.xctest/Contents/MacOS/LithiumPackageTests"))
+        #expect(!ExternalApps.isTestImage("/System/Library/PrivateFrameworks/RecapPerformanceTesting.framework/Versions/A/RecapPerformanceTesting"))
+        #expect(!ExternalApps.isTestImage("/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit"))
+    }
+
     /// A closed tab's web view hands nothing to another app: a load still on its way when the tab
     /// closed (a redirect to `mailto:`) reaches a delegate that refuses it, not WebKit's own
     /// fallback, which opens it with NSWorkspace.

@@ -122,6 +122,42 @@ extension BrowserTests {
         #expect(try saved.allSatisfy { try Data(contentsOf: $0) == Data(contentsOf: file) })
     }
 
+    /// Recorded, not opened: tests never launch Preview or Finder.
+    @Test func toolbarButtonsHandTheFileToOtherApps() async throws {
+        let preview = try #require(NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Preview"))
+        let file = try makePDF(title: "Lease", pages: ["Sign here"])
+        let browser = Browser()
+        let local = browser.newTab(url: file)
+        defer { browser.close(local) }
+        #expect(await waitForPDF(30) { local.pdf?.pageCount == 1 })
+        var before = ExternalApps.recorded
+        local.pdf?.showInFinder()
+        local.pdf?.openInPreview()
+        #expect(ExternalApps.recorded == before + [.reveal(file), .openWith(file, app: preview)])
+
+        let bytes = try Data(contentsOf: file)
+        let web = browser.newTab(url: URL(string: "data:application/pdf;base64,\(bytes.base64EncodedString())")!)
+        defer { browser.close(web) }
+        #expect(await waitForPDF(30) { web.pdf?.pageCount == 1 })
+        before = ExternalApps.recorded
+        web.pdf?.openInPreview()
+        let handOff = ExternalApps.recorded.dropFirst(before.count)
+        guard case .openWith(let copy, let app)? = handOff.first, handOff.count == 1 else {
+            Issue.record("\(handOff)")
+            return
+        }
+        #expect(app == preview)
+        #expect(copy.lastPathComponent == "Lease.pdf")
+        #expect(try Data(contentsOf: copy) == bytes)
+
+        try FileManager.default.createDirectory(at: URL.downloadsDirectory, withIntermediateDirectories: true)
+        web.pdf?.download()
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitForPDF(5) { item.state == .finished })
+        #expect(item.destination?.deletingLastPathComponent() == URL.downloadsDirectory)
+        #expect(try item.destination.map { try Data(contentsOf: $0) } == bytes)
+    }
+
     @Test func locksAPasswordProtectedPDFUntilUnlocked() async throws {
         let file = try makePDF(title: "Secret", pages: ["Hidden"], password: "open sesame")
         let browser = Browser()

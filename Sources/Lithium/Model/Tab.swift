@@ -7,6 +7,26 @@ enum UnshownLoad {
     case download(fileName: String?)
     /// Lithium refused where it led: another app's scheme (`mailto:`), or its own pages.
     case refused(scheme: String)
+    /// Given up before it showed anything: a 204 No Content answer, a load the page stopped, a
+    /// response WebKit dropped (error 102).
+    case dropped
+}
+
+/// The navigation delegate of a web view its tab has put away (closed, or asleep). A load still
+/// on its way can reach a decision after that, say a redirect to `mailto:`; WebKit asks a web view
+/// with no delegate nothing and hands such an address to another app itself (NSWorkspace), so a
+/// closed tab could open the user's mail app. This one refuses every load.
+@MainActor
+final class PutAwayWebView: NSObject, WKNavigationDelegate {
+    static let refusing = PutAwayWebView()
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        decisionHandler(.cancel)
+    }
 }
 
 @MainActor
@@ -120,6 +140,16 @@ final class Tab: NSObject, Identifiable {
     /// From the moment a load starts until it commits a document or ends without one: the
     /// document shown until then is the one on its way out.
     private(set) var isAwaitingCommit = false
+    /// Counts the loads started, so an agent's input tells a load it started from one already
+    /// under way. Lithium's error page is the end of the load that failed, not a load of its own.
+    private(set) var loadStarts = 0
+    /// From `showError` until its page starts loading, which WebKit may report first through
+    /// `isLoading`, before `errorNavigation` is known.
+    @ObservationIgnored private var isStartingErrorPage = false
+    @ObservationIgnored private var startedNavigation: WKNavigation?
+    /// `unshownLoads` when the load under way started: one that already ended as a download
+    /// isn't dropped too when WebKit then gives it up.
+    @ObservationIgnored private var unshownAtStart = 0
     /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
     /// that have none (Lithium's error page, local files).
     @ObservationIgnored private(set) var httpStatus: Int?
@@ -424,7 +454,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
-        isAwaitingCommit = false
+        awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
@@ -433,7 +463,7 @@ final class Tab: NSObject, Identifiable {
         observations.removeAll()
         guard let loadedWebView else { return }
         loadedWebView.stopLoading()
-        loadedWebView.navigationDelegate = nil
+        loadedWebView.navigationDelegate = PutAwayWebView.refusing
         loadedWebView.uiDelegate = nil
         loadedWebView.removeFromSuperview()
     }
@@ -464,7 +494,7 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     // WebKit reports a load from the moment it is asked for, before it calls
                     // didStartProvisionalNavigation.
-                    if self?.isLoading != webView.isLoading { self?.isAwaitingCommit = webView.isLoading }
+                    if self?.isLoading != webView.isLoading { self?.awaitCommit(webView.isLoading) }
                     self?.isLoading = webView.isLoading
                     self?.tellExtensions(.loading)
                 }
@@ -579,9 +609,8 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func showError(_ error: Error, for url: URL?) {
+        guard !Self.isDropped(error) else { return }
         let error = error as NSError
-        let ignored = error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
-        guard !ignored else { return }
         failedURL = url
         loadError = error
         let message = error.localizedDescription
@@ -596,6 +625,7 @@ final class Tab: NSObject, Identifiable {
             </style>
             <div><h1>Can’t open this page</h1><p>\(message)</p></div>
             """
+        isStartingErrorPage = true
         errorNavigation = webView.loadHTMLString(html, baseURL: url)
     }
 }
@@ -615,6 +645,10 @@ extension Tab: WKNavigationDelegate {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
         }
+        // A server's redirect keeps the type of the click that started its load, whoever pressed since.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), (webView as? PageWebView)?.agentPressedLast != true {
+            browser?.agent?.userStartedLoad(in: self)
+        }
         if action.shouldPerformDownload {
             // A download the agent started waits for the user's Allow.
             let name = url.lastPathComponent
@@ -623,7 +657,8 @@ extension Tab: WKNavigationDelegate {
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
-            if action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
+            // Only the user's own click hands an address to another app, never an agent's.
+            if action.navigationType == .linkActivated, (webView as? PageWebView)?.agentPressedLast != true { ExternalApps.open(url) }
             // A load refused here ends without a word from WebKit.
             if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
             return (.cancel, preferences)
@@ -658,8 +693,12 @@ extension Tab: WKNavigationDelegate {
         // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
 
-        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) {
-            browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
+        // ⌘-click opens the link in a new tab, as does an agent's middle click (WebKit's button
+        // mask 4); the user's own middle click follows it here.
+        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
+            if await browser?.agent?.open(url, from: self) != true {
+                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift))
+            }
             return (.cancel, preferences)
         }
         // An extension's page sending its tab to a website (1Password's Sign In button) goes on
@@ -714,7 +753,20 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if navigation !== errorNavigation { failedURL = nil }
         httpStatus = nil
-        isAwaitingCommit = true
+        awaitCommit(true, for: navigation)
+        isStartingErrorPage = false
+    }
+
+    /// `navigation` is nil when `isLoading` tells of a load before WebKit names it: that load,
+    /// named next, isn't counted twice, but one that replaces the load under way is.
+    private func awaitCommit(_ awaiting: Bool, for navigation: WKNavigation? = nil) {
+        let isErrorPage = navigation.map { $0 === errorNavigation } ?? isStartingErrorPage
+        if awaiting, !isErrorPage, !isAwaitingCommit || navigation != nil && startedNavigation != nil && startedNavigation !== navigation {
+            loadStarts += 1
+            unshownAtStart = unshownLoads
+        }
+        startedNavigation = awaiting ? navigation ?? startedNavigation : nil
+        isAwaitingCommit = awaiting
     }
 
     /// Private WebKit (`WKNavigationDelegatePrivate`), which calls it only on a delegate that has it.
@@ -726,7 +778,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
-        isAwaitingCommit = false
+        awaitCommit(false)
         if navigation !== errorNavigation { loadError = nil }
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.
@@ -764,7 +816,8 @@ extension Tab: WKNavigationDelegate {
             case Internal.scheme, Extensions.scheme:
                 break
             default:
-                NSWorkspace.shared.open(url)
+                // As in a page: an agent's click never hands an address to another app.
+                if NSApp.currentEvent.map(NativeInput.isAgents) != true { ExternalApps.open(url) }
             }
         }
         pdf = reader
@@ -787,7 +840,20 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         // Whatever the error, cancellations included: the old page was only on its way out.
         guard !goToAddressAfterWaking() else { return }
+        // A load given up with no load after it ends here, as one that became a download does.
+        if Self.isDropped(error), !webView.isLoading, unshownLoads == unshownAtStart { endedUnshown(.dropped) }
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)
+    }
+
+    /// Private WebKit (`WKNavigationAction._isRedirect`).
+    private static func isRedirect(_ action: WKNavigationAction) -> Bool {
+        action.responds(to: NSSelectorFromString("_isRedirect")) && action.value(forKey: "_isRedirect") as? Bool == true
+    }
+
+    /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
+    private static func isDropped(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -831,14 +897,29 @@ extension Tab: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard let browser else { return nil }
+        // An agent's click opening a tab: it goes into the Agent group, unselected, and the
+        // action's result names it. One for an address agents can't open as it is (a file:
+        // page, which asks the user) opens through the hub, without its opener.
+        let agentSession = browser.agent?.actingSession(in: self)
+        if agentSession != nil, let url = action.request.url, !url.absoluteString.isEmpty, AgentURLs.verdict(for: url) != .allowed {
+            Task { await browser.agent?.open(url, from: self) }
+            return nil
+        }
         // WebKit hands an extension's page its own configuration for the new one, which a website
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
-            browser.newTab(url: url)
+            if let agentSession {
+                let tab = browser.newAgentTab(session: agentSession)
+                tab.load(url)
+                browser.agent?.didOpen(tab, from: self)
+            } else {
+                browser.newTab(url: url)
+            }
             return nil
         }
         browser.prepare(popup: configuration)
-        let popup = browser.newTab(configuration: configuration)
+        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration) } ?? browser.newTab(configuration: configuration)
+        if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
         // window.open with no features at all, which can't be told apart from one.
@@ -925,6 +1006,21 @@ extension Tab: WKUIDelegate {
         dialogOwner?.handDialogToUser(in: self)
     }
 
+    /// Its web view moved to another window, or out of any: out of the agent's stage, if it was there.
+    func webViewDidMove(_ webView: WKWebView) {
+        browser?.agent?.stage.didLeave(webView)
+    }
+
+    /// The user clicked, typed or scrolled in its page.
+    func noteUserInput() {
+        browser?.agent?.userInput(in: self)
+    }
+
+    /// The user clicked in its page, or pressed Enter there.
+    func noteUserActivation() {
+        browser?.agent?.userActivated(in: self)
+    }
+
     /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to
     /// a modal that would hold up the user, until it is handed to the user; any other is the
     /// user's, and agents see it while it shows.
@@ -948,7 +1044,7 @@ extension Tab: WKUIDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
-        guard let window = webView.window else { return panel.runModal() == .OK ? panel.urls : nil }
+        guard let window = webView.userWindow else { return panel.runModal() == .OK ? panel.urls : nil }
         return await panel.beginSheetModal(for: window) == .OK ? panel.urls : nil
     }
 
@@ -975,7 +1071,7 @@ extension Tab: WKUIDelegate {
     }
 
     private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
-        guard let window = webView.window else { return alert.runModal() }
+        guard let window = webView.userWindow else { return alert.runModal() }
         return await alert.beginSheetModal(for: window)
     }
 }

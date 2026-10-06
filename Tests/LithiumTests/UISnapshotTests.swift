@@ -131,6 +131,31 @@ struct UISnapshotTests {
         await browser.setAgentAccess(false)
     }
 
+    /// What the user sees over the page while an agent acts in it: border, caption and pointer
+    /// dot; and the tab's badge with its ring.
+    @Test func agentActingSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let acting = AgentActing(session: "x", caption: "Clicking “Place order”", pointer: CGPoint(x: 528, y: 127))
+        let page = VStack(alignment: .leading, spacing: 14) {
+            Text("Your basket").font(Theme.font(22, .semibold))
+            Text("2 items · €42.00").foregroundStyle(.secondary)
+            Button("Place order") {}.controlSize(.large).padding(.leading, 440)
+            Spacer()
+        }
+        .padding(40)
+        .frame(width: 800, height: 420, alignment: .topLeading)
+        .overlay { AgentActingOverlay(acting: acting) }
+        let badge = Favicon(image: nil, fallback: "shop.example", size: 16)
+            .frame(width: 16, height: 16)
+            .overlay(alignment: .bottomTrailing) { AgentBadge(isActing: true) }
+            .padding(12)
+        for isDark in [false, true] {
+            try render(page, isDark: isDark).write(to: directory.appending(path: "agent-acting-\(isDark ? "dark" : "light").png"))
+            try render(badge, isDark: isDark).write(to: directory.appending(path: "agent-badge-acting-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

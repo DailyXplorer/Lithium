@@ -175,6 +175,34 @@ struct AgentConfirmationsTests {
         }
     }
 
+    /// Two alike downloads during one action of the agent (a double click on a download link)
+    /// each ask and are each logged: the Allow the first got never answers the second.
+    @Test func eachDownloadDuringAnActionAsks() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            let hub = client.hub
+            let session = try #require(hub.sessions.first)
+            hub.tabs[tab.id]?.acting = AgentActing(session: session.id, caption: "Clicking")
+            defer { hub.tabs[tab.id]?.acting = nil }
+            let report = base.appending(path: "report.csv").absoluteString
+            for (kind, answer) in [(ConfirmationKind.download, ConfirmationAnswer.allowOnce), (.download, .deny), (.file, .allowOnce), (.file, .deny)] {
+                let asking = Task {
+                    try await hub.confirm(kind, "open “report.csv”", subject: report, site: nil, in: NamedTab(tab: tab, id: id), session: session, until: .now + .seconds(20))
+                }
+                #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty }, "\(kind) asked again")
+                hub.confirmations.pending.forEach { hub.confirmations.answer($0.id, answer) }
+                _ = await asking.result
+            }
+            var kinds: [String] = []
+            for _ in 0..<100 where kinds.count < 4 {
+                kinds = await hub.log.entries(limit: 50).filter { $0["event"] == "confirmation" && $0["subject"] == .string(report) }.compactMap { $0["confirmation"]?["kind"]?.string }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(kinds.sorted() == ["download", "download", "file", "file"])
+        }
+    }
+
     @Test func stopDeniesThePromptAndEndsTheCall() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "one"))

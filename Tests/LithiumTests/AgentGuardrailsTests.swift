@@ -64,8 +64,10 @@ struct AgentGuardrailsTests {
         let cases: [(action: Guardrails.Action, element: Element, page: Page, form: Guardrails.Form?, expected: ConfirmationKind?, why: String)] = [
             (.type, card, Self.shop, nil, .payment, "typing a card number"),
             (.select, Element(role: "combobox", name: "Expiry month", field: "payment"), Self.shop, nil, .payment, "picking an expiry month"),
-            (.press("ArrowDown"), card, Self.shop, nil, .payment, "a key in a card field"),
+            (.press(enter: false), card, Self.shop, nil, .payment, "a key in a card field"),
             (.type, inFrame, Self.shop, nil, .payment, "anything in a provider's frame"),
+            (.press(enter: false), Element(role: "frame", inUnknownFrame: true), Self.shop, nil, .password, "a key in a frame of an origin nobody knows"),
+            (.type, Element(role: "frame", inUnknownFrame: true), Page(url: Self.shop.url, paymentFrame: true), nil, .payment, "typing there on a page with a payment frame"),
             (.activate, email, Page(url: URL(string: "https://www.paypal.com/signin")), nil, .payment, "anything in a provider's tab"),
             (.activate, button("Pay €42.00"), Self.shop, nil, .payment, "a commit control with an amount anywhere"),
             (.activate, button("Place order"), Self.checkout, nil, .payment, "a commit control on a payment page"),
@@ -73,10 +75,10 @@ struct AgentGuardrailsTests {
             (.activate, button("Buy"), Self.shop, nil, nil, "a Buy link on a product grid"),
             (.activate, wallet, Self.shop, nil, .payment, "an Apple Pay button"),
             (.activate, button("Continue"), Self.shop, Guardrails.Form(cardField: true), .payment, "submitting a form with a card field"),
-            (.press("Enter"), email, Page(url: Self.shop.url, paymentFrame: true), Guardrails.Form(), .payment, "submitting any form on a page with a payment frame"),
+            (.press(enter: true), email, Page(url: Self.shop.url, paymentFrame: true), Guardrails.Form(), .payment, "submitting any form on a page with a payment frame"),
             (.type, password, Self.shop, nil, .password, "typing a password"),
-            (.press("Enter"), password, Self.shop, nil, .password, "Enter in a password field"),
-            (.press("Tab"), password, Self.shop, nil, nil, "Tab out of a password field"),
+            (.press(enter: true), password, Self.shop, nil, .password, "Enter in a password field"),
+            (.press(enter: false), password, Self.shop, nil, nil, "Tab out of a password field"),
             (.check, Element(role: "checkbox", name: "Show password", field: nil), Self.shop, nil, nil, "a show-password toggle"),
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: true), .password, "submitting a filled password"),
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: false), nil, "submitting an empty password field"),
@@ -85,6 +87,57 @@ struct AgentGuardrailsTests {
         ]
         for test in cases {
             #expect(Guardrails.confirmation(for: test.action, on: test.element, page: test.page, submitting: test.form) == test.expected, "\(test.why)")
+        }
+    }
+
+    /// A key that activates or submits asks what a click asks, and one that types a character
+    /// asks what typing does, from the same decision.
+    @Test func keysAskWhatAClickOrTypingAsks() throws {
+        let login = TargetReport.Form(id: 1, cards: false, password: true)
+        let cart = TargetReport.Form(id: 2, cards: true, password: false)
+        let target = { (report: TargetReport) in ActionTarget(report: report, address: nil, frame: .main, ref: nil, css: .zero, page: Self.shop) }
+        let control = { (role: String, name: String, form: TargetReport.Form?, submit: Bool) in
+            target(TargetReport(token: "d", role: role, name: name, tag: role == "checkbox" ? "input" : role == "link" ? "a" : "button", form: form, submit: submit))
+        }
+        let field = { (name: String, field: String?) in
+            target(TargetReport(token: "d", role: "textbox", name: name, tag: "input", field: field, form: login, editable: true))
+        }
+        func asks(_ input: ActionTarget.Input, on target: ActionTarget) -> ConfirmationKind? {
+            let (action, form) = target.guarded(input)
+            return Guardrails.confirmation(for: action, on: target.element, page: target.page, submitting: form.map(Guardrails.Form.init))
+        }
+        func key(_ combo: String) throws -> ActionTarget.Input {
+            let parsed = try #require(NativeKey.parse(combo), "\(combo)")
+            return .key(parsed.key, parsed.modifiers)
+        }
+        let controls: [(target: ActionTarget, click: ConfirmationKind?, enter: ConfirmationKind?, why: String)] = [
+            (control("button", "Sign in", login, true), .password, .password, "the submit of a filled password"),
+            (control("button", "Continue", cart, true), .payment, .payment, "the submit of a form with a card field"),
+            (control("button", "Pay €42.00", nil, false), .payment, .payment, "a commit control"),
+            (control("link", "Pay €42.00", nil, false), .payment, .payment, "a commit link"),
+            (control("link", "Help", nil, false), nil, nil, "a plain link"),
+            (control("button", "Show password", login, false), nil, nil, "a button that submits nothing"),
+            (control("checkbox", "Remember me", login, false), nil, .password, "a checkbox, which Enter submits from"),
+            (control("checkbox", "Save card", cart, false), nil, .payment, "a checkbox in a card form"),
+        ]
+        for test in controls {
+            #expect(asks(.click, on: test.target) == test.click, "click: \(test.why)")
+            for combo in ["Space", "space", "Shift+Space", "Control+Space"] { #expect(try asks(key(combo), on: test.target) == test.click, "\(combo): \(test.why)") }
+            for combo in ["Enter", "return", "Shift+Enter", "Control+M"] { #expect(try asks(key(combo), on: test.target) == test.enter, "\(combo): \(test.why)") }
+        }
+        let password = field("Password", "password")
+        let card = field("Card number", "payment")
+        let who = field("Who", nil)
+        let fields: [(target: ActionTarget, combo: String, expected: ConfirmationKind?, why: String)] = [
+            (password, "q", .password, "a character typed into a password field"),
+            (password, "Shift+Q", .password, "a capital"), (password, "+", .password, "a symbol"), (password, "Space", .password, "a space"),
+            (password, "Alt+e", .password, "an Option character"), (password, "Enter", .password, "Enter in a password field"),
+            (password, "Tab", nil, "Tab out of it"), (password, "ArrowLeft", nil, "an arrow"), (password, "Meta+K", nil, "a shortcut"),
+            (card, "4", .payment, "a digit typed into a card field"), (card, "Tab", .payment, "any key in a card field"),
+            (who, "q", nil, "a character in a plain field"), (who, "Enter", .password, "Enter submitting a filled password"),
+        ]
+        for test in fields {
+            #expect(try asks(key(test.combo), on: test.target) == test.expected, "\(test.combo): \(test.why)")
         }
     }
 

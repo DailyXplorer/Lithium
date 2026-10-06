@@ -45,6 +45,9 @@ enum Guardrails {
         var wallet = false
         /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
+        /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
+        /// card or a password.
+        var inUnknownFrame = false
     }
 
     /// The tab's page, all frames together.
@@ -71,8 +74,8 @@ enum Guardrails {
 
     enum Action: Equatable {
         case type, select, check
-        /// A key pressed in the element, as `Enter`.
-        case press(String)
+        /// A key pressed in the element; `enter` when it is Enter or types Enter's carriage return.
+        case press(enter: Bool)
         /// A click, or Enter or Space on a button or link.
         case activate
     }
@@ -81,14 +84,15 @@ enum Guardrails {
     /// if it submits one. A payment wins over a password.
     static func confirmation(for action: Action, on element: Element, page: Page, submitting form: Form? = nil) -> ConfirmationKind? {
         if page.isProviderTab || element.inPaymentFrame { return .payment }
+        if element.inUnknownFrame { return page.isPaymentPage ? .payment : .password }
         if let form, form.cardField || page.paymentFrame { return .payment }
         switch action {
         case .type, .select, .check:
             if element.field == "payment" { return .payment }
             if element.field == "password", action == .type { return .password }
-        case .press(let key):
+        case .press(let enter):
             if element.field == "payment" { return .payment }
-            if element.field == "password", key == "Enter" { return .password }
+            if element.field == "password", enter { return .password }
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }

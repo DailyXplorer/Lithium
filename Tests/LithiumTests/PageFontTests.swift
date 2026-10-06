@@ -108,6 +108,59 @@ struct PageFontTests {
         #expect(result["font"] as? String == "Lithium DM Sans")
     }
 
+    /// An editor this script can't recognize (no contenteditable) rewrites its class whenever
+    /// anyone else touches its attributes, so every pass brings another one. The throttle must hold:
+    /// fewer passes lower the burst count, and that alone must not lift it.
+    @Test func unrecognizedEditorStaysThrottled() async throws {
+        let page = """
+            <div id="editor" class="pass-0"><p>Hello</p></div>
+            <script>
+              window.passes = 0;
+              const editor = document.getElementById('editor');
+              const options = { attributes: true, subtree: true };
+              const observer = new MutationObserver(() => {
+                observer.disconnect();
+                editor.className = 'pass-' + ++window.passes;
+                observer.observe(editor, options);
+              });
+              observer.observe(editor, options);
+            </script>
+            """
+        let probe = """
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            await wait(400);
+            document.getElementById('editor').className = 'start';
+            await wait(3000);
+            const before = window.passes;
+            await wait(6000);
+            return { passes: window.passes - before };
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        // In a window WebKit takes for visible, so animation frames run and the loop goes at full
+        // speed until throttled; hidden, timers alone would keep it below the throttle's threshold.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        let occlusion = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        if webView.responds(to: occlusion) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(webView.method(for: occlusion), to: Setter.self)(webView, occlusion, false)
+        }
+        window.orderFrontRegardless()
+        defer { window.close() }
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        let passes = try #require(result["passes"] as? Int)
+        #expect(passes > 0)
+        #expect(passes <= 14)
+    }
+
     /// A chat or live feed appends content on every frame for good: its icons must still keep their
     /// font once the page has been busy longer than the anti-loop budget.
     @Test func streamingPageKeepsLateIconFonts() async throws {

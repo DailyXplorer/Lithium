@@ -134,23 +134,26 @@
 
   // A page that changes all the time (a chat, a live feed, an editor this script doesn't
   // recognize answering every pass) is checked at most every THROTTLE ms rather than on every
-  // frame: past BUSY bursts of changes in two seconds without the user's input, until a two-second
-  // window with fewer than CALM. Changes keep accumulating meanwhile, so nothing is missed. A page
-  // still loading isn't counted, since it changes on every frame.
+  // frame: past BUSY bursts of changes in two seconds without the user's input, until the user's
+  // next input or SILENCE ms without any change. A burst count can't lift it: the throttle itself
+  // lowers the count of a page that answers every pass. Changes keep accumulating meanwhile, so
+  // nothing is missed. A page still loading isn't counted, since it changes on every frame.
   const BUSY = 30;
-  const CALM = 10;
+  const SILENCE = 4000;
   const THROTTLE = 500;
   let windowStart = 0;
   let bursts = 0;
+  let lastBurst = -Infinity;
   let throttled = false;
   let lastFlush = -Infinity;
+  let frame = 0;
+  let timer = 0;
   const countBurst = () => {
     if (document.readyState !== 'complete') return;
     const now = performance.now();
-    const elapsed = now - windowStart;
-    if (elapsed > 2000) {
-      // Past four seconds, the last full window had no burst at all.
-      if (elapsed > 4000 || bursts < CALM) throttled = false;
+    if (now - lastBurst > SILENCE) throttled = false;
+    lastBurst = now;
+    if (now - windowStart > 2000) {
       windowStart = now;
       bursts = 0;
     }
@@ -161,13 +164,20 @@
       bursts = 0;
       windowStart = performance.now();
       throttled = false;
-      if (scheduled) requestAnimationFrame(flush);
+      if (scheduled) {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(flush);
+      }
     }, { capture: true, passive: true });
   }
 
   const flush = () => {
     if (!scheduled) return;
     scheduled = false;
+    // A callback left waiting would flush the next pass early, and each early pass would leave
+    // one more: enough of them made a throttled page flush on every frame.
+    cancelAnimationFrame(frame);
+    clearTimeout(timer);
     lastFlush = performance.now();
     if (changed.size) {
       const elements = [...changed];
@@ -197,12 +207,12 @@
     if (scheduled) return;
     scheduled = true;
     if (throttled) {
-      setTimeout(flush, lastFlush + THROTTLE - performance.now());
+      timer = setTimeout(flush, lastFlush + THROTTLE - performance.now());
       return;
     }
-    requestAnimationFrame(flush);
+    frame = requestAnimationFrame(flush);
     // Pages in background tabs get no animation frames.
-    setTimeout(flush, 100);
+    timer = setTimeout(flush, 100);
   };
 
   const queue = (node) => {

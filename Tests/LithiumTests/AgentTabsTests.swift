@@ -581,10 +581,10 @@ struct AgentTabsTests {
             #expect((await client.call("navigate", ["tab": "t999", "url": "https://example.com"])).code == "unknown_tab")
             #expect((await client.call("navigate", ["url": "https://example.com"])).code == "invalid_params")
             let id = try #require((await client.call("tab_open"))["tab"]?.string)
-            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "wait": "networkidle"])).code == "unsupported")
+            #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "wait": "idle"])).code == "invalid_params")
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.absoluteString), "timeoutMs": 0])).code == "invalid_params")
             #expect((await client.call("wait_for", ["tab": .string(id)])).code == "invalid_params")
-            #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": 500])).code == "unsupported")
+            #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": -1])).code == "invalid_params")
             #expect((await client.call("tab_open", ["ephemeral": true])).code == "unsupported")
         }
     }

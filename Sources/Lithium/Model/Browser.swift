@@ -215,7 +215,7 @@ final class Browser {
     func setAgentAccess(_ enabled: Bool) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools)
+            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools + AgentHub.networkTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {

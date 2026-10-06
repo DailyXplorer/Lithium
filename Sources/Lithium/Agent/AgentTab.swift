@@ -55,6 +55,9 @@ final class AgentTab {
     /// subject: the action run again (`AgentHub.action`) takes each once, without asking twice.
     /// A download or a file never comes from it: each asks.
     @ObservationIgnored var answered: [String: ConfirmationGrant] = [:]
+    /// Its network log and console, from the first agent use of the tab: nil until then, so a
+    /// tab no agent used costs nothing.
+    @ObservationIgnored var capture: TabCapture?
 
     static func prompt(_ kind: ConfirmationKind, _ action: String, subject: String) -> String {
         "\(kind.rawValue)\n\(action)\n\(subject)"
@@ -101,6 +104,7 @@ final class AgentTab {
             shown = [:]
             // The user may have passed the check: the next read says if the new page is one.
             challenge = nil
+            capture?.newPage()
             switchPage(to: token)
         } else {
             frames[token] = frame

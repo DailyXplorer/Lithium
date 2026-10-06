@@ -190,6 +190,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.agent?.allowAgain()
         case "openAgentLog":
             browser.openAgentLog()
+        case "setAgentCaptureBodies":
+            defaults.set(value as? Bool ?? false, forKey: Preference.agentCaptureBodies)
         case "agentLog":
             // As JSON text: the entries are `JSONValue`s, which don't cross to the page as they are.
             let entries = await agentLog(browser).entries(limit: Self.agentLogPageLength)
@@ -317,6 +319,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "stopped": browser.agent?.state == .stopped,
                 "status": AgentStatus.text(browser.agent),
                 "url": browser.agent?.url ?? "",
+                "captureBodies": defaults.bool(forKey: Preference.agentCaptureBodies),
             ] as [String: Any],
             "extensions": browser.extensions.installed.map { entry in
                 let context = browser.extensions.contexts[entry.id]

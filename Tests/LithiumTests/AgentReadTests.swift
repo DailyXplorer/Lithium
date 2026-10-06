@@ -686,7 +686,7 @@ struct AgentReadTests {
             #expect(await client.call("wait_for", ["tab": .string(tab), "ref": stays, "state": "visible", "timeoutMs": 300]).code == "stale_ref")
             #expect(await client.call("wait_for", ["tab": .string(tab), "ref": going, "state": "shown"]).code == "invalid_params")
             #expect(await client.call("wait_for", ["tab": .string(tab), "text": "a", "url": "*"]).code == "invalid_params")
-            #expect(await client.call("wait_for", ["tab": .string(tab), "networkIdle": 500]).code == "unsupported")
+            #expect(await client.call("wait_for", ["tab": .string(tab), "text": "a", "networkIdle": 500]).code == "invalid_params")
 
             let moving = try await open(client, base, "/moving-on")
             let arrived = await client.call("wait_for", ["tab": .string(moving), "text": "Welcome aboard"])

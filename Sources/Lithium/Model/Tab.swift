@@ -199,6 +199,7 @@ final class Tab: NSObject, Identifiable {
         webView.allowsMagnification = true
         observeWebView()
         if isMuted { applyMute(to: webView) }
+        browser?.agent?.didAttach(webView, to: self)
     }
 
     private func applyMute(to webView: WKWebView) {
@@ -548,7 +549,7 @@ final class Tab: NSObject, Identifiable {
         browser?.nowPlaying.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, to: controller)
-        browser?.agent?.install(on: controller)
+        browser?.agent?.install(on: controller, for: self)
     }
 
     /// Sends a tab an extension woke without its history on to the extension's address. Called

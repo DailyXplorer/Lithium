@@ -160,6 +160,12 @@ final class AgentHub {
     @ObservationIgnored weak var browser: Browser?
     @ObservationIgnored private var tabIDs = AgentTabIDs()
     @ObservationIgnored private(set) lazy var frameHandler = AgentFrameHandler(hub: self)
+    @ObservationIgnored private(set) lazy var consoleHandler = AgentConsoleHandler(hub: self)
+    /// The network log comes from WebKit's resource load delegate where it has one, else from
+    /// each document's performance timeline; tests take the second way.
+    @ObservationIgnored var usesResourceLoadDelegate = ResourceLoadSpy.isAvailable
+    /// Settings › Agents › Capture response bodies, off by default.
+    var capturesBodies: Bool { defaults.bool(forKey: Preference.agentCaptureBodies) }
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog
     @ObservationIgnored private let defaults: UserDefaults
@@ -304,6 +310,7 @@ final class AgentHub {
         server = nil
         AgentEndpoint.delete(in: folder)
         stage.releaseAll()
+        stopCapturing()
         if let keyGuard { NSEvent.removeMonitor(keyGuard) }
         keyGuard = nil
     }
@@ -598,6 +605,7 @@ final class AgentHub {
     /// Marks an agent action in `tab`: its badge, and ten minutes during which it doesn't sleep.
     func touch(_ tab: Tab) {
         guard let state = agentTab(for: tab) else { return }
+        capture(in: tab)
         if !state.isTouched { state.isTouched = true }
         state.lastAction = now()
         if let session = Self.callSession { state.holder = session.id }
@@ -689,6 +697,7 @@ final class AgentHub {
     /// see `dialog_open` for a page that isn't there.
     func pageGone(_ tab: Tab) {
         tabs[tab.id]?.drive = nil
+        tabs[tab.id]?.capture?.reset()
     }
 
     /// The agent's navigation still under way in `tab`, for a session still connected.
@@ -704,9 +713,11 @@ final class AgentHub {
         state.interruption = .agentStop
     }
 
-    /// Hooked from `Tab.applyProtections`: every frame of the page says hello to the hub.
-    func install(on controller: WKUserContentController) {
+    /// Hooked from `Tab.applyProtections`: every frame of the page says hello to the hub, and in
+    /// a tab agents use, the console and error scripts go in too.
+    func install(on controller: WKUserContentController, for tab: Tab) {
         frameHandler.install(on: controller)
+        if tabs[tab.id]?.capture != nil { consoleHandler.install(on: controller, bodies: capturesBodies) }
     }
 
     /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
@@ -714,6 +725,7 @@ final class AgentHub {
     func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {
         do {
             guard let state = agentTab(for: named.tab) else { throw named.closedError }
+            capture(in: named.tab)
             let free = try await AgentWait.until(deadline) { () -> Bool? in
                 guard self.isOpen(named.tab) else { throw named.closedError }
                 return state.isBusy ? nil : true

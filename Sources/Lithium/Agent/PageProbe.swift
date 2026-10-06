@@ -96,11 +96,18 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
         controller.addUserScript(PageProbe.bootstrap)
     }
 
+    /// A hello, or an uncaught error from `agent-errors.js` in a tab agents use.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let token = (message.body as? [String: Any])?["token"] as? String,
-              let tab = (message.webView as? PageWebView)?.tab, let hub, hub.isOpen(tab),
+        guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub, hub.isOpen(tab),
               message.frameInfo.securityOrigin.protocol != Extensions.scheme else { return }
-        hub.agentTab(for: tab)?.hello(token: token, frame: message.frameInfo)
+        if let error = body["console"] as? [String: Any] {
+            hub.tabs[tab.id]?.capture?.log(
+                level: "error", kind: error["kind"] as? String, text: error["text"] as? String ?? "", source: error["source"] as? String,
+                line: error["line"] as? Int, column: error["column"] as? Int, frameID: ResourceLoadSpy.frameID(of: message.frameInfo)
+            )
+        } else if let token = body["token"] as? String {
+            hub.agentTab(for: tab)?.hello(token: token, frame: message.frameInfo)
+        }
     }
 }
 

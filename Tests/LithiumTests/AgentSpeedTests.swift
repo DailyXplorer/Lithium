@@ -407,7 +407,7 @@ struct AgentSpeedTests {
             ]])
             #expect(!opened.isError, "\(opened.content)")
             #expect(opened["steps"]?.items?.map { $0["ok"] } == [true, true], "\(opened.content)")
-            #expect(opened["ok"] == 2 && opened["state"] == "domcontentloaded", "\(opened.content)")
+            #expect(opened["ok"] == 2 && opened["state"] == "load", "\(opened.content)")
             #expect(opened["diff"]?.string?.contains("Feed the cat") == true, "\(opened.content)")
             let id = try #require(opened["tab"]?.string)
             #expect(client.tab(id)?.title.hasSuffix("o Feed the cat") == true)

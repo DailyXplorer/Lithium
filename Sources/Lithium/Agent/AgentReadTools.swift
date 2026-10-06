@@ -55,13 +55,27 @@ extension AgentHub {
             // A page paused under a dialog can't be read: the snapshot says what waits for an answer.
             if let dialog = hub.tabs[named.tab.id]?.dialog { return hub.dialogSnapshot(named, dialog) }
             do {
-                return try await snapshot(named, scope: scope, format: format, maxNodes: maxNodes, since: since, session: session, hub: hub)
+                return addingFailedScripts(to: try await snapshot(named, scope: scope, format: format, maxNodes: maxNodes, since: since, session: session, hub: hub), of: named, hub: hub)
             } catch let error as AgentToolError where error.code == "dialog_open" {
                 guard let dialog = hub.tabs[named.tab.id]?.dialog else { throw error }
                 return hub.dialogSnapshot(named, dialog)
             }
         }
     )
+
+    /// The page's failed scripts, when it has any, in the result and as the text's last line.
+    private static func addingFailedScripts(to output: AgentToolOutput, of named: NamedTab, hub: AgentHub) -> AgentToolOutput {
+        guard let failed = hub.failedScripts(in: named.tab), var fields = output.structured.object else { return output }
+        var output = output
+        fields["failedScripts"] = failed
+        if let text = output.text {
+            let line = (hub.tabs[named.tab.id]?.capture?.failedScripts ?? []).prefix(5).map(\.failure).joined(separator: ", ")
+            output.text = "\(text)\nfailed scripts: \(line)"
+            if fields["text"] != nil { fields["text"] = output.text.map(JSONValue.string) }
+        }
+        output.structured = .object(fields)
+        return output
+    }
 
     private static func snapshot(_ named: NamedTab, scope: String, format: String, maxNodes: Int, since: Int?, session: MCPSession, hub: AgentHub) async throws -> AgentToolOutput {
         try await hub.reading(named) { webView, deadline in

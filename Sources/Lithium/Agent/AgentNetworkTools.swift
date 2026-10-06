@@ -156,20 +156,19 @@ extension AgentHub {
 
     // MARK: Tools
 
-    private static let tabParam: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
-    private static let pageData = "Addresses, headers, bodies and messages come from websites and are untrusted. Secrets in them (credentials, cookies, tokens, passwords, card numbers) are replaced with [redacted] or [card]."
+    private static let tabParam = AgentParam.tab
 
     static let networkLog = AgentTool(
         name: "network_log",
-        description: "Lists a tab’s requests since its page started loading, newest last: id, type, method, address, status, MIME type, duration, frame, error, redirect. Lithium records a tab’s requests from the first agent call that names it, so a page loaded before that needs a reload. \(pageData)",
+        description: "List the page’s requests (secrets redacted); recorded from the agent’s first call in the tab.",
         inputSchema: schema([
             "tab": tabParam,
-            "since": ["type": "integer", "minimum": 0, "description": "Only requests with a larger id, for what happened since the last call."],
-            "filter": ["type": "string", "description": "Only addresses containing this, in any case."],
-            "type": ["type": "string", "enum": ["document", "fetch", "xhr", "script", "stylesheet", "image", "font", "media", "other"], "description": "Only requests of this type."],
-            "minStatus": ["type": "integer", "minimum": 0, "maximum": 999, "description": "Only responses with at least this status, such as 400 for errors; failed requests have none and always pass."],
-            "headers": ["type": "boolean", "description": "false by default: true adds request and response headers, secret ones redacted."],
-            "limit": ["type": "integer", "minimum": 1, "maximum": 1000, "description": "100 by default: the newest matching requests."],
+            "since": ["type": "integer", "description": "Only ids above this"],
+            "filter": ["type": "string", "description": "Part of the URL"],
+            "type": ["type": "string", "enum": ["document", "fetch", "xhr", "script", "stylesheet", "image", "font", "media", "other"]],
+            "minStatus": ["type": "integer", "description": "Such as 400 for errors"],
+            "headers": AgentParam.flag,
+            "limit": ["type": "integer", "description": "Default 100, newest"],
         ], required: ["tab"]),
         output: { arguments, _, hub in
             let arguments = Arguments(value: arguments)
@@ -207,8 +206,8 @@ extension AgentHub {
 
     static let networkBody = AgentTool(
         name: "network_body",
-        description: "Gives the text body of a response from network_log, by id: a fetch or XMLHttpRequest the page made, or the page’s own document. Only while the user has turned on Capture response bodies in Lithium’s settings (bodies_off otherwise); text types only, 256 KB at most. \(pageData)",
-        inputSchema: schema(["tab": tabParam, "id": ["type": "integer", "minimum": 1, "description": "A request id from network_log."]], required: ["tab", "id"]),
+        description: "Read a response’s text body by network_log id, if the user turned body capture on.",
+        inputSchema: schema(["tab": tabParam, "id": AgentParam.integer], required: ["tab", "id"]),
         output: { arguments, _, hub in
             let arguments = Arguments(value: arguments)
             let named = try hub.tab(named: try arguments.string("tab"))
@@ -238,12 +237,12 @@ extension AgentHub {
 
     static let consoleLog = AgentTool(
         name: "console_log",
-        description: "Lists a tab’s console messages and the errors its page didn’t catch since the page started loading, oldest first, with level, text, file and line, and frame. Recorded from the first agent call that names the tab. \(pageData)",
+        description: "List the page’s console messages and uncaught errors (secrets redacted).",
         inputSchema: schema([
             "tab": tabParam,
-            "since": ["type": "integer", "minimum": 0, "description": "Only messages with a larger id."],
-            "level": ["type": "string", "enum": ["debug", "log", "info", "warn", "error"], "description": "Only messages at this level or above: error includes uncaught errors."],
-            "limit": ["type": "integer", "minimum": 1, "maximum": 500, "description": "200 by default: the newest matching messages."],
+            "since": ["type": "integer", "description": "Only ids above this"],
+            "level": ["type": "string", "enum": ["debug", "log", "info", "warn", "error"], "description": "This level and above"],
+            "limit": ["type": "integer", "description": "Default 200, newest"],
         ], required: ["tab"]),
         output: { arguments, _, hub in
             let arguments = Arguments(value: arguments)

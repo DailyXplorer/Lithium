@@ -290,6 +290,38 @@
   };
   const isVisible = (element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !hiddenByAncestor(element);
 
+  // Controls follow Playwright's actionability rather than the text rules: one with a box is
+  // there to act on even at opacity 0 (TodoMVC's toggle, which its label draws), and a field
+  // hidden on purpose behind a styled label (clipped to a pixel, zero size, off the page) is
+  // reached through that label, as the user's click on the label reaches it. Text stays under
+  // the text rules, so a control's name never comes from text the user can't see.
+  const isControl = (element) => interactive.has(roleOf(element));
+  const tiny = (rect) => rect.width < 2 || rect.height < 2;
+  const offPage = (rect) => rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0;
+  const shownLabel = (element) => [...(element.labels ?? [])].find((label) => {
+    const rect = label.getBoundingClientRect();
+    return isVisible(label) && !tiny(rect) && !offPage(rect) && !clippedAway(label, getComputedStyle(label));
+  });
+  // What stands for the control on screen: itself, its label, or nothing when it is hidden.
+  // `clipped`: an ancestor clips it away, so only a label outside can stand for it.
+  const controlFace = (element, style = getComputedStyle(element), clipped = false) => {
+    if (!element.checkVisibility({ visibilityProperty: true }) || hiddenByAncestor(element)) return null;
+    const rect = element.getBoundingClientRect();
+    if (!clipped && !tiny(rect) && !offPage(rect) && !clippedAway(element, style)) return element;
+    return isField(element) ? shownLabel(element) ?? null : null;
+  };
+  // A control the user can't see named only by what they can (its visible labels) or what the
+  // page gives assistive technology, never by its own transparent text.
+  const unseenName = (element) => {
+    const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+      .map((id) => element.getRootNode().getElementById?.(id) ?? document.getElementById(id)).filter((label) => label && isVisible(label));
+    return collapse(labelledBy.map(textOf).join(' ')) || collapse(element.getAttribute('aria-label'))
+      || collapse([...(element.labels ?? [])].filter(isVisible).map(textOf).join(' ')) || collapse(element.getAttribute('title'));
+  };
+  const controlName = (element, role) => cut(isVisible(element) ? nameOf(element, role) : unseenName(element), 80);
+  // An element as the snapshot, waits and forms see it.
+  const isShown = (element) => (isControl(element) ? Boolean(controlFace(element)) : isVisible(element) && element.getBoundingClientRect().width > 0);
+
   // Challenges a whole page is made of; widgets in frames are told by their address, in Lithium.
   const pageChallenge = () => {
     const has = (selector) => document.querySelector(selector) !== null;
@@ -409,12 +441,51 @@
       return { all, own };
     };
     const limit = 5000;
+    const describe = (element, role, box, name) => {
+      const node = { id: idOf(element), role, box };
+      if (name) node.name = name;
+      if (role === 'heading') node.level = Number(element.getAttribute('aria-level')) || Number(element.localName[1]) || 2;
+      if (role === 'link' && element.getAttribute('href')) node.href = cut(element.getAttribute('href'), 160);
+      const value = valueOf(element, role);
+      if (value?.value) node.value = value.value;
+      if (value?.filled) node.filled = true;
+      const state = stateOf(element, role, focused);
+      if (state.length) node.state = state;
+      if (element.localName === 'select') node.options = element.options.length;
+      const guard = isField(element) ? guardOf(element) : null;
+      if (guard) node.guard = guard;
+      if (isField(element)) controls.push(element);
+      return node;
+    };
+    // Inside text the user can't see (transparent, clipped away), only controls still operable
+    // there are listed, never the text.
+    const visitUnseen = (element, context) => {
+      if (nodes.length >= limit) return;
+      const tag = element.localName;
+      if (skipped.has(tag) || isExtensionUI(element) || element.getAttribute('aria-hidden') === 'true') return;
+      const style = styleOf(element);
+      if (style.display === 'none' || style.contentVisibility === 'hidden') return;
+      const clipped = context.clipped || clippedAway(element, style);
+      const role = roleOf(element);
+      const face = interactive.has(role) ? controlFace(element, style, context.clipped) : null;
+      if (face) {
+        if (isField(element) && isCard(element)) pay.cards = true;
+        const box = round(face.getBoundingClientRect());
+        if (inScope(box)) nodes.push(describe(element, role, box, controlName(element, role)));
+      }
+      if (textless.has(tag) || tag === 'svg') return;
+      for (const child of childrenOf(element)) visitUnseen(child, { clipped });
+    };
     const visit = (element, context) => {
       if (nodes.length >= limit) return;
       const tag = element.localName;
       if (skipped.has(tag) || isExtensionUI(element) || element.getAttribute('aria-hidden') === 'true') return;
       const style = styleOf(element);
-      if (style.display === 'none' || style.opacity === '0' || style.contentVisibility === 'hidden' || clippedAway(element, style)) return;
+      if (style.display === 'none' || style.contentVisibility === 'hidden') return;
+      if (style.opacity === '0' || clippedAway(element, style)) {
+        visitUnseen(element, { clipped: false });
+        return;
+      }
       const shown = style.visibility === 'visible';
       let role = roleOf(element);
       // A form or region is a landmark only when it has a name, as ARIA has it.
@@ -433,25 +504,14 @@
       if (shown && isField(element) && isCard(element)) pay.cards = true;
       const emitted = shown && role && (interactive.has(role) || structural.has(role) || role === 'clickable');
       if (emitted) {
-        const box = round(element.getBoundingClientRect());
+        // A field off the page or shrunk to nothing shows through its label, if any.
+        const face = isField(element) ? controlFace(element, style) : element;
+        const box = face ? round(face.getBoundingClientRect()) : [0, 0, 0, 0];
         if (interactive.has(role) || role === 'clickable') next.interactive = true;
         if (namedByContent.has(role)) next.named = true;
         if (inScope(box)) {
-          const node = { id: idOf(element), role, box };
-          const name = cut(nameOf(element, role), 80);
-          if (name) node.name = name;
-          if (role === 'heading') node.level = Number(element.getAttribute('aria-level')) || Number(tag[1]) || 2;
-          if (role === 'link' && element.getAttribute('href')) node.href = cut(element.getAttribute('href'), 160);
-          const value = valueOf(element, role);
-          if (value?.value) node.value = value.value;
-          if (value?.filled) node.filled = true;
-          const state = stateOf(element, role, focused);
-          if (state.length) node.state = state;
-          if (tag === 'select') node.options = element.options.length;
-          const guard = isField(element) ? guardOf(element) : null;
-          if (guard) node.guard = guard;
+          const node = describe(element, role, box, cut(nameOf(element, role), 80));
           if (wallet) node.wallet = true;
-          if (isField(element)) controls.push(element);
           nodes.push(node);
         }
       } else if (shown && !context.named && !isInline(style) && !textless.has(tag) && parseFloat(style.fontSize) >= 6) {
@@ -525,17 +585,35 @@
 
   // Readable text, as lines, each with the block it came from: read_text, find_text, waits.
   const excludedFromMain = 'nav, footer, aside, header, dialog, menu, [role=navigation], [role=contentinfo], [role=complementary], [role=search], [role=banner], [role=dialog], [role=alertdialog], [aria-modal=true]';
-  const lines = (root, { markdown = false, main = false } = {}) => {
+  // `sources`: each line also gets `nodes`, the text node each of its characters comes from.
+  const lines = (root, { markdown = false, main = false, sources = false } = {}) => {
     const out = [];
     let line = '';
+    let pieces = [];
     let block = root;
+    // Follows collapse(): a run of whitespace is one space, and none at either end.
+    const nodesOf = () => {
+      const nodes = [];
+      let piece = -1;
+      let space = true;
+      for (let i = 0; i < line.length; i++) {
+        while (piece + 1 < pieces.length && pieces[piece + 1].at <= i) piece++;
+        const blank = /\s/.test(line[i]);
+        if (!blank || !space) nodes.push(pieces[piece]?.node ?? null);
+        space = blank;
+      }
+      if (space && nodes.length) nodes.pop();
+      return nodes;
+    };
     const flush = (prefix = '') => {
       const text = collapse(line);
-      if (text) out.push({ text: prefix + text, element: block });
+      if (text) out.push(sources ? { text: prefix + text, element: block, nodes: [...prefix].map(() => null).concat(nodesOf()) } : { text: prefix + text, element: block });
       line = '';
+      pieces = [];
     };
     const visit = (node, depth) => {
       if (node.nodeType === Node.TEXT_NODE) {
+        if (sources) pieces.push({ node, at: line.length });
         line += node.data;
         return;
       }
@@ -559,9 +637,16 @@
       // Cells and link text go through the same rules, so hidden text in them stays out too.
       const visibleText = (child, inMarkdown) => collapse(lines(child, { markdown: inMarkdown }).map((item) => item.text).join(' '));
       if (tag === 'tr') {
-        const cells = [...element.cells].map((cell) => visibleText(cell, markdown));
+        const cellLines = [...element.cells].map((cell) => lines(cell, { markdown, sources }));
+        const cells = cellLines.map((items) => items.map((item) => item.text).join(' '));
         // Spacer rows (Hacker News has one between stories) have nothing to read.
-        if (cells.some(Boolean)) out.push({ text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element });
+        if (!cells.some(Boolean)) return;
+        const row = { text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element };
+        if (sources) {
+          row.nodes = (markdown ? [null, null] : []).concat(...cellLines.map((items, i) => (i ? [null, null, null] : [])
+            .concat(...items.map((item, j) => (j ? [null] : []).concat(item.nodes)))));
+        }
+        out.push(row);
         return;
       }
       const href = markdown && tag === 'a' ? hrefOf(element) : '';
@@ -636,7 +721,7 @@
 
   const fieldFacts = (element) => {
     const role = roleOf(element);
-    const field = { id: idOf(element), role, name: cut(nameOf(element, role), 80), type: element.type || element.localName };
+    const field = { id: idOf(element), role, name: controlName(element, role), type: element.type || element.localName };
     const value = valueOf(element, role);
     if (value?.value) field.value = value.value;
     if (value?.filled) field.filled = true;
@@ -654,7 +739,7 @@
     }
     return field;
   };
-  const isFormField = (element) => isField(element) && element.type !== 'hidden' && isVisible(element);
+  const isFormField = (element) => isField(element) && element.type !== 'hidden' && (isVisible(element) || Boolean(controlFace(element)));
   const isSubmit = (element) => (element.localName === 'button' && (element.type || 'submit') === 'submit')
     || (element.localName === 'input' && ['submit', 'image'].includes(element.type));
   const forms = () => {
@@ -678,12 +763,21 @@
     return { token: frame.token, forms: found, loose };
   };
 
+  // The link or button a text node is in, up to the block its line comes from (often the list
+  // item or paragraph around it), so a match's ref is one to click.
+  const controlOf = (node, block) => {
+    for (let element = node?.parentElement ?? node?.getRootNode?.()?.host; element; element = element.parentElement ?? element.getRootNode()?.host) {
+      if (isControl(element)) return element;
+      if (element === block) break;
+    }
+    return null;
+  };
   const find = ({ text, caseSensitive, limit }) => {
     const needle = caseSensitive ? text : text.toLowerCase();
     const matches = [];
     let count = 0;
     if (document.body && needle) {
-      for (const line of lines(document.body)) {
+      for (const line of lines(document.body, { sources: true })) {
         const haystack = caseSensitive ? line.text : line.text.toLowerCase();
         for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
           count++;
@@ -691,7 +785,12 @@
             // About 80 characters around the match, and the whole match with 10 on each side when it is longer.
             const around = Math.max(10, Math.floor((80 - needle.length) / 2));
             const start = Math.max(0, at - around);
-            matches.push({ id: idOf(line.element), context: line.text.slice(start, Math.max(start + 80, at + needle.length + around)) });
+            // Nil for a match outside a control, or across two.
+            const first = controlOf(line.nodes[at], line.element);
+            const control = first === controlOf(line.nodes[at + needle.length - 1], line.element) ? first : null;
+            const match = { id: idOf(control ?? line.element), context: line.text.slice(start, Math.max(start + 80, at + needle.length + around)) };
+            if (control) match.role = roleOf(control);
+            matches.push(match);
           }
         }
       }
@@ -729,8 +828,13 @@
     const style = getComputedStyle(element);
     if (!element.checkVisibility()) return style.display === 'none' ? 'display:none' : 'no box (an ancestor has display:none)';
     if (!element.checkVisibility({ visibilityProperty: true })) return 'visibility:hidden';
-    if (!element.checkVisibility({ opacityProperty: true })) return 'opacity:0';
     if (hiddenByAncestor(element)) return 'aria-hidden';
+    if (isControl(element)) {
+      if (controlFace(element, style)) return null;
+      const reason = tiny(rect) ? 'zero size' : offPage(rect) ? 'a box off the page' : 'clip (visually hidden)';
+      return isField(element) ? `${reason} and no visible label` : reason;
+    }
+    if (!element.checkVisibility({ opacityProperty: true })) return 'opacity:0';
     if (rect.width < 1 || rect.height < 1) return 'zero size';
     return null;
   };
@@ -740,11 +844,12 @@
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
     const role = roleOf(element) || 'text';
-    const rect = element.getBoundingClientRect();
-    const facts = { token: frame.token, role, name: cut(nameOf(element, role), 80), box: round(rect) };
+    const hidden = hiddenReason(element, element.getBoundingClientRect());
+    const face = !hidden && isControl(element) ? controlFace(element) ?? element : element;
+    const rect = face.getBoundingClientRect();
+    const facts = { token: frame.token, role, name: isControl(element) ? controlName(element, role) : cut(nameOf(element, role), 80), box: round(rect) };
     const guard = isField(element) ? guardOf(element) : null;
     if (guard) facts.guard = guard;
-    const hidden = hiddenReason(element, rect);
     facts.visible = !hidden;
     if (hidden) facts.hidden = hidden;
     if (!hidden) {
@@ -753,7 +858,7 @@
       facts.inViewport = rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
       if (facts.inViewport) {
         const hit = hitAt(x, y);
-        if (hit && !contains(element, hit)) facts.coveredBy = cover(hit);
+        if (hit && !contains(element, hit) && !contains(face, hit)) facts.coveredBy = cover(hit);
       }
     }
     return facts;
@@ -798,7 +903,7 @@
   const payFacts = () => {
     const pay = {};
     for (const element of document.querySelectorAll('input, select, textarea')) {
-      if (isCard(element) && isVisible(element)) { pay.cards = true; break; }
+      if (isCard(element) && (isVisible(element) || controlFace(element))) { pay.cards = true; break; }
     }
     for (const element of document.querySelectorAll(walletSelector)) {
       if (isWallet(element, getComputedStyle(element))) { pay.wallet = true; break; }
@@ -847,21 +952,23 @@
       facts.box = round(element.getBoundingClientRect());
       return facts;
     }
-    let rect = element.getBoundingClientRect();
-    const hidden = hiddenReason(element, rect);
+    const hidden = hiddenReason(element, element.getBoundingClientRect());
     if (hidden) return { ...facts, hidden };
+    // A visually hidden field is pressed where its label shows (`controlFace`).
+    const face = isControl(element) ? controlFace(element) ?? element : element;
+    let rect = face.getBoundingClientRect();
     const showing = (r) => r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
     const center = (r) => [r.left + r.width / 2, r.top + r.height / 2];
     const inside = ([px, py]) => px >= 0 && py >= 0 && px < innerWidth && py < innerHeight;
     if (scroll && !inside(center(rect))) {
-      element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-      rect = element.getBoundingClientRect();
+      face.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      rect = face.getBoundingClientRect();
     }
     const box = round(rect);
     // Stable: the same box a frame later, measured only when it differs from the last snapshot's.
     if (!known || known.some((value, index) => Math.abs(value - box[index]) > 1)) {
       await nextFrame();
-      const again = round(element.getBoundingClientRect());
+      const again = round(face.getBoundingClientRect());
       if (again.some((value, index) => Math.abs(value - box[index]) > 1)) return { ...facts, box: again, unstable: true };
     }
     facts.box = box;
@@ -869,7 +976,7 @@
     if (!showing(rect)) return { ...facts, inViewport: false };
     facts.inViewport = true;
     // The center of the largest visible rect, else a point of it that reaches the element.
-    const clipped = [...element.getClientRects()].map((r) => {
+    const clipped = [...face.getClientRects()].map((r) => {
       const left = Math.max(r.left, 0);
       const top = Math.max(r.top, 0);
       return { left, top, width: Math.min(r.right, innerWidth) - left, height: Math.min(r.bottom, innerHeight) - top };
@@ -877,17 +984,33 @@
     const largest = clipped.sort((a, b) => b.width * b.height - a.width * a.height)[0] ?? rect;
     const points = [center(largest)];
     for (const [fx, fy] of [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) points.push([largest.left + largest.width * fx, largest.top + largest.height * fy]);
+    // A label reaches its field only where no link or button inside it takes the click: its own text.
+    const plain = (node) => {
+      for (let current = node; current && current !== face; current = current.parentElement ?? current.getRootNode()?.host) if (isControl(current)) return false;
+      return true;
+    };
+    if (face !== element) {
+      const walker = document.createTreeWalker(face, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.data.trim() || !plain(node.parentElement)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) points.push(center(r));
+      }
+    }
+    const reaches = (hit) => contains(element, hit) || (contains(face, hit) && (face === element || plain(hit)));
     let firstHit = null;
     for (const point of points.filter(inside)) {
       const hit = hitAt(point[0], point[1]);
       firstHit ??= hit;
-      if (hit && contains(element, hit)) {
+      if (hit && reaches(hit)) {
         facts.point = point;
         return facts;
       }
     }
     facts.point = points[0];
-    if (firstHit) facts.coveredBy = cover(firstHit);
+    if (firstHit && face !== element && contains(face, firstHit)) facts.notActionable = 'its label holds only links or buttons, which would take the click';
+    else if (firstHit) facts.coveredBy = cover(firstHit);
     else facts.inViewport = false;
     return facts;
   };
@@ -1029,8 +1152,8 @@
       switch (state) {
         case 'attached': return Boolean(element);
         case 'detached': return !element;
-        case 'visible': return Boolean(element) && isVisible(element) && element.getBoundingClientRect().width > 0;
-        case 'hidden': return !element || !isVisible(element) || element.getBoundingClientRect().width === 0;
+        case 'visible': return Boolean(element) && isShown(element);
+        case 'hidden': return !element || !isShown(element);
         case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
       }
       return false;

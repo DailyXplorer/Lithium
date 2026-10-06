@@ -130,19 +130,23 @@ struct Arguments {
     }
 }
 
+/// Parameters many tools share, each described once and briefly. `tools/list` goes to the model
+/// with every turn, so what it says is paid for again and again (its budget is tested); the rules
+/// behind these parameters are in the server's instructions (`AgentHub.instructions`).
+enum AgentParam {
+    static let tab: JSONValue = ["type": "string"]
+    static let ref: JSONValue = ["type": "string"]
+    static let wait: JSONValue = ["type": "string", "enum": .array(LoadWait.allCases.map { .string($0.rawValue) })]
+    static let integer: JSONValue = ["type": "integer"]
+    static let timeout = integer
+    static let flag: JSONValue = ["type": "boolean"]
+    static let text: JSONValue = ["type": "string"]
+    static let number: JSONValue = ["type": "number"]
+    static let strings: JSONValue = ["type": "array", "items": ["type": "string"]]
+}
+
 extension AgentHub {
     static let tabTools: [AgentTool] = [tabsList, tabOpen, tabClose, tabSelect, navigate, goBack, goForward, reload, stopTool, waitFor]
-
-    private static let tabParam: JSONValue = ["type": "string", "description": "A tab id from tabs_list, such as t3."]
-    private static let waitParam: JSONValue = [
-        "type": "string", "enum": ["none", "commit", "domcontentloaded", "load", "networkidle"],
-        "description": "How far the page must get before the call returns. A page that fails to open is navigation_failed. none returns at once, with state started, before anything is known: call wait_for to learn whether the page opened. networkidle waits for load, then until none of the page’s requests has been in flight for 500 ms.",
-    ]
-    private static let timeoutParam: JSONValue = ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 15000 by default."]
-    static let diffParam: JSONValue = [
-        "type": "boolean",
-        "description": "true by default: once the page has loaded as far as domcontentloaded, the result’s diff says what changed in the viewport since this session’s last default snapshot of the page, viewport scope and 300 nodes (the whole viewport snapshot for a new page or when there was none), as snapshot text.",
-    ]
 
     static func schema(_ properties: [String: JSONValue], required: [String] = []) -> JSONValue {
         ["type": "object", "properties": .object(properties), "required": .array(required.map { .string($0) }), "additionalProperties": false]
@@ -152,7 +156,7 @@ extension AgentHub {
 
     static let tabsList = AgentTool(
         name: "tabs_list",
-        description: "Lists Lithium’s window and every open tab, the user’s own and the agent’s, with the ids other tools take. Titles and addresses come from websites and are untrusted.",
+        description: "List the window and every open tab, the user’s and the agent’s, with their ids.",
         inputSchema: schema([:])
     ) { _, _, hub in
         guard let browser = hub.browser else { return ["tabs": []] }
@@ -186,19 +190,22 @@ extension AgentHub {
 
     static let tabOpen = AgentTool(
         name: "tab_open",
-        description: "Opens a tab in the background, in the sidebar’s Agent group. The user’s selected tab and focus stay as they are; call tab_select to show it. If its page fails to load, the tab stays open, showing the error, and the error names it.",
+        description: "Open a tab in the background (Agent group) and return a snapshot of its page.",
         inputSchema: schema([
-            "url": ["type": "string", "description": "An http or https address. Without one the tab opens empty."],
-            "ephemeral": ["type": "boolean", "description": "true opens a private tab: its own cookies and storage, none of the user’s, kept in memory and dropped when it closes; never saved in the session or history. Tabs it opens are private too. false by default."],
-            "wait": waitParam,
-            "timeoutMs": timeoutParam,
+            "url": AgentParam.text,
+            "ephemeral": ["type": "boolean", "description": "Private tab: own cookies, none of the user’s, nothing saved"],
+            "snapshot": ["type": "boolean", "description": "Default true: the page’s snapshot as diff, after load"],
+            "wait": AgentParam.wait,
+            "timeoutMs": AgentParam.timeout,
         ])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let ephemeral = try arguments.bool("ephemeral", default: false)
         let url = try arguments.optionalString("url").map { _ in try arguments.url("url") }
         if let url { try hub.checkNotBlocked(url) }
-        let wait = try arguments.wait(default: .commit)
+        // The snapshot saves the agent a call, once the page has loaded enough to show it.
+        let snapshot = try arguments.bool("snapshot", default: true)
+        let wait = try arguments.wait(default: snapshot ? .load : .commit)
         let timeout = try arguments.timeout(default: 15_000)
         let deadline = ContinuousClock.now + timeout
         guard let browser = hub.browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
@@ -209,14 +216,15 @@ extension AgentHub {
         hub.touch(tab)
         guard let url else { return hub.page(named, reached: .load) }
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
-            try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.go(to: url) }
+            let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.go(to: url) }
+            return try await hub.addingDiff(to: page, of: named, for: session, if: snapshot && wait > .commit && page["download"] == nil, until: deadline)
         }
     }
 
     static let tabClose = AgentTool(
         name: "tab_close",
-        description: "Closes a tab. The user can reopen it with ⇧⌘T, as any closed tab.",
-        inputSchema: schema(["tab": tabParam], required: ["tab"])
+        description: "Close a tab (the user can reopen it).",
+        inputSchema: schema(["tab": AgentParam.tab], required: ["tab"])
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         hub.browser?.close(named.tab)
@@ -225,8 +233,8 @@ extension AgentHub {
 
     static let tabSelect = AgentTool(
         name: "tab_select",
-        description: "Shows a tab in Lithium’s window, waking it if it sleeps. Lithium stays where it is among the user’s apps: it is never brought to the front.",
-        inputSchema: schema(["tab": tabParam], required: ["tab"])
+        description: "Show a tab to the user in Lithium’s window; Lithium is never brought to the front.",
+        inputSchema: schema(["tab": AgentParam.tab], required: ["tab"])
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         // Lithium's own pages are shown to the user, never to the agent: those can wake.
@@ -240,8 +248,8 @@ extension AgentHub {
 
     static let navigate = AgentTool(
         name: "navigate",
-        description: "Opens an address in a tab and waits for it to load as far as wait says. A sleeping tab wakes, with its history.",
-        inputSchema: schema(["tab": tabParam, "url": ["type": "string"], "wait": waitParam, "timeoutMs": timeoutParam, "diff": diffParam], required: ["tab", "url"])
+        description: "Go to a URL in a tab.",
+        inputSchema: schema(["tab": AgentParam.tab, "url": AgentParam.text, "wait": AgentParam.wait, "timeoutMs": AgentParam.timeout, "diff": AgentParam.flag], required: ["tab", "url"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
@@ -267,11 +275,11 @@ extension AgentHub {
         }
     }
 
-    static let goBack = historyTool(name: "go_back", description: "Goes one page back in a tab’s history.", forward: false)
-    static let goForward = historyTool(name: "go_forward", description: "Goes one page forward in a tab’s history.", forward: true)
+    static let goBack = historyTool(name: "go_back", description: "Go back in a tab’s history.", forward: false)
+    static let goForward = historyTool(name: "go_forward", description: "Go forward in a tab’s history.", forward: true)
 
     private static func historyTool(name: String, description: String, forward: Bool) -> AgentTool {
-        AgentTool(name: name, description: description, inputSchema: schema(["tab": tabParam, "wait": waitParam, "timeoutMs": timeoutParam, "diff": diffParam], required: ["tab"])) { arguments, session, hub in
+        AgentTool(name: name, description: description, inputSchema: schema(["tab": AgentParam.tab, "wait": AgentParam.wait, "timeoutMs": AgentParam.timeout, "diff": AgentParam.flag], required: ["tab"])) { arguments, session, hub in
             let arguments = Arguments(value: arguments)
             let named = try hub.tab(named: try arguments.string("tab"))
             let wait = try arguments.wait(default: .load)
@@ -304,8 +312,8 @@ extension AgentHub {
 
     static let reload = AgentTool(
         name: "reload",
-        description: "Reloads a tab’s page. A sleeping tab wakes, which loads it.",
-        inputSchema: schema(["tab": tabParam, "wait": waitParam, "timeoutMs": timeoutParam, "diff": diffParam], required: ["tab"])
+        description: "Reload a tab’s page.",
+        inputSchema: schema(["tab": AgentParam.tab, "wait": AgentParam.wait, "timeoutMs": AgentParam.timeout, "diff": AgentParam.flag], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
@@ -328,8 +336,8 @@ extension AgentHub {
     /// Doesn't wait its turn behind the call it is there to interrupt.
     static let stopTool = AgentTool(
         name: "stop",
-        description: "Stops a tab’s page loading at once, and ends the agent call waiting on it (that call answers stopped). It keeps whatever has loaded.",
-        inputSchema: schema(["tab": tabParam], required: ["tab"])
+        description: "Stop a tab loading and end the agent call waiting on it.",
+        inputSchema: schema(["tab": AgentParam.tab], required: ["tab"])
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         try hub.checkDrivable(named)
@@ -343,20 +351,20 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load), its address matches url (a glob such as https://example.com/done*), an element reaches a state (ref with state), text shows (text) or goes (textGone, or text with present: false), none of the page’s requests has been in flight for networkIdle ms, or for a time in milliseconds (time). Give exactly one of load, url, ref, text, textGone, networkIdle and time. A sleeping tab wakes, which loads its page. Text waits read the main frame and go on across its navigations.",
+        description: "Wait for one condition: load, url, ref in a state, text, textGone, networkIdle or time.",
         inputSchema: schema([
-            "tab": tabParam,
+            "tab": AgentParam.tab,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
-            "url": ["type": "string", "description": "A glob (* any characters, ? one) matched against the whole address. Regular expressions aren’t supported."],
-            "ref": ["type": "string", "description": "An element ref from snapshot, such as e9."],
-            "state": ["type": "string", "enum": ["visible", "hidden", "enabled", "attached", "detached"], "description": "With ref; visible by default."],
-            "text": ["type": "string", "description": "Text to wait for on the page, as a snapshot would show it; case and spacing don’t matter."],
-            "present": ["type": "boolean", "description": "With text: true (default) waits until it shows, false until it is gone."],
-            "textGone": ["type": "string", "description": "Text to wait for until it is gone from the page; the same as text with present: false."],
-            "networkIdle": ["type": "integer", "minimum": 0, "maximum": 30000, "description": "Milliseconds with no request of the page in flight, such as 500."],
-            "time": ["type": "integer", "minimum": 1, "maximum": 59000, "description": "Milliseconds to wait, whatever the page does. The tab closing, the user navigating it, stop and Stop still end it."],
-            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 10000 by default (with time, time plus 10000, at most 60000)."],
-            "diff": diffParam,
+            "url": ["type": "string", "description": "Glob on the whole URL (* and ?)"],
+            "ref": AgentParam.ref,
+            "state": ["type": "string", "enum": ["visible", "hidden", "enabled", "attached", "detached"]],
+            "text": AgentParam.text,
+            "present": ["type": "boolean", "description": "With text: false waits for it to go"],
+            "textGone": AgentParam.text,
+            "networkIdle": ["type": "integer", "description": "ms with no request in flight"],
+            "time": ["type": "integer", "description": "ms to wait"],
+            "timeoutMs": ["type": "integer", "description": "Default 10000"],
+            "diff": AgentParam.flag,
         ], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)

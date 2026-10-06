@@ -217,6 +217,7 @@ private struct TabRow: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 0)
+            if tab.isEphemeral { PrivateTabBadge() }
             if tab.isMuted {
                 Button { tab.isMuted = false } label: {
                     Icon(.speakerOff, size: 12)
@@ -257,7 +258,7 @@ private struct TabRow: View {
                 Button("Use Page Title") { browser.rename(tab, to: "") }
             }
             Button("Pin Tab") { browser.pin(tab) }
-                .disabled(tab.url == nil)
+                .disabled(tab.url == nil || tab.isEphemeral)
             if tab.openedByAgent != nil {
                 Button("Move to Tab List") { withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) } }
             }
@@ -302,6 +303,16 @@ struct AgentBadge: View {
             .overlay { if isActing { Circle().strokeBorder(Color.accentColor, lineWidth: 1.5).padding(-1.5) } }
             .offset(x: 4, y: 4)
             .help("Used by an agent")
+    }
+}
+
+/// At the end of a private tab's row: nothing it shows is saved, and its cookies go with it.
+struct PrivateTabBadge: View {
+    var body: some View {
+        Icon(.privateTab, size: 12)
+            .frame(width: 18, height: 18)
+            .opacity(0.6)
+            .help("Private tab: not saved in history, and its cookies go when it closes")
     }
 }
 

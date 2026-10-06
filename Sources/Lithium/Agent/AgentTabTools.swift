@@ -173,7 +173,7 @@ extension AgentHub {
                 "favorite": .bool(tab.pinID != nil),
                 "asleep": .bool(tab.isAsleep),
                 "loading": .bool(tab.isLoading),
-                "ephemeral": false,
+                "ephemeral": .bool(tab.isEphemeral),
                 "agentTouched": .bool(hub.isTouched(tab)),
                 "agentGroup": .bool(tab.isInAgentGroup),
             ]
@@ -191,15 +191,13 @@ extension AgentHub {
         description: "Opens a tab in the background, in the sidebar’s Agent group. The user’s selected tab and focus stay as they are; call tab_select to show it. If its page fails to load, the tab stays open, showing the error, and the error names it.",
         inputSchema: schema([
             "url": ["type": "string", "description": "An http or https address. Without one the tab opens empty."],
-            "ephemeral": ["type": "boolean", "description": "Not supported yet; must be false."],
+            "ephemeral": ["type": "boolean", "description": "true opens a private tab: its own cookies and storage, none of the user’s, kept in memory and dropped when it closes; never saved in the session or history. Tabs it opens are private too. false by default."],
             "wait": waitParam,
             "timeoutMs": timeoutParam,
         ])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
-        if arguments.value["ephemeral"] == true {
-            throw AgentToolError(code: "unsupported", message: "Ephemeral tabs aren’t available in this version of Lithium.")
-        }
+        let ephemeral = try arguments.bool("ephemeral", default: false)
         let url = try arguments.optionalString("url").map { _ in try arguments.url("url") }
         if let url { try hub.checkNotBlocked(url) }
         let wait = try arguments.wait(default: .commit)
@@ -208,7 +206,7 @@ extension AgentHub {
         guard let browser = hub.browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
         // Asked before the tab opens: a file the user denies leaves no tab behind.
         if let url { try await hub.checkOpenable(url, in: nil, until: deadline) }
-        let tab = browser.newAgentTab(session: session.label)
+        let tab = browser.newAgentTab(session: session.label, privateStore: ephemeral ? .nonPersistent() : nil)
         let named = NamedTab(tab: tab, id: hub.id(for: tab))
         hub.touch(tab)
         guard let url else { return hub.page(named, reached: .load) }
@@ -347,7 +345,7 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load), its address matches url (a glob such as https://example.com/done*), an element reaches a state (ref with state), or text shows or goes (text with present). Give exactly one of load, url, ref and text. A sleeping tab wakes, which loads its page. Text waits read the main frame and go on across its navigations.",
+        description: "Waits until a tab’s page has loaded (load: domcontentloaded or load), its address matches url (a glob such as https://example.com/done*), an element reaches a state (ref with state), text shows (text) or goes (textGone, or text with present: false), or for a time in milliseconds (time). Give exactly one of load, url, ref, text, textGone and time. A sleeping tab wakes, which loads its page. Text waits read the main frame and go on across its navigations.",
         inputSchema: schema([
             "tab": tabParam,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
@@ -356,14 +354,18 @@ extension AgentHub {
             "state": ["type": "string", "enum": ["visible", "hidden", "enabled", "attached", "detached"], "description": "With ref; visible by default."],
             "text": ["type": "string", "description": "Text to wait for on the page, as a snapshot would show it; case and spacing don’t matter."],
             "present": ["type": "boolean", "description": "With text: true (default) waits until it shows, false until it is gone."],
-            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 10000 by default."],
+            "textGone": ["type": "string", "description": "Text to wait for until it is gone from the page; the same as text with present: false."],
+            "time": ["type": "integer", "minimum": 1, "maximum": 59000, "description": "Milliseconds to wait, whatever the page does. The tab closing, the user navigating it, stop and Stop still end it."],
+            "timeoutMs": ["type": "integer", "minimum": 1, "maximum": 60000, "description": "Milliseconds, 10000 by default (with time, time plus 10000, at most 60000)."],
             "diff": diffParam,
         ], required: ["tab"])
     ) { arguments, session, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
         let tab = named.tab
-        let timeout = try arguments.timeout(default: 10_000)
+        let time = arguments.value["time"] == nil ? nil : try arguments.int("time", default: 0, in: 1...59_000)
+        let timeout = try arguments.timeout(default: time.map { min(60_000, $0 + 10_000) } ?? 10_000)
+        if let time, .milliseconds(time) >= timeout { throw Arguments.invalid("time must be shorter than timeoutMs.") }
         let diff = try arguments.bool("diff", default: true)
         if arguments.value["networkIdle"] != nil {
             throw AgentToolError(code: "unsupported", message: "wait_for networkIdle needs the network log, which this version of Lithium doesn’t have yet.")
@@ -372,8 +374,11 @@ extension AgentHub {
         let pattern = try arguments.optionalString("url")
         let element = try arguments.optionalString("ref")
         let text = try arguments.optionalString("text")
-        guard [load, pattern, element, text].compactMap({ $0 }).count == 1 else { throw Arguments.invalid("Give exactly one condition: load, url, ref or text.") }
-        let condition = try DOMCondition(ref: element, text: text, arguments: arguments)
+        let textGone = try arguments.optionalString("textGone")
+        guard [load, pattern, element, text, textGone, time.map(String.init)].compactMap({ $0 }).count == 1 else {
+            throw Arguments.invalid("Give exactly one condition: load, url, ref, text, textGone or time.")
+        }
+        let condition = try DOMCondition(ref: element, text: text ?? textGone, gone: textGone != nil, arguments: arguments)
         let state = try load.map { load in
             guard let state = LoadWait(rawValue: load), state >= .domcontentloaded else { throw Arguments.invalid("load must be domcontentloaded or load.") }
             return state
@@ -404,6 +409,11 @@ extension AgentHub {
                 }
             } else if let condition {
                 try await hub.wait(for: condition, in: named, deadline: deadline, timeout: timeout)
+            } else if let time {
+                // Counted from the call's turn in the tab; the wait in line may have used the margin.
+                let end = ContinuousClock.now + .milliseconds(time)
+                guard end < deadline else { throw hub.timedOut(named, after: timeout, "its turn came too late to wait \(time) ms") }
+                _ = try await hub.watch(named, until: end) { nil as Bool? }
             }
             var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true

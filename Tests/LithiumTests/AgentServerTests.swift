@@ -116,6 +116,7 @@ struct AgentServerTests {
             "name": "lithium_status",
             "description": .string(AgentHub.statusTool.description),
             "inputSchema": ["type": "object", "properties": [:], "additionalProperties": false],
+            "annotations": ["title": "Lithium status", "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false],
         ]])
 
         let reply = try await fixture.post(Self.call("lithium_status", id: 3), session: session)

@@ -156,6 +156,26 @@ struct UISnapshotTests {
         }
     }
 
+    /// A private tab's row: the private badge at its end.
+    @Test func privateTabSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let row = HStack(spacing: 8) {
+            Favicon(image: nil, fallback: "shop.example", size: 16)
+                .frame(width: 16, height: 16)
+            Text("Checkout · Shop").lineLimit(1)
+            Spacer(minLength: 0)
+            PrivateTabBadge()
+        }
+        .font(Theme.font(13))
+        .padding(.horizontal, 10)
+        .frame(width: 240, height: 32)
+        .padding(8)
+        for isDark in [false, true] {
+            try render(row, isDark: isDark).write(to: directory.appending(path: "private-tab-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

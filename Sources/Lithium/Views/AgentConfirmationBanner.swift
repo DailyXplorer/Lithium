@@ -63,6 +63,7 @@ extension ConfirmationKind {
         case .password: .lock
         case .download: .download
         case .upload, .file: .folder
+        case .script: .code
         }
     }
 
@@ -73,6 +74,7 @@ extension ConfirmationKind {
         case .download: "Downloads"
         case .upload: "Uploads"
         case .file: "Local files"
+        case .script: "Scripts"
         }
     }
 
@@ -84,6 +86,7 @@ extension ConfirmationKind {
         case .download: "download files"
         case .upload: "upload files"
         case .file: "open local files"
+        case .script: "run scripts in pages"
         }
     }
 }

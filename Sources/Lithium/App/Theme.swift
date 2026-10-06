@@ -63,6 +63,7 @@ enum Preference {
     static let videoPopoutInsetY = "videoPopoutInsetY"
     static let agentAccess = "agentAccess"
     static let agentCaptureBodies = "agentCaptureBodies"
+    static let agentRunScripts = "agentRunScripts"
     static let agentPort = "agentPort"
 }
 

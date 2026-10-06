@@ -1204,7 +1204,59 @@
     })),
   });
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources };
+  // What `evaluate` needs before and after an agent's script. Any value in a password or card
+  // field, a card field in use, or an extension's frame (password managers fill through them)
+  // means the script doesn't run; same-origin child documents count, since the script can reach
+  // them. The values go to Lithium alone, which also takes them out of what a script returns,
+  // and the frames' addresses let it spot a payment provider's.
+  const isSecretField = (element) => isField(element) && (isPassword(element) || isCard(element));
+  const guards = () => {
+    const secrets = new Set();
+    const frames = [];
+    let card = false;
+    let manager = false;
+    const visit = (root, depth) => {
+      let focused = root.activeElement;
+      while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+      for (const element of allElements(root)) {
+        if (/^i?frame$/.test(element.localName)) {
+          if (isExtensionFrame(element)) manager = true;
+          if (element.src) frames.push(element.src);
+          let inner = null;
+          try { inner = element.contentDocument; } catch { /* cross-origin */ }
+          if (inner && depth < 4) visit(inner, depth + 1);
+        } else if (isSecretField(element)) {
+          const value = element.localName === 'select' ? (element.selectedIndex > 0 ? element.value : '') : element.value;
+          if (value) secrets.add(value);
+          if (!isPassword(element) && (value || element === focused)) card = true;
+        }
+      }
+    };
+    visit(document, 0);
+    return { token: frame.token, path: framePath(), secrets: [...secrets], card, manager, frames };
+  };
+  // Hands `evaluate`'s world the element `id` names, by an event only that world listens for (a
+  // random name, so the page can't). It goes to `document` when no element is asked for, and to
+  // `window` when it is gone or is extension UI. The frame is checked again first, in the same
+  // task as the hand-over, so no value typed since Lithium's check reaches the script; a frame
+  // that holds one gets no event, and the script never runs.
+  const handOver = ({ id, element: name }) => {
+    const held = guards();
+    if (held.secrets.length || held.card || held.manager) return { token: frame.token, blocked: true };
+    if (id === undefined) {
+      document.dispatchEvent(new CustomEvent(name));
+      return { token: frame.token };
+    }
+    const element = elementOf(id);
+    if (!element || inExtensionUI(element)) {
+      window.dispatchEvent(new CustomEvent(name));
+      return { token: frame.token, gone: !element, extensionUI: Boolean(element) };
+    }
+    element.dispatchEvent(new CustomEvent(name, { composed: true }));
+    return { token: frame.token, found: true };
+  };
+
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.

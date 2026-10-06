@@ -59,6 +59,7 @@ enum AgentToolHints {
         "network_log": Hint(title: "List a tab’s requests", effect: .reads, idempotent: true),
         "network_body": Hint(title: "Read a response body", effect: .reads, idempotent: true),
         "console_log": Hint(title: "Read a tab’s console", effect: .reads, idempotent: true),
+        "evaluate": Hint(title: "Run a script in a page", effect: .acts),
     ]
 
     /// Nil for a tool the table doesn't know, which then goes without. A hint is given only where

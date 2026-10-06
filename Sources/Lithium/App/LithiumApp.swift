@@ -74,6 +74,12 @@ struct BrowserCommands: Commands {
             Button("Print…") { browser.selectedTab?.print() }
                 .keyboardShortcut("p")
         }
+        CommandGroup(after: .pasteboard) {
+            // The focused page's, through the responder chain: nothing happens in the address bar.
+            Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
+                .keyboardShortcut("v", modifiers: [.command, .option, .shift])
+                .disabled(browser.selectedTab == nil)
+        }
         CommandGroup(after: .textEditing) {
             Divider()
             // ⌘F toggles the bar; closing it hands the keyboard back to the page.

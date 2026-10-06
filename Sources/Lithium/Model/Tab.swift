@@ -561,6 +561,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
+        controller.addUserScript(PageOverrides.script)
         browser?.nowPlaying.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, to: controller)

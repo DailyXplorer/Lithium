@@ -26,6 +26,8 @@ extension NSView {
 final class AgentStage {
     static let origin = CGPoint(x: -30_000, y: -30_000)
     var releaseDelay: Duration = .seconds(30)
+    /// Whether occlusion detection can be turned off (tests take the fallback placement).
+    var hasOcclusionControl: @MainActor (WKWebView) -> Bool = AgentStage.hasOcclusionControl
 
     private(set) var window: AgentStageWindow?
     private struct Entry {
@@ -43,13 +45,14 @@ final class AgentStage {
     /// Puts `webView` in a window, at `size`, unless it already is in one; either way it stays
     /// staged until `releaseDelay` after this call.
     func host(_ webView: WKWebView, size: CGSize) {
-        if let entry = entries[ObjectIdentifier(webView)], entry.webView?.window === window, window != nil {
+        if let window, let entry = entries[ObjectIdentifier(webView)], entry.webView?.window === window {
             entries[ObjectIdentifier(webView)]?.lastUse = .now
+            placeForFallback(window)
             scheduleSweep()
             return
         }
         guard webView.window == nil else { return }
-        let window = stageWindow(size: size)
+        let window = stageWindow(size: size, hidden: hasOcclusionControl(webView))
         Self.setOcclusionDetection(false, on: webView)
         webView.frame = CGRect(origin: .zero, size: size)
         webView.autoresizingMask = [.width, .height]
@@ -75,6 +78,7 @@ final class AgentStage {
     func didLeave(_ webView: WKWebView) {
         guard !(webView.window is AgentStageWindow), entries.removeValue(forKey: ObjectIdentifier(webView)) != nil else { return }
         Self.setOcclusionDetection(true, on: webView)
+        if entries.isEmpty { window?.orderOut(nil) }
     }
 
     func releaseAll() {
@@ -104,17 +108,27 @@ final class AgentStage {
                 if let webView = entry.webView, webView.window === self.window { self.release(webView) } else { self.entries[key] = nil }
             }
             self.sweep = nil
+            if self.entries.isEmpty { self.window?.orderOut(nil) }
             self.scheduleSweep()
         }
     }
 
-    private func stageWindow(size: CGSize) -> AgentStageWindow {
+    /// `hidden`: fully transparent, which only occlusion detection turned off lets WebKit
+    /// ignore; in the fallback placement an invisible window would count as occluded.
+    private func stageWindow(size: CGSize, hidden: Bool) -> AgentStageWindow {
         if let window {
             if window.frame.size != size { window.setContentSize(size) }
+            if !window.isVisible { show(window) }
             return window
         }
         let window = AgentStageWindow(contentRect: CGRect(origin: Self.origin, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // An ordered-in window can be moved back onto a screen by macOS (one was seen under the
+        // menu bar, a white rectangle behind Lithium's window): clear, it shows no background
+        // wherever it ends up, and with occlusion control it shows nothing at all.
+        window.alphaValue = hidden ? 0 : 1
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.ignoresMouseEvents = true
         window.isExcludedFromWindowsMenu = true
         window.collectionBehavior = [.ignoresCycle, .transient, .canJoinAllSpaces]
@@ -122,11 +136,16 @@ final class AgentStage {
         window.animationBehavior = .none
         // Keys a page doesn't handle travel up the responder chain; here they would beep.
         window.contentView = WebContainerView(frame: CGRect(origin: .zero, size: size))
-        // Behind every window, off every screen: ordered in so WebKit counts it as shown, never
-        // in front of anything, never key.
-        window.orderBack(nil)
+        show(window)
         self.window = window
         return window
+    }
+
+    /// Behind every window, off every screen: ordered in so WebKit counts it as shown, never
+    /// in front of anything, never key. Ordered out again once nothing is staged.
+    private func show(_ window: AgentStageWindow) {
+        window.setFrameOrigin(Self.origin)
+        window.orderBack(nil)
     }
 
     // MARK: Occlusion
@@ -145,10 +164,11 @@ final class AgentStage {
     }
 
     /// Without the private call, a window off every screen counts as occluded and its pages as
-    /// hidden: the stage sits under Lithium's window instead, at its frame, where it can't be
-    /// seen (design section 3, item 17: unverified). With no window of Lithium's shown, it stays off screen.
+    /// hidden: the stage sits under Lithium's window instead, at exactly its frame, where it can't
+    /// be seen (design section 3, item 17: unverified), and is put back there on every action in
+    /// case that window moved. With no window of Lithium's shown, it stays off screen.
     private func placeForFallback(_ window: AgentStageWindow) {
-        guard let webView = staged.first, !Self.hasOcclusionControl(webView) else { return }
+        guard let webView = staged.first, !hasOcclusionControl(webView) else { return }
         guard let main = NSApp?.windows.first(where: { $0.isVisible && $0.canBecomeMain && !($0 is AgentStageWindow) }) else { return }
         window.setFrame(main.frame, display: false)
         window.order(.below, relativeTo: main.windowNumber)

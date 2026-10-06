@@ -14,7 +14,8 @@ final class Privacy {
     /// Bumped whenever new rule lists are loaded, so open tabs know to swap theirs.
     private(set) var generation = 0
 
-    @ObservationIgnored private var ruleLists: [WKContentRuleList] = []
+    /// Set by tests too, for a rule of their own.
+    @ObservationIgnored var ruleLists: [WKContentRuleList] = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var updateLoop: Task<Void, Never>?
     /// False when the loaded filters predate a change to FilterSources.json, such as a new group:

@@ -168,7 +168,8 @@ extension AgentHub {
     /// `cap`, since handlers a page attaches once its scripts have loaded (jQuery's) aren't there
     /// at DOMContentLoaded, and a click before them does nothing. A page that loaded with one of
     /// its own site's scripts failed (a 503) is reloaded once. Past the cap the steps run anyway,
-    /// and the result says so in `note`; `reloaded` names the script.
+    /// and the result says so in `note`; `reloaded` names the script, or is null when the reload
+    /// failed, `note` saying why.
     func readyForSteps(_ named: NamedTab, within cap: Duration, session: MCPSession, deadline: ContinuousClock.Instant) async throws -> [String: JSONValue] {
         guard try await loads(named, within: cap, until: deadline) else { return ["note": .string(Self.stillLoading(after: cap))] }
         let site = named.tab.url?.host().map(SiteInfo.registrable)
@@ -181,7 +182,8 @@ extension AgentHub {
         switch try await step("reload", reload, session: session) {
         case .success: break
         case .failure(let error) where error.code == "timeout": fields["note"] = .string(Self.stillLoading(after: cap))
-        case .failure(let error): throw error
+        // The page was usable before: the steps run on it as it is.
+        case .failure(let error): fields = ["reloaded": .null, "note": .string("script failed: \(failed.failure); reload failed: \(error.message)")]
         }
         return fields
     }

@@ -507,7 +507,8 @@ extension AgentHub {
         // `none`: the navigation has started, and nothing more is known; wait_for tells how it ends.
         if let reached { fields["state"] = .string(reached == LoadWait.none ? "started" : reached.rawValue) }
         if let status = tab.httpStatus { fields["status"] = .int(status) }
-        if let failed = failedScripts(in: tab) { fields["failedScripts"] = failed }
+        // Before the commit, the failures known are the page before's.
+        if !tab.isAwaitingCommit, let failed = failedScripts(in: tab) { fields["failedScripts"] = failed }
         return .object(fields)
     }
 

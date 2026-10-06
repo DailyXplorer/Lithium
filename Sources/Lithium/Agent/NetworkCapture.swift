@@ -175,10 +175,10 @@ final class TabCapture {
         }
     }
 
-    /// The main frame's scripts that failed on the page shown: handlers they would have attached
-    /// are missing, and a button may do nothing.
+    /// The main frame's scripts that failed on the page loading, or the page shown when none is:
+    /// handlers they would have attached are missing, and a button may do nothing.
     var failedScripts: [NetworkEntry] {
-        entries.filter { $0.frameID == nil && $0.type == "script" && $0.failed }
+        entries.filter { $0.id >= (pageMark?.entry ?? 0) && $0.frameID == nil && $0.type == "script" && $0.failed }
     }
 
     // MARK: Console

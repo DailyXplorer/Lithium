@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Testing
+import WebKit
 @testable import Lithium
 
 /// Steps act on a page that is ready (PR 12): `batch {url}` and `tab_open {steps}` wait for the
@@ -156,6 +157,72 @@ struct AgentReadyTests {
             let snapshot = await client.call("snapshot", ["tab": .string(id)])
             #expect(snapshot["failedScripts"] == [["url": script, "status": 503]], "\(snapshot.content)")
             #expect(snapshot["text"]?.string?.hasSuffix("failed scripts: \(base.appending(path: "app.js").absoluteString) 503") == true, "\(snapshot.content)")
+        }
+    }
+
+    /// The reload after a failed script opens an alert, which fails it: the steps still run on
+    /// the page, and the tab's id comes back.
+    @Test func aReloadThatFailsLeavesThePageToTheSteps() async throws {
+        let pages = Counter()
+        let page = Data(Self.scripted.utf8)
+        let html = Self.html
+        let (server, base) = try await LocalHTTP.serve([:], answer: { path in
+            switch path {
+            case "/": (html,pages.next() == 1 ? page : page + Data("<script>alert('Busy')</script>".utf8))
+            case "/app.js": ("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nCache-Control: no-store", Data("busy".utf8))
+            default: nil
+            }
+        })
+        defer { server.cancel() }
+        try await withAgent { client in
+            let result = await client.call("tab_open", ["url": .string(base.absoluteString), "steps": [["tool": "find_text", "args": ["text": "Start"]]]])
+            #expect(!result.isError && result["tab"]?.string != nil, "\(result.content)")
+            #expect(result["reloaded"] == .null, "\(result.content)")
+            #expect(result["note"]?.string?.contains("; reload failed: ") == true, "\(result.content)")
+            guard case .array(let steps)? = result["steps"] else { Issue.record("no steps: \(result.content)"); return }
+            #expect(steps.count == 1, "\(result.content)")
+            #expect(pages.value == 2)
+        }
+    }
+
+    /// The page's own script, refused by a content rule: WebKit doesn't tell the resource load
+    /// delegate of it, so it is no failure and the page isn't reloaded.
+    @Test func aScriptTheBlockerRefusedIsNoFailure() async throws {
+        let rules = #"[{"trigger": {"url-filter": "ads\\.js"}, "action": {"type": "block"}}]"#
+        let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "agent-ready-rules-\(UUID().uuidString)")))
+        let list = try #require(try await store.compileContentRuleList(forIdentifier: "ads", encodedContentRuleList: rules))
+        let pages = Counter()
+        let scripts = Counter()
+        let (server, base) = try await LocalHTTP.serve(
+            ["/": (Self.html, Data("<title>Ads</title><p>Start</p><script src=\"/ads.js\"></script>".utf8)), "/ads.js": ("Content-Type: text/javascript", Data())],
+            requested: { path in
+                if path == "/" { _ = pages.next() }
+                if path == "/ads.js" { _ = scripts.next() }
+            }
+        )
+        defer { server.cancel() }
+        try await withAgent { client in
+            let rules = client.browser.privacy.ruleLists
+            client.browser.privacy.ruleLists = [list]
+            defer { client.browser.privacy.ruleLists = rules }
+            let result = await client.call("tab_open", ["url": .string(base.absoluteString), "steps": [["tool": "find_text", "args": ["text": "Start"]]]])
+            #expect(!result.isError && result["ok"] == 1, "\(result.content)")
+            #expect(result["reloaded"] == nil && result["failedScripts"] == nil, "\(result.content)")
+            #expect(pages.value == 1 && scripts.value == 0)
+        }
+    }
+
+    /// The failures of the page before are not the next page's, even before it says hello.
+    @Test func aNewPageDoesNotListThePageBeforesFailures() async throws {
+        let (server, base) = try await serveScripted(failures: nil, requests: Counter())
+        defer { server.cancel() }
+        try await withAgent { client in
+            let opened = await client.call("tab_open", ["url": .string(base.absoluteString), "wait": "load"])
+            #expect(opened["failedScripts"] != nil, "\(opened.content)")
+            let id = try #require(opened["tab"]?.string)
+            let result = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "b").absoluteString), "wait": "commit"])
+            #expect(!result.isError, "\(result.content)")
+            #expect(result["failedScripts"] == nil, "\(result.content)")
         }
     }
 }

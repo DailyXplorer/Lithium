@@ -973,7 +973,7 @@ extension Tab: WKNavigationDelegate {
         browser?.agent?.pageGone(self)
         dialogOwner?.answerDialog(in: self)
         guard let browser else { return }
-        guard browser.selectedTabID == id else {
+        guard browser.isOnScreen(self) else {
             sleep(configuration: browser.makeConfiguration(for: url))
             return
         }

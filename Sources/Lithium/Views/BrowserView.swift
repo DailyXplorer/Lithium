@@ -99,7 +99,9 @@ struct ContentCard: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             Group {
-                if let tab, browser.videoPopout.tab === tab {
+                if let tab, let split = browser.split(of: tab) {
+                    SplitPages(split: split)
+                } else if let tab, browser.videoPopout.tab === tab {
                     PoppedOutPlaceholder(popout: browser.videoPopout)
                 } else if let tab {
                     PageContainer(view: tab.webView)
@@ -126,13 +128,15 @@ struct ContentCard: View {
             // Floats in the top right corner, like Chrome's, below the PDF viewer's controls
             // and above the player.
             .overlay(alignment: .topTrailing) {
-                if let tab, browser.find.isVisible {
+                // In split view, over the focused page instead (`SplitPane`).
+                if let tab, browser.find.isVisible, browser.split(of: tab) == nil {
                     FindBar(tab: tab)
                         .padding(.top, tab.pdf == nil ? 10 : 50)
                         .padding(.horizontal, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
+            .overlay { SplitDropLayer() }
         }
         // The outgoing page leaves with the keyboard, which falls back on the window: keys beep and
         // the first click only focuses the page. The next run-loop turn has the new page in place.

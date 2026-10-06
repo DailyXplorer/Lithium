@@ -114,7 +114,7 @@ final class VideoPopout {
 
     private func isOutOfSight(_ tab: Tab) -> Bool {
         guard let browser else { return false }
-        return browser.tabs.contains(tab) && browser.selectedTab !== tab && !tab.isAsleep
+        return browser.tabs.contains(tab) && !browser.isOnScreen(tab) && !tab.isAsleep
     }
 
     private func show(_ tab: Tab, request current: Int) async {

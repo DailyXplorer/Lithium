@@ -11,6 +11,7 @@ struct Session: Codable, Equatable {
 
     var tabs: [Tab] = []
     var selectedIndex: Int?
+    var splits: [Split]?
 }
 
 enum SessionStore {

@@ -47,6 +47,7 @@ final class Browser {
     let videoPopout = VideoPopout()
     let nowPlaying = NowPlaying()
     let pinnedPages = PinnedPages()
+    let splits = TabSplits()
     let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
@@ -147,8 +148,9 @@ final class Browser {
                 paired.formUnion([ObjectIdentifier(tab), ObjectIdentifier(opener)])
             }
         }
+        let partner = shownPartner
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
-        for tab in tabs where tab.id != selectedTabID && tab !== videoPopout.tab
+        for tab in tabs where tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
             && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
             && tab.canSleep(idleFor: interval) {
             tab.sleep(configuration: makeConfiguration(for: tab.url))
@@ -264,8 +266,11 @@ final class Browser {
         }
         // A click only moves focus when it lands on something that takes focus (like the page).
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
-        let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-            MainActor.assumeIsolated { Self.endEditingIfOutside(event) }
+        let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                Self.endEditingIfOutside(event)
+                self?.noteClick(event)
+            }
             return event
         }
         eventMonitors = [escape, click].compactMap { $0 }
@@ -480,11 +485,13 @@ final class Browser {
             closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
+        // In split view the other side fills the window.
+        let partner = leaveSplit(tab)
         if tab.id == selectedTabID {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
-            selectedTabID = remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
-                : remaining[min(position, remaining.count - 1)].id
+            selectedTabID = partner?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
+                : remaining[min(position, remaining.count - 1)].id)
             // The tab shown next may be asleep.
             selectedTab?.markActive()
         }
@@ -608,11 +615,14 @@ final class Browser {
 
     private var session: Session {
         var session = Session()
+        var places: [Tab.ID: Int] = [:]
         for tab in tabs {
             guard let url = tab.url, !tab.isEphemeral else { continue }
             if tab.id == selectedTabID { session.selectedIndex = session.tabs.count }
+            places[tab.id] = session.tabs.count
             session.tabs.append(Session.Tab(url: url, title: tab.title, customTitle: tab.customTitle, pinID: tab.pinID))
         }
+        session.splits = savedSplits(at: places)
         return session
     }
 
@@ -621,6 +631,7 @@ final class Browser {
     private func restore(_ session: Session) {
         let pinIDs = Set(pins.map(\.id))
         var selected: Tab?
+        var restored: [Int: Tab] = [:]
         for (index, saved) in session.tabs.enumerated() {
             // An extension's own page needs its extension, which loads after the session comes back.
             guard saved.url.scheme != Extensions.scheme else { continue }
@@ -630,8 +641,10 @@ final class Browser {
             tab.pinID = saved.pinID.flatMap { pinIDs.contains($0) ? $0 : nil }
             tabs.append(tab)
             extensions.didOpen(tab)
+            restored[index] = tab
             if index == session.selectedIndex { selected = tab }
         }
+        restoreSplits(session.splits, tabs: restored)
         if let selected {
             selectedTabID = selected.id
             extensions.didActivate(selected, previous: nil)
@@ -665,6 +678,7 @@ final class Browser {
         guard tab.pinID == nil, !tab.isEphemeral, let url = tab.url else { return }
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
         pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
+        leaveSplit(tab)
         tab.pinID = pin.id
         // The user's from now on: unpinned, it goes to the tab list.
         tab.openedByAgent = nil

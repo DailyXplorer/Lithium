@@ -22,7 +22,7 @@ struct AddressBarExtrasTests {
         load.update(isLoading: false, progress: 1)
         #expect(load.phase == .finishing)
         #expect(load.value == 1)
-        load.finish()
+        load.finish(generation: load.generation)
         #expect(!load.isVisible)
         #expect(load.value == 0)
     }
@@ -31,10 +31,27 @@ struct AddressBarExtrasTests {
         var load = LoadingProgress()
         load.update(isLoading: true, progress: 0.5)
         load.update(isLoading: false, progress: 1)
+        let first = load.generation
         load.update(isLoading: true, progress: 0.1)
-        load.finish()
+        load.finish(generation: first)
         #expect(load.phase == .loading)
         #expect(load.value == 0.1)
+    }
+
+    @Test func aLoadThatFinishesDuringThePreviousExitRunsItsOwn() {
+        var load = LoadingProgress()
+        load.update(isLoading: true, progress: 0.5)
+        load.update(isLoading: false, progress: 1)
+        let first = load.generation
+        load.update(isLoading: true, progress: 0.2)
+        load.update(isLoading: false, progress: 1)
+        let second = load.generation
+
+        load.finish(generation: first)
+        #expect(load.phase == .finishing)
+        #expect(load.value == 1)
+        load.finish(generation: second)
+        #expect(!load.isVisible)
     }
 
     @Test func zoomLabelsAndSteps() {

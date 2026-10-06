@@ -7,6 +7,8 @@ struct LoadingProgress: Equatable {
 
     private(set) var phase = Phase.idle
     private(set) var value = 0.0
+    /// Counts loads, so the exit of one never ends the next.
+    private(set) var generation = 0
 
     static let minimumVisible = 0.05
 
@@ -16,6 +18,7 @@ struct LoadingProgress: Equatable {
         if isLoading {
             if phase != .loading {
                 phase = .loading
+                generation += 1
                 value = max(progress, Self.minimumVisible)
             } else if progress > value {
                 value = progress
@@ -26,10 +29,12 @@ struct LoadingProgress: Equatable {
         }
     }
 
-    /// The exit animation is over; a load that started meanwhile keeps the bar.
-    mutating func finish() {
-        guard phase == .finishing else { return }
-        self = Self()
+    /// The exit animation of load `generation` is over; a load that started meanwhile keeps
+    /// the bar, even if it is already finishing too.
+    mutating func finish(generation: Int) {
+        guard phase == .finishing, generation == self.generation else { return }
+        phase = .idle
+        value = 0
     }
 }
 
@@ -123,7 +128,7 @@ struct LoadingBar: View {
         if next.phase == .finishing {
             // The exit chains off the run to 100 %, so no timer outlives the load.
             withAnimation(Self.step) { load = next } completion: {
-                if load.phase == .finishing { exit() }
+                if load.phase == .finishing, load.generation == next.generation { exit(next.generation) }
             }
         } else {
             withAnimation(Self.step) { load = next }
@@ -133,10 +138,10 @@ struct LoadingBar: View {
         }
     }
 
-    private func exit() {
+    private func exit(_ generation: Int) {
         withAnimation(.easeOut(duration: 0.2)) { pulse = 0.5 }
         withAnimation(Self.fadeOut) { fade = 0 } completion: {
-            load.finish()
+            load.finish(generation: generation)
         }
     }
 }

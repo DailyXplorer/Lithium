@@ -75,6 +75,7 @@ final class AgentStage {
     func didLeave(_ webView: WKWebView) {
         guard !(webView.window is AgentStageWindow), entries.removeValue(forKey: ObjectIdentifier(webView)) != nil else { return }
         Self.setOcclusionDetection(true, on: webView)
+        if entries.isEmpty { window?.orderOut(nil) }
     }
 
     func releaseAll() {
@@ -104,6 +105,7 @@ final class AgentStage {
                 if let webView = entry.webView, webView.window === self.window { self.release(webView) } else { self.entries[key] = nil }
             }
             self.sweep = nil
+            if self.entries.isEmpty { self.window?.orderOut(nil) }
             self.scheduleSweep()
         }
     }
@@ -111,10 +113,17 @@ final class AgentStage {
     private func stageWindow(size: CGSize) -> AgentStageWindow {
         if let window {
             if window.frame.size != size { window.setContentSize(size) }
+            if !window.isVisible { show(window) }
             return window
         }
         let window = AgentStageWindow(contentRect: CGRect(origin: Self.origin, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // An ordered-in window can be moved back onto a screen by macOS (one was seen under the
+        // menu bar, a white rectangle behind Lithium's window): transparent, it shows nothing
+        // wherever it ends up.
+        window.alphaValue = 0
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.ignoresMouseEvents = true
         window.isExcludedFromWindowsMenu = true
         window.collectionBehavior = [.ignoresCycle, .transient, .canJoinAllSpaces]
@@ -122,11 +131,16 @@ final class AgentStage {
         window.animationBehavior = .none
         // Keys a page doesn't handle travel up the responder chain; here they would beep.
         window.contentView = WebContainerView(frame: CGRect(origin: .zero, size: size))
-        // Behind every window, off every screen: ordered in so WebKit counts it as shown, never
-        // in front of anything, never key.
-        window.orderBack(nil)
+        show(window)
         self.window = window
         return window
+    }
+
+    /// Behind every window, off every screen: ordered in so WebKit counts it as shown, never
+    /// in front of anything, never key. Ordered out again once nothing is staged.
+    private func show(_ window: AgentStageWindow) {
+        window.setFrameOrigin(Self.origin)
+        window.orderBack(nil)
     }
 
     // MARK: Occlusion

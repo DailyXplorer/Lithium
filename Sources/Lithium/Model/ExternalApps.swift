@@ -23,15 +23,18 @@ enum ExternalApps {
         if NSClassFromString("XCTestCase") != nil { return true }
         let name = ProcessInfo.processInfo.processName.lowercased()
         if name.contains("xctest") || name.contains("swiftpm-testing-helper") || name.hasSuffix("packagetests") { return true }
-        for index in 0..<_dyld_image_count() {
-            guard let image = _dyld_get_image_name(index) else { continue }
-            let path = String(cString: image)
-            if path.contains("XCTest.framework") || path.contains("Testing.framework") || path.contains("lib_Testing") || path.hasSuffix(".xctest") || path.contains(".xctest/") {
-                return true
-            }
+        return (0..<_dyld_image_count()).contains { index in
+            _dyld_get_image_name(index).map { isTestImage(String(cString: $0)) } ?? false
         }
-        return false
     }()
+
+    /// Whole names only: every AppKit app loads the system's RecapPerformanceTesting.framework,
+    /// which once made Lithium itself record its hand-offs and open nothing.
+    static func isTestImage(_ path: String) -> Bool {
+        let components = path.split(separator: "/")
+        return components.contains { $0 == "XCTest.framework" || $0 == "Testing.framework" || $0.hasSuffix(".xctest") }
+            || components.last?.hasPrefix("lib_Testing") == true
+    }
 
     private(set) static var recorded: [HandOff] = []
 

@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 import SwiftUI
 import Testing
 import WebKit
@@ -20,6 +21,24 @@ struct UISnapshotTests {
                 let view = ShieldView(host: "youtube.com", isOn: .constant(isOn), updated: updated)
                 let png = try render(view, isDark: isDark)
                 try png.write(to: directory.appending(path: "shield-\(isOn ? "on" : "off")-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    /// The PDF viewer's strip, for a PDF from the web and for a file on disk, which adds Show in Finder.
+    @Test func pdfToolbarSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let document = PDFDocument()
+        document.insert(PDFPage(), at: 0)
+        document.insert(PDFPage(), at: 1)
+        let data = try #require(document.dataRepresentation())
+        for (name, url) in [("web", URL(string: "https://example.com/files/Annual%20report.pdf")!), ("local", URL(filePath: "/tmp/Annual report.pdf"))] {
+            let reader = PDFReader(url: url)
+            #expect(reader.open(data))
+            for isDark in [false, true] {
+                let toolbar = PDFToolbar(reader: reader, showsSidebar: .constant(true)).frame(width: 760)
+                try render(toolbar, isDark: isDark).write(to: directory.appending(path: "pdf-toolbar-\(name)-\(isDark ? "dark" : "light").png"))
             }
         }
     }

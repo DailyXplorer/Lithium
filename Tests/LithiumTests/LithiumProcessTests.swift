@@ -44,17 +44,27 @@ struct LithiumProcessTests {
         #expect(!LithiumProcess.isLithium(pid, started: 0))
     }
 
+    /// A program built for the test: a copy of a system one (`/bin/sleep`) is killed at launch,
+    /// its signature only holding where macOS installed it, and leaves a crash report each run.
     @Test func takesTheLithiumOfAnyApp() throws {
-        let app = FileManager.default.temporaryDirectory.appending(path: "lithium-process-\(UUID().uuidString)/Copy.app")
-        defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
-        let executable = app.appending(path: "Contents/MacOS/Lithium")
+        let folder = FileManager.default.temporaryDirectory.appending(path: "lithium-process-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let executable = folder.appending(path: "Copy.app/Contents/MacOS/Lithium")
         try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: URL(filePath: "/bin/sleep"), to: executable)
+        let source = folder.appending(path: "sleeper.c")
+        try "#include <unistd.h>\nint main(void) { sleep(60); return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+        let compiler = Process()
+        compiler.executableURL = URL(filePath: "/usr/bin/cc")
+        compiler.arguments = [source.path, "-o", executable.path]
+        try compiler.run()
+        compiler.waitUntilExit()
+        try #require(compiler.terminationStatus == 0)
         let lithium = try Self.run(executable)
         defer { lithium.terminate() }
         let pid = lithium.processIdentifier
         let started = try #require(LithiumProcess.started(pid))
         #expect(LithiumProcess.isLithium(pid, started: started))
         #expect(!LithiumProcess.isLithium(pid, started: started - 1))
+        #expect(lithium.isRunning, "macOS let the copy run")
     }
 }

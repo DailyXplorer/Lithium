@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// A strip along the top of the page, like Safari's, instead of a floating card.
+/// A strip along the top of the page, like Safari's, instead of a floating card. No button has a
+/// key: Return typed for the page or the address bar must never grant (and remember) a permission.
+/// Escape dismisses it without remembering anything (`Browser.dismissOverlay`).
 struct PermissionPrompt: View {
     let request: PermissionRequest
     @Environment(Browser.self) private var browser
@@ -18,9 +20,7 @@ struct PermissionPrompt: View {
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 12)
             Button("Don’t Allow") { browser.permissions.answer(request, allow: false) }
-                .keyboardShortcut(.cancelAction)
             Button("Allow") { browser.permissions.answer(request, allow: true) }
-                .keyboardShortcut(.defaultAction)
         }
         .font(Theme.font(13))
         .padding(.horizontal, 16)

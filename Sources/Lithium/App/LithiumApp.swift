@@ -191,7 +191,7 @@ struct BrowserCommands: Commands {
 
     private func findStep(forward: Bool) {
         guard let tab = browser.selectedTab else { return }
-        browser.find.show()
+        browser.find.show(focusingField: false)
         Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 

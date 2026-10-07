@@ -8,18 +8,22 @@ struct ShortTabTitle {
     let label: String
 }
 
+/// The model's answer for a title. Outside `ModelTitles`, so tests can stand in for the model
+/// on any macOS.
+enum TitleOutcome {
+    case title(String)
+    /// Refused for this title (guardrails, unsupported language): don't ask again.
+    case declined
+    /// Something transient (busy, rate limited): fine to try again later.
+    case failed
+}
+
 /// Apple's on-device model (Apple Intelligence), used to name pages whose title is still too
 /// long after the rules. Runs out of process on the Neural Engine; nothing leaves the Mac.
 @available(macOS 26.0, *)
 @MainActor
 final class ModelTitles {
-    enum Outcome {
-        case title(String)
-        /// Refused for this title (guardrails, unsupported language): don't ask again.
-        case declined
-        /// Something transient (busy, rate limited): fine to try again later.
-        case failed
-    }
+    typealias Outcome = TitleOutcome
 
     private let model = SystemLanguageModel.default
     private var readySession: LanguageModelSession?

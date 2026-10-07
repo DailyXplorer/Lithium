@@ -91,7 +91,8 @@
     ])));
   };
 
-  const load = () => call('history', $('#query').value.trim()).then(render);
+  // No answer for a search a newer one replaced: the newer one renders.
+  const load = () => call('history', $('#query').value.trim()).then((visits) => visits && render(visits));
   let timer = null;
   $('#query').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
   $('#clear').onclick = () => {

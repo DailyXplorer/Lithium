@@ -84,6 +84,17 @@ final class HistoryStore {
 
     func visits(matching query: String, limit: Int = 500) -> [Visit] {
         writeTitles()
+        return Self.visits(in: db, matching: query, limit: limit)
+    }
+
+    /// `visits` off the main thread, for the History page: a query few visits match reads them
+    /// all. Nil when a newer query replaced this one before it ran.
+    func visitsInBackground(matching query: String, limit: Int = 500) async -> [Visit]? {
+        writeTitles()
+        return await search.visits(matching: query, limit: limit)
+    }
+
+    nonisolated fileprivate static func visits(in db: OpaquePointer?, matching query: String, limit: Int) -> [Visit] {
         let pattern = "%\(query.trimmingCharacters(in: .whitespaces))%"
         var statement: OpaquePointer?
         let sql = "SELECT id, url, title, visited_at FROM visits WHERE url LIKE ?1 OR title LIKE ?1 ORDER BY visited_at DESC LIMIT ?2"
@@ -185,12 +196,15 @@ final class HistoryStore {
 }
 
 /// A read-only connection to the history file, used on a queue of its own. Only the newest
-/// query runs: the ones typing made obsolete while it was busy are skipped.
+/// query of each kind runs: the ones typing made obsolete while it was busy are skipped. The
+/// address bar and the History page each have their own newest.
 private final class HistorySearch: @unchecked Sendable {
+    private enum Kind { case topSites, visits }
+
     private let fileURL: URL
     private let queue = DispatchQueue(label: "app.lithium.history-search", qos: .userInitiated)
     private let lock = NSLock()
-    private var newest = 0
+    private var newest: [Kind: Int] = [:]
     private var db: OpaquePointer?
 
     init(fileURL: URL) {
@@ -198,15 +212,23 @@ private final class HistorySearch: @unchecked Sendable {
     }
 
     func topSites(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
-        let ticket = lock.withLock { newest += 1; return newest }
+        await run(.topSites) { HistoryStore.topSites(in: $0, matching: query, limit: limit) }
+    }
+
+    func visits(matching query: String, limit: Int) async -> [Visit]? {
+        await run(.visits) { HistoryStore.visits(in: $0, matching: query, limit: limit) }
+    }
+
+    private func run<Result: Sendable>(_ kind: Kind, _ read: @escaping @Sendable (OpaquePointer?) -> Result) async -> Result? {
+        let ticket = lock.withLock { newest[kind, default: 0] += 1; return newest[kind, default: 0] }
         return await withCheckedContinuation { continuation in
             queue.async { [self] in
-                guard lock.withLock({ ticket == newest }) else { return continuation.resume(returning: nil) }
+                guard lock.withLock({ ticket == newest[kind] }) else { return continuation.resume(returning: nil) }
                 if db == nil, sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
                     sqlite3_close(db)
                     db = nil
                 }
-                continuation.resume(returning: HistoryStore.topSites(in: db, matching: query, limit: limit))
+                continuation.resume(returning: read(db))
             }
         }
     }

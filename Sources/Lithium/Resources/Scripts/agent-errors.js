@@ -2,6 +2,10 @@
 // page's uncaught errors and unhandled rejections reach this world's listeners too, with file and
 // line, so they need nothing in the page's world, where the page could see it.
 (() => {
+  // Once per document, so no error is posted twice when capture reaches a frame twice. This
+  // world's globals are out of the page's sight.
+  if (globalThis.lithiumAgentErrors) return;
+  globalThis.lithiumAgentErrors = true;
   const post = (message) => {
     try { webkit.messageHandlers.lithiumAgent.postMessage({ console: message }); } catch (_) {}
   };

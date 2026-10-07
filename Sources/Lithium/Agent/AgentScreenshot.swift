@@ -127,7 +127,23 @@ struct FrameLayout {
             }
             rects += (report.rects + unknown.map(\.box)).map { placement.place($0).intersection(placement.clip) }
         }
-        return rects.filter { !$0.isNull && !$0.isEmpty }
+        return (rects + alsoMasked).filter { !$0.isNull && !$0.isEmpty }
+    }
+
+    /// Rects painted over besides this read's own: another read's, taken around the same picture.
+    private var alsoMasked: [CGRect] = []
+
+    /// This layout painting over `later`'s masks too, a later read of the same scroll whose
+    /// fields moved, showed or went: the picture was taken between the two, so a field was at
+    /// one place, the other, or on its way. Read in document order, the nth rect of each is
+    /// most likely one field, and the box spanning both covers its way.
+    func masking(_ later: FrameLayout) -> FrameLayout {
+        // Either one that can't place its masks is refused as such.
+        guard let own = masks else { return self }
+        guard let other = later.masks else { return later }
+        var both = self
+        both.alsoMasked = other + (own.count == other.count ? zip(own, other).map { $0.union($1) } : [])
+        return both
     }
 }
 

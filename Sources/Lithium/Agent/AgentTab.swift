@@ -110,6 +110,14 @@ final class AgentTab {
             capture?.newPage(restored: restored)
             switchPage(to: token)
         } else {
+            // A frame that navigated has one document, so one token: the last one's refs are
+            // stale already, and keeping it would grow `frames` and run capture's scripts twice
+            // there. Without WebKit's frame id, nothing is dropped.
+            if let id = ResourceLoadSpy.frameID(of: frame),
+               let old = frames.first(where: { $0.key != token && ResourceLoadSpy.frameID(of: $0.value) == id })?.key {
+                frames[old] = nil
+                reports[old] = nil
+            }
             frames[token] = frame
         }
     }

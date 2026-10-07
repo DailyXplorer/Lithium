@@ -209,6 +209,15 @@ struct AgentInputTests {
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Inside</button>
             <script>document.querySelector('button').addEventListener('click', (event) => parent.postMessage('child-click:' + event.isTrusted, '*'));</script>
             """),
+        // A frame whose button replaces the frame's own document, from this server at once.
+        "/nav-frame": (html, """
+            <title>Nav frame</title><style>body { margin: 0 } iframe { position: absolute; left: 40px; top: 40px; width: 300px; height: 100px }</style>
+            <iframe id="nav" src="/nav-child"></iframe>
+            """),
+        "/nav-child": (html, """
+            <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Leave</button>
+            <script>document.querySelector('button').addEventListener('mousedown', () => { location.href = '/child'; });</script>
+            """),
         "/far-frame": (html, """
             <title>Far frame</title><style>body { margin: 0 } iframe { position: fixed; left: 0; top: 2500px; width: 300px; height: 100px }</style>
             <iframe id="far"></iframe>
@@ -780,6 +789,21 @@ struct AgentInputTests {
             let magnified = await client.call("click", ["tab": .string(eventsID), "ref": .string(press)])
             #expect(!magnified.isError, "\(magnified.content)")
             #expect(try await log(events, ["click"]) == ["click:true:b:1"])
+        }
+    }
+
+    /// A click whose press replaces its frame's document answers once the frame shows another
+    /// one: the document asked to settle never answers, and the frame's going commits nothing
+    /// in the tab.
+    @Test func aClickThatNavigatesItsFrameEndsWithTheFramesDocument() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "nav-frame"))
+            let leave = try await ref(client, id, "button", "Leave")
+            let started = ContinuousClock.now
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(leave), "timeoutMs": 15_000])
+            #expect(!clicked.isError, "\(clicked.content)")
+            #expect(ContinuousClock.now - started < .seconds(5))
+            #expect(await eventually { try await page(tab, "return document.getElementById('nav').contentDocument.querySelector('button')?.textContent") as? String == "Inside" })
         }
     }
 

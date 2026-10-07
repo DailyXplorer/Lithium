@@ -296,6 +296,21 @@ struct AgentEvaluateTests {
         }
     }
 
+    /// A result cut inside an emoji, or holding half of one, still comes back: neither makes the
+    /// answer one Swift's JSON decoder refuses ("page changed while the script ran").
+    @Test func emojiAndLoneSurrogatesInAResultComeBack() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "page"))
+            let lone = await evaluate(client, id, "() => ({ text: 'a\\uD83Db', [String.fromCharCode(0xDE00)]: 1 })")
+            #expect(lone["result"] == ["text": "a\u{FFFD}b", "\u{FFFD}": 1], "\(lone.content)")
+            // As JSON, a quote and then pairs: the cap's last unit is the first half of one.
+            let cut = await evaluate(client, id, "() => '😀'.repeat(\(AgentHub.maxScriptResult * 6))")
+            #expect(!cut.isError, "\(cut.content)")
+            #expect(cut["truncated"] == true, "\(cut.content)")
+            #expect(cut["result"]?.string?.hasPrefix("\"😀😀") == true)
+        }
+    }
+
     // MARK: Time
 
     @Test func aScriptThatNeverEndsEndsTheCallOnTime() async throws {

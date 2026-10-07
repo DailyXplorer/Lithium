@@ -1112,7 +1112,7 @@ extension AgentHub {
         do {
             // A load the events start within 50 ms is followed: the page holds its answer that
             // long, timed in the page, as a timer of Lithium's in the background fires late.
-            if let settle { try await self.settle(ctx, target.frame, settle, timeout: 1000, frame: true, hold: 50, since: since) }
+            if let settle { try await self.settle(ctx, target.frame, settle, timeout: 1000, frame: true, hold: 50, since: since, document: target.report.token) }
             var page: JSONValue?
             if since.hasMoved(tab, ctx.state) {
                 do {
@@ -1157,17 +1157,38 @@ extension AgentHub {
     /// holds the action no longer than `timeout` milliseconds. A document on its way out never
     /// answers: a load that started `since` ends the wait, as does the frame going.
     /// Returns the frame's counts of trusted events once it answered.
+    /// `gone` is thrown when the child frame's `document` went, or the frame did, instead of answering.
     @discardableResult
-    func settle(_ ctx: ActionContext, _ frame: FrameTarget, _ settle: Settle, timeout: Int, frame rendered: Bool, hold: Int = 0, since: LoadProgress? = nil) async throws -> [String: Int] {
+    func settle(_ ctx: ActionContext, _ frame: FrameTarget, _ settle: Settle, timeout: Int, frame rendered: Bool, hold: Int = 0, since: LoadProgress? = nil, document: String? = nil, gone: AgentToolError? = nil) async throws -> [String: Int] {
         let args: [String: Any] = ["type": settle.type, "count": settle.count, "timeoutMs": timeout, "scrolled": settle.scrolled, "frame": rendered, "hold": hold]
         let pending = start(ctx.webView, frame, "settle", args)
         let (tab, state) = (ctx.named.tab, ctx.state)
-        let done = try await watch(ctx.named, until: ctx.deadline) { () -> Bool? in
-            if pending.result != nil { return true }
-            // A load under way before the action that commits takes the document too.
-            return since.map { $0.hasMoved(tab, state) || tab.commits > $0.commits } == true ? true : nil
-        }
+        // A child frame's document replaced or taken away commits nothing in the tab: past half a
+        // second, the frame is asked which document it shows, after every half second. Its answer
+        // as another document, or none, ends the wait. A main frame's going is a commit. A probe
+        // unanswered for a second (sent to a document as it went) is replaced.
+        let probing = frame.info == nil ? nil : document
+        var probe: PageAnswer<Data>?
+        var probed = ContinuousClock.now
+        // False: the document went.
+        var done: Bool?
+        repeat {
+            let asked = probe
+            done = try await watch(ctx.named, until: probing == nil ? ctx.deadline : min(ctx.deadline, .now + .milliseconds(500))) { () -> Bool? in
+                if pending.result != nil { return true }
+                // A load under way before the action that commits takes the document too.
+                if since.map({ $0.hasMoved(tab, state) || tab.commits > $0.commits }) == true { return true }
+                guard let result = asked?.result else { return nil }
+                let report = (try? result.get()).flatMap { try? PageProbe.decode(WaitReport.self, from: $0) }
+                return report?.token == probing && report?.gone != true ? nil : false
+            }
+            if let probing, probe?.result != nil || probe == nil || .now - probed > .seconds(1) {
+                probe = start(ctx.webView, frame, "focused", ["token": probing])
+                probed = .now
+            }
+        } while done == nil && ContinuousClock.now < ctx.deadline
         if done == nil { throw timedOut(ctx.named, after: ctx.timeout, "its page didn’t handle the agent’s input: a script may be keeping it busy") }
+        if let gone, probing != nil, done == false || (try? pending.result?.get()) == nil { throw gone }
         let report = (try? pending.result?.get()).flatMap { try? PageProbe.decode(SettleReport.self, from: $0) }
         if let unseen = settle.unseen, report?.seen == false {
             throw AgentToolError(code: "unsupported", message: unseen)
@@ -1181,11 +1202,12 @@ extension AgentHub {
     /// before it fired, as a key that types fires one too.
     func insert(_ pending: inout String, _ input: NativeInput, _ ctx: ActionContext, _ target: ActionTarget, keys: Int, inserted: inout Int) async throws {
         guard !pending.isEmpty else { return }
-        let counts = try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false)
+        // Its document gone, the text would go to whatever has focus in the next one.
+        let counts = try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false, document: target.report.token, gone: Self.frameGone(target.ref))
         try input.insert(pending)
         inserted = max(inserted, counts["beforeinput"] ?? 0) + 1
         pending = ""
-        try await settle(ctx, target.frame, Settle(type: "beforeinput", count: inserted), timeout: 1000, frame: false)
+        try await settle(ctx, target.frame, Settle(type: "beforeinput", count: inserted), timeout: 1000, frame: false, document: target.report.token, gone: Self.frameGone(target.ref))
     }
 
     /// The size of the page area the user sees, which background pages are laid out at.

@@ -329,6 +329,31 @@ struct AgentSpeedTests {
         }
     }
 
+    /// A step's time far out of range is refused before any step runs, as the tool alone refuses
+    /// it: planning the batch added 1 to Int.max, which trapped and took Lithium down.
+    @Test func absurdStepTimesAreRefusedBeforeAnyStepRuns() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "todos"))
+            let field = try ref(await nodes(client, id), "textbox", "What needs to be done?")
+            let typed: JSONValue = ["tool": "type", "args": ["ref": .string(field), "text": "Not typed", "submit": true]]
+            for refused: JSONValue in [
+                ["tool": "wait_for", "args": ["time": .int(Int.max)]], ["tool": "wait_for", "args": ["time": .int(Int.min)]],
+                ["tool": "wait_for", "args": ["time": .double(1e30)]], ["tool": "click", "args": ["ref": .string(field), "timeoutMs": .int(Int.max)]],
+            ] {
+                let batch = await client.call("batch", ["tab": .string(id), "steps": [typed, refused]])
+                #expect(batch.code == "invalid_params", "\(refused): \(batch.content)")
+                #expect(batch.message.hasPrefix("steps[1].args:"), "\(batch.message)")
+            }
+            // No tab yet for tab_open's steps: refused the same way.
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "todos").absoluteString), "steps": [["tool": "wait_for", "args": ["time": .int(Int.max)]]]])
+            #expect(opened.code == "invalid_params", "\(opened.content)")
+            #expect(client.tab(id)?.title.contains("Not typed") == false)
+            // A time in range runs as before.
+            let waited = await client.call("batch", ["tab": .string(id), "steps": [["tool": "wait_for", "args": ["time": .double(10)]]]])
+            #expect(waited["steps"]?.items?.first?["ok"] == true, "\(waited.content)")
+        }
+    }
+
     @Test func aPasswordStepInABatchAsksAndIsRedacted() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))

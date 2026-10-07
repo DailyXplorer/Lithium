@@ -51,6 +51,8 @@ struct WindowKeysTests {
         let field = NSTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
         window.contentView?.addSubview(field)
         window.orderFrontRegardless()
+        // Ordered front, the window gives its only field the keyboard.
+        window.makeFirstResponder(nil)
 
         #expect(!browser.ownsEscape(in: window), "not the browser's window yet")
         browser.window = window

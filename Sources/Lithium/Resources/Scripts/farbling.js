@@ -21,6 +21,31 @@
   const weakMapSet = WeakMap.prototype.set;
   const weakSetHas = WeakSet.prototype.has;
   const weakSetAdd = WeakSet.prototype.add;
+  // The canvas and array members the noise goes through, likewise: a canvas `width` that reads
+  // 0, an empty `putImageData` or an array `length` past the limit once left every read clean.
+  // They work on objects of any same-origin realm, so these serve the frames and popups too.
+  const member = (proto, name) => (proto && getOwnPropertyDescriptor(proto, name)) || {};
+  const read = (getter, self) => { try { return apply(getter, self, []); } catch (_) { return 0; } };
+  const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
+  const typedLength = member(typedArray, 'length').get;
+  const typedKind = member(typedArray, Symbol.toStringTag).get;
+  const imageWidth = member(ImageData.prototype, 'width').get;
+  const imageHeight = member(ImageData.prototype, 'height').get;
+  const imageData = member(ImageData.prototype, 'data').get;
+  const createElement = member(Document.prototype, 'createElement').value;
+  const canvasWidth = member(HTMLCanvasElement.prototype, 'width');
+  const canvasHeight = member(HTMLCanvasElement.prototype, 'height');
+  const getContext = member(HTMLCanvasElement.prototype, 'getContext').value;
+  const drawImage = member(CanvasRenderingContext2D.prototype, 'drawImage').value;
+  const putImageData = member(CanvasRenderingContext2D.prototype, 'putImageData').value;
+  const OffscreenCanvasCtor = globalThis.OffscreenCanvas;
+  const offscreen = OffscreenCanvasCtor && OffscreenCanvasCtor.prototype;
+  const offscreenWidth = member(offscreen, 'width').get;
+  const offscreenHeight = member(offscreen, 'height').get;
+  const offscreenGetContext = member(offscreen, 'getContext').value;
+  const offscreenContext = globalThis.OffscreenCanvasRenderingContext2D && OffscreenCanvasRenderingContext2D.prototype;
+  const offscreenDrawImage = member(offscreenContext, 'drawImage').value;
+  const offscreenPutImageData = member(offscreenContext, 'putImageData').value;
 
   // A blank frame (about:blank, srcdoc) belongs to the site that created it.
   const hostname = location.hostname || (() => { try { return parent.location.hostname; } catch (_) { return ''; } })();
@@ -80,16 +105,17 @@
   const noisePixels = (data) => {
     const next = prng(seed);
     const gap = () => floor(log(1 - next()) / LOG_CLEAN);
-    const pixels = data.length >> 2;
+    const pixels = apply(typedLength, data, []) >> 2;
     for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
       data[(pixel << 2) + floor(next() * 3)] |= 1;
     }
   };
 
   const noiseSamples = (samples) => {
-    if (!samples || samples.length > MAX_SAMPLES) return;
+    const length = samples ? apply(typedLength, samples, []) : 0;
+    if (length > MAX_SAMPLES) return;
     const next = prng(seed ^ 0x9e3779b9);
-    for (let i = 0; i < samples.length; i++) samples[i] += (next() - 0.5) * 1e-7;
+    for (let i = 0; i < length; i++) samples[i] += (next() - 0.5) * 1e-7;
   };
 
   const cores = (real) => max(2, min(real, 2 + floor(prng(seed ^ 0x51ed270b)() * (real - 1))));
@@ -130,20 +156,21 @@
     try {
       const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
         const image = apply(target, self, args);
-        if (image.width * image.height <= MAX_PIXELS) noisePixels(image.data);
+        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []));
         return image;
       });
       const farbledCopy = (canvas) => {
-        const { width, height } = canvas;
+        // Anything but a canvas reads as empty and goes on to the native call, which throws as usual.
+        const width = read(canvasWidth.get, canvas), height = read(canvasHeight.get, canvas);
         if (!width || !height || width * height > MAX_PIXELS) return canvas;
-        const copy = win.document.createElement('canvas');
-        copy.width = width;
-        copy.height = height;
-        const context = copy.getContext('2d');
-        context.drawImage(canvas, 0, 0);
+        const copy = apply(createElement, win.document, ['canvas']);
+        apply(canvasWidth.set, copy, [width]);
+        apply(canvasHeight.set, copy, [height]);
+        const context = apply(getContext, copy, ['2d']);
+        apply(drawImage, context, [canvas, 0, 0]);
         const image = apply(getImageData, context, [0, 0, width, height]);
-        noisePixels(image.data);
-        context.putImageData(image, 0, 0);
+        noisePixels(apply(imageData, image, []));
+        apply(putImageData, context, [image, 0, 0]);
         return copy;
       };
       patch(win.HTMLCanvasElement.prototype, 'toDataURL', (target, self, args) => apply(target, farbledCopy(self), args));
@@ -153,18 +180,18 @@
     try {
       const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
         const image = apply(target, self, args);
-        if (image.width * image.height <= MAX_PIXELS) noisePixels(image.data);
+        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []));
         return image;
       });
       patch(win.OffscreenCanvas.prototype, 'convertToBlob', (target, self, args) => {
-        const { width, height } = self;
+        const width = read(offscreenWidth, self), height = read(offscreenHeight, self);
         if (!width || !height || width * height > MAX_PIXELS) return apply(target, self, args);
-        const copy = new win.OffscreenCanvas(width, height);
-        const context = copy.getContext('2d');
-        context.drawImage(self, 0, 0);
+        const copy = new OffscreenCanvasCtor(width, height);
+        const context = apply(offscreenGetContext, copy, ['2d']);
+        apply(offscreenDrawImage, context, [self, 0, 0]);
         const image = apply(offscreenGetImageData, context, [0, 0, width, height]);
-        noisePixels(image.data);
-        context.putImageData(image, 0, 0);
+        noisePixels(apply(imageData, image, []));
+        apply(offscreenPutImageData, context, [image, 0, 0]);
         return apply(target, copy, args);
       });
     } catch (_) {}
@@ -176,7 +203,8 @@
         patch(contexts[i] && contexts[i].prototype, 'readPixels', (target, self, args) => {
           const result = apply(target, self, args);
           const pixels = args[6];
-          if (pixels && pixels.BYTES_PER_ELEMENT === 1 && pixels.length <= MAX_PIXELS * 4) noisePixels(pixels);
+          const kind = pixels ? apply(typedKind, pixels, []) : undefined;
+          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray') && apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels);
           return result;
         });
       }

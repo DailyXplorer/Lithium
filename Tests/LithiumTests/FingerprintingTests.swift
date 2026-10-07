@@ -130,9 +130,12 @@ struct FingerprintingTests {
 
     /// Built-ins the page replaced before adding a frame don't keep the frame unprotected: a
     /// `call` that always answers true once made it look protected already. Nor do they strip the
-    /// page's own noise (a `Math.floor` returning a huge gap once skipped every pixel).
+    /// page's own noise (a `Math.floor` returning a huge gap once skipped every pixel, a canvas
+    /// `width` reading 0 or an empty `putImageData` once handed back the clean canvas).
     @Test func replacedBuiltInsDontUnprotectAFrame() async throws {
         let tamper = """
+            Object.defineProperty(HTMLCanvasElement.prototype, 'width', { get: () => 0 });
+            CanvasRenderingContext2D.prototype.putImageData = function () {};
             Function.prototype.call = function () { return true; };
             Object.defineProperty = function (target) { return target; };
             Object.getOwnPropertyDescriptor = function () { return undefined; };
@@ -144,6 +147,30 @@ struct FingerprintingTests {
 
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
+    }
+
+    /// Image and array members the page redefines don't skip the noise of `getImageData` or of
+    /// audio either (an `ImageData` width past the limit, a `length` past the sample limit).
+    @Test func replacedImageAndArrayMembersDontSkipTheNoise() async throws {
+        let probe = """
+            (() => {
+              Object.defineProperty(ImageData.prototype, 'width', { get: () => 1e9 });
+              Object.defineProperty(Object.getPrototypeOf(Float32Array.prototype), 'length', { get: () => 1e9 });
+              const c = document.createElement('canvas'); c.width = 20; c.height = 20;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 20, 20);
+              const data = x.getImageData(0, 0, 20, 20).data;
+              let pixels = 0; for (let i = 0; i < 1600; i++) pixels += data[i];
+              const samples = new AudioBuffer({ length: 4096, sampleRate: 44100 }).getChannelData(0);
+              let audio = 0; for (let i = 0; i < 4096; i++) audio += Math.abs(samples[i]);
+              return JSON.stringify({ pixels, audio: audio > 0 });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(protected["pixels"] != bare["pixels"])
+        #expect(bare["audio"] == AnyHashable(false))
+        #expect(protected["audio"] == AnyHashable(true))
     }
 
     @Test func popupIsProtectedBeforeItsFirstPage() async throws {

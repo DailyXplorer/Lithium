@@ -601,6 +601,28 @@ struct FingerprintingTests {
         }
     }
 
+    /// Trusted Types are checked before a write opens the document: one they reject throws and
+    /// leaves the page, one a default policy lets through still replaces it.
+    @Test func writeRejectedByTrustedTypesLeavesThePage() async throws {
+        let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"require-trusted-types-for 'script'\">"
+        let pages: [String: (html: String, expected: [String: Bool])] = [
+            "rejected": (csp + "<body><p id=\"kept\">kept</p></body>", ["kept": true, "written": false, "threw": true]),
+            "defaultPolicy": (csp + "<body><p id=\"kept\">kept</p><script>trustedTypes.createPolicy('default', { createHTML: (s) => s })</script></body>",
+                              ["kept": false, "written": true, "threw": false]),
+        ]
+        let probe = """
+            let threw = false;
+            try { document.write('<p>written</p>'); } catch (error) { threw = error instanceof TypeError; }
+            return JSON.stringify({ threw, kept: document.getElementById('kept') !== null, written: [...document.querySelectorAll('p')].some((p) => p.textContent === 'written') });
+            """
+        for (name, page) in pages {
+            for source in [nil, try Self.farbling()] {
+                let result: [String: Bool] = try await run(probe, farbling: source, html: page.html, awaiting: true)
+                #expect(result == page.expected, "\(name), farbling: \(source != nil)")
+            }
+        }
+    }
+
     /// Copies of the script for different sites agree on the marker: a cross-site frame's copy (of
     /// the top page's site) and that of the popup it opens (of its own) find each other, so
     /// toString holds between them and a window they both reach is noised once.

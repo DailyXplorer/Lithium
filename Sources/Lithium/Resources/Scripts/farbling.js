@@ -84,6 +84,9 @@
   const nodeCount = member(NodeList.prototype, 'length').get;
   const iframeWindow = member(HTMLIFrameElement.prototype, 'contentWindow').get;
   const frameWindow = member(HTMLFrameElement.prototype, 'contentWindow').get;
+  const iframeSrcdoc = member(HTMLIFrameElement.prototype, 'srcdoc').set;
+  const trustedTypesFactory = globalThis.trustedTypes;
+  const isTrustedHTML = trustedTypesFactory && member(TrustedTypePolicyFactory.prototype, 'isHTML').value;
   const regExpExec = RegExp.prototype.exec;
   const FRAME_TAG = /frame/i;
 
@@ -523,8 +526,22 @@
           // drops the `load` listener before the markup's frames fire it. An empty write opens it
           // first, exactly when the browser would (not while the document's external or module
           // script runs, say): the real write then finds the parser open and the listener back.
-          // No arguments, so no Trusted Types check.
-          try { apply(nativeWrite, self, []); } catch (_) {}
+          // No arguments, so no Trusted Types check: the real write runs that before anything else,
+          // and one it rejects must throw with the document unopened. A never-inserted frame's
+          // `srcdoc` runs the same check on the joined markup (a default policy is called once
+          // more) without parsing or loading it.
+          let allowed = true;
+          if (isTrustedHTML) {
+            let joined = '', plain = false;
+            for (let j = 0; j < args.length; j++) {
+              joined += `${args[j]}`;
+              if (!apply(isTrustedHTML, trustedTypesFactory, [args[j]])) plain = true;
+            }
+            if (plain) {
+              try { apply(iframeSrcdoc, apply(createElement, self, ['iframe']), [joined]); } catch (_) { allowed = false; }
+            }
+          }
+          if (allowed) { try { apply(nativeWrite, self, []); } catch (_) {} }
           remark(self);
           const result = apply(target, self, args);
           remark(self);

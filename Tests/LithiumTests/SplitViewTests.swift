@@ -194,6 +194,55 @@ struct SplitViewTests {
         #expect(browser.split(of: a) != nil, "navigating keeps the pair")
     }
 
+    /// ⌘1…⌘9 count the sidebar's rows: a pair is one, and its number shows the pair as it was.
+    @Test func numberShortcutsCountAPairAsOneRow() {
+        let browser = browser(with: ["a", "b", "c", "d"])
+        browser.select(tab("a", in: browser))
+        browser.openInSplit(tab("b", in: browser))
+        #expect(rows(browser) == ["a|b", "c", "d"])
+        let first = browser.pins.count
+
+        browser.selectItem(at: first + 1)
+        #expect(name(browser.selectedTab) == "c")
+        browser.selectItem(at: first + 2)
+        #expect(name(browser.selectedTab) == "d")
+        browser.selectItem(at: first)
+        #expect(name(browser.selectedTab) == "a")
+        #expect(name(browser.shownPartner) == "b")
+
+        browser.select(tab("b", in: browser))
+        browser.selectItem(at: first)
+        #expect(name(browser.selectedTab) == "b", "the focused side stays focused")
+    }
+
+    /// The other side's video popped out, its web view sits in the player: a click on the
+    /// player's controls leaves the focus, and the video, where they are.
+    @Test func aClickOnThePoppedOutPartnersPlayerKeepsItsVideoOut() throws {
+        let browser = browser(with: ["a", "b"])
+        let a = tab("a", in: browser), b = tab("b", in: browser)
+        browser.select(a)
+        browser.openInSplit(b)
+        browser.videoPopout.adopt(a)
+        defer { browser.videoPopout.discard(a) }
+        #expect(browser.shownPartner === a)
+
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.contentView = nil }
+        let content = NSView(frame: window.contentLayoutRect)
+        window.contentView = content
+        b.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        a.webView.frame = NSRect(x: 560, y: 20, width: 220, height: 124)
+        content.addSubview(b.webView)
+        content.addSubview(a.webView)
+
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: 600, y: 60), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        browser.noteClick(event)
+        #expect(browser.selectedTab === b)
+        #expect(browser.videoPopout.tab === a)
+    }
+
     /// Both sides are on screen: low memory puts other tabs to sleep, never the one beside the
     /// selected tab.
     @Test func theOtherSideNeverSleeps() async throws {

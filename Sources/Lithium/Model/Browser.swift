@@ -608,6 +608,14 @@ final class Browser {
         if let tab = selectedTab { close(tab) }
     }
 
+    /// ⌘W, which the menu sends whichever window is key: the selected tab only when that is the
+    /// browser's window. Another one in front (a detached Web Inspector, a sheet) closes instead.
+    func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
+        guard let keyWindow else { return }
+        // Before the browser's window is known, it is the one in front.
+        if window == nil || keyWindow === window { closeSelectedTab() } else { keyWindow.performClose(nil) }
+    }
+
     /// The others of its group: favorites' pages stay open, as Chrome keeps pinned tabs, and so
     /// does the Agent group for a tab of the list, or the list for an agent's tab. Tabs close
     /// bottom up, so ⇧⌘T brings them back top down, each where it was.
@@ -733,13 +741,17 @@ final class Browser {
         select(tab)
     }
 
-    /// ⌘1…⌘9 walk the favorites grid, then the tab list and the Agent group, as the sidebar reads.
+    /// ⌘1…⌘9 walk the favorites grid, then the rows of the tab list and the Agent group, as the
+    /// sidebar shows them: a split pair is one row, and its number shows the pair.
     func selectItem(at index: Int) {
-        let list = regularTabs + agentTabs
+        let rows = tabListEntries.map(\.tab) + agentTabs
         if index < pins.count {
             activate(pins[index])
-        } else if index - pins.count < list.count {
-            select(list[index - pins.count])
+        } else if index - pins.count < rows.count {
+            let tab = rows[index - pins.count]
+            // The pair already shown keeps its focused side.
+            if let selectedTab, split(of: tab)?.contains(selectedTab.id) == true { return }
+            select(tab)
         }
     }
 
@@ -752,7 +764,9 @@ final class Browser {
             guard let url = tab.url, !tab.isEphemeral else { continue }
             if tab.id == selectedTabID { session.selectedIndex = session.tabs.count }
             places[tab.id] = session.tabs.count
-            session.tabs.append(Session.Tab(url: url, title: tab.title, customTitle: tab.customTitle, pinID: tab.pinID))
+            // Not the error page's own title: the tab comes back named after its site.
+            let title = tab.isShowingError ? "" : tab.title
+            session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID))
         }
         session.splits = savedSplits(at: places)
         return session

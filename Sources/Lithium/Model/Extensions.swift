@@ -227,24 +227,34 @@ final class Extensions: NSObject {
     // MARK: Toolbar
 
     func performAction(id: String, in tab: Tab?) {
-        contexts[id]?.performAction(for: tab)
+        contexts[id]?.performAction(for: tab?.isEphemeral == true ? nil : tab)
     }
 
     // MARK: Tabs
 
+    /// Private tabs are kept from extensions, as Chrome keeps incognito windows from extensions
+    /// not allowed in them: they are in no tab list, send no event, and run no extension (`Tab.webView`).
+    var tabs: [Tab] {
+        browser?.navigationOrder.filter { !$0.isEphemeral } ?? []
+    }
+
     func didOpen(_ tab: Tab) {
+        guard !tab.isEphemeral else { return }
         controller.didOpenTab(tab)
     }
 
     func didClose(_ tab: Tab) {
+        guard !tab.isEphemeral else { return }
         controller.didCloseTab(tab, windowIsClosing: false)
     }
 
     func didActivate(_ tab: Tab, previous: Tab?) {
-        controller.didActivateTab(tab, previousActiveTab: previous)
+        guard !tab.isEphemeral else { return }
+        controller.didActivateTab(tab, previousActiveTab: previous?.isEphemeral == true ? nil : previous)
     }
 
     func didChange(_ properties: WKWebExtension.TabChangedProperties, of tab: Tab) {
+        guard !tab.isEphemeral else { return }
         controller.didChangeTabProperties(properties, for: tab)
     }
 }
@@ -366,11 +376,12 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     }
 
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] {
-        extensions.browser?.navigationOrder ?? []
+        extensions.tabs
     }
 
+    /// None while a private tab shows.
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
-        extensions.browser?.selectedTab
+        extensions.browser?.selectedTab.flatMap { $0.isEphemeral ? nil : $0 }
     }
 
     func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType {

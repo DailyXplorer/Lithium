@@ -158,4 +158,24 @@ struct ExtensionsTests {
         #expect(second.contexts[id] != nil)
         #expect(!FileManager.default.fileExists(atPath: stale.path))
     }
+
+    /// Turned off again while it was still loading (the settings switch doesn't wait), the
+    /// extension stays off.
+    @Test func turnedOffWhileLoadingStaysOff() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        await extensions.setEnabled(false, id: id)
+        try #require(extensions.contexts[id] == nil)
+
+        let turningOn = Task { await extensions.setEnabled(true, id: id) }
+        while extensions.installed.first?.isEnabled != true { await Task.yield() }
+        try #require(extensions.contexts[id] == nil, "the load ended before it could be turned off")
+        await extensions.setEnabled(false, id: id)
+        await turningOn.value
+
+        #expect(extensions.contexts[id] == nil)
+        #expect(extensions.installed.first?.isEnabled == false)
+    }
 }

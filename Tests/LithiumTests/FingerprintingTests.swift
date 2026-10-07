@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 import WebKit
@@ -52,14 +53,18 @@ struct FingerprintingTests {
         })()
         """
 
-    /// The names the script adds to a page's window: its marker.
-    private static let markerProbe = "JSON.stringify(Object.getOwnPropertyNames(window).filter((name) => name.startsWith('__')))"
+    /// The names the page's window has of its own.
+    private static let namesProbe = "JSON.stringify([...Object.getOwnPropertyNames(window), ...Object.getOwnPropertySymbols(window).map(String)])"
 
-    private static func farbling(session: String = "test-key", mark: String = "0123456789abcdef") throws -> String {
+    private static func farbling(key: String = "test-key", site: String = "example.com") throws -> String {
         let url = try #require(Resources.bundle.url(forResource: "farbling", withExtension: "js"))
-        return try String(contentsOf: url, encoding: .utf8)
-            .replacingOccurrences(of: "__LITHIUM_SESSION_KEY__", with: session)
-            .replacingOccurrences(of: "__LITHIUM_MARK_KEY__", with: mark)
+        return Privacy.farbling(try String(contentsOf: url, encoding: .utf8), key: SymmetricKey(data: Data(key.utf8)), site: site)
+    }
+
+    /// A page's canvas hash under `source`.
+    private func canvasHash(_ source: String, at base: String = "https://example.com/") async throws -> AnyHashable? {
+        let result: [String: AnyHashable] = try await run(Self.probe, farbling: source, at: base)
+        return result["page"]
     }
 
     private func run(withFarbling: Bool, probe: String = Self.probe) async throws -> [String: AnyHashable] {
@@ -69,7 +74,7 @@ struct FingerprintingTests {
 
     /// `before` runs ahead of the script; `awaiting` runs the probe as an async function body,
     /// for what the page only gets later.
-    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", before: String? = nil, awaiting: Bool = false) async throws -> Value {
+    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", html: String = "<body></body>", before: String? = nil, awaiting: Bool = false) async throws -> Value {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         if let before {
@@ -83,7 +88,7 @@ struct FingerprintingTests {
         let popups = Popups()
         webView.navigationDelegate = loaded
         webView.uiDelegate = popups
-        webView.loadHTMLString("<body></body>", baseURL: URL(string: base)!)
+        webView.loadHTMLString(html, baseURL: URL(string: base)!)
         try await loaded.wait()
         let result: Any? = awaiting
             ? try await webView.callAsyncJavaScript(probe, contentWorld: .page)
@@ -106,24 +111,43 @@ struct FingerprintingTests {
         }
     }
 
-    /// The marker every protected window carries is a keyed hash of its site under a key of its
-    /// own: no identifier shared across sites, and nothing that leads back to the noise's seed.
-    @Test func markerDiffersFromSiteToSiteAndIsIndependentOfTheSeed() async throws {
-        let bare: [String] = try await run(Self.markerProbe, farbling: nil)
-        let marker = { (source: String, base: String) async throws -> [String] in
-            let names: [String] = try await self.run(Self.markerProbe, farbling: source, at: base)
-            return names.filter { !bare.contains($0) }
-        }
-        let source = try Self.farbling()
-        let first = try await marker(source, "https://news.example/")
-        #expect(first.count == 1)
-        #expect(try await marker(source, "https://news.example/") == first)
-        #expect(try await marker(source, "https://shop.example.org/") != first)
-        #expect(try await marker(Self.farbling(session: "another-key"), "https://news.example/") == first)
-        #expect(try await marker(Self.farbling(mark: "fedcba9876543210"), "https://news.example/") != first)
+    /// A protected window carries no marker a page could list: the window property it once had
+    /// said "Lithium" on every site.
+    @Test func windowCarriesNoMarker() async throws {
+        let bare: [String] = try await run(Self.namesProbe, farbling: nil)
+        let protected: [String] = try await run(Self.namesProbe, farbling: Self.farbling())
+        #expect(protected == bare)
     }
 
-    /// Private tabs farble with keys of their own, so their marker isn't a normal tab's either.
+    /// The seed is an HMAC of the registrable site under the launch's key: a page that recovers
+    /// its own can't run it back to the key, and the subdomains of a public suffix such as
+    /// github.io, or two IP addresses, are sites of their own.
+    @Test func seedIsAKeyedHashOfTheRegistrableSite() throws {
+        let site = { (address: String) in Privacy.farblingSite(URL(string: address)!) }
+        #expect(site("https://alice.github.io/") == "alice.github.io")
+        #expect(site("https://www.example.co.uk/a") == "example.co.uk")
+        #expect(site("https://shop.example.co.uk/") == "example.co.uk")
+        #expect(site("http://10.0.0.1/") == "10.0.0.1")
+        #expect(site("http://192.168.0.1:8080/") == "192.168.0.1")
+        #expect(site("http://[::1]/") == "::1")
+
+        let key = SymmetricKey(size: .bits256)
+        let template = "'__LITHIUM_SEED__' '__LITHIUM_MARK__'"
+        let source = Privacy.farbling(template, key: key, site: "alice.github.io")
+        let hmac = HMAC<SHA256>.authenticationCode(for: Data("seed:alice.github.io".utf8), using: key)
+        let seed = hmac.prefix(16).map { String(format: "%02x", $0) }.joined()
+        #expect(source.hasPrefix("'\(seed)' 'm"))
+        #expect(!source.contains("__LITHIUM_"))
+        #expect(Privacy.farbling(template, key: key, site: "bob.github.io") != source)
+        #expect(Privacy.farbling(template, key: key, site: "10.0.0.1") != Privacy.farbling(template, key: key, site: "192.168.0.1"))
+
+        let privacy = Privacy()
+        let script = { (address: String) in privacy.scripts(true, for: URL(string: address)!).first?.source }
+        #expect(script("https://alice.github.io/") != script("https://bob.github.io/"))
+        #expect(script("https://www.example.co.uk/") == script("https://shop.example.co.uk/"))
+    }
+
+    /// Private tabs farble with keys of their own: the same site's canvas reads differently there.
     @Test func privateTabsGetTheirOwnKeys() async throws {
         let privacy = Privacy()
         let url = URL(string: "https://news.example/")!
@@ -131,9 +155,7 @@ struct FingerprintingTests {
         let ephemeral = try #require(privacy.scripts(true, for: url, isPrivate: true).first?.source)
         #expect(!normal.contains("__LITHIUM_") && !ephemeral.contains("__LITHIUM_"))
         #expect(normal != ephemeral)
-        let normalMarker: [String] = try await run(Self.markerProbe, farbling: normal, at: url.absoluteString)
-        let privateMarker: [String] = try await run(Self.markerProbe, farbling: ephemeral, at: url.absoluteString)
-        #expect(normalMarker != privateMarker)
+        #expect(try await canvasHash(normal, at: url.absoluteString) != canvasHash(ephemeral, at: url.absoluteString))
     }
 
     /// Built-ins the page replaced before adding a frame don't keep the frame unprotected: a
@@ -258,5 +280,135 @@ struct FingerprintingTests {
         #expect(bare["page"] == bare["frame"])
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
+    }
+
+    /// Frames made from markup, from a fragment, or by an insertion method other than the
+    /// classic three are protected by the time the page reaches them through `frames`.
+    @Test func framesFromMarkupAndFragmentsAreProtected() async throws {
+        let probe = """
+            (() => {
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const last = () => hash(frames[frames.length - 1]);
+              const box = () => document.body.appendChild(document.createElement('div'));
+              const iframe = () => document.createElement('iframe');
+              const fragment = () => { const f = document.createDocumentFragment(); f.appendChild(iframe()); return f; };
+              const routes = { page: hash(window) };
+              box().insertAdjacentHTML('beforeend', '<iframe></iframe>'); routes.insertAdjacentHTML = last();
+              box().innerHTML = '<IFRAME></IFRAME>'; routes.innerHTML = last();
+              box().appendChild(document.createElement('p')).outerHTML = '<iframe></iframe>'; routes.outerHTML = last();
+              box().appendChild(fragment()); routes.appendChildFragment = last();
+              box().append(fragment()); routes.appendFragment = last();
+              const template = document.createElement('template'); template.innerHTML = '<iframe></iframe>';
+              box().appendChild(template.content); routes.template = last();
+              box().replaceChildren(iframe()); routes.replaceChildren = last();
+              box().insertAdjacentElement('beforeend', iframe()); routes.insertAdjacentElement = last();
+              const range = document.createRange(); range.selectNodeContents(box()); range.insertNode(iframe()); routes.insertNode = last();
+              if (Element.prototype.setHTMLUnsafe) { box().setHTMLUnsafe('<iframe></iframe>'); routes.setHTMLUnsafe = last(); }
+              const host = box().appendChild(iframe());
+              host.contentDocument.write('<iframe></iframe>'); routes.write = hash(host.contentWindow.frames[0]);
+              return JSON.stringify(routes);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare.count >= 11)
+        #expect(Set(bare.values).count == 1, "\(bare)")
+        #expect(protected["page"] != bare["page"])
+        for (route, value) in protected {
+            #expect(value == protected["page"], "\(route)")
+        }
+    }
+
+    /// Any realm's `toString` sees through the replacements of every other: of a frame the hooks
+    /// protected, and of one WebKit's injection protected with a copy of the script of its own.
+    /// A blank frame that keeps its realm when its page loads gets the noise once, not twice.
+    @Test func toStringHoldsAcrossRealms() async throws {
+        let probe = """
+            const hash = (win) => {
+              const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+              return (h >>> 0).toString(16);
+            };
+            const native = (fn, toString) => /\\[native code\\]/.test(toString.call(fn));
+            const disguised = (child) => native(child.HTMLCanvasElement.prototype.toDataURL, Function.prototype.toString)
+              && native(HTMLCanvasElement.prototype.toDataURL, child.Function.prototype.toString)
+              && native(child.Function.prototype.toString, Function.prototype.toString);
+            const blank = document.body.appendChild(document.createElement('iframe')).contentWindow;
+            const reused = document.createElement('iframe');
+            reused.srcdoc = '<p>frame</p>';
+            document.body.appendChild(reused);
+            await new Promise((done) => { reused.onload = done; setTimeout(done, 3000); });
+            return JSON.stringify({ page: hash(window), loaded: hash(frames[0]), reused: hash(reused.contentWindow),
+              blank: disguised(blank), loadedDisguised: disguised(frames[0]), reusedDisguised: disguised(reused.contentWindow) });
+            """
+        let html = "<body><iframe srcdoc=\"<p>frame</p>\"></iframe></body>"
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, html: html, awaiting: true)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: html, awaiting: true)
+
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["loaded"] == protected["page"])
+        #expect(protected["reused"] == protected["page"])
+        #expect(protected["blank"] == AnyHashable(true))
+        #expect(protected["loadedDisguised"] == AnyHashable(true))
+        #expect(protected["reusedDisguised"] == AnyHashable(true))
+    }
+
+    /// Pixel noise moves values up or down, so clearing each byte's lowest bit doesn't remove it,
+    /// and where it lands follows the image: a blank canvas doesn't show where it goes in another.
+    @Test func pixelNoiseSurvivesClearingTheLowBit() async throws {
+        let probe = """
+            (() => {
+              const read = (draw) => {
+                const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); draw(x);
+                return x.getImageData(0, 0, 200, 40).data;
+              };
+              const text = read((x) => { x.font = '18px Arial'; x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40); x.fillStyle = '#069'; x.fillText('Lithium fp', 4, 26); });
+              let masked = 0; for (let i = 0; i < text.length; i++) masked = (Math.imul(masked, 31) + (text[i] & 0xfe)) | 0;
+              const spots = (data, clean) => { const at = []; for (let i = 0; i < data.length; i++) if (i % 4 !== 3 && data[i] !== clean) at.push(i); return at.join(); };
+              const blank = spots(read(() => {}), 0);
+              const grey = spots(read((x) => { x.fillStyle = '#808080'; x.fillRect(0, 0, 200, 40); }), 128);
+              return JSON.stringify({ masked, blank, grey });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare["blank"] == AnyHashable("") && bare["grey"] == AnyHashable(""))
+        #expect(protected["masked"] != bare["masked"])
+        #expect(protected["blank"] != AnyHashable(""))
+        #expect(protected["grey"] != AnyHashable(""))
+        #expect(protected["blank"] != protected["grey"])
+    }
+
+    /// Frequency data is in decibels, where an offset as small as the samples' rounds away in
+    /// float32; the noise is relative there, so it shows.
+    @Test func frequencyNoiseSurvivesFloat32Rounding() async throws {
+        // Stands for an analyser's output, without audio hardware: -30.5 dB in every bin.
+        let analyser = "AnalyserNode.prototype.getFloatFrequencyData = function (values) { values.fill(-30.5); };"
+        let probe = """
+            (() => {
+              const analyser = new OfflineAudioContext(1, 128, 44100).createAnalyser();
+              const values = new Float32Array(analyser.frequencyBinCount);
+              analyser.getFloatFrequencyData(values);
+              let moved = 0, most = 0;
+              for (let i = 0; i < values.length; i++) if (values[i] !== -30.5) { moved++; most = Math.max(most, Math.abs(values[i] + 30.5)); }
+              return JSON.stringify({ moved, count: values.length, small: most < 0.001 });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, before: analyser)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), before: analyser)
+
+        #expect(bare["moved"] == AnyHashable(0))
+        let count = try #require(protected["count"] as? Int)
+        #expect(try #require(protected["moved"] as? Int) > count / 2)
+        #expect(protected["small"] == AnyHashable(true))
     }
 }

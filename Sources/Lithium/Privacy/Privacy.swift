@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import WebKit
@@ -31,9 +32,11 @@ final class Privacy {
     /// down is retried after 1, 2, 4… hours, up to a day, not with every other list each hour.
     @ObservationIgnored private var failedUpdates = 0
     @ObservationIgnored private var nextUpdate = Date.distantPast
-    @ObservationIgnored private let farbling: WKUserScript
+    @ObservationIgnored private let farblingTemplate: String
+    /// Drawn at launch, so the noise of a site changes from launch to launch.
+    @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
     /// Private tabs farble with keys of their own: nothing in them matches the same site in a normal tab.
-    @ObservationIgnored private let privateFarbling: WKUserScript
+    @ObservationIgnored private let privateFarblingKey = SymmetricKey(size: .bits256)
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
 
@@ -47,24 +50,34 @@ final class Privacy {
     init() {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
 
-        let template = Resources.bundle.url(forResource: "farbling", withExtension: "js")
+        farblingTemplate = Resources.bundle.url(forResource: "farbling", withExtension: "js")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        farbling = Self.makeFarbling(template)
-        privateFarbling = Self.makeFarbling(template)
 
         let safari = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
         let safariVersion = safari?["CFBundleShortVersionString"] as? String ?? "26.0"
         userAgentSuffix = "Version/\(safariVersion) Safari/605.1.15"
     }
 
-    /// The script with fresh random keys: one seeds the noise, the other, independent, names the
-    /// marker each page window carries, so reading the marker tells a page nothing of the seeds.
-    private static func makeFarbling(_ template: String) -> WKUserScript {
-        let key = { (bytes: Int) in (0..<bytes).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined() }
-        let source = template
-            .replacingOccurrences(of: "__LITHIUM_SESSION_KEY__", with: key(16))
-            .replacingOccurrences(of: "__LITHIUM_MARK_KEY__", with: key(8))
-        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+    /// The script for pages of `site`: its noise seed and marker name are HMACs of the site under
+    /// the launch's key, worked out here so a page that recovers its own values can't run them
+    /// back to the key or on to another site's.
+    static func farbling(_ template: String, key: SymmetricKey, site: String) -> String {
+        let value = { (label: String) in
+            HMAC<SHA256>.authenticationCode(for: Data("\(label):\(site)".utf8), using: key)
+                .prefix(16).map { String(format: "%02x", $0) }.joined()
+        }
+        return template
+            .replacingOccurrences(of: "__LITHIUM_SEED__", with: value("seed"))
+            .replacingOccurrences(of: "__LITHIUM_MARK__", with: "m" + value("mark"))
+    }
+
+    /// The site farbling is keyed on: the registrable domain from the public suffix list (so
+    /// `alice.github.io` and `bob.github.io` differ), or the address itself for an IP host.
+    nonisolated static func farblingSite(_ url: URL) -> String {
+        guard let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")), !host.isEmpty else { return "" }
+        var address = in6_addr()
+        if host.contains(":") ? inet_pton(AF_INET6, host, &address) == 1 : inet_pton(AF_INET, host, &address) == 1 { return host }
+        return SiteInfo.registrable(host)
     }
 
     func start() {
@@ -204,7 +217,9 @@ final class Privacy {
     /// The protection scripts for `url`.
     func scripts(_ enabled: Bool, for url: URL, isPrivate: Bool = false) -> [WKUserScript] {
         guard enabled else { return [] }
-        let farbling = isPrivate ? privateFarbling : self.farbling
+        // Every frame gets the top page's site, as in Brave: a frame embedded on many sites farbles differently on each.
+        let farbling = WKUserScript(source: Self.farbling(farblingTemplate, key: isPrivate ? privateFarblingKey : farblingKey, site: Self.farblingSite(url)),
+                                    injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }

@@ -1,13 +1,21 @@
 // Brave-style farbling: tiny, deterministic noise per (session, site) so fingerprints
 // stay stable on one site but cannot be linked across sites or sessions.
 // WebKit's own fingerprinting protections run underneath (see Privacy.swift); this covers
-// what they leave: audio, WebGL and offscreen reads, CPU count, voices, and same-origin
-// iframes, a classic way to fetch pristine APIs from a fresh window.
+// what they leave in the page's windows: audio, WebGL and offscreen reads, CPU count, voices,
+// and same-origin iframes, a classic way to fetch pristine APIs from a fresh window.
+// Not workers: WebKit injects user scripts into documents only, and the one way in, running a
+// worker from a blob that imports the page's script, gives the worker a blob address. Relative
+// URLs in it (importScripts, fetch, nested workers) then fail; a CSP that allows the worker's
+// address but not blob: refuses it, and one whose script-src doesn't cover that address refuses
+// the import inside the worker, where nothing can fall back; a SharedWorker would no longer be
+// shared. So a worker sees the real CPU count and unfarbled OffscreenCanvas and WebGL reads.
 (() => {
   'use strict';
-  const KEY = '__LITHIUM_SESSION_KEY__';
-  // Names the marker below; random too, and independent of KEY, so the marker gives no seed away.
-  const MARK_KEY = '__LITHIUM_MARK_KEY__';
+  // Keyed hashes of the top page's site under a key of the launch (see Privacy.farbling): every
+  // frame of a page shares them, and nothing leads from them to the key or another site's.
+  const SEED = '__LITHIUM_SEED__';
+  // Names the marker below; hashed apart from SEED, so the marker gives no seed away.
+  const MARK = '__LITHIUM_MARK__';
   const MAX_PIXELS = 500000;
   const MAX_SAMPLES = 500000;
   // Taken once: the page shares this world and could replace any of them before a frame or
@@ -55,86 +63,135 @@
   const voiceLocal = member(voiceProto, 'localService').get;
   const voiceLang = member(voiceProto, 'lang').get;
   const { toLowerCase, startsWith, indexOf, slice } = String.prototype;
+  // And what marks a protected window, and finds the frames that markup creates.
+  const { getPrototypeOf } = Object;
+  const CustomEventCtor = CustomEvent;
+  const eventDetail = member(CustomEvent.prototype, 'detail').get;
+  const preventDefault = member(Event.prototype, 'preventDefault').value;
+  const addEventListener = member(EventTarget.prototype, 'addEventListener').value;
+  const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
+  const nodeType = member(Node.prototype, 'nodeType').get;
+  const parentNode = member(Node.prototype, 'parentNode').get;
+  // By node type: elements, documents, fragments and shadow roots.
+  const queryAll = { __proto__: null,
+    1: member(Element.prototype, 'querySelectorAll').value,
+    9: member(Document.prototype, 'querySelectorAll').value,
+    11: member(DocumentFragment.prototype, 'querySelectorAll').value };
+  const nodeCount = member(NodeList.prototype, 'length').get;
+  const iframeWindow = member(HTMLIFrameElement.prototype, 'contentWindow').get;
+  const frameWindow = member(HTMLFrameElement.prototype, 'contentWindow').get;
+  const regExpExec = RegExp.prototype.exec;
+  const FRAME_TAG = /frame/i;
 
-  // A blank frame (about:blank, srcdoc) belongs to the site that created it.
-  const hostname = location.hostname || (() => { try { return parent.location.hostname; } catch (_) { return ''; } })();
-  const labels = hostname.split('.');
-  const shortSecondLevel = labels.length > 2 && labels.at(-2).length <= 3 && labels.at(-1).length === 2;
-  const site = labels.slice(shortSecondLevel ? -3 : -2).join('.');
-
-  const fnv = (text) => {
-    let hash = 0x811c9dc5;
-    for (const char of text) {
-      hash ^= char.charCodeAt(0);
-      hash = imul(hash, 0x01000193);
-    }
-    return hash >>> 0;
-  };
-  const seed = fnv(KEY + site);
-
-  // HalfSipHash-2-4 of `text` under the 64-bit key `hex`: a keyed hash a page can't run
-  // backwards to the key, unlike FNV, whose steps undo one by one.
-  const sipHash = (hex, text) => {
-    const k0 = parseInt(hex.slice(0, 8), 16) | 0;
-    const k1 = parseInt(hex.slice(8, 16), 16) | 0;
-    let v0 = k0, v1 = k1, v2 = 0x6c796765 ^ k0, v3 = 0x74656462 ^ k1;
-    const rotl = (x, b) => (x << b) | (x >>> (32 - b));
-    const rounds = (count) => {
-      for (let i = 0; i < count; i++) {
-        v0 = (v0 + v1) | 0; v1 = rotl(v1, 5) ^ v0; v0 = rotl(v0, 16);
-        v2 = (v2 + v3) | 0; v3 = rotl(v3, 8) ^ v2;
-        v0 = (v0 + v3) | 0; v3 = rotl(v3, 7) ^ v0;
-        v2 = (v2 + v1) | 0; v1 = rotl(v1, 13) ^ v2; v2 = rotl(v2, 16);
-      }
+  // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
+  // noisy pixels, unlike the 32 bits it once had. The first outputs are dropped to spread the salt.
+  const seedWords = [0, 8, 16, 24].map((at) => parseInt(SEED.slice(at, at + 8), 16) | 0);
+  const prng = (salt) => {
+    let a = seedWords[0], b = seedWords[1], c = seedWords[2], d = seedWords[3] ^ salt;
+    const next = () => {
+      const t = (((a + b) | 0) + d) | 0;
+      d = (d + 1) | 0;
+      a = b ^ (b >>> 9);
+      b = (c + (c << 3)) | 0;
+      c = ((c << 21) | (c >>> 11)) + t | 0;
+      return (t >>> 0) / 4294967296;
     };
-    const word = (m) => { v3 ^= m; rounds(2); v0 ^= m; };
-    // Two UTF-16 units a word; the last word carries the length, as in SipHash.
-    for (let i = 0; i + 1 < text.length; i += 2) word(text.charCodeAt(i) | (text.charCodeAt(i + 1) << 16));
-    word((text.length % 2 ? text.charCodeAt(text.length - 1) : 0) | ((text.length & 0xff) << 24));
-    v2 ^= 0xff;
-    rounds(4);
-    return (v1 ^ v3) >>> 0;
-  };
-  // Marks a protected window across realms (WebKit's per-frame injection and the iframe hook
-  // below can both reach a frame, always one of the same site). A keyed hash of the site: pages
-  // can't forge it, and it differs from site to site, so it is no identifier they could share.
-  const MARK = '__' + sipHash(MARK_KEY, site).toString(36);
-  const prng = (state) => () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = imul(state ^ (state >>> 15), 1 | state);
-    t = (t + imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    for (let i = 0; i < 12; i++) next();
+    return next;
   };
 
-  // Setting (not toggling) low bits keeps the noise idempotent: a window reached both by
-  // WebKit's per-frame injection and by the iframe hook below gets the same result.
-  // One pixel in twenty gets noise. The gaps between them are drawn directly (geometric
-  // distribution), so the cost follows the noisy pixels rather than the size of the image.
+  // A hash of the image read, so where the noise goes changes with the image: a blank canvas
+  // shows a page nothing of where it lands in another. Four bytes at a time where they line up.
+  const Uint32ArrayCtor = Uint32Array;
+  const typedBuffer = member(typedArray, 'buffer').get;
+  const typedOffset = member(typedArray, 'byteOffset').get;
+  const hashBytes = (data, length) => {
+    let hash = length ^ 0x811c9dc5, done = 0;
+    try {
+      const count = length >> 2;
+      const words = new Uint32ArrayCtor(apply(typedBuffer, data, []), apply(typedOffset, data, []), count);
+      for (let i = 0; i < count; i++) hash = imul(hash ^ words[i], 0x01000193);
+      done = count << 2;
+    } catch (_) {}
+    for (let i = done; i < length; i++) hash = imul(hash ^ data[i], 0x01000193);
+    return hash;
+  };
+
+  // One pixel in twenty moves a color by one, up or down: unlike setting a low bit, nothing
+  // as simple as clearing one undoes it. The gaps between them are drawn directly (geometric
+  // distribution), so past the hash the cost follows the noisy pixels. A window gets this once
+  // (the marker below), so the noise needn't hold when applied twice.
   const LOG_CLEAN = log(0.95);
   const noisePixels = (data) => {
-    const next = prng(seed);
+    const length = apply(typedLength, data, []);
+    const next = prng(hashBytes(data, length));
     const gap = () => floor(log(1 - next()) / LOG_CLEAN);
-    const pixels = apply(typedLength, data, []) >> 2;
+    const pixels = length >> 2;
     for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
-      data[(pixel << 2) + floor(next() * 3)] |= 1;
+      const at = (pixel << 2) + floor(next() * 3);
+      const value = data[at], step = next() < 0.5 ? 1 : -1;
+      data[at] = value + step;
+      // At either end of the range the write clamps or wraps: go the other way.
+      if (data[at] !== value + step) data[at] = value - step;
     }
   };
 
   const noiseSamples = (samples) => {
     const length = samples ? apply(typedLength, samples, []) : 0;
     if (length > MAX_SAMPLES) return;
-    const next = prng(seed ^ 0x9e3779b9);
+    const next = prng(0x9e3779b9);
     for (let i = 0; i < length; i++) samples[i] += (next() - 0.5) * 1e-7;
   };
 
-  const cores = (real) => max(2, min(real, 2 + floor(prng(seed ^ 0x51ed270b)() * (real - 1))));
+  // Frequencies are decibels, around -30 to -100: an offset as small as the samples' rounds away
+  // in float32, so each moves by up to 1e-5 of itself instead (a ten-thousandth of a decibel).
+  const noiseFrequencies = (values) => {
+    const length = values ? apply(typedLength, values, []) : 0;
+    if (length > MAX_SAMPLES) return;
+    const next = prng(0x2545f491);
+    for (let i = 0; i < length; i++) values[i] *= 1 + (next() - 0.5) * 2e-5;
+  };
 
+  const cores = (real) => max(2, min(real, 2 + floor(prng(0x51ed270b)() * (real - 1))));
+
+  // Replacements report the original's source through toString, so pages cannot spot them. One
+  // map for every realm this copy protects, joined with the map of the copy in the parent, top or
+  // opener window: any realm's toString then sees through the replacements of all the others.
+  let disguises = new WeakMapCtor();
+
+  // A protected window answers a cancelable event named MARK: the copy that protects it cancels it
+  // and hands over its disguises. WebKit's per-frame injection and the hooks below can both reach a
+  // frame (a blank one keeps its realm when its page loads), so each copy asks before protecting.
+  // An event listener can't be listed or forged, unlike the window property this once was.
+  const answer = (event) => {
+    apply(preventDefault, event, []);
+    const box = read(eventDetail, event);
+    if (box) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
+  };
+  const ask = (win) => {
+    const box = { __proto__: null };
+    const event = new CustomEventCtor(MARK, { __proto__: null, cancelable: true, detail: box });
+    return apply(dispatchEvent, win, [event]) ? null : box;
+  };
+  // Cross-origin windows have no prototype to give, and are left alone.
+  const sameOrigin = (win) => { try { return getPrototypeOf(win); } catch (_) { return null; } };
+  try {
+    const others = [parent, top, opener];
+    for (let i = 0; i < others.length; i++) {
+      const box = others[i] && others[i] !== window && sameOrigin(others[i]) ? ask(others[i]) : null;
+      if (box && box.disguises) { disguises = box.disguises; break; }
+    }
+  } catch (_) {}
+
+  // Keyed by the realm's Window.prototype: a frame that navigates keeps its window but gets a new realm.
+  const seen = new WeakSetCtor();
   const protect = (win) => {
-    if (!win || hasOwn(win, MARK)) return;
-    defineProperty(win, MARK, { value: true });
+    const realm = win ? sameOrigin(win) : null;
+    if (!realm || apply(weakSetHas, seen, [realm])) return;
+    apply(weakSetAdd, seen, [realm]);
+    if (ask(win) !== null) return;
+    apply(addEventListener, win, [MARK, answer]);
 
-    // Replacements report the original's source through toString, so pages cannot spot them.
-    const disguises = new WeakMapCtor();
     const nativeToString = win.Function.prototype.toString;
     const disguise = (replacement, original) => {
       defineProperty(replacement, 'name', { value: original.name });
@@ -160,6 +217,14 @@
       const original = descriptor.get;
       const get = disguise(getOwnPropertyDescriptor({ get [name]() { return handler(original, this); } }, name).get, original);
       defineProperty(proto, name, { ...descriptor, get });
+    };
+
+    const patchSetter = (proto, name, handler) => {
+      const descriptor = proto && getOwnPropertyDescriptor(proto, name);
+      if (!descriptor || !descriptor.set) return;
+      const original = descriptor.set;
+      const set = disguise(getOwnPropertyDescriptor({ set [name](value) { handler(original, this, value); } }, name).set, original);
+      defineProperty(proto, name, { ...descriptor, set });
     };
 
     try {
@@ -213,7 +278,7 @@
           const result = apply(target, self, args);
           const pixels = args[6];
           const kind = pixels ? apply(typedKind, pixels, []) : undefined;
-          // Byte targets only (Int8Array: WebGL2 integer reads); setting a low bit means nothing to floats.
+          // Byte targets only (Int8Array: WebGL2 integer reads); a step of one means nothing to floats.
           if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray' || kind === 'Int8Array') &&apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels);
           return result;
         });
@@ -237,7 +302,7 @@
       });
       patch(win.AnalyserNode.prototype, 'getFloatFrequencyData', (target, self, args) => {
         const result = apply(target, self, args);
-        noiseSamples(args[0]);
+        noiseFrequencies(args[0]);
         return result;
       });
     } catch (_) {}
@@ -271,7 +336,14 @@
 
     // Same-origin frames get the same treatment the moment the page can reach them.
     const protectFrame = (frame) => {
-      try { protect(frame.contentWindow); } catch (_) {}
+      try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
+    };
+    const framesIn = (node) => {
+      try { return apply(queryAll[apply(nodeType, node, [])], node, ['iframe, frame']); } catch (_) { return null; }
+    };
+    const protectAll = (found) => {
+      const count = found === null ? 0 : read(nodeCount, found);
+      for (let i = 0; i < count; i++) protectFrame(found[i]);
     };
     // Runs on every DOM insertion of the page, so it does as little as it can: most nodes
     // are elements without children, which cannot hold a frame.
@@ -279,10 +351,12 @@
       if (node === null || typeof node !== 'object' || node.nodeType !== 1) return;
       const name = node.localName;
       if (name === 'iframe' || name === 'frame') protectFrame(node);
-      else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) {
-        const found = node.querySelectorAll('iframe, frame');
-        for (let i = 0; i < found.length; i++) protectFrame(found[i]);
-      }
+      else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) protectAll(framesIn(node));
+    };
+    // A fragment hands its children over on insertion, so its frames are listed before.
+    const framesBefore = (node) => node !== null && typeof node === 'object' && node.nodeType === 11 ? framesIn(node) : null;
+    const protectAfter = (fragmentFrames, node) => {
+      if (fragmentFrames === null) protectInserted(node); else protectAll(fragmentFrames);
     };
     // Insertion methods are among the hottest DOM calls: their replacements forward
     // `arguments` instead of collecting them in an array and calling through a handler.
@@ -292,17 +366,35 @@
       const original = descriptor.value;
       const replacement = variadic
         ? { [name]() {
+            // Fragments are rare here: their frames go in an object of their own, not an array a page could set up.
+            let fragments = null, count = 0;
+            for (let i = 0; i < arguments.length; i++) {
+              const found = framesBefore(arguments[i]);
+              if (found !== null) { if (fragments === null) fragments = { __proto__: null }; fragments[count++] = found; }
+            }
             const result = apply(original, this, arguments);
             for (let i = 0; i < arguments.length; i++) protectInserted(arguments[i]);
+            for (let i = 0; i < count; i++) protectAll(fragments[i]);
             return result;
           } }[name]
         : { [name](node) {
+            const fragmentFrames = framesBefore(node);
             const result = apply(original, this, arguments);
-            protectInserted(node);
+            protectAfter(fragmentFrames, node);
             return result;
           } }[name];
       defineProperty(proto, name, { ...descriptor, value: disguise(replacement, original) });
     };
+    // Markup reaches no insertion method: once it is in, the frames it may have made are looked
+    // up, when it names one (or isn't a plain string, such as TrustedHTML).
+    const mayHoldFrame = (markup) => typeof markup !== 'string' || apply(regExpExec, FRAME_TAG, [markup]) !== null;
+    const hookMarkup = (proto, name, at) => patch(proto, name, (target, self, args) => {
+      // Markup put next to the element lands in its parent.
+      const container = read(parentNode, self) || self;
+      const result = apply(target, self, args);
+      if (mayHoldFrame(args[at])) protectAll(framesIn(container));
+      return result;
+    });
     try {
       const frameTypes = [win.HTMLIFrameElement.prototype, win.HTMLFrameElement.prototype];
       for (let i = 0; i < frameTypes.length; i++) {
@@ -319,8 +411,53 @@
       }
       const single = ['appendChild', 'insertBefore', 'replaceChild'];
       for (let i = 0; i < single.length; i++) hookInsertion(win.Node.prototype, single[i], false);
-      const variadic = ['append', 'prepend', 'after', 'before', 'replaceWith'];
+      const variadic = ['append', 'prepend', 'after', 'before', 'replaceWith', 'replaceChildren'];
       for (let i = 0; i < variadic.length; i++) hookInsertion(win.Element.prototype, variadic[i], true);
+      const siblings = ['after', 'before', 'replaceWith'];
+      for (let i = 0; i < siblings.length; i++) hookInsertion(win.CharacterData.prototype, siblings[i], true);
+      patch(win.Element.prototype, 'insertAdjacentElement', (target, self, args) => {
+        const result = apply(target, self, args);
+        protectInserted(args[1]);
+        return result;
+      });
+      patch(win.Range.prototype, 'insertNode', (target, self, args) => {
+        const fragmentFrames = framesBefore(args[0]);
+        const result = apply(target, self, args);
+        protectAfter(fragmentFrames, args[0]);
+        return result;
+      });
+
+      // `frames[n]` reaches a frame without the getters above, so markup is covered where it lands.
+      const markupSetter = (proto, name, outer) => patchSetter(proto, name, (target, self, value) => {
+        const container = outer ? read(parentNode, self) : self;
+        apply(target, self, [value]);
+        if (mayHoldFrame(value)) protectAll(framesIn(container));
+      });
+      markupSetter(win.Element.prototype, 'innerHTML', false);
+      markupSetter(win.ShadowRoot.prototype, 'innerHTML', false);
+      markupSetter(win.Element.prototype, 'outerHTML', true);
+      hookMarkup(win.Element.prototype, 'insertAdjacentHTML', 1);
+      hookMarkup(win.Element.prototype, 'setHTMLUnsafe', 0);
+      hookMarkup(win.ShadowRoot.prototype, 'setHTMLUnsafe', 0);
+      const documentProto = hasOwn(win.Document.prototype, 'write') ? win.Document.prototype : win.HTMLDocument.prototype;
+      // Opening a document, which writing to a loaded one does, drops its window's listeners: the marker's too.
+      const remark = () => { try { apply(addEventListener, win, [MARK, answer]); } catch (_) {} };
+      patch(documentProto, 'open', (target, self, args) => {
+        const result = apply(target, self, args);
+        remark();
+        return result;
+      });
+      const writes = ['write', 'writeln'];
+      for (let i = 0; i < writes.length; i++) {
+        patch(documentProto, writes[i], (target, self, args) => {
+          const result = apply(target, self, args);
+          remark();
+          for (let j = 0; j < args.length; j++) {
+            if (mayHoldFrame(args[j])) { protectAll(framesIn(self)); break; }
+          }
+          return result;
+        });
+      }
     } catch (_) {}
 
     // A popup starts as a blank window of the opener's site that WebKit injects nothing into

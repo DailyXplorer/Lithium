@@ -154,13 +154,18 @@ final class Downloads: NSObject, WKDownloadDelegate {
             // Cancelled from the list while the panel was open.
             guard byDownload[id]?.state == .downloading else { return nil }
             destination = chosen
+            // Another running download holds that path (its file isn't on disk yet, so the panel
+            // didn't ask): this one gets a numbered name beside it.
+            if takenDestinations().contains(chosen) {
+                destination = self.destination(for: chosen.lastPathComponent, in: chosen.deletingLastPathComponent())
+            }
             // The panel already asked whether to replace a file of that name. WebKit won't write
             // over it, and the old one must stay until the new one is complete: the download goes
             // to a hidden file beside it, swapped in when it finishes.
-            if FileManager.default.fileExists(atPath: chosen.path) {
-                let partial = chosen.deletingLastPathComponent().appending(path: ".\(chosen.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
+            if FileManager.default.fileExists(atPath: destination.path) {
+                let partial = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
                 partials[id] = partial
-                take(chosen, for: id)
+                take(destination, for: id)
                 return partial
             }
         }
@@ -181,21 +186,25 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return response == .OK ? panel.url : nil
     }
 
-    /// In ~/Downloads, numbered when the name is taken.
-    private func destination(for suggestedFilename: String) -> URL {
-        let folder = URL.downloadsDirectory
+    /// In ~/Downloads unless another folder is given, numbered when the name is taken.
+    private func destination(for suggestedFilename: String, in folder: URL = .downloadsDirectory) -> URL {
         let name = (suggestedFilename as NSString).deletingPathExtension
         let ext = (suggestedFilename as NSString).pathExtension
         var destination = folder.appending(path: suggestedFilename)
         var counter = 1
-        // A transfer cancelled from the list may never hear back from WebKit.
-        destinations = destinations.filter { byDownload[$0.key]?.state == .downloading }
-        let taken = reserved.union(destinations.values)
+        let taken = takenDestinations()
         while FileManager.default.fileExists(atPath: destination.path) || taken.contains(destination) {
             counter += 1
             destination = folder.appending(path: ext.isEmpty ? "\(name) \(counter)" : "\(name) \(counter).\(ext)")
         }
         return destination
+    }
+
+    /// Paths given to files still being written, which may not exist on disk yet.
+    private func takenDestinations() -> Set<URL> {
+        // A transfer cancelled from the list may never hear back from WebKit.
+        destinations = destinations.filter { byDownload[$0.key]?.state == .downloading }
+        return reserved.union(destinations.values)
     }
 
     func downloadDidFinish(_ download: WKDownload) {

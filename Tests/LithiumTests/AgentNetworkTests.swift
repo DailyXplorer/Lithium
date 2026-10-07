@@ -357,6 +357,28 @@ struct AgentNetworkTests {
         }
     }
 
+    /// A page posting to the console handler itself, past the console script's limit, or firing
+    /// error events the agent's world hears, gets a few hundred a second through and no more.
+    @Test func aPageCantFloodTheConsole() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "plain"))
+            let tab = try #require(client.tab(id))
+            let webView = try #require(tab.loadedWebView)
+            _ = try await webView.callAsyncJavaScript("""
+                for (let i = 0; i < 3000; i++) webkit.messageHandlers.lithiumAgentConsole.postMessage({ level: 'log', text: 'posted ' + i });
+                for (let i = 0; i < 3000; i++) dispatchEvent(new ErrorEvent('error', { message: 'fired ' + i }));
+                await new Promise((done) => setTimeout(done, 1100));
+                webkit.messageHandlers.lithiumAgentConsole.postMessage({ level: 'log', text: 'after the flood' });
+                """, contentWorld: .page)
+            #expect(await waitUntil(10) { client.hub.tabs[tab.id]?.capture?.messages.contains { $0.text == "after the flood" } == true })
+            let texts = client.hub.tabs[tab.id]?.capture?.messages.map(\.text) ?? []
+            let flood = texts.filter { $0.hasPrefix("posted ") || $0.hasPrefix("fired ") }
+            // Without the limit, the 500 newest would be kept.
+            #expect(flood.count >= TabCapture.messagesPerSecond && flood.count < 450, "\(flood.count)")
+            #expect(texts.contains { $0.hasPrefix("Lithium left out ") && $0.hasSuffix(" messages: the page sent more than 200 in a second.") }, "\(texts.suffix(3))")
+        }
+    }
+
     /// A tab agents use, sent to one of Lithium's own pages: the page finds no console handler,
     /// its console stays its own, and nothing it logs is kept.
     @Test func lithiumsOwnPagesStayOutOfTheConsole() async throws {

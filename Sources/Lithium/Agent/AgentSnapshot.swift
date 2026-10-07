@@ -187,8 +187,8 @@ struct PageSnapshot {
 
     var header: String {
         var parts = ["\(tab) \(url) \(SnapshotNode.quoted(title)) seq \(seq)"]
-        parts.append("viewport \(Int(viewport.w))x\(Int(viewport.h)) scroll \(Int(viewport.sx)),\(Int(viewport.sy))")
-        parts.append("page \(Int(viewport.pw))x\(Int(viewport.ph))")
+        parts.append("viewport \(Int(css: viewport.w))x\(Int(css: viewport.h)) scroll \(Int(css: viewport.sx)),\(Int(css: viewport.sy))")
+        parts.append("page \(Int(css: viewport.pw))x\(Int(css: viewport.ph))")
         if zoom != 1 { parts.append("zoom \(zoom.formatted())") }
         if let focused { parts.append("focused \(focused)") }
         if let challenge { parts.append("challenge \(challenge.kind)\(challenge.ref.map { " " + $0 } ?? ""): ask the user to solve it") }
@@ -299,12 +299,14 @@ extension AgentTab {
             }
             for raw in report.nodes ?? [] where raw.box.count == 4 {
                 let rect = place(raw.box)
+                // A page's huge boxes, scaled down nested frames, can overflow to infinity.
+                guard rect.isFinite else { continue }
                 if depth > 0, !rect.intersects(clip) { continue }
                 let address = ElementAddress(document: document, id: raw.id)
                 var node = SnapshotNode(
                     ref: "", role: raw.role, name: raw.name, level: raw.level, href: raw.href, value: raw.value,
                     filled: raw.filled == true, state: (raw.state ?? []).filter { focusing || $0 != "focused" }, options: raw.options,
-                    box: [Int(rect.minX.rounded()), Int(rect.minY.rounded()), Int(rect.width.rounded()), Int(rect.height.rounded())],
+                    box: [Int(css: rect.minX), Int(css: rect.minY), Int(css: rect.width), Int(css: rect.height)],
                     frame: inFrame, depth: depth
                 )
                 node.off = Self.off(rect, viewport: viewport)
@@ -412,3 +414,14 @@ extension AgentTab {
     }
 }
 
+extension Int {
+    /// A length or position the page reported, rounded and kept within ±1e9 CSS pixels: a page
+    /// can report boxes far past what `Int(_:)` takes without trapping.
+    init(css value: Double) {
+        self = value.isNaN ? 0 : Int(Swift.min(Swift.max(value.rounded(), -1e9), 1e9))
+    }
+}
+
+extension CGRect {
+    var isFinite: Bool { minX.isFinite && minY.isFinite && width.isFinite && height.isFinite }
+}

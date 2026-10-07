@@ -9,6 +9,16 @@ import LithiumTestGuard
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct AgentKeysTests {
+    /// A point far out of range used to reach `Int(_:)` in an error message, which traps.
+    @Test func refusesPointsFarOutOfRange() throws {
+        for (x, y) in [(1e19, 0.0), (0, -1e19), (1_000_001, 0)] {
+            #expect(throws: Arguments.invalid("x and y must be CSS pixels in the viewport, within ±1000000.")) {
+                try Arguments(value: ["x": .double(x), "y": .double(y)]).point()
+            }
+        }
+        #expect(try Arguments(value: ["x": .double(-1e6), "y": 5]).point() != nil)
+    }
+
     @Test func namesKeysAsAUSKeyboardTypesThem() throws {
         #expect(NativeKey.typing("a") == NativeKey(code: 0, characters: "a", shifted: "A"))
         #expect(NativeKey.typing("A") == NativeKey(code: 0, characters: "a", flags: .shift, shifted: "A"))
@@ -260,6 +270,13 @@ struct AgentInputTests {
               <input id="account" aria-label="Account" style="top: 40px"><input type="password" id="real" aria-label="Real" style="top: 100px">
             </form>
             <script>document.getElementById('account').addEventListener('focus', () => document.getElementById('real').focus());</script>
+            """),
+        "/to-one-line": (html, """
+            <title>One line</title><style>body { margin: 0 } textarea, input { position: absolute; left: 40px; width: 160px }</style>
+            <form action="/done">
+              <textarea id="notes" aria-label="Notes" style="top: 40px"></textarea><input id="title" aria-label="Title" style="top: 120px">
+            </form>
+            <script>document.getElementById('notes').addEventListener('focus', () => document.getElementById('title').focus());</script>
             """),
         "/later": (html, """
             <title>Later</title><style>body { margin: 0 } input { position: absolute; left: 40px; width: 160px }</style>
@@ -1543,6 +1560,20 @@ struct AgentInputTests {
             let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
             #expect(!logged.contains("hunter2decoy"), "\(logged)")
             #expect(entries.allSatisfy { $0["params"]?["text"] == "[redacted]" }, "\(entries)")
+        }
+    }
+
+    /// A multi-line field whose click moves focus to a one-line one: "\n" would be Enter there,
+    /// which submits its form past the gate, so the call is refused before any key.
+    @Test func newlinesAreRefusedWhenFocusMovesToAOneLineField() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "to-one-line"))
+            let notes = try await ref(client, id, "textbox", "Notes")
+            let typed = await client.call("type", ["tab": .string(id), "ref": .string(notes), "text": "a\nb"])
+            #expect(typed.code == "invalid_params", "\(typed.content)")
+            #expect(typed.message.contains("holds one line"), "\(typed.message)")
+            #expect(try await page(tab, "return document.getElementById('title').value") as? String == "")
+            #expect(tab.url?.path() == "/to-one-line")
         }
     }
 

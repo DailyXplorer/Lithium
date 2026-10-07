@@ -114,7 +114,7 @@ struct ActionTarget {
 
     /// `e9 button "Pay €42.00"`, as messages name it.
     var label: String {
-        "\(ref ?? "the element at \(Int(css.x)),\(Int(css.y))") \(report.role ?? "element")" + ((report.name ?? "").isEmpty ? "" : " \(SnapshotNode.quoted(report.name ?? ""))")
+        "\(ref ?? "the element at \(Int(css: css.x)),\(Int(css: css.y))") \(report.role ?? "element")" + ((report.name ?? "").isEmpty ? "" : " \(SnapshotNode.quoted(report.name ?? ""))")
     }
 
     /// “Pay €42.00”, or the role when it has no name, for the caption and the user's prompt.
@@ -359,6 +359,10 @@ extension AgentHub {
                     guard attempt < 3, !focused.inUnreadFrame, focused.address?.document == target.address?.document else {
                         AgentHub.callNotes?.noteFields(unguarded: false)
                         throw AgentToolError(code: "not_editable", message: attempt < 3 ? "Focus moved from \(target.label) into another frame. Give the ref of the field to type into." : "The page keeps moving focus away from \(target.label).")
+                    }
+                    // Only `submit` may press Enter in a one-line field, past the gate that weighs it.
+                    if text.contains("\n"), focused.report.multiline != true {
+                        throw Arguments.invalid("Focus moved from \(target.label) to \(focused.label), which holds one line: \\n would submit its form. Use submit: true.")
                     }
                     var moved: [(Delivery, describing: String)] = [(.keys(into: focused, .type, submitting: nil), "type into \(focused.shortName)" + (submit ? " and submit its form" : ""))]
                     if submit { moved.append((.keys(into: focused, .press(enter: true), submitting: focused.report.form), "submit the form of \(focused.shortName)")) }
@@ -854,17 +858,17 @@ extension AgentHub {
             if viewport == nil {
                 viewport = report.viewport
                 guard let viewport, css.x >= 0, css.y >= 0, css.x < viewport.w, css.y < viewport.h else {
-                    throw AgentToolError(code: "not_in_viewport", message: "\(Int(css.x)),\(Int(css.y)) is outside \(ctx.named.id)’s viewport (\(Int(report.viewport?.w ?? 0))x\(Int(report.viewport?.h ?? 0))).")
+                    throw AgentToolError(code: "not_in_viewport", message: "\(Int(css: css.x)),\(Int(css: css.y)) is outside \(ctx.named.id)’s viewport (\(Int(css: report.viewport?.w ?? 0))x\(Int(css: report.viewport?.h ?? 0))).")
                 }
             }
             guard report.gone != true, let id = report.id else {
-                throw AgentToolError(code: "not_in_viewport", message: "Nothing of \(ctx.named.id)’s page is at \(Int(css.x)),\(Int(css.y)).")
+                throw AgentToolError(code: "not_in_viewport", message: "Nothing of \(ctx.named.id)’s page is at \(Int(css: css.x)),\(Int(css: css.y)).")
             }
             let address = ElementAddress(document: report.token, id: id)
             var target = ActionTarget(report: report, address: address, frame: frame, ref: ctx.state.ref(for: address), css: css, viewport: viewport, inPaymentFrame: inPaymentFrame)
             if let src = report.src { try note(frame: src, origin: nil, in: &target) }
             if report.extensionUI == true {
-                throw AgentToolError(code: "blocked_extension_ui", message: "\(Int(css.x)),\(Int(css.y)) is on an extension’s UI, which agents can’t use.")
+                throw AgentToolError(code: "blocked_extension_ui", message: "\(Int(css: css.x)),\(Int(css: css.y)) is on an extension’s UI, which agents can’t use.")
             }
             inPaymentFrame = target.inPaymentFrame
             guard let index = report.frame else { return target }
@@ -1223,8 +1227,14 @@ extension Arguments {
         let y = try number("y")
         guard x != nil || y != nil else { return nil }
         guard let x, let y else { throw Self.invalid("Give both x and y.") }
+        guard abs(x) <= Self.maxCoordinate, abs(y) <= Self.maxCoordinate else {
+            throw Self.invalid("x and y must be CSS pixels in the viewport, within ±\(Int(Self.maxCoordinate)).")
+        }
         return .point(CGPoint(x: x, y: y))
     }
+
+    /// Far past any viewport, and far from where converting to `Int` traps.
+    static let maxCoordinate = 1e6
 
     /// `ref`, or `x` and `y`, at the top level or in the object under `key` (drag's from and to),
     /// which may also be a ref string.

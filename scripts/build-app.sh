@@ -22,7 +22,8 @@ if [ ! -L .build ]; then
   ln -s "$HOME/Library/Caches/Lithium/build" .build
 fi
 
-if [ ! -f Sources/Lithium/Resources/Filters/manifest.json ]; then
+# A missing, half-written or outdated set (FilterSources.json changed since) is built again.
+if ! python3 scripts/update-filters.py --check; then
   python3 scripts/update-filters.py
 fi
 

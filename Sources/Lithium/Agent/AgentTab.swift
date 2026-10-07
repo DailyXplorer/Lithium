@@ -175,14 +175,28 @@ final class AgentTab {
 
     // MARK: Refs
 
+    /// Element refs held for the page shown before the oldest half goes: a long-lived page that
+    /// keeps changing would otherwise get new refs forever. A dropped ref answers `stale_ref`.
+    static let maxRefs = 40_000
+
     func ref(for address: ElementAddress) -> String {
         if let ref = table.issued[address] { return ref }
+        if table.issued.count >= Self.maxRefs { dropOldestRefs() }
         let element = "e\(nextElement)"
         nextElement += 1
         let ref = address.document == mainDocument ? element : "\(frameRef(for: address.document)):\(element)"
         table.issued[address] = ref
         table.refs[ref] = address
         return ref
+    }
+
+    /// Numbers count up, so the lowest are the oldest; frame refs stay.
+    private func dropOldestRefs() {
+        let oldest = nextElement - Self.maxRefs / 2
+        for (address, ref) in table.issued where Int(ref.split(separator: "e").last ?? "") ?? 0 < oldest {
+            table.issued[address] = nil
+            table.refs[ref] = nil
+        }
     }
 
     /// `f1`, `f2`: one per frame document.

@@ -1324,6 +1324,22 @@ struct AgentReadTests {
         }
     }
 
+    /// A page that keeps changing gets new refs forever: past the cap, the oldest half goes.
+    @Test func aLongLivedPageKeepsItsNewestRefs() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            #expect(state.mainFrameAnswered("p1", asked: state.hellos))
+            let frame = state.frameRef(for: "c1")
+            state.setFrameElement(frame, ElementAddress(document: "p1", id: 0))
+            let refs = (1...AgentTab.maxRefs + 1).map { state.ref(for: ElementAddress(document: "p1", id: $0)) }
+            #expect(state.refCounts.shown <= AgentTab.maxRefs / 2 + 2, "\(state.refCounts)")
+            #expect(state.address(of: refs[0]) == nil)
+            #expect(state.address(of: refs[AgentTab.maxRefs]) == ElementAddress(document: "p1", id: AgentTab.maxRefs + 1))
+            #expect(state.address(of: refs[AgentTab.maxRefs - 1]) == ElementAddress(document: "p1", id: AgentTab.maxRefs))
+            #expect(state.address(of: frame) == ElementAddress(document: "p1", id: 0))
+        }
+    }
+
     /// A frame left with its activeElement, as the HTML standard keeps it (this WebKit resets it):
     /// the focus is where the main frame's leads, and only there.
     @Test func aFrameLeftDoesntHoldTheFocus() async throws {

@@ -46,11 +46,14 @@ struct SidebarView: View {
                 LazyVStack(spacing: 2) {
                     // A tab from the Agent group dropped on a row's upper half goes above it, on
                     // its lower half below it.
-                    ForEach(Array(browser.regularTabs.enumerated()), id: \.element.id) { index, tab in
-                        TabRow(tab: tab)
-                            .dropDestination(for: String.self) { items, location in
-                                dropTab(items, on: .tabList(location.y < sidebarRowHeight / 2 ? index : index + 1))
-                            }
+                    ForEach(browser.tabListEntries) { entry in
+                        let index = entry.index
+                        Group {
+                            if let split = entry.split { SplitTabRow(split: split) } else { TabRow(tab: entry.tab) }
+                        }
+                        .dropDestination(for: String.self) { items, location in
+                            dropTab(items, on: .tabList(location.y < sidebarRowHeight / 2 ? index : index + 1))
+                        }
                     }
                     let agentTabs = browser.agentTabs
                     if !agentTabs.isEmpty {
@@ -242,10 +245,14 @@ private struct TabRow: View {
         .tabHoverTarget(.tab(tab.id), isHovered: $isHovered)
         // Simultaneous, so a single click still selects instantly instead of waiting for a second one.
         .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
-        .draggable(tab.id.uuidString)
+        .draggable(browser.startDragging(tab))
         .contextMenu {
             Button("Reload Tab") { browser.navigate(tab, .reload) }
                 .disabled(tab.url == nil)
+            if tab.isInTabList {
+                Button("Open in Split View") { browser.openInSplit(tab) }
+                    .disabled(browser.splitPartner(for: tab) == nil)
+            }
             Button("Duplicate Tab") { browser.duplicate(tab) }
                 .disabled(tab.url == nil)
             MuteButton(tab: tab)
@@ -364,7 +371,7 @@ private struct TabNameField: View {
 
 private let sidebarRowHeight: CGFloat = 34
 
-private struct SidebarRow<Content: View>: View {
+struct SidebarRow<Content: View>: View {
     let isSelected: Bool
     let action: () -> Void
     @ViewBuilder let content: Content

@@ -414,6 +414,38 @@ struct FingerprintingTests {
         #expect(protected["spread"] == AnyHashable(1))
     }
 
+    /// A paint app that reads the whole canvas, paints a dab and puts it back each time leaves
+    /// the rest of the image as it first read it: white doesn't drift grey, nothing turns to grain.
+    @Test func pixelNoiseDoesntBuildUpWhenThePageEditsBetweenReads() async throws {
+        let probe = """
+            (() => {
+              const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 200, 40);
+              const first = x.getImageData(0, 0, 200, 40).data;
+              let image = x.getImageData(0, 0, 200, 40);
+              x.fillStyle = '#f00';
+              for (let i = 0; i < 200; i++) {
+                x.putImageData(image, 0, 0);
+                x.fillRect(i, 0, 1, 1);
+                image = x.getImageData(0, 0, 200, 40);
+              }
+              // Row 0 holds the dabs; the rest was never painted.
+              let noisy = 0, changed = 0, spread = 0;
+              for (let i = 200 * 4; i < first.length; i++) {
+                if (first[i] !== 255) noisy++;
+                if (image.data[i] !== first[i]) changed++;
+                spread = Math.max(spread, 255 - image.data[i]);
+              }
+              return JSON.stringify({ noisy, changed, spread });
+            })()
+            """
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(try #require(protected["noisy"] as? Int) > 0)
+        #expect(protected["changed"] == AnyHashable(0))
+        #expect(protected["spread"] == AnyHashable(1))
+    }
+
     /// A blank `<iframe>` in the page's own markup is protected before the next inline script can
     /// reach it through `frames`: the parser calls none of the hooks, and WebKit injects nothing there.
     @Test func blankFrameFromThePageMarkupIsProtected() async throws {
@@ -436,6 +468,36 @@ struct FingerprintingTests {
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
         #expect(protected["native"] == AnyHashable(true))
+    }
+
+    /// A blank frame fires `load` while it is inserted, before the observer or the insertion hooks
+    /// get to it: a handler there, in the markup or added by a script, finds it already protected.
+    @Test func blankFrameIsProtectedInItsOwnLoadEvent() async throws {
+        let html = """
+            <body><iframe onload="window.fromMarkup = frames[0].HTMLCanvasElement.prototype.toDataURL"></iframe><script>
+              document.addEventListener('load', (event) => {
+                if (event.target.localName === 'iframe' && !window.fromScript) window.fromScript = frames[frames.length - 1].HTMLCanvasElement.prototype.toDataURL;
+              }, true);
+              document.body.appendChild(document.createElement('iframe'));
+            </script></body>
+            """
+        let probe = """
+            (() => {
+              const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              const hash = (d) => { let h = 0; for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0; return (h >>> 0).toString(16); };
+              const through = (toDataURL) => toDataURL ? hash(toDataURL.call(c)) : 'missing';
+              return JSON.stringify({ page: hash(c.toDataURL()), markup: through(window.fromMarkup), script: through(window.fromScript) });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: html)
+
+        #expect(bare["markup"] == bare["page"])
+        #expect(bare["script"] == bare["page"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["markup"] == protected["page"])
+        #expect(protected["script"] == protected["page"])
     }
 
     /// Copies of the script for different sites agree on the marker: a cross-site frame's copy (of

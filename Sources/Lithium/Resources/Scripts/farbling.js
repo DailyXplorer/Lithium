@@ -69,6 +69,8 @@
   const CustomEventCtor = CustomEvent;
   const eventDetail = member(CustomEvent.prototype, 'detail').get;
   const preventDefault = member(Event.prototype, 'preventDefault').value;
+  const eventTarget = member(Event.prototype, 'target').get;
+  const elementName = member(Element.prototype, 'localName').get;
   const addEventListener = member(EventTarget.prototype, 'addEventListener').value;
   const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
   const nodeType = member(Node.prototype, 'nodeType').get;
@@ -125,26 +127,55 @@
   // (the marker below), so the noise needn't hold when applied twice.
   // Pixels this handed out and the page reads back (put back, or drawn from a data URL) are
   // left as they are: noised afresh at other spots each round trip, an editor's canvas would
-  // drift into visible grain. The hashes of the last few results are kept for that.
+  // drift into visible grain. The hashes of the last few results are kept for exact round trips,
+  // and the last result of each context and region for those that change part of the image first
+  // (a fill, a brush dab): the pixels the page left alone aren't noised again. Either way the page
+  // only gets back values it was already given.
   const LOG_CLEAN = log(0.95);
   const NOISED = 64;
   const noised = new Int32Array(NOISED);
   let noisedCount = 0;
-  const noisePixels = (data) => {
+  const Uint8ArrayCtor = Uint8Array;
+  const lastResults = new WeakMapCtor();
+  // `owner` and `region` (a string, or null when unknown) say where the pixels were read.
+  const noisePixels = (data, owner, region) => {
     const length = apply(typedLength, data, []);
     const hash = hashBytes(data, length);
-    for (let i = 0; i < noisedCount && i < NOISED; i++) if (noised[i] === hash) return;
-    const next = prng(hash);
-    const gap = () => floor(log(1 - next()) / LOG_CLEAN);
-    const pixels = length >> 2;
-    for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
-      const at = (pixel << 2) + floor(next() * 3);
-      const value = data[at], step = next() < 0.5 ? 1 : -1;
-      data[at] = value + step;
-      // At either end of the range the write clamps or wraps: go the other way.
-      if (data[at] !== value + step) data[at] = value - step;
+    let bytes = null, last = null;
+    try {
+      bytes = new Uint8ArrayCtor(apply(typedBuffer, data, []), apply(typedOffset, data, []), length);
+      if (region !== null) last = apply(weakMapGet, lastResults, [owner]) || null;
+    } catch (_) {}
+    const before = last !== null && last.region === region && last.length === length ? last.bytes : null;
+    let fresh = true;
+    for (let i = 0; i < noisedCount && i < NOISED; i++) if (noised[i] === hash) fresh = false;
+    if (fresh) {
+      const next = prng(hash);
+      const gap = () => floor(log(1 - next()) / LOG_CLEAN);
+      const pixels = length >> 2;
+      for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
+        const at = (pixel << 2) + floor(next() * 3);
+        const value = data[at], step = next() < 0.5 ? 1 : -1;
+        const start = pixel << 2;
+        if (before !== null && bytes[start] === before[start] && bytes[start + 1] === before[start + 1] &&
+            bytes[start + 2] === before[start + 2] && bytes[start + 3] === before[start + 3]) continue;
+        data[at] = value + step;
+        // At either end of the range the write clamps or wraps: go the other way.
+        if (data[at] !== value + step) data[at] = value - step;
+      }
+      noised[noisedCount++ % NOISED] = hashBytes(data, length);
     }
-    noised[noisedCount++ % NOISED] = hashBytes(data, length);
+    try {
+      if (bytes !== null && region !== null) {
+        apply(weakMapSet, lastResults, [owner, { __proto__: null, region, length, bytes: new Uint8ArrayCtor(bytes) }]);
+      }
+    } catch (_) {}
+  };
+  // Where a read comes from, when the page passed plain numbers: anything else could convert
+  // differently each time it is asked.
+  const regionOf = (args) => {
+    for (let i = 0; i < 4; i++) if (typeof args[i] !== 'number') return null;
+    return args[0] + ',' + args[1] + ',' + args[2] + ',' + args[3];
   };
 
   const noiseSamples = (samples) => {
@@ -194,6 +225,20 @@
     }
   } catch (_) {}
 
+  // A frame without a `src` fires `load` while it is being inserted: inside the native call, before
+  // the hooks below or the observer at the end run, and a handler there reaches it through
+  // `frames`. A capture listener on the document, added before any of the page's, protects it
+  // first (`load` never reaches the window). `document.open` drops it, so it is added again then.
+  const frameLoaded = (event) => {
+    const frame = read(eventTarget, event);
+    const name = read(elementName, frame);
+    if (name !== 'iframe' && name !== 'frame') return;
+    try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
+  };
+  const watchLoads = (doc) => {
+    try { apply(addEventListener, doc, ['load', frameLoaded, true]); } catch (_) {}
+  };
+
   // Keyed by the realm's Window.prototype: a frame that navigates keeps its window but gets a new realm.
   const seen = new WeakSetCtor();
   const protect = (win) => {
@@ -202,6 +247,7 @@
     apply(weakSetAdd, seen, [realm]);
     if (ask(win) !== null) return;
     apply(addEventListener, win, [MARK, answer]);
+    watchLoads(win.document);
 
     const nativeToString = win.Function.prototype.toString;
     const disguise = (replacement, original) => {
@@ -241,7 +287,7 @@
     try {
       const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
         const image = apply(target, self, args);
-        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []));
+        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []), self, regionOf(args));
         return image;
       });
       const farbledCopy = (canvas) => {
@@ -254,7 +300,7 @@
         const context = apply(getContext, copy, ['2d']);
         apply(drawImage, context, [canvas, 0, 0]);
         const image = apply(getImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []));
+        noisePixels(apply(imageData, image, []), canvas, width + ',' + height);
         apply(putImageData, context, [image, 0, 0]);
         return copy;
       };
@@ -265,7 +311,7 @@
     try {
       const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
         const image = apply(target, self, args);
-        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []));
+        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []), self, regionOf(args));
         return image;
       });
       patch(win.OffscreenCanvas.prototype, 'convertToBlob', (target, self, args) => {
@@ -275,7 +321,7 @@
         const context = apply(offscreenGetContext, copy, ['2d']);
         apply(offscreenDrawImage, context, [self, 0, 0]);
         const image = apply(offscreenGetImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []));
+        noisePixels(apply(imageData, image, []), self, width + ',' + height);
         apply(offscreenPutImageData, context, [image, 0, 0]);
         return apply(target, copy, args);
       });
@@ -290,7 +336,7 @@
           const pixels = args[6];
           const kind = pixels ? apply(typedKind, pixels, []) : undefined;
           // Byte targets only (Int8Array: WebGL2 integer reads); a step of one means nothing to floats.
-          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray' || kind === 'Int8Array') &&apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels);
+          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray' || kind === 'Int8Array') &&apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels, self, regionOf(args));
           return result;
         });
       }
@@ -457,7 +503,10 @@
         try {
           const view = read(documentView, doc);
           const realm = view ? sameOrigin(view) : null;
-          if (realm && apply(weakSetHas, seen, [realm])) apply(addEventListener, view, [MARK, answer]);
+          if (realm && apply(weakSetHas, seen, [realm])) {
+            apply(addEventListener, view, [MARK, answer]);
+            watchLoads(doc);
+          }
         } catch (_) {}
       };
       patch(documentProto, 'open', (target, self, args) => {
@@ -492,6 +541,9 @@
   };
 
   protect(window);
+  // Also when another copy protected this window already: a blank frame keeps its window, and the
+  // marker on it, when its first page loads, but that page's document is a new one.
+  watchLoads(document);
 
   // The parser adds frames through no method the hooks see, and `frames[n]` reaches them past the
   // getters: a blank `<iframe>` in the page's markup stayed a clean window for good. While the page

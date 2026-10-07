@@ -204,6 +204,74 @@ struct FilterUpdateTests {
         #expect(!Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
         #expect(Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(-1), now: now))
     }
+
+    /// The backoff outlives a relaunch: a list that stays down doesn't bring a full update at every launch.
+    @MainActor
+    @Test func theBackoffSurvivesARelaunch() throws {
+        let suite = "filter-backoff-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date()
+        #expect(Privacy.savedBackoff(in: defaults, now: now).notBefore == .distantPast)
+
+        _ = Privacy.saveBackoff(afterFailures: 3, in: defaults, now: now)
+        let relaunched = Privacy.savedBackoff(in: defaults, now: now.addingTimeInterval(60))
+        #expect(relaunched.failures == 3)
+        #expect(relaunched.notBefore == now.addingTimeInterval(4 * 60 * 60))
+        #expect(!Privacy.needsUpdate(updated: now, matchesSources: true, complete: false, notBefore: relaunched.notBefore, now: now.addingTimeInterval(60)))
+
+        // A clock turned back doesn't hold updates off for more than a day.
+        #expect(Privacy.savedBackoff(in: defaults, now: now.addingTimeInterval(-7 * 24 * 60 * 60)).notBefore
+            == now.addingTimeInterval(-6 * 24 * 60 * 60))
+
+        _ = Privacy.saveBackoff(afterFailures: 0, in: defaults, now: now)
+        let succeeded = Privacy.savedBackoff(in: defaults, now: now)
+        #expect(succeeded.failures == 0 && succeeded.notBefore == .distantPast)
+    }
+
+    /// scripts/update-filters.py fails a list the app's updater would refuse, so the app never
+    /// ships an HTML page or an empty file as the copy it falls back to.
+    @Test func updateScriptRefusesWhatTheUpdaterRefuses() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func list(_ prefix: String) -> String { (1...12).map { "||\(prefix)-\($0).example^" }.joined(separator: "\n") }
+        let bodies = [
+            "good": list("good"),
+            "empty": "\n  \n! Title: empty\n",
+            "html": "\u{FEFF}  <!DOCTYPE html>\n<html><body>Sign in</body></html>",
+            "few": "||few-1.example^\n||few-2.example^",
+            "portal": "!#include html.txt\n" + list("included"),
+        ]
+        for (name, body) in bodies {
+            try body.write(to: folder.appending(path: "\(name).txt"), atomically: false, encoding: .utf8)
+        }
+        // Loads the script as a module and downloads each list from a file URL.
+        let check = """
+            import importlib.util, pathlib, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            folder = pathlib.Path(sys.argv[2])
+            script.LISTS = {path.stem: path.as_uri() for path in folder.glob("*.txt")}
+            for name in sorted(script.LISTS):
+                try:
+                    print(name, len(script.download(name)))
+                except SystemExit:
+                    print(name, "failed")
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.path]
+        let output = Pipe()
+        python.standardOutput = output
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == "empty failed\nfew failed\ngood 12\nhtml failed\nportal failed\n")
+    }
 }
 
 /// Answers with the body served at a URL, or a 404 when there is none.

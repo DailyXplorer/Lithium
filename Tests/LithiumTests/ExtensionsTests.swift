@@ -161,13 +161,16 @@ struct ExtensionsTests {
 
     /// Turned off again while it was still loading (the settings switch doesn't wait), the
     /// extension stays off.
-    @Test func turnedOffWhileLoadingStaysOff() async throws {
+    @Test(.timeLimit(.minutes(1))) func turnedOffWhileLoadingStaysOff() async throws {
         let folder = folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let extensions = Extensions(folder: folder, configuration: .nonPersistent())
         try await extensions.install(archive: try archive(), id: id)
         await extensions.setEnabled(false, id: id)
         try #require(extensions.contexts[id] == nil)
+        // Files older than the archive are unpacked again (`ditto`), which keeps the load waiting
+        // long enough to turn the extension off in the middle of it.
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -60)], ofItemAtPath: folder.appending(path: id).path)
 
         let turningOn = Task { await extensions.setEnabled(true, id: id) }
         while extensions.installed.first?.isEnabled != true { await Task.yield() }

@@ -6,7 +6,7 @@ import WebKit
 /// How a tab decides where its page goes: links opening new tabs, tracking parameters, Lithium's
 /// own pages, and what extensions hear about it. Keeps its data in the home folder, like `BrowserTests`.
 @MainActor
-@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct NavigationTests {
     private final class Requests: @unchecked Sendable {
         private let lock = NSLock()
@@ -145,8 +145,10 @@ struct NavigationTests {
         let id = "ppoonnmmllkkjjiihhggffeeddccbbaa"
         let browser = Browser()
         defer { Task { await browser.extensions.remove(id: id) } }
+        // With host access granted at install: `tabs.get` on a website's tab would otherwise ask
+        // for it in a modal alert that no one answers here, and the test would never end.
         try await browser.extensions.install(archive: try Self.archive([
-            "manifest.json": #"{"manifest_version": 3, "name": "Tabs", "version": "1.0", "permissions": ["tabs"], "options_page": "options.html"}"#,
+            "manifest.json": #"{"manifest_version": 3, "name": "Tabs", "version": "1.0", "permissions": ["tabs"], "host_permissions": ["<all_urls>"], "options_page": "options.html"}"#,
             "options.html": #"<title>Options</title><script src="options.js"></script>"#,
             "options.js": "chrome.tabs.onActivated.addListener(({ tabId }) => chrome.tabs.get(tabId, (tab) => { document.title = 'Activated ' + tab.url; }));",
         ]), id: id)

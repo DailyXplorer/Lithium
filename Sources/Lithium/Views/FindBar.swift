@@ -42,11 +42,13 @@ struct FindBar: View {
         .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
         .onAppear {
             text = find.query
-            claimFocus($isFocused)
+            if find.focusesField { claimFocus($isFocused) }
             // Closing the bar cleared the last search's matches; reopened, it shows them again.
             if !find.query.isEmpty { searchAgain() }
         }
         .onChange(of: find.focusToken) { claimFocus($isFocused) }
+        .onChange(of: isFocused) { find.isFieldFocused = isFocused }
+        .onDisappear { find.isFieldFocused = false }
         .onChange(of: find.query) { text = find.query }
         .onChange(of: text) {
             guard text != find.query else { return }

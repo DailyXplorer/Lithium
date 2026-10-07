@@ -62,7 +62,7 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator())
+        .background(WindowConfigurator(browser: browser))
         .ignoresSafeArea()
         .overlay {
             if browser.capture.isSelecting {
@@ -341,19 +341,31 @@ struct WindowDragArea: View {
     }
 }
 
-/// Moves the traffic lights down so they sit centered in Lithium's taller top bar.
+/// Moves the traffic lights down so they sit centered in Lithium's taller top bar, and tells the
+/// browser which window it is in.
 private struct WindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { TrafficLightsView() }
+    let browser: Browser
+
+    func makeNSView(context: Context) -> NSView { TrafficLightsView(browser: browser) }
     func updateNSView(_ view: NSView, context: Context) {}
 
     final class TrafficLightsView: NSView {
+        private weak var browser: Browser?
         private var observers: [NSObjectProtocol] = []
+
+        init(browser: Browser) {
+            self.browser = browser
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             guard let window else { return }
+            browser?.window = window
             window.isMovableByWindowBackground = false
             let names: [Notification.Name] = [
                 NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,

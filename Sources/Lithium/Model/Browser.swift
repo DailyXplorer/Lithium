@@ -68,6 +68,8 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    /// The write a change to the session waits for (`saveSession`).
+    @ObservationIgnored private var sessionSave: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
     @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
@@ -728,14 +730,35 @@ final class Browser {
         }
     }
 
-    /// Writes the session now and again whenever a tab it describes changes.
+    /// Writes the session now, and again a moment after a tab it describes changes: a page that
+    /// retitles itself (an unread count, a clock) costs one write a second at most. Nothing runs
+    /// while nothing changes.
     private func saveSession() {
+        sessionSave?.cancel()
+        sessionSave = nil
         let session = withObservationTracking { self.session } onChange: { [weak self] in
-            Task { @MainActor in self?.saveSession() }
+            Task { @MainActor in self?.sessionChanged() }
         }
         guard session != savedSession else { return }
         SessionStore.save(session)
         savedSession = session
+    }
+
+    private func sessionChanged() {
+        guard sessionSave == nil else { return }
+        sessionSave = Task { [weak self] in
+            try? await Task.sleep(for: Self.sessionSaveDelay)
+            guard !Task.isCancelled else { return }
+            self?.saveSession()
+        }
+    }
+
+    static let sessionSaveDelay = Duration.seconds(1)
+
+    /// What waits to be written, at once: when the app quits.
+    func saveNow() {
+        saveSession()
+        history.writeTitles()
     }
 
     // MARK: Favorites

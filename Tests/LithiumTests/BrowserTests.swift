@@ -314,6 +314,30 @@ struct BrowserTests {
         #expect(!typed.hasUnsavedInput)
     }
 
+    /// A page that retitles itself again and again writes the session once, a moment later,
+    /// not at every change; quitting writes what waits at once.
+    @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Start</title>start")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) && tab.title == "Start" })
+        browser.saveNow()
+        let before = SessionStore.writes
+
+        // One at a time from here: the page's own timers are slowed while it isn't shown.
+        for count in 1...20 {
+            _ = try await tab.webView.evaluateJavaScript("document.title = 'Count \(count)'")
+            #expect(await waitUntil(5) { tab.title == "Count \(count)" })
+        }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.title == "Count 20" } })
+        #expect(SessionStore.writes - before <= 2)
+
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Final'")
+        #expect(await waitUntil(10) { tab.title == "Final" })
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
+    }
+
     /// The real Chrome Web Store, YouTube and SponsorBlock:
     /// `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension`.
     /// Adds SponsorBlock with the store's own button and Lithium's confirmation, then watches it skip a sponsor.

@@ -13,6 +13,11 @@ struct Visit: Identifiable, Hashable {
 final class HistoryStore {
     private var db: OpaquePointer?
     private var lastRecorded: (url: URL, date: Date)?
+    /// Titles waiting to be written, by address: a page that retitles itself (an unread count,
+    /// a clock) costs one write a second at most, not one per change.
+    private var pendingTitles: [URL: String] = [:]
+    private var titleWrite: Task<Void, Never>?
+    static let titleDelay = Duration.seconds(1)
     /// The address bar's query reads every visit (70 ms at 200,000), so it runs on a connection
     /// of its own, off the main thread.
     private let search: HistorySearch
@@ -41,6 +46,8 @@ final class HistoryStore {
 
     func record(_ url: URL, title: String) {
         guard ["http", "https"].contains(url.scheme) else { return }
+        // A title still waiting belongs to the visit before this one.
+        writeTitles()
         let now = Date()
         // Reloads and redirect bounces land on the same URL within seconds; keep one row.
         if let last = lastRecorded, last.url == url, now.timeIntervalSince(last.date) < 60 { return }
@@ -48,15 +55,35 @@ final class HistoryStore {
         run("INSERT INTO visits (url, title, visited_at) VALUES (?, ?, ?)", url.absoluteString, title, now.timeIntervalSince1970)
     }
 
+    /// Written a moment later, or as soon as anything reads or adds visits.
     func updateTitle(_ title: String, for url: URL) {
         guard !title.isEmpty else { return }
-        run(
-            "UPDATE visits SET title = ? WHERE id = (SELECT id FROM visits WHERE url = ? ORDER BY visited_at DESC LIMIT 1)",
-            title, url.absoluteString
-        )
+        pendingTitles[url] = title
+        guard titleWrite == nil else { return }
+        titleWrite = Task { [weak self] in
+            try? await Task.sleep(for: Self.titleDelay)
+            guard !Task.isCancelled else { return }
+            self?.writeTitles()
+        }
+    }
+
+    /// The titles waiting, each on its address's latest visit.
+    func writeTitles() {
+        titleWrite?.cancel()
+        titleWrite = nil
+        guard !pendingTitles.isEmpty else { return }
+        let titles = pendingTitles
+        pendingTitles = [:]
+        for (url, title) in titles {
+            run(
+                "UPDATE visits SET title = ? WHERE id = (SELECT id FROM visits WHERE url = ? ORDER BY visited_at DESC LIMIT 1)",
+                title, url.absoluteString
+            )
+        }
     }
 
     func visits(matching query: String, limit: Int = 500) -> [Visit] {
+        writeTitles()
         let pattern = "%\(query.trimmingCharacters(in: .whitespaces))%"
         var statement: OpaquePointer?
         let sql = "SELECT id, url, title, visited_at FROM visits WHERE url LIKE ?1 OR title LIKE ?1 ORDER BY visited_at DESC LIMIT ?2"
@@ -80,12 +107,14 @@ final class HistoryStore {
 
     /// Distinct pages matching `query`, best first: addresses that start with it, then the most visited.
     func topSites(matching query: String, limit: Int) -> [(url: URL, title: String)] {
-        Self.topSites(in: db, matching: query, limit: limit)
+        writeTitles()
+        return Self.topSites(in: db, matching: query, limit: limit)
     }
 
     /// `topSites` off the main thread; nil when a newer query replaced this one before it ran.
     func topSitesInBackground(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
-        await search.topSites(matching: query, limit: limit)
+        writeTitles()
+        return await search.topSites(matching: query, limit: limit)
     }
 
     nonisolated fileprivate static func topSites(in db: OpaquePointer?, matching query: String, limit: Int) -> [(url: URL, title: String)] {
@@ -122,10 +151,14 @@ final class HistoryStore {
     }
 
     func delete(id: Int64) {
+        writeTitles()
         run("DELETE FROM visits WHERE id = ?", id)
     }
 
     func clear() {
+        titleWrite?.cancel()
+        titleWrite = nil
+        pendingTitles = [:]
         execute("DELETE FROM visits; VACUUM;")
         lastRecorded = nil
     }

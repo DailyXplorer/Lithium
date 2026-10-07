@@ -238,9 +238,9 @@ struct SplitViewTests {
         first.openInSplit(tab("c", in: first))
         first.toggleStacked(of: tab("c", in: first))
         first.resizeSplit(of: tab("c", in: first), to: 0.3)
-        // The session is saved on the main actor's next turns.
-        for _ in 0..<1000 where SessionStore.load().splits?.first?.fraction != 0.3 {
-            await Task.yield()
+        // The session is saved a moment after it changes.
+        for _ in 0..<250 where SessionStore.load().splits?.first?.fraction != 0.3 {
+            try await Task.sleep(for: .milliseconds(20))
         }
         let saved = try #require(SessionStore.load().splits?.first)
         #expect(saved.isStacked && saved.fraction == 0.3)

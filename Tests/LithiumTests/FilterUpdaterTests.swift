@@ -80,11 +80,11 @@ struct FilterUpdateTests {
 
     private func url(_ list: String) -> URL { URL(string: "https://\(host)/\(list).txt")! }
 
-    private func updater(_ groups: [String: [String]]) -> FilterUpdater {
+    private func updater(_ groups: [String: [String]], bundledFilters: URL? = nil) -> FilterUpdater {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubLists.self]
         let lists = Dictionary(uniqueKeysWithValues: Set(groups.values.joined()).map { ($0, url($0)) })
-        return FilterUpdater(sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration))
+        return FilterUpdater(sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration), bundledFilters: bundledFilters)
     }
 
     private func read(_ file: String) throws -> String {
@@ -124,12 +124,22 @@ struct FilterUpdateTests {
 
     /// A dead or failing list keeps its last good copy, and the others still update.
     @Test func aFailingListKeepsItsLastGoodCopyWithoutHoldingBackTheOthers() async throws {
-        defer { try? FileManager.default.removeItem(at: destination) }
-        let updater = updater(["ads": ["steady", "flaky", "dead"]])
+        let bundled = FileManager.default.temporaryDirectory.appending(path: "bundled-filters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: destination); try? FileManager.default.removeItem(at: bundled) }
+        let updater = updater(["ads": ["steady", "flaky", "dead"]], bundledFilters: bundled)
         StubLists.serve("||first-steady.example^", at: url("steady"))
         StubLists.serve("||first-flaky.example^", at: url("flaky"))
+
+        // A failing list with no copy anywhere would lose its rules: nothing is written.
+        await #expect(throws: (any Error).self) { try await updater.update(into: destination) }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+
+        // The first update after installing falls back to the bundled copy.
+        try FileManager.default.createDirectory(at: bundled.appending(path: "lists"), withIntermediateDirectories: true)
+        try "||bundled-dead.example^".write(to: bundled.appending(path: "lists/dead.txt"), atomically: false, encoding: .utf8)
         try await updater.update(into: destination)
         #expect(try manifest().failedLists == ["dead"])
+        #expect(try read("ads.json").contains("bundled-dead"))
 
         StubLists.serve("||second-steady.example^", at: url("steady"))
         StubLists.serve(nil, at: url("flaky"))

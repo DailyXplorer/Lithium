@@ -20,6 +20,9 @@ struct FilterUpdater: Sendable {
 
     let sources: Sources
     var session: URLSession = .shared
+    /// The set shipped with the app, whose `lists/` copies stand in for a failing list the
+    /// downloaded set doesn't hold yet (the first update after installing or upgrading).
+    var bundledFilters: URL? = Resources.bundle.url(forResource: "Filters", withExtension: nil)
 
     static func bundled() -> FilterUpdater? {
         guard let url = Resources.bundle.url(forResource: "FilterSources", withExtension: "json"),
@@ -31,8 +34,9 @@ struct FilterUpdater: Sendable {
     /// Builds a complete filter folder in a temporary location, then swaps it into `destination`,
     /// so a failed or interrupted update never leaves a half-written set behind.
     /// A list that fails to download (a dead server, an error page) doesn't hold back the others:
-    /// it keeps the last good copy the folder holds for that, and is named in the manifest's
-    /// `failedLists`. Only when every list fails is nothing written, and the error thrown.
+    /// it keeps the last good copy the folder (or else the bundled set) holds for it, and is named
+    /// in the manifest's `failedLists`. When every list fails, or a failing one has no copy at all,
+    /// nothing is written and the error thrown, so the current set keeps that list's rules.
     func update(into destination: URL) async throws {
         var downloaded: [String: [String]] = [:]
         var failed: [String] = []
@@ -47,8 +51,10 @@ struct FilterUpdater: Sendable {
                 NSLog("Lithium: filter list %@ failed to download: %@", name, error.localizedDescription)
                 failed.append(name)
                 lastError = error
-                downloaded[name] = (try? String(contentsOf: Self.copy(of: name, in: destination), encoding: .utf8))
-                    .map { $0.split(separator: "\n").map(String.init) }
+                let copy = [destination, bundledFilters].compactMap { $0 }.lazy
+                    .compactMap { try? String(contentsOf: Self.copy(of: name, in: $0), encoding: .utf8) }.first
+                guard let copy else { throw error }
+                downloaded[name] = copy.split(separator: "\n").map(String.init)
             }
         }
         if let lastError, failed.count == names.count { throw lastError }

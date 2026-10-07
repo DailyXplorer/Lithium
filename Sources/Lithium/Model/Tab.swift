@@ -68,6 +68,11 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored weak var opener: Tab?
     /// The hub whose dialog the page waits on: it still answers it once agent access is off.
     @ObservationIgnored var dialogOwner: AgentHub?
+    /// The page's dialog waiting for the tab to be shown (`present`): resumed with true when it
+    /// is, false for the default answer.
+    @ObservationIgnored private var hiddenDialog: CheckedContinuation<Bool, Never>?
+    /// For tests.
+    var hasHiddenDialog: Bool { hiddenDialog != nil }
     /// When the page was last heard, so a pause between tracks or while buffering isn't taken
     /// for silence.
     @ObservationIgnored private var lastHeard: Date?
@@ -490,6 +495,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     func tearDown() {
+        answerHiddenDialog()
         observations.removeAll()
         guard let loadedWebView else { return }
         loadedWebView.stopLoading()
@@ -570,7 +576,7 @@ final class Tab: NSObject, Identifiable {
         controller.addUserScript(PageOverrides.script)
         browser?.nowPlaying.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
-        privacy.addScripts(enabled, for: url, to: controller)
+        privacy.addScripts(enabled, for: url, isPrivate: isEphemeral, to: controller)
         browser?.agent?.install(on: controller, for: self)
     }
 
@@ -753,8 +759,11 @@ extension Tab: WKNavigationDelegate {
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
-            // Only the user's own click hands an address to another app, never an agent's.
-            if action.navigationType == .linkActivated, (webView as? PageWebView)?.agentPressedLast != true { ExternalApps.open(url) }
+            // Only the user's own click hands an address to another app, never an agent's, nor a
+            // script's `click()`: that does nothing.
+            if action.navigationType == .linkActivated, Self.isPressed(action, in: webView), (webView as? PageWebView)?.agentPressedLast != true {
+                ExternalApps.open(url)
+            }
             // A load refused here ends without a word from WebKit.
             if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
             return (.cancel, preferences)
@@ -791,8 +800,11 @@ extension Tab: WKNavigationDelegate {
         guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
 
         // ⌘-click opens the link in a new tab, as does an agent's middle click (WebKit's button
-        // mask 4); the user's own middle click follows it here.
-        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
+        // mask 4); the user's own middle click follows it here. A script's ⌘-click (an untrusted
+        // `MouseEvent` with `metaKey`) follows it here too, as in WebKit: a new tab of Lithium's
+        // would get around the popup blocker.
+        if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil,
+           Self.isPressed(action, in: webView) {
             if await browser?.agent?.open(url, from: self) != true {
                 browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore, openedFrom: self)
             }
@@ -961,6 +973,14 @@ extension Tab: WKNavigationDelegate {
         action.responds(to: NSSelectorFromString("_isRedirect")) && action.value(forKey: "_isRedirect") as? Bool == true
     }
 
+    /// A real press (the user's or `NativeInput`'s) started this navigation, not a script on its
+    /// own: WebKit's user gesture (private `WKNavigationAction._isUserInitiated`), or a press in
+    /// the page just before, for a redirect or a WebKit without it.
+    private static func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
+        if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true { return true }
+        return (webView as? PageWebView)?.pressedRecently == true
+    }
+
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
     private static func isDropped(_ error: Error) -> Bool {
         let error = error as NSError
@@ -979,6 +999,7 @@ extension Tab: WKNavigationDelegate {
         browser?.nowPlaying.discard(self)
         browser?.agent?.pageGone(self)
         dialogOwner?.answerDialog(in: self)
+        answerHiddenDialog()
         guard let browser else { return }
         guard browser.isOnScreen(self) else {
             sleep(configuration: browser.makeConfiguration(for: url))
@@ -1117,6 +1138,10 @@ extension Tab: WKUIDelegate {
     /// Its web view came into a window: the agent's dialog waiting in the page is the user's now,
     /// and the page has the window's size, not one an agent gave it.
     func didComeIntoView() {
+        if let hiddenDialog {
+            self.hiddenDialog = nil
+            hiddenDialog.resume(returning: true)
+        }
         dialogOwner?.handDialogToUser(in: self)
         browser?.agent?.cameIntoView(self)
     }
@@ -1185,9 +1210,24 @@ extension Tab: WKUIDelegate {
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
     }
 
-    private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
-        guard let window = webView.userWindow else { return alert.runModal() }
+    /// A sheet on the tab's window, never an app-modal alert: a page out of sight would hold up
+    /// the whole app (`for (;;) alert(1)` left only Force Quit). Its dialog waits for the tab to
+    /// be shown instead. Nil is the default answer: for one more dialog from the tab meanwhile, and
+    /// for the waiting one when the tab closes, sleeps or is sent elsewhere.
+    func present(_ alert: NSAlert) async -> NSApplication.ModalResponse? {
+        if webView.userWindow == nil {
+            guard hiddenDialog == nil else { return nil }
+            guard await withCheckedContinuation({ hiddenDialog = $0 }) else { return nil }
+        }
+        guard let window = webView.userWindow else { return nil }
         return await alert.beginSheetModal(for: window)
+    }
+
+    /// Gives the dialog waiting for the tab to be shown its default answer.
+    func answerHiddenDialog() {
+        guard let hiddenDialog else { return }
+        self.hiddenDialog = nil
+        hiddenDialog.resume(returning: false)
     }
 }
 

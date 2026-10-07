@@ -6,10 +6,18 @@
 (() => {
   'use strict';
   const KEY = '__LITHIUM_SESSION_KEY__';
+  // Names the marker below; random too, and independent of KEY, so the marker gives no seed away.
+  const MARK_KEY = '__LITHIUM_MARK_KEY__';
   const MAX_PIXELS = 500000;
   const MAX_SAMPLES = 500000;
-  // Taken once: the page shares this world and could replace Reflect.apply later.
+  // Taken once: the page shares this world and could replace any of them before a frame or
+  // popup it opens is protected (a `call` that always returns true once skipped them).
   const apply = Reflect.apply;
+  const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
+  const weakMapGet = WeakMap.prototype.get;
+  const weakMapSet = WeakMap.prototype.set;
+  const weakSetHas = WeakSet.prototype.has;
+  const weakSetAdd = WeakSet.prototype.add;
 
   // A blank frame (about:blank, srcdoc) belongs to the site that created it.
   const hostname = location.hostname || (() => { try { return parent.location.hostname; } catch (_) { return ''; } })();
@@ -26,9 +34,34 @@
     return hash >>> 0;
   };
   const seed = fnv(KEY + site);
+
+  // HalfSipHash-2-4 of `text` under the 64-bit key `hex`: a keyed hash a page can't run
+  // backwards to the key, unlike FNV, whose steps undo one by one.
+  const sipHash = (hex, text) => {
+    const k0 = parseInt(hex.slice(0, 8), 16) | 0;
+    const k1 = parseInt(hex.slice(8, 16), 16) | 0;
+    let v0 = k0, v1 = k1, v2 = 0x6c796765 ^ k0, v3 = 0x74656462 ^ k1;
+    const rotl = (x, b) => (x << b) | (x >>> (32 - b));
+    const rounds = (count) => {
+      for (let i = 0; i < count; i++) {
+        v0 = (v0 + v1) | 0; v1 = rotl(v1, 5) ^ v0; v0 = rotl(v0, 16);
+        v2 = (v2 + v3) | 0; v3 = rotl(v3, 8) ^ v2;
+        v0 = (v0 + v3) | 0; v3 = rotl(v3, 7) ^ v0;
+        v2 = (v2 + v1) | 0; v1 = rotl(v1, 13) ^ v2; v2 = rotl(v2, 16);
+      }
+    };
+    const word = (m) => { v3 ^= m; rounds(2); v0 ^= m; };
+    // Two UTF-16 units a word; the last word carries the length, as in SipHash.
+    for (let i = 0; i + 1 < text.length; i += 2) word(text.charCodeAt(i) | (text.charCodeAt(i + 1) << 16));
+    word((text.length % 2 ? text.charCodeAt(text.length - 1) : 0) | ((text.length & 0xff) << 24));
+    v2 ^= 0xff;
+    rounds(4);
+    return (v1 ^ v3) >>> 0;
+  };
   // Marks a protected window across realms (WebKit's per-frame injection and the iframe hook
-  // below can both reach a frame). The name derives from the session key, so pages can't forge it.
-  const MARK = '__' + fnv(KEY).toString(36);
+  // below can both reach a frame, always one of the same site). A keyed hash of the site: pages
+  // can't forge it, and it differs from site to site, so it is no identifier they could share.
+  const MARK = '__' + sipHash(MARK_KEY, site).toString(36);
   const prng = (state) => () => {
     state = (state + 0x6d2b79f5) | 0;
     let t = Math.imul(state ^ (state >>> 15), 1 | state);
@@ -59,36 +92,36 @@
   const cores = (real) => Math.max(2, Math.min(real, 2 + Math.floor(prng(seed ^ 0x51ed270b)() * (real - 1))));
 
   const protect = (win) => {
-    if (!win || Object.prototype.hasOwnProperty.call(win, MARK)) return;
-    Object.defineProperty(win, MARK, { value: true });
+    if (!win || hasOwn(win, MARK)) return;
+    defineProperty(win, MARK, { value: true });
 
     // Replacements report the original's source through toString, so pages cannot spot them.
     const disguises = new WeakMap();
     const nativeToString = win.Function.prototype.toString;
     const disguise = (replacement, original) => {
-      Object.defineProperty(replacement, 'name', { value: original.name });
-      Object.defineProperty(replacement, 'length', { value: original.length });
-      disguises.set(replacement, original);
+      defineProperty(replacement, 'name', { value: original.name });
+      defineProperty(replacement, 'length', { value: original.length });
+      apply(weakMapSet, disguises, [replacement, original]);
       return replacement;
     };
-    const toString = disguise({ toString() { return apply(nativeToString, disguises.get(this) || this, []); } }.toString, nativeToString);
-    Object.defineProperty(win.Function.prototype, 'toString', { ...Object.getOwnPropertyDescriptor(win.Function.prototype, 'toString'), value: toString });
+    const toString = disguise({ toString() { return apply(nativeToString, apply(weakMapGet, disguises, [this]) || this, []); } }.toString, nativeToString);
+    defineProperty(win.Function.prototype, 'toString', { ...getOwnPropertyDescriptor(win.Function.prototype, 'toString'), value: toString });
 
     const patch = (proto, name, handler) => {
-      const descriptor = proto && Object.getOwnPropertyDescriptor(proto, name);
+      const descriptor = proto && getOwnPropertyDescriptor(proto, name);
       if (!descriptor || typeof descriptor.value !== 'function') return null;
       const original = descriptor.value;
       const value = disguise({ [name](...args) { return handler(original, this, args); } }[name], original);
-      Object.defineProperty(proto, name, { ...descriptor, value });
+      defineProperty(proto, name, { ...descriptor, value });
       return original;
     };
 
     const patchGetter = (proto, name, handler) => {
-      const descriptor = proto && Object.getOwnPropertyDescriptor(proto, name);
+      const descriptor = proto && getOwnPropertyDescriptor(proto, name);
       if (!descriptor || !descriptor.get) return;
       const original = descriptor.get;
-      const get = disguise({ get [name]() { return handler(original, this); } }.__lookupGetter__(name), original);
-      Object.defineProperty(proto, name, { ...descriptor, get });
+      const get = disguise(getOwnPropertyDescriptor({ get [name]() { return handler(original, this); } }, name).get, original);
+      defineProperty(proto, name, { ...descriptor, get });
     };
 
     try {
@@ -110,9 +143,8 @@
         context.putImageData(image, 0, 0);
         return copy;
       };
-      for (const name of ['toDataURL', 'toBlob']) {
-        patch(win.HTMLCanvasElement.prototype, name, (target, self, args) => apply(target, farbledCopy(self), args));
-      }
+      patch(win.HTMLCanvasElement.prototype, 'toDataURL', (target, self, args) => apply(target, farbledCopy(self), args));
+      patch(win.HTMLCanvasElement.prototype, 'toBlob', (target, self, args) => apply(target, farbledCopy(self), args));
     } catch (_) {}
 
     try {
@@ -135,8 +167,10 @@
     } catch (_) {}
 
     try {
-      for (const context of [win.WebGLRenderingContext, win.WebGL2RenderingContext]) {
-        patch(context && context.prototype, 'readPixels', (target, self, args) => {
+      // Indexed loops here and below: the page may have replaced the array iterator by now.
+      const contexts = [win.WebGLRenderingContext, win.WebGL2RenderingContext];
+      for (let i = 0; i < contexts.length; i++) {
+        patch(contexts[i] && contexts[i].prototype, 'readPixels', (target, self, args) => {
           const result = apply(target, self, args);
           const pixels = args[6];
           if (pixels && pixels.BYTES_PER_ELEMENT === 1 && pixels.length <= MAX_PIXELS * 4) noisePixels(pixels);
@@ -149,8 +183,8 @@
       const farbled = new WeakSet();
       patch(win.AudioBuffer.prototype, 'getChannelData', (target, self, args) => {
         const samples = apply(target, self, args);
-        if (!farbled.has(samples)) {
-          farbled.add(samples);
+        if (!apply(weakSetHas, farbled, [samples])) {
+          apply(weakSetAdd, farbled, [samples]);
           noiseSamples(samples);
         }
         return samples;
@@ -198,7 +232,7 @@
     // Insertion methods are among the hottest DOM calls: their replacements forward
     // `arguments` instead of collecting them in an array and calling through a handler.
     const hookInsertion = (proto, name, variadic) => {
-      const descriptor = proto && Object.getOwnPropertyDescriptor(proto, name);
+      const descriptor = proto && getOwnPropertyDescriptor(proto, name);
       if (!descriptor || typeof descriptor.value !== 'function') return;
       const original = descriptor.value;
       const replacement = variadic
@@ -212,10 +246,12 @@
             protectInserted(node);
             return result;
           } }[name];
-      Object.defineProperty(proto, name, { ...descriptor, value: disguise(replacement, original) });
+      defineProperty(proto, name, { ...descriptor, value: disguise(replacement, original) });
     };
     try {
-      for (const proto of [win.HTMLIFrameElement.prototype, win.HTMLFrameElement.prototype]) {
+      const frameTypes = [win.HTMLIFrameElement.prototype, win.HTMLFrameElement.prototype];
+      for (let i = 0; i < frameTypes.length; i++) {
+        const proto = frameTypes[i];
         patchGetter(proto, 'contentWindow', (target, self) => {
           const child = apply(target, self, []);
           try { protect(child); } catch (_) {}
@@ -226,8 +262,21 @@
           return apply(target, self, []);
         });
       }
-      for (const name of ['appendChild', 'insertBefore', 'replaceChild']) hookInsertion(win.Node.prototype, name, false);
-      for (const name of ['append', 'prepend', 'after', 'before', 'replaceWith']) hookInsertion(win.Element.prototype, name, true);
+      const single = ['appendChild', 'insertBefore', 'replaceChild'];
+      for (let i = 0; i < single.length; i++) hookInsertion(win.Node.prototype, single[i], false);
+      const variadic = ['append', 'prepend', 'after', 'before', 'replaceWith'];
+      for (let i = 0; i < variadic.length; i++) hookInsertion(win.Element.prototype, variadic[i], true);
+    } catch (_) {}
+
+    // A popup starts as a blank window of the opener's site that WebKit injects nothing into
+    // until its first page loads, and the opener can reach it at once.
+    try {
+      patch(hasOwn(win, 'open') ? win : win.Window.prototype, 'open', (target, self, args) => {
+        // A bare `open()` calls it without a `this`, which the native one takes for the window.
+        const child = apply(target, self == null ? win : self, args);
+        try { protect(child); } catch (_) {}
+        return child;
+      });
     } catch (_) {}
   };
 

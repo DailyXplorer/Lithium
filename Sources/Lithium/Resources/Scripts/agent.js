@@ -1182,7 +1182,9 @@
         case 'detached': return !element;
         case 'visible': return Boolean(element) && isShown(element);
         case 'hidden': return !element || !isShown(element);
-        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+        // As click judges it: a control in a disabled fieldset is :disabled, not .disabled.
+        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true'
+          && !safeMatches(element, ':disabled');
       }
       return false;
     };

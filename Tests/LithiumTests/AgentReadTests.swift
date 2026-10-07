@@ -361,6 +361,7 @@ struct AgentReadTests {
             <div role="button" aria-label="Deep" style="position:absolute;left:0;top:20000px;width:400px;height:200px;background:rgb(255,0,0)"></div>
             <input type="password" value="hunter2secret" style="position:absolute;left:200px;top:20020px;width:150px;height:40px;background:rgb(0,0,255);border:0">
             """),
+        "/fieldset": (Self.html, "<title>Fieldset</title><fieldset id=\"set\" disabled><button>Send</button></fieldset>"),
         "/endless": (Self.html, """
             <title>Endless</title><style>body { margin: 0 }</style>
             <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10px;width:400px;height:40px">
@@ -773,6 +774,18 @@ struct AgentReadTests {
             let arrived = await client.call("wait_for", ["tab": .string(moving), "text": "Welcome aboard"])
             #expect(!arrived.isError, "\(arrived.message)")
             #expect(arrived["title"] == "Arrived")
+        }
+    }
+
+    /// A control in a disabled fieldset is disabled to click, so it isn't enabled to wait for either.
+    @Test func aControlInADisabledFieldsetIsntEnabled() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/fieldset")
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            let send = try #require(node(snapshot, role: "button", name: "Send")?["ref"])
+            #expect(await client.call("wait_for", ["tab": .string(tab), "ref": send, "state": "enabled", "timeoutMs": 300]).code == "timeout")
+            _ = try await client.tab(tab)?.webView.callAsyncJavaScript("document.getElementById('set').disabled = false", contentWorld: .page)
+            #expect(await client.call("wait_for", ["tab": .string(tab), "ref": send, "state": "enabled", "timeoutMs": 3000])["met"] == true)
         }
     }
 

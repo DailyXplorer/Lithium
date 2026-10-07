@@ -63,6 +63,20 @@ struct BrowserTests {
         #expect(opened.url == typed)
     }
 
+    /// A typed `mailto:` address goes to Mail (only recorded in tests); the tab stays on its page.
+    @Test func typedMailtoGoesToMail() {
+        let browser = Browser()
+        let page = URL(string: "data:text/html,page")!
+        let tab = browser.newTab(url: page)
+        defer { browser.close(tab) }
+        let mail = URL(string: "mailto:alice@example.com")!
+        let (before, count) = (ExternalApps.recorded, browser.tabs.count)
+        browser.submitAddress(mail.absoluteString)
+        #expect(ExternalApps.recorded == before + [.open(mail)])
+        #expect(tab.url == page)
+        #expect(browser.tabs.count == count)
+    }
+
     /// A tab out of sight waits to be selected; the visible one reloads once, then stops.
     @Test func crashedTabs() async throws {
         let browser = Browser()

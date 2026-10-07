@@ -15,6 +15,10 @@ struct AddressInputTests {
         ("c++ tutorial", "https://search.brave.com/search?q=c%2B%2B%20tutorial"),
         ("swift", "https://search.brave.com/search?q=swift"),
         ("1.5", "https://search.brave.com/search?q=1.5"),
+        ("mailto:alice@example.com", "mailto:alice@example.com"),
+        ("[::1]", "http://[::1]"),
+        ("[2001:db8::1]/admin", "http://[2001:db8::1]/admin"),
+        ("[::1]:8080", "http://[::1]:8080"),
     ])
     func resolves(input: String, expected: String) {
         #expect(AddressInput.url(for: input, engine: .brave)?.absoluteString == expected)

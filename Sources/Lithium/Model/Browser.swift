@@ -460,6 +460,8 @@ final class Browser {
     }
 
     private func open(_ url: URL, in tab: Tab?) {
+        // A typed `mailto:` goes to Mail; the tab, which can't show it, stays on its page.
+        if url.scheme?.lowercased() == "mailto" { return ExternalApps.open(url) }
         if let tab {
             if tab !== selectedTab { select(tab) }
             navigate(tab, .open(url))

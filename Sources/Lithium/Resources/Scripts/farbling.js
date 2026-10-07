@@ -76,6 +76,12 @@
   const nodeType = member(Node.prototype, 'nodeType').get;
   const parentNode = member(Node.prototype, 'parentNode').get;
   const documentView = member(Document.prototype, 'defaultView').get;
+  const documentState = member(Document.prototype, 'readyState').get;
+  const currentScript = member(Document.prototype, 'currentScript').get;
+  const hasAttribute = member(Element.prototype, 'hasAttribute').value;
+  // A script with a source (`href` for SVG) is an external one.
+  const external = (script) => !!script &&
+    (apply(hasAttribute, script, ['src']) || apply(hasAttribute, script, ['href']) || apply(hasAttribute, script, ['xlink:href']));
   // By node type: elements, documents, fragments and shadow roots.
   const queryAll = { __proto__: null,
     1: member(Element.prototype, 'querySelectorAll').value,
@@ -509,7 +515,7 @@
           }
         } catch (_) {}
       };
-      patch(documentProto, 'open', (target, self, args) => {
+      const open = patch(documentProto, 'open', (target, self, args) => {
         const result = apply(target, self, args);
         // With three arguments it opens a window instead, as `open` does: a blank popup to protect.
         if (args.length > 2) { try { protect(result); } catch (_) {} } else remark(self);
@@ -518,6 +524,15 @@
       const writes = ['write', 'writeln'];
       for (let i = 0; i < writes.length; i++) {
         patch(documentProto, writes[i], (target, self, args) => {
+          // Writing to a loaded document opens it inside the native call, which drops the `load`
+          // listener before the markup's frames fire it. Opened here first, the write finds the
+          // parser open and the listener is back in time. Not from the document's own external
+          // script: the browser ignores that write, and opening would wipe the page.
+          const state = read(documentState, self);
+          if (open && (state === 'interactive' || state === 'complete') && !external(read(currentScript, self))) {
+            apply(open, self, []);
+            remark(self);
+          }
           const result = apply(target, self, args);
           remark(self);
           for (let j = 0; j < args.length; j++) {

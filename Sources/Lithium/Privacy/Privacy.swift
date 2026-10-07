@@ -22,6 +22,8 @@ final class Privacy {
     /// they are then refreshed at once instead of when they turn a day old.
     @ObservationIgnored private var filtersMatchSources = true
     @ObservationIgnored private let farbling: WKUserScript
+    /// Private tabs farble with keys of their own: nothing in them matches the same site in a normal tab.
+    @ObservationIgnored private let privateFarbling: WKUserScript
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
 
@@ -35,19 +37,24 @@ final class Privacy {
     init() {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
 
-        let key = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined()
         let template = Resources.bundle.url(forResource: "farbling", withExtension: "js")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        farbling = WKUserScript(
-            source: template.replacingOccurrences(of: "__LITHIUM_SESSION_KEY__", with: key),
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: false,
-            in: .page
-        )
+        farbling = Self.makeFarbling(template)
+        privateFarbling = Self.makeFarbling(template)
 
         let safari = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
         let safariVersion = safari?["CFBundleShortVersionString"] as? String ?? "26.0"
         userAgentSuffix = "Version/\(safariVersion) Safari/605.1.15"
+    }
+
+    /// The script with fresh random keys: one seeds the noise, the other, independent, names the
+    /// marker each page window carries, so reading the marker tells a page nothing of the seeds.
+    private static func makeFarbling(_ template: String) -> WKUserScript {
+        let key = { (bytes: Int) in (0..<bytes).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max)) }.joined() }
+        let source = template
+            .replacingOccurrences(of: "__LITHIUM_SESSION_KEY__", with: key(16))
+            .replacingOccurrences(of: "__LITHIUM_MARK_KEY__", with: key(8))
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
     }
 
     func start() {
@@ -147,13 +154,14 @@ final class Privacy {
     }
 
     /// Adds the protection scripts for `url`; the caller has already reset the controller's scripts.
-    func addScripts(_ enabled: Bool, for url: URL, to controller: WKUserContentController) {
-        scripts(enabled, for: url).forEach(controller.addUserScript)
+    func addScripts(_ enabled: Bool, for url: URL, isPrivate: Bool = false, to controller: WKUserContentController) {
+        scripts(enabled, for: url, isPrivate: isPrivate).forEach(controller.addUserScript)
     }
 
     /// The protection scripts for `url`.
-    func scripts(_ enabled: Bool, for url: URL) -> [WKUserScript] {
+    func scripts(_ enabled: Bool, for url: URL, isPrivate: Bool = false) -> [WKUserScript] {
         guard enabled else { return [] }
+        let farbling = isPrivate ? privateFarbling : self.farbling
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }

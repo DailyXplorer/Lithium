@@ -32,6 +32,13 @@ final class PageWebView: WKWebView {
     /// The last button or key pressed in the page was `NativeInput`'s: what the page opens
     /// is an agent's only then, never on the user's own click during an agent's action.
     private(set) var agentPressedLast = false
+    /// When a button or key was last pressed or released in the page, by the user or `NativeInput`.
+    private var lastPress: ContinuousClock.Instant?
+    /// A real press came just before: what a link does now is that press's, not a script's own
+    /// `click()`, which WebKit reports as a link click too. A second, like WebKit's own user gesture.
+    var pressedRecently: Bool {
+        lastPress.map { .now - $0 < .seconds(1) } ?? false
+    }
 
     /// The page's own undo stack. WebKit records its edits with the view's undo manager, else
     /// the window's: shared with the address bar, and in the stage with every page an agent
@@ -91,6 +98,8 @@ final class PageWebView: WKWebView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        // The click comes on release, maybe long after the press.
+        lastPress = .now
         if !NativeInput.isAgents(event) {
             if userPressed { tab?.noteUserActivation() }
             userPressed = false
@@ -123,7 +132,10 @@ final class PageWebView: WKWebView {
     @discardableResult
     private func noteUser(_ event: NSEvent, pressing: Bool) -> Bool {
         let agents = NativeInput.isAgents(event)
-        if pressing { agentPressedLast = agents }
+        if pressing {
+            agentPressedLast = agents
+            lastPress = .now
+        }
         guard !agents else { return false }
         tab?.noteUserInput()
         return true

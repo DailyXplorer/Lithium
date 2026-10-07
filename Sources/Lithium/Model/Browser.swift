@@ -448,6 +448,7 @@ final class Browser {
         guard let tab else { return }
         agent?.userNavigated(tab)
         tab.dialogOwner?.answerDialog(in: tab)
+        tab.answerHiddenDialog()
         switch step {
         case .open(let url): tab.load(url)
         case .back: tab.webView.goBack()

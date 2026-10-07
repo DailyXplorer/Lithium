@@ -46,6 +46,15 @@
   const offscreenContext = globalThis.OffscreenCanvasRenderingContext2D && OffscreenCanvasRenderingContext2D.prototype;
   const offscreenDrawImage = member(offscreenContext, 'drawImage').value;
   const offscreenPutImageData = member(offscreenContext, 'putImageData').value;
+  // And the members the voice filter reads: an `Array` `filter` that keeps everything or a voice
+  // `default` that is always true once handed back every installed voice.
+  const ourNavigator = navigator;
+  const navigatorLanguage = member(Navigator.prototype, 'language').get;
+  const voiceProto = globalThis.SpeechSynthesisVoice && SpeechSynthesisVoice.prototype;
+  const voiceDefault = member(voiceProto, 'default').get;
+  const voiceLocal = member(voiceProto, 'localService').get;
+  const voiceLang = member(voiceProto, 'lang').get;
+  const { toLowerCase, startsWith, indexOf, slice } = String.prototype;
 
   // A blank frame (about:blank, srcdoc) belongs to the site that created it.
   const hostname = location.hostname || (() => { try { return parent.location.hostname; } catch (_) { return ''; } })();
@@ -204,7 +213,8 @@
           const result = apply(target, self, args);
           const pixels = args[6];
           const kind = pixels ? apply(typedKind, pixels, []) : undefined;
-          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray') && apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels);
+          // Byte targets only (Int8Array: WebGL2 integer reads); setting a low bit means nothing to floats.
+          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray' || kind === 'Int8Array') &&apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels);
           return result;
         });
       }
@@ -240,9 +250,22 @@
     // of the page's language, which every Mac with that language ships.
     try {
       patch(win.SpeechSynthesis.prototype, 'getVoices', (target, self, args) => {
-        const language = (win.navigator.language || 'en').split('-')[0].toLowerCase();
-        return apply(target, self, args).filter((voice) =>
-          voice.default || (voice.localService && voice.lang.toLowerCase().startsWith(language)));
+        // The language is the same in every frame and popup, so this window's navigator serves them all.
+        const tag = apply(toLowerCase, read(navigatorLanguage, ourNavigator) || 'en', []);
+        const dash = apply(indexOf, tag, ['-']);
+        const language = dash < 0 ? tag : apply(slice, tag, [0, dash]);
+        // Compacted in place, so the result stays the frame's own array.
+        const voices = apply(target, self, args);
+        let kept = 0;
+        for (let i = 0; i < voices.length; i++) {
+          const voice = voices[i];
+          if (apply(voiceDefault, voice, []) ||
+              (apply(voiceLocal, voice, []) && apply(startsWith, apply(toLowerCase, apply(voiceLang, voice, []), []), [language]))) {
+            voices[kept++] = voice;
+          }
+        }
+        voices.length = kept;
+        return voices;
       });
     } catch (_) {}
 

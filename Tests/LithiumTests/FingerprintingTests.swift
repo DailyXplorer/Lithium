@@ -67,9 +67,14 @@ struct FingerprintingTests {
         return try await run(probe, farbling: source)
     }
 
-    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/") async throws -> Value {
+    /// `before` runs ahead of the script; `awaiting` runs the probe as an async function body,
+    /// for what the page only gets later.
+    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", before: String? = nil, awaiting: Bool = false) async throws -> Value {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        if let before {
+            configuration.userContentController.addUserScript(WKUserScript(source: before, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         if let source {
             configuration.userContentController.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
@@ -80,7 +85,10 @@ struct FingerprintingTests {
         webView.uiDelegate = popups
         webView.loadHTMLString("<body></body>", baseURL: URL(string: base)!)
         try await loaded.wait()
-        let json = try #require(try await webView.evaluateJavaScript(probe) as? String)
+        let result: Any? = awaiting
+            ? try await webView.callAsyncJavaScript(probe, contentWorld: .page)
+            : try await webView.evaluateJavaScript(probe) as Any?
+        let json = try #require(result as? String)
         return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? Value)
     }
 
@@ -171,6 +179,57 @@ struct FingerprintingTests {
         #expect(protected["pixels"] != bare["pixels"])
         #expect(bare["audio"] == AnyHashable(false))
         #expect(protected["audio"] == AnyHashable(true))
+    }
+
+    /// The voice filter reads only what it saved at load: a page that replaces `Array` `filter`,
+    /// a voice's `default`, the navigator's `language` or `startsWith` still gets the same few voices.
+    @Test func replacedBuiltInsDontRevealEveryVoice() async throws {
+        // WebKit lists the voices once they've loaded, after the first call.
+        let probe = """
+            if (!speechSynthesis.getVoices().length) {
+              await new Promise((done) => { speechSynthesis.onvoiceschanged = done; setTimeout(done, 3000); });
+            }
+            const before = speechSynthesis.getVoices().length;
+            Array.prototype.filter = function () { return this.slice(); };
+            Object.defineProperty(SpeechSynthesisVoice.prototype, 'default', { get: () => true });
+            Object.defineProperty(Navigator.prototype, 'language', { get: () => '' });
+            String.prototype.startsWith = () => true;
+            return JSON.stringify({ before, after: speechSynthesis.getVoices().length });
+            """
+        // WebKit marks every voice a Mac ships as a default one, which the filter keeps; run before
+        // the script, this stands for the voices a user downloads, which it hides.
+        let downloaded = "Object.defineProperty(SpeechSynthesisVoice.prototype, 'default', { get: () => false });"
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, awaiting: true)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), before: downloaded, awaiting: true)
+
+        let installed = try #require(bare["before"] as? Int)
+        let shown = try #require(protected["before"] as? Int)
+        #expect(shown < installed, "\(shown) of \(installed) voices shown")
+        #expect(protected["after"] as? Int == shown)
+    }
+
+    /// WebGL2 integer reads into an `Int8Array` get the same noise as byte reads.
+    @Test func signedByteReadPixelsGetsNoise() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2');
+              const buffer = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, buffer);
+              gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8I, 64, 64);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+              gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, buffer);
+              gl.clearBufferiv(gl.COLOR, 0, new Int32Array([2, 4, 6, 8]));
+              const pixels = new Int8Array(64 * 64 * 4);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA_INTEGER, gl.BYTE, pixels);
+              let sum = 0; for (let i = 0; i < pixels.length; i++) sum += pixels[i];
+              return JSON.stringify({ error: gl.getError(), sum });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare["error"] == AnyHashable(0))
+        #expect(bare["sum"] == AnyHashable(64 * 64 * 20))
+        #expect(try #require(protected["sum"] as? Int) > 64 * 64 * 20)
     }
 
     @Test func popupIsProtectedBeforeItsFirstPage() async throws {

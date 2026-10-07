@@ -531,19 +531,73 @@ struct FingerprintingTests {
         #expect(protected["script"] == protected["page"])
     }
 
-    /// The browser ignores a write from the document's own external script once it has loaded;
-    /// opening the document ahead of such a write would wipe the page instead.
-    @Test func lateWriteFromAnExternalScriptStillLeavesThePage() async throws {
-        let probe = """
-            const script = document.createElement('script');
-            script.src = 'data:text/javascript,' + encodeURIComponent('document.write("<p>written</p>")');
-            await new Promise((resolve) => { script.onload = script.onerror = resolve; document.body.append(script); });
-            return JSON.stringify({ kept: document.getElementById('kept') !== null, written: document.body.textContent.includes('written') });
+    /// A write into a document that is still loading, with no script of its own running (its parser
+    /// waits on an external script), opens it too: the frames it writes are protected the same way.
+    @Test func blankFrameWrittenIntoALoadingDocumentIsProtected() async throws {
+        let html = """
+            <body><script>
+              const written = document.body.appendChild(document.createElement('iframe')).contentDocument;
+              written.open();
+              written.write('<script src="data:text/javascript,"><\\/script>');
+              written.close();
+              window.state = written.readyState;
+              written.write('<iframe onload="parent.fromHandler = frames[0].HTMLCanvasElement.prototype.toDataURL"></iframe>' +
+                '<script>parent.fromScript = frames[0].HTMLCanvasElement.prototype.toDataURL<\\/script>');
+              written.close();
+            </script></body>
             """
+        let probe = """
+            (() => {
+              const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              const hash = (d) => { let h = 0; for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0; return (h >>> 0).toString(16); };
+              const through = (toDataURL) => toDataURL ? hash(toDataURL.call(c)) : 'missing';
+              return JSON.stringify({ state: window.state, page: hash(c.toDataURL()), handler: through(window.fromHandler), script: through(window.fromScript) });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: html)
+
+        #expect(bare["state"] == AnyHashable("loading"))
+        #expect(protected["state"] == AnyHashable("loading"))
+        #expect(bare["handler"] == bare["page"])
+        #expect(bare["script"] == bare["page"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["handler"] == protected["page"])
+        #expect(protected["script"] == protected["page"])
+    }
+
+    /// The browser ignores a write to a loaded document while one of its external or module scripts
+    /// runs, an inline script added by an external one included; opening the document ahead of
+    /// such a write would wipe the page instead.
+    @Test func lateWriteFromAnExternalScriptStillLeavesThePage() async throws {
+        let write = "document.write(\"<p>written</p>\")"
+        let loaders = [
+            "external": """
+                const script = document.createElement('script');
+                script.src = 'data:text/javascript,' + encodeURIComponent('\(write)');
+                await new Promise((resolve) => { script.onload = script.onerror = resolve; document.body.append(script); });
+                """,
+            "module": """
+                const script = document.createElement('script');
+                script.type = 'module';
+                script.text = 'try { \(write) } finally { window.ran() }';
+                await new Promise((resolve) => { window.ran = resolve; document.body.append(script); });
+                """,
+            "inlineFromExternal": """
+                window.inlineText = '\(write)';
+                const script = document.createElement('script');
+                script.src = 'data:text/javascript,' + encodeURIComponent('const inline = document.createElement("script"); inline.text = inlineText; document.body.append(inline)');
+                await new Promise((resolve) => { script.onload = script.onerror = resolve; document.body.append(script); });
+                """,
+        ]
         let html = "<body><p id=\"kept\">kept</p></body>"
-        for source in [nil, try Self.farbling()] {
-            let result: [String: Bool] = try await run(probe, farbling: source, html: html, awaiting: true)
-            #expect(result == ["kept": true, "written": false])
+        for (name, loader) in loaders {
+            let probe = loader + "return JSON.stringify({ kept: document.getElementById('kept') !== null, written: [...document.querySelectorAll('p')].some((p) => p.textContent === 'written') });"
+            for source in [nil, try Self.farbling()] {
+                let result: [String: Bool] = try await run(probe, farbling: source, html: html, awaiting: true)
+                #expect(result == ["kept": true, "written": false], "\(name), farbling: \(source != nil)")
+            }
         }
     }
 

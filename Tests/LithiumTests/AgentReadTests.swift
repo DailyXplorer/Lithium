@@ -1253,6 +1253,20 @@ struct AgentReadTests {
         }
     }
 
+    /// pushState changes the address with no event or mutation; the next snapshot names the new one.
+    /// (Hover-revealed menus dirty the cache on the real pointer's events, which a test can't send.)
+    @Test func aSnapshotSeesAnAddressPushedWithoutNavigating() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            let webView = try #require(client.tab(tab)?.webView)
+            let first = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(first["url"]?.string?.hasSuffix("/one") == true, "\(first.content)")
+            _ = try await webView.callAsyncJavaScript("history.pushState(null, '', '/pushed')", contentWorld: .page)
+            let second = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(second["url"]?.string?.hasSuffix("/pushed") == true, "\(second.content)")
+        }
+    }
+
     /// Back twice after nine pages: the last eight pages left keep their refs, the oldest goes first.
     @Test func theLastEightPagesLeftKeepTheirRefs() async throws {
         try await withAgent { client, base in

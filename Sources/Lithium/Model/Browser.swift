@@ -450,12 +450,18 @@ final class Browser {
     }
 
     func open(_ input: String) {
-        guard let url = AddressInput.url(for: input) else { return }
-        open(url)
+        open(input, in: selectedTab)
     }
 
-    private func open(_ url: URL) {
-        if let tab = selectedTab {
+    /// Into `tab`, brought to the front if it no longer is; a new tab when nil.
+    private func open(_ input: String, in tab: Tab?) {
+        guard let url = AddressInput.url(for: input) else { return }
+        open(url, in: tab)
+    }
+
+    private func open(_ url: URL, in tab: Tab?) {
+        if let tab {
+            if tab !== selectedTab { select(tab) }
             navigate(tab, .open(url))
         } else {
             newTab(url: url)
@@ -485,21 +491,32 @@ final class Browser {
         suggestions.update(query: text, tabs: tabs, pins: pins, history: history)
     }
 
-    /// Return in the address bar: the highlighted suggestion, or the typed text as is.
     func submitAddress(_ text: String) {
+        submitAddress(text, editing: selectedTabID)
+    }
+
+    /// Return in the address bar: the highlighted suggestion, or the typed text as is. It goes to
+    /// `tabID`, the tab shown when editing began, even if the selection moved on its own since (a
+    /// download-only tab closing hands it back to its opener); to a new tab once that one is gone.
+    func submitAddress(_ text: String, editing tabID: Tab.ID?) {
+        let tab = tabID.flatMap { id in tabs.first { $0.id == id } }
         if let suggestion = suggestions.selected, suggestions.selectedIndex > 0 {
-            accept(suggestion)
+            accept(suggestion, in: tab)
         } else {
-            open(text)
+            open(text, in: tab)
         }
         suggestions.clear()
     }
 
     func accept(_ suggestion: Suggestion) {
+        accept(suggestion, in: selectedTab)
+    }
+
+    private func accept(_ suggestion: Suggestion, in tab: Tab?) {
         suggestions.clear()
         switch suggestion {
-        case .search(let query): open(query)
-        case .address(let url), .history(_, let url): open(url)
+        case .search(let query): open(query, in: tab)
+        case .address(let url), .history(_, let url): open(url, in: tab)
         case .openTab(let id, _, _): if let tab = tabs.first(where: { $0.id == id }) { select(tab) }
         case .pin(let id, _, _): if let pin = pins.first(where: { $0.id == id }) { activate(pin) }
         }

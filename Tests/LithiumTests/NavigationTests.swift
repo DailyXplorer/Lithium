@@ -71,6 +71,27 @@ struct NavigationTests {
         #expect(tab.webView.url == page)
     }
 
+    /// The same tracked link, followed again after Back, is stripped again: only a redirect
+    /// straight back to the stripped address is let through.
+    @Test func aTrackedLinkIsStrippedEveryTime() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data(#"<title>Results</title><a id="go" href="/a?utm_source=test">Go</a>"#.utf8)),
+            "/a": ("Content-Type: text/html", Data("<title>Article</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        for visit in 1...2 {
+            #expect(await waitUntil(30) { tab.webView.title == "Results" && !tab.webView.isLoading })
+            _ = try await tab.webView.evaluateJavaScript("document.getElementById('go').click(); 0")
+            #expect(await waitUntil(30) { tab.webView.title == "Article" && !tab.webView.isLoading })
+            #expect(requests["/a"] == visit)
+            tab.webView.goBack()
+        }
+        #expect(requests["/a?utm_source=test"] == 0)
+    }
+
     /// Back from a website returns to Lithium's page, which can still talk to the app; a
     /// website's own script still can't open one.
     @Test func backReturnsToAnInternalPage() async throws {

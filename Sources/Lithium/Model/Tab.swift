@@ -120,8 +120,9 @@ final class Tab: NSObject, Identifiable {
     private(set) var loadError: NSError?
     var connection: SiteInfo.Connection { SiteInfo.Connection(url: url, loadError: loadError) }
     @ObservationIgnored private var lastCrashReload: Date?
-    /// The address last loaded without its tracking parameters. A server sending it back with
-    /// them (a redirect) is let through, rather than stripped and reloaded forever.
+    /// The address last loaded without its tracking parameters, until another page commits. A
+    /// server sending it back with them (a redirect) is let through, rather than stripped and
+    /// reloaded forever.
     @ObservationIgnored private var strippedURL: URL?
     /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
@@ -916,6 +917,9 @@ extension Tab: WKNavigationDelegate {
         hasShownPage = true
         awaitCommit(false)
         if navigation !== errorNavigation { loadError = nil }
+        // Another page showing ends the redirect a stripped address guards against: a later link
+        // to the same tracked address (after Back, say) is stripped again.
+        if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.
         setInternalBridge(Internal.isInternal(webView.url))
         // The old page is now in the history, one Back away. Only on its way out, it isn't the

@@ -72,3 +72,117 @@ struct CookieFiltersTests {
         #expect(!sources.built(manifest(["ads": nil, "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]])))
     }
 }
+
+/// Filter updates from lists served in the test, without the network.
+struct FilterUpdateTests {
+    private let host = "\(UUID().uuidString.lowercased()).lists.test"
+    private let destination = FileManager.default.temporaryDirectory.appending(path: "filters-\(UUID())")
+
+    private func url(_ list: String) -> URL { URL(string: "https://\(host)/\(list).txt")! }
+
+    private func updater(_ groups: [String: [String]]) -> FilterUpdater {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubLists.self]
+        let lists = Dictionary(uniqueKeysWithValues: Set(groups.values.joined()).map { ($0, url($0)) })
+        return FilterUpdater(sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration))
+    }
+
+    private func read(_ file: String) throws -> String {
+        try String(contentsOf: destination.appending(path: file), encoding: .utf8)
+    }
+
+    private func manifest() throws -> Manifest {
+        try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: destination.appending(path: "manifest.json")))
+    }
+
+    /// The in-page engine can't tell which list a rule came from, so only uBO's lists may bring rules that run code.
+    @Test func onlyUBOListsBringRulesThatRunCode() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        StubLists.serve("""
+            example.org##+js(set, uboProbe, 1)
+            example.org#%#//scriptlet("set-constant", "uboAdguardProbe", "1")
+            """, at: url("ubo-filters"))
+        StubLists.serve("""
+            example.org##+js(trusted-set, otherProbe, 1)
+            example.org#%#//scriptlet("ubo-trusted-set-constant", "otherScriptlet", "1")
+            example.org#%#window.otherScript = 1;
+            example.org#@%#//scriptlet("set-constant", "uboAdguardProbe", "1")
+            ||ads.example.org^
+            """, at: url("easylist"))
+        try await updater(["ads": ["ubo-filters", "easylist"]]).update(into: destination)
+
+        let scriptlets = try read("scriptlets.txt")
+        let advanced = try read("advanced.txt")
+        #expect(scriptlets.contains("uboProbe") && !scriptlets.contains("otherProbe"))
+        #expect(advanced.contains("uboAdguardProbe"))
+        #expect(!advanced.contains("otherProbe") && !advanced.contains("otherScript") && !advanced.contains("#@%#"))
+        #expect(try manifest().groups["ads"]?.webkitRules == 1)
+        #expect(FilterUpdater.isAllowed("example.org##+js(trusted-click-element, #x)", list: "ubo-cookies"))
+        #expect(!FilterUpdater.isAllowed("example.org#@#+js(set, a, 1)", list: "easylist-cookies"))
+        #expect(FilterUpdater.isAllowed("example.org##.cookie-banner", list: "easylist-cookies"))
+    }
+
+    /// A dead or failing list keeps its last good copy, and the others still update.
+    @Test func aFailingListKeepsItsLastGoodCopyWithoutHoldingBackTheOthers() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let updater = updater(["ads": ["steady", "flaky", "dead"]])
+        StubLists.serve("||first-steady.example^", at: url("steady"))
+        StubLists.serve("||first-flaky.example^", at: url("flaky"))
+        try await updater.update(into: destination)
+        #expect(try manifest().failedLists == ["dead"])
+
+        StubLists.serve("||second-steady.example^", at: url("steady"))
+        StubLists.serve(nil, at: url("flaky"))
+        try await updater.update(into: destination)
+        let rules = try read("ads.json")
+        #expect(try manifest().failedLists == ["dead", "flaky"])
+        #expect(rules.contains("second-steady") && rules.contains("first-flaky") && !rules.contains("first-steady"))
+
+        // Every list failing leaves the folder as it was.
+        StubLists.serve(nil, at: url("steady"))
+        let before = try read("manifest.json")
+        await #expect(throws: (any Error).self) { try await updater.update(into: destination) }
+        #expect(try read("manifest.json") == before)
+        #expect(try read("ads.json") == rules)
+    }
+
+    /// Automatic updates after a failure wait longer each time, up to a day, instead of fetching every list each hour.
+    @MainActor
+    @Test func failedUpdatesAreRetriedWithABackoff() {
+        let now = Date()
+        #expect(Privacy.retryDelay(afterFailures: 1) == 60 * 60)
+        #expect(Privacy.retryDelay(afterFailures: 3) == 4 * 60 * 60)
+        #expect(Privacy.retryDelay(afterFailures: 50) == 24 * 60 * 60)
+
+        let recent = now.addingTimeInterval(-60)
+        #expect(!Privacy.needsUpdate(updated: recent, matchesSources: true, complete: true, notBefore: .distantPast, now: now))
+        #expect(Privacy.needsUpdate(updated: recent, matchesSources: true, complete: false, notBefore: .distantPast, now: now))
+        #expect(!Privacy.needsUpdate(updated: recent, matchesSources: true, complete: false, notBefore: now.addingTimeInterval(60), now: now))
+        #expect(!Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
+        #expect(Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(-1), now: now))
+    }
+}
+
+/// Answers with the body served at a URL, or a 404 when there is none.
+private final class StubLists: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var bodies: [URL: String] = [:]
+
+    static func serve(_ body: String?, at url: URL) {
+        lock.withLock { bodies[url] = body }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let body = Self.lock.withLock { Self.bodies[url] }
+        let response = HTTPURLResponse(url: url, statusCode: body == nil ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data((body ?? "Not found").utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

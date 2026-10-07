@@ -102,8 +102,10 @@ def main() -> int:
                 cache[name] = expand(LISTS[name], set())
             # uBO's +js() filters run with uBO's own scriptlets in the app (UBOScriptlets.swift), unconverted.
             is_scriptlet = lambda r: name.startswith("ubo-") and ("##+js(" in r or "#@#+js(" in r)
+            # Rules that run code in pages come only from uBO's own lists (FilterUpdater.isAllowed).
+            allowed = lambda r: name.startswith("ubo-") or not ("+js(" in r or "#%#" in r or "#@%#" in r)
             scriptlets += [r for r in cache[name] if is_scriptlet(r)]
-            rules += [r for r in cache[name] if not is_scriptlet(r)]
+            rules += [r for r in cache[name] if allowed(r) and not is_scriptlet(r)]
         rules = list(dict.fromkeys(rules))
         stats = convert(rules, OUT / f"{group}.json")
         advanced += (stats.get("advancedRulesText") or "").splitlines()

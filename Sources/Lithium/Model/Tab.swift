@@ -113,6 +113,8 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
+    /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
+    @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
@@ -569,6 +571,7 @@ final class Tab: NSObject, Identifiable {
         // User scripts depend on the page (advanced rules are per site), so they are swapped
         // on every main-frame navigation, before the new document starts.
         controller.removeAllUserScripts()
+        protectedFrameHosts = []
         PageStyle.scripts(for: url).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
@@ -578,6 +581,16 @@ final class Tab: NSObject, Identifiable {
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, isPrivate: isEphemeral, to: controller)
         browser?.agent?.install(on: controller, for: self)
+    }
+
+    /// Adds the advanced rules for a frame's own site (an embed, an ad, a consent prompt) before
+    /// its document starts: one lookup per host per page, and nothing added when the host has no
+    /// rules. The page's scripts, rebuilt on each main-frame navigation, drop them.
+    private func addFrameProtections(for url: URL) {
+        guard let privacy = browser?.privacy, let page = webView.url, let host = url.host()?.lowercased(),
+              protectedFrameHosts.insert(host).inserted,
+              let script = privacy.frameScript(privacy.isEnabled(for: page), for: url, in: page) else { return }
+        webView.configuration.userContentController.addUserScript(script)
     }
 
     /// Sends a tab an extension woke without its history on to the extension's address. Called
@@ -797,7 +810,11 @@ extension Tab: WKNavigationDelegate {
             return (.allow, preferences)
         }
         // An extension's own pages run in its configuration, which Lithium leaves alone.
-        guard url.scheme != Extensions.scheme, isMainFrame else { return (.allow, preferences) }
+        guard url.scheme != Extensions.scheme else { return (.allow, preferences) }
+        guard isMainFrame else {
+            addFrameProtections(for: url)
+            return (.allow, preferences)
+        }
 
         // ⌘-click opens the link in a new tab, as does an agent's middle click (WebKit's button
         // mask 4); the user's own middle click follows it here. A script's ⌘-click (an untrusted

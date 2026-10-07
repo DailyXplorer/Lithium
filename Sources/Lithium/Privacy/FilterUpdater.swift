@@ -30,17 +30,35 @@ struct FilterUpdater: Sendable {
 
     /// Builds a complete filter folder in a temporary location, then swaps it into `destination`,
     /// so a failed or interrupted update never leaves a half-written set behind.
+    /// A list that fails to download (a dead server, an error page) doesn't hold back the others:
+    /// it keeps the last good copy the folder holds for that, and is named in the manifest's
+    /// `failedLists`. Only when every list fails is nothing written, and the error thrown.
     func update(into destination: URL) async throws {
         var downloaded: [String: [String]] = [:]
-        for name in Set(sources.groups.values.joined()) {
+        var failed: [String] = []
+        var lastError: Error?
+        let names = Set(sources.groups.values.joined()).filter { sources.lists[$0] != nil }
+        for name in names.sorted() {
             guard let url = sources.lists[name] else { continue }
-            var seen: Set<URL> = []
-            downloaded[name] = try await expand(url, seen: &seen)
+            do {
+                var seen: Set<URL> = []
+                downloaded[name] = try await expand(url, seen: &seen)
+            } catch {
+                NSLog("Lithium: filter list %@ failed to download: %@", name, error.localizedDescription)
+                failed.append(name)
+                lastError = error
+                downloaded[name] = (try? String(contentsOf: Self.copy(of: name, in: destination), encoding: .utf8))
+                    .map { $0.split(separator: "\n").map(String.init) }
+            }
         }
+        if let lastError, failed.count == names.count { throw lastError }
 
         let staging = destination.deletingLastPathComponent().appending(path: ".filters-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: staging.appending(path: "lists"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: staging) }
+        for (name, lines) in downloaded {
+            try lines.joined(separator: "\n").write(to: Self.copy(of: name, in: staging), atomically: false, encoding: .utf8)
+        }
 
         var groups: [String: Manifest.Group] = [:]
         var advanced: [String] = []
@@ -49,7 +67,7 @@ struct FilterUpdater: Sendable {
             var unique = Set<String>()
             var rules: [String] = []
             for name in names {
-                for rule in downloaded[name] ?? [] where unique.insert(rule).inserted {
+                for rule in downloaded[name] ?? [] where Self.isAllowed(rule, list: name) && unique.insert(rule).inserted {
                     if Self.isUBOScriptlet(rule, list: name) { scriptlets.append(rule) } else { rules.append(rule) }
                 }
             }
@@ -70,7 +88,8 @@ struct FilterUpdater: Sendable {
             updated: ISO8601DateFormatter().string(from: Date()),
             groups: groups,
             advancedRules: advanced.count,
-            scriptletRules: scriptlets.count
+            scriptletRules: scriptlets.count,
+            failedLists: failed.isEmpty ? nil : failed
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -86,6 +105,18 @@ struct FilterUpdater: Sendable {
     /// A uBO `+js()` filter from one of uBO's own lists, the only ones trusted with its `trusted-` scriptlets.
     static func isUBOScriptlet(_ rule: String, list: String) -> Bool {
         list.hasPrefix("ubo-") && (rule.contains("##+js(") || rule.contains("#@#+js("))
+    }
+
+    /// Rules that run code in every matching page (uBO's `+js()`, AdGuard's `#%#` scriptlets and
+    /// JavaScript, and their exceptions) come only from uBO's own lists. The in-page engine can't
+    /// tell which list a rule came from, so another list's would run as trusted as uBO's.
+    static func isAllowed(_ rule: String, list: String) -> Bool {
+        list.hasPrefix("ubo-") || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
+    }
+
+    /// Where a filter folder keeps a list as last downloaded, for when it next fails.
+    private static func copy(of list: String, in folder: URL) -> URL {
+        folder.appending(path: "lists/\(list).txt")
     }
 
     private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
@@ -188,6 +219,8 @@ struct Manifest: Codable {
     let groups: [String: Group]
     let advancedRules: Int?
     var scriptletRules: Int? = nil
+    /// Lists that failed to download: their last good copy stands in, if there is one.
+    var failedLists: [String]? = nil
 
     var date: Date? { ISO8601DateFormatter().date(from: updated) }
 }

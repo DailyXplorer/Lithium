@@ -61,6 +61,58 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: url)?.contains("adPlacements") == true)
     }
 
+    /// A load clears out engines it no longer needs, but not the build another load is still running.
+    @Test func aLoadLeavesAnotherLoadsBuildAlone() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let container = folder.appending(path: "engine")
+        let building = container.appending(path: ".building-\(UUID().uuidString)")
+        let old = container.appending(path: "old-engine")
+        try FileManager.default.createDirectory(at: building, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try #"example.org#%#//scriptlet("set-constant", "lithiumProbe", "42")"#.write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+
+        let blocking = AdvancedBlocking(container: container)
+        await blocking.load(folder: folder, stamp: UUID().uuidString)
+        #expect(blocking.script(for: URL(string: "https://example.org/")!) != nil)
+        #expect(FileManager.default.fileExists(atPath: building.path))
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+    }
+
+    /// Rules for an embedded site (an ad, a consent prompt) run in its frames, looked up for
+    /// its own host, and never in the page or in frames of other sites.
+    @Test func frameRulesRunOnlyInFramesOfTheirOwnSite() async throws {
+        let blocking = try await makeBlocking(rules: """
+            ads.example.net#%#//scriptlet("ubo-set-constant.js", "lithiumProbe", "42")
+            ads.example.net#$#.promo { display: none !important; }
+            """)
+        let page = URL(string: "https://example.org/")!
+        #expect(blocking.script(for: page) == nil)
+        #expect(blocking.script(for: page, inFrameOf: page) == nil)
+        let source = try #require(blocking.script(for: URL(string: "https://ads.example.net/frame")!, inFrameOf: page))
+
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(FramedPage(), forURLScheme: "lithium-test")
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+        )
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        // The page itself is on the frame's host: the script still leaves it alone.
+        webView.load(URLRequest(url: URL(string: "lithium-test://ads.example.net/")!))
+        try await loaded.wait()
+
+        var reports: [String] = []
+        for _ in 0..<50 where reports.count < 2 {
+            reports = try await webView.evaluateJavaScript("reports") as? [String] ?? []
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(reports.sorted() == [#"["ads.example.net","42","none"]"#, #"["other.example.com","undefined","block"]"#])
+        let top = try await webView.evaluateJavaScript("JSON.stringify([String(window.lithiumProbe), getComputedStyle(document.querySelector('.promo')).display])") as? String
+        #expect(top == #"["undefined","block"]"#)
+    }
+
     private static let playerProbe = """
         window.ytInitialPlayerResponse = { adPlacements: [1], videoDetails: { videoId: 'x' } };
         const response = await fetch('/youtubei/v1/player?key=1');
@@ -144,6 +196,33 @@ struct AdvancedBlockingTests {
             """) as? String
         #expect(result == #"["42","none","none","block"]"#)
     }
+}
+
+/// Serves a page with two frames, one on its own host and one on another, under a custom scheme.
+/// Each frame reports back what the script did in it.
+@MainActor
+private final class FramedPage: NSObject, WKURLSchemeHandler {
+    func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
+        let url = task.request.url!
+        let body = url.path() == "/frame" ? """
+            <!doctype html><div class="promo">frame</div>
+            <script>
+              addEventListener('load', () => parent.postMessage(JSON.stringify([
+                location.hostname, String(window.lithiumProbe), getComputedStyle(document.querySelector('.promo')).display,
+              ]), '*'));
+            </script>
+            """ : """
+            <!doctype html><div class="promo">page</div>
+            <script>window.reports = []; addEventListener('message', (event) => reports.push(event.data));</script>
+            <iframe src="lithium-test://ads.example.net/frame"></iframe>
+            <iframe src="lithium-test://other.example.com/frame"></iframe>
+            """
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/html"])!)
+        task.didReceive(Data(body.utf8))
+        task.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 }
 
 /// Serves a page and a player API answer under a custom scheme, so the test needs no network.

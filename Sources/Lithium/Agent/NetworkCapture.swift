@@ -189,6 +189,34 @@ final class TabCapture {
         if messages.count > Self.maxMessages { messages.removeFirst() }
     }
 
+    /// What the page may post in a burst, and again each second. The console script keeps to 100
+    /// a second, but a page can call the handler itself, or fire error events, at any rate.
+    static let messagesPerSecond = 200
+    @ObservationIgnored private var allowance = TabCapture.messagesPerSecond
+    @ObservationIgnored private var allowanceFilled = ContinuousClock.now
+    @ObservationIgnored private var refused = 0
+
+    /// A token bucket, filled whole once a second: whether a message from the page (console,
+    /// error, body) may cost anything now. The first one let through after some were refused
+    /// says how many, so a page that keeps flooding adds one such line a second.
+    func admitsMessage() -> Bool {
+        let now = ContinuousClock.now
+        if now - allowanceFilled >= .seconds(1) {
+            allowance = Self.messagesPerSecond
+            allowanceFilled = now
+        }
+        guard allowance > 0 else {
+            refused += 1
+            return false
+        }
+        allowance -= 1
+        if refused > 0 {
+            log(level: "warn", text: "Lithium left out \(refused) messages: the page sent more than \(Self.messagesPerSecond) in a second.", frameID: nil)
+            refused = 0
+        }
+        return true
+    }
+
     // MARK: Pages
 
     /// The main frame shows a new document: what the page before left goes. The new page's own

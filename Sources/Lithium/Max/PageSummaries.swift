@@ -142,7 +142,9 @@ final class PageSummaries {
         guard entries[tab.id]?.url == page else { return }
 
         let selection = content.selection.trimmingCharacters(in: .whitespacesAndNewlines)
-        if SummaryText.wordCount(selection) >= SummaryText.minimumSelectionWords {
+        let words = selection.isEmpty ? 0 : await SummaryText.wordCountInBackground(selection)
+        guard entries[tab.id]?.url == page else { return }
+        if words >= SummaryText.minimumSelectionWords {
             entries[tab.id]?.shown = .selection
             if let current = entries[tab.id]?.selection, current.text == selection, !current.state.isFailure { return }
             start(.selection, text: selection, isPartial: false, title: content.title, in: tab, for: page)

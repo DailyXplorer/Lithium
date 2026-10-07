@@ -27,14 +27,20 @@ final class FindInPage {
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
     private(set) var focusToken = 0
+    /// Whether the bar takes the keyboard when it appears: only Find… asks for it. Find Next and
+    /// Use Selection for Find leave the keyboard where it is, such as a form field in the page.
+    @ObservationIgnored private(set) var focusesField = true
+    /// Set by the bar while its field has the keyboard: Escape there closes the bar.
+    @ObservationIgnored var isFieldFocused = false
     /// What the last search highlighted, cleared when the search moves elsewhere or the bar closes.
     @ObservationIgnored private weak var target: FindTarget?
     /// Only the newest search sets the count: an older one may finish later, even for the same text.
     @ObservationIgnored private var search = 0
 
-    func show() {
+    func show(focusingField: Bool = true) {
         isVisible = true
-        focusToken &+= 1
+        focusesField = focusingField
+        if focusingField { focusToken &+= 1 }
     }
 
     func hide() {
@@ -90,7 +96,7 @@ final class FindInPage {
 
     func useSelection(in target: FindTarget) async {
         guard let text = await target.selectedText(), !text.isEmpty else { return }
-        show()
+        show(focusingField: false)
         await update(query: text, in: target)
     }
 }

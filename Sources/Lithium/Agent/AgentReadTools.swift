@@ -665,7 +665,10 @@ extension AgentHub {
             } catch let error as AgentToolError where gone && ["stale_ref", "frame_gone"].contains(error.code) {
                 return
             }
-            let pending = start(webView, target, "wait", ["id": address.id, "token": address.document, "state": state, "timeoutMs": remaining()])
+            let key = Self.waitKey()
+            let pending = start(webView, target, "wait", ["id": address.id, "token": address.document, "state": state, "timeoutMs": remaining(), "key": key])
+            // The page's own timer would keep it checking long after the call ended.
+            defer { if pending.result == nil { _ = start(webView, target, "cancelWait", ["key": key]) } }
             let commits = tab.commits
             // A call into a document that went away never answers, and a frame navigating or
             // taken away commits nothing in the tab: for an element of a frame, its document and
@@ -707,10 +710,15 @@ extension AgentHub {
         case .text(let text, let present):
             let event = "“\(text)” \(present ? "showed" : "went")"
             var pause = Duration.milliseconds(50)
+            let key = Self.waitKey()
+            var current: PageAnswer<Data>?
+            // The page's own timer would keep it re-reading its text long after the call ended.
+            defer { if let current, current.result == nil { _ = start(webView, .main, "cancelWait", ["key": key]) } }
             while ContinuousClock.now < deadline {
                 try checkPageShown(named, before: event)
                 let commits = tab.commits
-                let pending = start(webView, .main, "wait", ["text": text, "present": present, "timeoutMs": remaining()])
+                let pending = start(webView, .main, "wait", ["text": text, "present": present, "timeoutMs": remaining(), "key": key])
+                current = pending
                 let outcome = try await watch(named, until: deadline) { () -> Bool? in
                     try self.checkPageShown(named, before: event)
                     if let result = pending.result {
@@ -738,6 +746,13 @@ extension AgentHub {
             }
             throw timedOut(named, after: timeout, present ? "no “\(text)” on the page" : "“\(text)” was still on the page")
         }
+    }
+
+    private static var waitKeys = 0
+    /// Names a wait in the page, so the call can end it there.
+    private static func waitKey() -> Int {
+        waitKeys += 1
+        return waitKeys
     }
 
     /// The element of a wait that never came: `stale_ref` when it has gone meanwhile.
@@ -835,7 +850,7 @@ extension AgentHub {
     }
 
     private static func rect(_ rect: CGRect) -> JSONValue {
-        [.int(Int(rect.minX.rounded())), .int(Int(rect.minY.rounded())), .int(Int(rect.width.rounded())), .int(Int(rect.height.rounded()))]
+        [.int(Int(css: rect.minX)), .int(Int(css: rect.minY)), .int(Int(css: rect.width)), .int(Int(css: rect.height))]
     }
 
     private static func pdfShown(_ named: NamedTab, use tools: String) -> AgentToolError {

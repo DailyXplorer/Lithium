@@ -60,6 +60,8 @@ final class Browser {
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private var eventMonitors: [Any] = []
+    /// The window the browser shows in, set as it appears: the Escape monitor only acts there.
+    @ObservationIgnored weak var window: NSWindow?
     /// Observed, so Reopen Closed Tab is enabled as soon as there is one. Never saved.
     private var closedTabs: [ClosedTab] = []
     // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
@@ -284,7 +286,9 @@ final class Browser {
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }
-            return MainActor.assumeIsolated { !NativeInput.isAgents(event) && self.dismissOverlay() } ? nil : event
+            return MainActor.assumeIsolated {
+                !NativeInput.isAgents(event) && self.ownsEscape(in: event.window) && self.dismissOverlay()
+            } ? nil : event
         }
         // A click only moves focus when it lands on something that takes focus (like the page).
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
@@ -310,6 +314,15 @@ final class Browser {
         window.makeFirstResponder(nil)
     }
 
+    /// Whether an Escape in `window` is Lithium's to handle. Not in another window (a save panel)
+    /// or under a sheet (the capture preview), and not while a text field edits (the address bar
+    /// ends its editing itself), unless it is the find field or a tab's name, which Escape closes.
+    func ownsEscape(in window: NSWindow?) -> Bool {
+        guard let window, window === self.window, window.attachedSheet == nil else { return false }
+        guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return true }
+        return find.isFieldFocused || renamingTabID != nil
+    }
+
     /// Closes the topmost Lithium overlay. Returns false when there was none.
     func dismissOverlay() -> Bool {
         if recentTabs.target != nil {
@@ -327,6 +340,13 @@ final class Browser {
         // Opened with ⇧⌘S, the popover never takes the keyboard, so Escape reaches the window.
         if summaries.isPanelPresented {
             summaries.isPanelPresented = false
+            return true
+        }
+        // The shown permission prompt, denied this once and not remembered. Not under an agent's
+        // banner, whose Deny Escape triggers.
+        if agent?.confirmations.front(selected: selectedTabID) == nil,
+           let request = permissions.pending.first(where: { $0.tabID == selectedTabID }) {
+            permissions.dismiss(request)
             return true
         }
         return false
@@ -521,7 +541,8 @@ final class Browser {
         }
         // In split view the other side fills the window.
         let partner = leaveSplit(tab)
-        if tab.id == selectedTabID {
+        let wasSelected = tab.id == selectedTabID
+        if wasSelected {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
@@ -541,6 +562,8 @@ final class Browser {
         tab.tearDown()
         tabs.remove(at: index)
         extensions.didClose(tab)
+        // Extensions would otherwise go on taking the closed tab for the active one.
+        if wasSelected, let selectedTab { extensions.didActivate(selectedTab, previous: nil) }
         dropPrivateData(of: tab)
     }
 

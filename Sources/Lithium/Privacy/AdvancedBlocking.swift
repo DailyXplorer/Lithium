@@ -46,21 +46,31 @@ final class AdvancedBlocking {
                     let lines = filters.split(whereSeparator: \.isNewline).map(String.init)
                     rules += "\n" + ubo.adguardRules(fromUBO: lines).joined(separator: "\n")
                 }
-                guard (try? builder.buildFilterEngine(rules: rules)) != nil else { return false }
-                return (try? FileManager.default.moveItem(at: staging, to: directory)) != nil
+                guard (try? builder.buildFilterEngine(rules: rules)) != nil,
+                      (try? FileManager.default.moveItem(at: staging, to: directory)) != nil else {
+                    try? FileManager.default.removeItem(at: staging)
+                    return false
+                }
+                return true
             }.value
             guard built else { return }
         }
         engine = try? WebExtension(containerURL: directory)
-        let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: nil)) ?? []
+        let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         for other in others where other.lastPathComponent != stamp {
+            // Another load's build stays; only one a crash left behind, untouched for a day, goes.
+            if other.lastPathComponent.hasPrefix(".building-"),
+               let modified = try? other.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+               Date().timeIntervalSince(modified) < 24 * 60 * 60 { continue }
             try? FileManager.default.removeItem(at: other)
         }
     }
 
-    func script(for url: URL) -> String? {
-        guard ["http", "https"].contains(url.scheme),
-              let configuration = engine?.lookup(pageUrl: url, topUrl: nil) else { return nil }
+    /// The script for a page at `url`, or, given `page`, for a frame of that page showing `url`:
+    /// looked up for the frame's own site, and only run in frames of that host, never the page itself.
+    func script(for url: URL, inFrameOf page: URL? = nil) -> String? {
+        guard ["http", "https"].contains(url.scheme), page.map({ ["http", "https"].contains($0.scheme) }) ?? true,
+              let configuration = engine?.lookup(pageUrl: url, topUrl: page) else { return nil }
 
         var parts: [String] = []
         let isUBO = { [ubo] (scriptlet: WebExtension.Scriptlet) in
@@ -89,7 +99,7 @@ final class AdvancedBlocking {
         }
         guard !parts.isEmpty else { return nil }
 
-        return """
+        let script = """
             (() => {
               const injectStyle = (text) => {
                 const style = document.createElement('style');
@@ -103,6 +113,8 @@ final class AdvancedBlocking {
               \(parts.joined(separator: "\n"))
             })();
             """
+        guard page != nil else { return script }
+        return "if (window !== window.top && location.hostname === \(json(url.host()?.lowercased() ?? ""))) {\n\(script)\n}"
     }
 
     private static func cssRules(_ rules: [String]) -> [String] {

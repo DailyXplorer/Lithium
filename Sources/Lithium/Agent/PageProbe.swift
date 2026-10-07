@@ -101,8 +101,9 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
         guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub, hub.isOpen(tab),
               message.frameInfo.securityOrigin.protocol != Extensions.scheme else { return }
         if let error = body["console"] as? [String: Any] {
-            guard message.frameInfo.securityOrigin.protocol != Internal.scheme else { return }
-            hub.tabs[tab.id]?.capture?.log(
+            // The page can fire error events at any rate, and this world's listener hears them all.
+            guard message.frameInfo.securityOrigin.protocol != Internal.scheme, let capture = hub.tabs[tab.id]?.capture, capture.admitsMessage() else { return }
+            capture.log(
                 level: "error", kind: error["kind"] as? String, text: error["text"] as? String ?? "", source: error["source"] as? String,
                 line: error["line"] as? Int, column: error["column"] as? Int, frameID: ResourceLoadSpy.frameID(of: message.frameInfo)
             )

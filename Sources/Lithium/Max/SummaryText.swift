@@ -37,9 +37,20 @@ enum SummaryText {
     /// Pieces of at most `limit` characters, of similar sizes, cut between paragraphs where
     /// possible, then between sentences, then between words.
     static func chunks(_ text: String, limit: Int) -> [String] {
-        guard text.count > limit else { return [text] }
-        let parts = (text.count + limit - 1) / limit
-        return pack(pieces(of: text, fitting: limit), target: text.count / parts, limit: limit)
+        let length = text.count
+        guard length > limit else { return [text] }
+        let parts = (length + limit - 1) / limit
+        return pack(pieces(of: text, fitting: limit), target: length / parts, limit: limit)
+    }
+
+    /// `chunks` and `wordCount` off the main thread: on a long page, in a script whose characters
+    /// take several bytes, counting them is a visible pause.
+    static func chunksInBackground(_ text: String, limit: Int) async -> [String] {
+        await Task.detached(priority: .userInitiated) { chunks(text, limit: limit) }.value
+    }
+
+    static func wordCountInBackground(_ text: String) async -> Int {
+        await Task.detached(priority: .userInitiated) { wordCount(text) }.value
     }
 
     private static func pieces(of text: String, fitting target: Int) -> [String] {
@@ -52,16 +63,27 @@ enum SummaryText {
         }
     }
 
-    /// Fills each chunk up to `target`, never past `limit`.
+    /// Fills each chunk up to `target`, never past `limit`. Lengths are kept as it goes:
+    /// `String.count` walks the whole string, and asked for every piece it made this quadratic.
+    /// Joining never makes more characters than its parts, so the kept length never falls short.
     private static func pack(_ pieces: [String], target: Int, limit: Int) -> [String] {
         var chunks: [String] = []
         var current = ""
+        var length = 0
         for piece in pieces where !piece.isEmpty {
-            if !current.isEmpty, current.count >= target || current.count + 1 + piece.count > limit {
+            let pieceLength = piece.count
+            if !current.isEmpty, length >= target || length + 1 + pieceLength > limit {
                 chunks.append(current)
                 current = ""
+                length = 0
             }
-            current += current.isEmpty ? piece : "\n" + piece
+            if current.isEmpty {
+                current = piece
+                length = pieceLength
+            } else {
+                current += "\n" + piece
+                length += 1 + pieceLength
+            }
         }
         if !current.isEmpty { chunks.append(current) }
         return chunks
@@ -76,16 +98,29 @@ enum SummaryText {
     private static func words(_ text: String, fitting target: Int) -> [String] {
         var parts: [String] = []
         var current = ""
+        var length = 0
         for word in text.split(separator: " ", omittingEmptySubsequences: true) {
-            if !current.isEmpty, current.count + 1 + word.count > target {
+            let wordLength = word.count
+            if !current.isEmpty, length + 1 + wordLength > target {
                 parts.append(current)
                 current = ""
+                length = 0
             }
-            current += current.isEmpty ? String(word) : " " + word
+            if current.isEmpty {
+                current = String(word)
+                length = wordLength
+            } else {
+                current += " " + word
+                length += 1 + wordLength
+            }
             // A "word" longer than a whole piece (a URL, a run of digits) is cut where it stands.
-            while current.count > target {
-                parts.append(String(current.prefix(target)))
-                current = String(current.dropFirst(target))
+            if length > target {
+                while length > target, !current.isEmpty {
+                    parts.append(String(current.prefix(target)))
+                    current = String(current.dropFirst(target))
+                    length -= target
+                }
+                length = current.count
             }
         }
         if !current.isEmpty { parts.append(current) }

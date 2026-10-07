@@ -76,6 +76,18 @@ struct AgentSnapshotModelTests {
         #expect(gone.diff(since: read)["removed"] == ["f1", "f1:e2", "f2", "f2:e3", "e4"])
     }
 
+    /// A page can report boxes and viewports past what `Int(_:)` takes without trapping.
+    @Test func pageGeometryIsClampedOnTheWayToInt() {
+        #expect(Int(css: 12.6) == 13)
+        #expect(Int(css: 1e19) == 1_000_000_000)
+        #expect(Int(css: -1e300) == -1_000_000_000)
+        #expect(Int(css: .infinity) == 1_000_000_000)
+        #expect(Int(css: .nan) == 0)
+        let viewport = PageViewport(w: 1e19, h: 600, sx: 0, sy: -1e19, pw: 1e300, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let snapshot = PageSnapshot(tab: "t1", url: "https://a.example/", title: "A", seq: 1, viewport: viewport, zoom: 1, focused: nil, challenge: nil, dropped: 0, nodes: [])
+        #expect(snapshot.header.contains("viewport 1000000000x600 scroll 0,-1000000000 · page 1000000000x600"), "\(snapshot.header)")
+    }
+
     @Test func placesFramesDownTheirContentBoxes() throws {
         let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
         let main = MaskReport(token: "m", path: "", viewport: viewport, rects: [], frames: [
@@ -324,6 +336,7 @@ struct AgentReadTests {
             """),
         // In <code>, which Lithium's DM Sans leaves to the page's own font.
         "/font": (Self.html, "<title>Font</title><style>body { margin: 0 }</style><code><button style=\"font: 30px Late, serif\">Wide words here</button></code>"),
+        "/late-shadow": (Self.html, "<title>Late</title><p>Late</p><x-late style=\"display:block;width:100px;height:40px\"></x-late>"),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
     ]
@@ -1434,6 +1447,73 @@ struct AgentReadTests {
             let baseline = try #require(state.record(&again, session: "s"))
             #expect(again.diff(since: baseline)["text"]?.string?.hasSuffix("no changes") == true, "\(again.diff(since: baseline))")
             #expect(again.seq == read.seq)
+        }
+    }
+
+    /// A hostile page's huge box is clamped, and one that overflows to infinity once scaled down
+    /// nested frames is left out, rather than trapping in `Int(_:)`.
+    @Test func hugeAndOverflowingBoxesDontCrashASnapshot() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+            let main = FrameReport(token: "m", path: "", viewport: viewport, nodes: [
+                FrameReport.Node(id: 1, role: "button", name: "Huge", box: [0, 0, 1e20, 1e20]),
+                FrameReport.Node(id: 2, role: "frame", frame: 0, box: [0, 0, 300, 200]),
+            ], frames: [FrameReport.Frame(id: 2, index: 0, box: [0, 0, 300, 200], content: [0, 0, 1e200, 1e200, 1e200], src: "")])
+            let child = FrameReport(token: "c", path: "0", viewport: viewport, nodes: [
+                FrameReport.Node(id: 3, role: "button", name: "Beyond", box: [1, 1, 1e200, 1e200]),
+            ])
+            let snapshot = state.compose(tab: "t1", main: main, children: [child], origins: [:], zoom: 1, maxNodes: 100)
+            #expect(snapshot.nodes.first { $0.name == "Huge" }?.box == [0, 0, 1_000_000_000, 1_000_000_000])
+            #expect(snapshot.nodes.contains { $0.role == "frame" })
+            #expect(!snapshot.nodes.contains { $0.name == "Beyond" })
+        }
+    }
+
+    /// A custom element that attaches a shadow root and renders into it, its box the same, changes
+    /// nothing any observer sees: the next snapshot still reads it.
+    @Test func aShadowRootAttachedLaterIsRead() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/late-shadow")
+            let before = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(node(before, role: "shadow-closed", name: "x-late") != nil, "\(text(before.content))")
+            let webView = try #require(client.tab(tab)?.loadedWebView)
+            _ = try await webView.callAsyncJavaScript("document.querySelector('x-late').attachShadow({ mode: 'open' }).innerHTML = '<button>Inside</button>'", contentWorld: .page)
+            let after = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(node(after, role: "button", name: "Inside") != nil, "\(text(after.content))")
+        }
+    }
+
+    /// A wait in the page ends when the call that started it does (Lithium sends `cancelWait`
+    /// on the way out), rather than re-reading the page until its own timer.
+    @Test func aCancelledWaitEndsInThePage() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            let webView = try #require(client.tab(tab)?.loadedWebView)
+            let started = ContinuousClock.now
+            let waiting = Task { try await PageProbe.run("wait", ["text": "never shows", "present": true, "timeoutMs": 30000, "key": 424242], in: .main, of: webView) }
+            try await Task.sleep(for: .milliseconds(300))
+            _ = try await PageProbe.run("cancelWait", ["key": 424242], in: .main, of: webView)
+            let report = try PageProbe.decode(WaitReport.self, from: try await waiting.value)
+            #expect(report.met == false)
+            #expect(ContinuousClock.now - started < .seconds(5))
+            // A text wait still sees text that shows, on its 4-a-second timer.
+            _ = try await webView.callAsyncJavaScript("setTimeout(() => document.body.append('arrives later'), 200)", contentWorld: .page)
+            #expect(!(await client.call("wait_for", ["tab": .string(tab), "text": "arrives later", "timeoutMs": 5000])).isError)
+        }
+    }
+
+    /// Every reconnect opens a new session, so an ended one's baselines must not stay with the tab.
+    @Test func anEndedSessionsSnapshotsAreFreed() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            #expect(!(await client.call("snapshot", ["tab": .string(tab)])).isError)
+            let state = try #require(client.tab(tab).flatMap(client.hub.agentTab(for:)))
+            #expect(state.snapshots.keys.contains { $0.hasPrefix("\(client.session) ") })
+            #expect(state.seqs[client.session] == 1)
+            _ = await client.hub.handle(.endSession(client.session))
+            #expect(state.snapshots.isEmpty)
+            #expect(state.seqs.isEmpty)
         }
     }
 

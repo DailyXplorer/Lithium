@@ -70,6 +70,22 @@ struct SummaryTextTests {
         #expect(chunks.joined(separator: " ").split(separator: " ").filter { $0 == "ipsum." }.count == 8)
     }
 
+    /// A page as long as Lithium reads, in short lines of a script with multibyte characters: cut
+    /// in one pass. Counting the chunk again for every line took seconds, on the main thread.
+    @Test func cutsALongPageOfShortLinesQuickly() async {
+        let text = (1...10_000).map { "第\($0)行：日本語の短い文です。" }.joined(separator: "\n")
+        let clock = ContinuousClock()
+        var chunks: [String] = []
+        let elapsed = await clock.measure { chunks = await SummaryText.chunksInBackground(text, limit: 21_000) }
+        #expect(elapsed < .seconds(1))
+        #expect(chunks.count > 1)
+        #expect(chunks.allSatisfy { $0.count <= 21_000 })
+        #expect(chunks.joined(separator: "\n") == text)
+        let words = String(repeating: "長い単語 ", count: 50)
+        #expect(SummaryText.chunks(words, limit: 40).allSatisfy { $0.count <= 40 })
+        #expect(SummaryText.chunks(words, limit: 40).joined(separator: " ").split(separator: " ").count == 50)
+    }
+
     @Test func countsWordsInAnyScript() {
         #expect(SummaryText.wordCount("Un deux trois, quatre.") == 4)
         #expect(SummaryText.wordCount("") == 0)

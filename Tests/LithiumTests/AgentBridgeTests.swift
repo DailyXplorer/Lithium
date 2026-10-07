@@ -58,14 +58,15 @@ struct AgentBridgeTests {
         private var output: AsyncStream<Data>.Iterator
         private var diagnostics: AsyncStream<Data>.Iterator
 
-        init(folder: URL, open: URL = URL(filePath: "/usr/bin/false")) throws {
+        /// `app` is the executable that counts as Lithium: this process's unless a test names another.
+        init(folder: URL, open: URL = URL(filePath: "/usr/bin/false"), app: String? = nil) throws {
             try #require(FileManager.default.isExecutableFile(atPath: Self.executable.path), "lithium-mcp isn't built at \(Self.executable.path)")
             process.executableURL = Self.executable
             var environment = ProcessInfo.processInfo.environment
             environment["LITHIUM_MCP_ENDPOINT"] = folder.appending(path: AgentEndpoint.fileName).path
             environment["LITHIUM_MCP_OPEN"] = open.path
             // The hubs run in this process, so it is the Lithium the bridge looks for.
-            environment["LITHIUM_MCP_APP"] = LithiumProcess.executable(ProcessInfo.processInfo.processIdentifier)
+            environment["LITHIUM_MCP_APP"] = app ?? LithiumProcess.executable(ProcessInfo.processInfo.processIdentifier)
             process.environment = environment
             let stdout = Pipe()
             let stderr = Pipe()
@@ -284,7 +285,7 @@ struct AgentBridgeTests {
         let lithium = try await Lithium(folder: folder)
         defer { lithium.hub.shutdown() }
         #expect(try await bridge.next()["result"]?["serverInfo"]?["name"] == "lithium")
-        #expect(lithium.endpoint.token == "kept-from-the-last-run")
+        #expect(lithium.endpoint.token != "kept-from-the-last-run")
         #expect(try String(contentsOf: folder.appending(path: "open-arguments"), encoding: .utf8) == "-g\n-j\n-b\napp.lithium.browser\n")
     }
 
@@ -318,6 +319,80 @@ struct AgentBridgeTests {
         try endpoint.write(in: folder)
 
         try await expectStartsLithium(in: folder, sparing: impostor)
+    }
+
+    /// The Lithium the session was opened with quit, and another server answers on its port:
+    /// the bridge sends that server nothing, its token included, and starts Lithium. `sleep`
+    /// processes stand in for both Lithiums, so the test can make one quit.
+    @Test func sendsNothingToThePortOfALithiumThatQuit() async throws {
+        let folder = Self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let impostor = try await Lithium(folder: Self.temporaryFolder())
+        defer { try? FileManager.default.removeItem(at: impostor.folder) }
+        defer { impostor.hub.shutdown() }
+        let quitting = try Self.sleeper()
+        defer { quitting.terminate() }
+        try AgentEndpoint(port: try #require(impostor.hub.port), token: impostor.endpoint.token, pid: quitting.processIdentifier).write(in: folder)
+        let bridge = try Bridge(folder: folder, open: Self.openStub(in: folder), app: "/bin/sleep")
+        defer { bridge.close() }
+        bridge.send(Self.initialize)
+        #expect(try await bridge.next()["result"]?["serverInfo"]?["name"] == "lithium")
+        quitting.terminate()
+        quitting.waitUntilExit()
+
+        bridge.send(Self.status(id: 2))
+        #expect(await bridge.nextDiagnostic() == "lithium-mcp: Lithium isn’t running; starting it in the background.")
+        let lithium = try await Lithium(folder: Self.temporaryFolder())
+        defer { try? FileManager.default.removeItem(at: lithium.folder) }
+        defer { lithium.hub.shutdown() }
+        let running = try Self.sleeper()
+        defer { running.terminate() }
+        try AgentEndpoint(port: try #require(lithium.hub.port), token: lithium.endpoint.token, pid: running.processIdentifier).write(in: folder)
+        let status = try await bridge.next()
+        #expect(status["id"] == 2)
+        #expect(status["result"]?["isError"] == false, "\(status)")
+        #expect(lithium.hub.sessions.map(\.clientName) == ["test-client"])
+        #expect(impostor.hub.recentLog.isEmpty)
+    }
+
+    /// Lithium's listener died and comes back on the same port, which writes the same endpoint
+    /// file: the bridge waits for the port to answer, not for the file to change.
+    @Test func waitsForAListenerBackOnTheSamePort() async throws {
+        let folder = Self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let lithium = try await Lithium(folder: folder)
+        defer { lithium.hub.shutdown() }
+        let bridge = try Bridge(folder: folder)
+        defer { bridge.close() }
+        bridge.send(Self.initialize)
+        _ = try await bridge.next()
+        let before = lithium.endpoint
+        let port = try #require(lithium.hub.port)
+        let server = try #require(lithium.hub.server)
+        // The first two attempts fail, each on the port and then on any port, so the listener is
+        // back on the same port only after two relisten delays.
+        let starts = OSAllocatedUnfairLock(initialState: 0)
+        server.listenerDidStart = { server, listener in
+            guard starts.withLock({ $0 += 1; return $0 }) <= 4 else { return }
+            server.listener(listener, changedTo: .failed(.posix(.EADDRNOTAVAIL)), port: 0)
+        }
+        server.failListener(.posix(.ENETDOWN))
+        server.closeConnections()
+        #expect(await RawHTTP.refusesSoon(host: "127.0.0.1", port: port))
+
+        bridge.send(Self.status(id: 2))
+        let status = try await bridge.next()
+        #expect(status["result"]?["structuredContent"]?["session"] == "s2", "\(status)")
+        #expect(lithium.hub.port == port)
+        #expect(lithium.endpoint == before)
+    }
+
+    private static func sleeper() throws -> Process {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sleep")
+        process.arguments = ["60"]
+        try process.run()
+        return process
     }
 
     private func expectStartsLithium(in folder: URL, sparing impostor: Lithium) async throws {

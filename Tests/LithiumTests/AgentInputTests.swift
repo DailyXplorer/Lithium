@@ -218,6 +218,15 @@ struct AgentInputTests {
             <style>body { margin: 0 }</style><button style="position:absolute;left:10px;top:20px;width:80px;height:30px">Leave</button>
             <script>document.querySelector('button').addEventListener('mousedown', () => { location.href = '/child'; });</script>
             """),
+        // A frame whose field takes the frame away at the first key.
+        "/gone-frame": (html, """
+            <title>Gone frame</title><style>body { margin: 0 } iframe { position: absolute; left: 40px; top: 40px; width: 300px; height: 100px }</style>
+            <iframe id="gone" src="/gone-child"></iframe>
+            """),
+        "/gone-child": (html, """
+            <input aria-label="Leaving" style="position:absolute;left:10px;top:20px;width:200px">
+            <script>document.querySelector('input').addEventListener('keydown', () => frameElement.remove());</script>
+            """),
         "/far-frame": (html, """
             <title>Far frame</title><style>body { margin: 0 } iframe { position: fixed; left: 0; top: 2500px; width: 300px; height: 100px }</style>
             <iframe id="far"></iframe>
@@ -804,6 +813,19 @@ struct AgentInputTests {
             #expect(!clicked.isError, "\(clicked.content)")
             #expect(ContinuousClock.now - started < .seconds(5))
             #expect(await eventually { try await page(tab, "return document.getElementById('nav').contentDocument.querySelector('button')?.textContent") as? String == "Inside" })
+        }
+    }
+
+    /// Text no key types, after a key that took the field's frame away, isn't inserted into
+    /// whatever has focus next: the call says the frame went.
+    @Test func textInsertedAfterItsFrameWentIsRefused() async throws {
+        try await withAgent { client, base in
+            let (id, _) = try await open(client, base.appending(path: "gone-frame"))
+            let field = try await ref(client, id, "textbox", "Leaving")
+            let started = ContinuousClock.now
+            let typed = await client.call("type", ["tab": .string(id), "ref": .string(field), "text": "a✓", "timeoutMs": 15_000])
+            #expect(typed.code == "frame_gone", "\(typed.content)")
+            #expect(ContinuousClock.now - started < .seconds(5))
         }
     }
 

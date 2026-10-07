@@ -145,6 +145,22 @@ struct AgentSnapshotModelTests {
         #expect(try #require(gone.masks).contains(CGRect(x: 50, y: 300, width: 100, height: 20)))
     }
 
+    /// A card form with one field per frame, read twice unchanged: the masks come in the same
+    /// order both times, so they compare equal and nothing is spanned between two frames' fields.
+    @Test func masksOfManyFramesKeepOneOrderAcrossReads() throws {
+        let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let main = MaskReport(token: "m", path: "", viewport: viewport, rects: [], frames: (0..<8).map {
+            FrameReport.Frame(id: $0 + 1, index: $0, box: [0, Double($0) * 60, 300, 40], content: [0, Double($0) * 60, 300, 40, 1], src: "")
+        })
+        let children = (0..<8).map { MaskReport(token: "c\($0)", path: "\($0)", viewport: viewport, rects: [[10, 10, 100, 20]], frames: []) }
+        let first = FrameLayout(main: main, children: children)
+        let second = FrameLayout(main: main, children: children.reversed())
+        let masks = try #require(first.masks)
+        #expect(masks.count == 8)
+        #expect(second.masks == masks)
+        #expect(first.masking(second).masks == masks + masks + masks)
+    }
+
     /// Half a surrogate pair in a page's answer (`agent.js` cut an emoji, or the page wrote one)
     /// is replaced, where `JSONDecoder` alone refuses the whole answer.
     @Test func loneSurrogatesInAnAnswerAreReplacedNotRefused() throws {

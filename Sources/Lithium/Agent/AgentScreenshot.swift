@@ -57,7 +57,9 @@ struct FrameLayout {
         self.lost = lost
     }
 
-    var reports: [MaskReport] { [main] + children.values }
+    /// In frame path order, not the dictionary's: two reads of an unchanged page then list the
+    /// same masks in the same order, so they compare equal and `masking` pairs a field with itself.
+    var reports: [MaskReport] { [main] + children.keys.sorted().map { children[$0]! } }
 
     /// Whether every frame `earlier` read sits at the same scroll here: masks read then still fit.
     func keepsScroll(of earlier: FrameLayout) -> Bool {

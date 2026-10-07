@@ -23,6 +23,8 @@ struct FilterUpdater: Sendable {
     /// The set shipped with the app, whose `lists/` copies stand in for a failing list the
     /// downloaded set doesn't hold yet (the first update after installing or upgrading).
     var bundledFilters: URL? = Resources.bundle.url(forResource: "Filters", withExtension: nil)
+    /// Rules a download needs to count as a list; the smallest real one holds well over this.
+    var minimumRules = 10
 
     static func bundled() -> FilterUpdater? {
         guard let url = Resources.bundle.url(forResource: "FilterSources", withExtension: "json"),
@@ -33,7 +35,8 @@ struct FilterUpdater: Sendable {
 
     /// Builds a complete filter folder in a temporary location, then swaps it into `destination`,
     /// so a failed or interrupted update never leaves a half-written set behind.
-    /// A list that fails to download (a dead server, an error page) doesn't hold back the others:
+    /// A list that fails to download (a dead server, an error page, an empty or HTML body)
+    /// doesn't hold back the others:
     /// it keeps the last good copy the folder (or else the bundled set) holds for it, and is named
     /// in the manifest's `failedLists`. When every list fails, or a failing one has no copy at all,
     /// nothing is written and the error thrown, so the current set keeps that list's rules.
@@ -46,7 +49,11 @@ struct FilterUpdater: Sendable {
             guard let url = sources.lists[name] else { continue }
             do {
                 var seen: Set<URL> = []
-                downloaded[name] = try await expand(url, seen: &seen)
+                let lines = try await expand(url, seen: &seen)
+                // A captive portal, a parked domain or an emptied file answers 200 too: anything
+                // that doesn't look like a filter list fails, so it never replaces the last good copy.
+                guard lines.count >= minimumRules else { throw URLError(.cannotParseResponse) }
+                downloaded[name] = lines
             } catch {
                 NSLog("Lithium: filter list %@ failed to download: %@", name, error.localizedDescription)
                 failed.append(name)
@@ -131,10 +138,13 @@ struct FilterUpdater: Sendable {
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { throw URLError(.badServerResponse) }
+        // An HTML page (an error or login page served with 200) would parse into junk rules.
+        let body = String(decoding: data, as: UTF8.self)
+        if body.first(where: { !$0.isWhitespace && $0 != "\u{FEFF}" }) == "<" { throw URLError(.cannotParseResponse) }
 
         var lines: [String] = []
         var conditions: [Bool] = []
-        for raw in String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline) {
+        for raw in body.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("!#if ") {
                 conditions.append(Self.evaluate(String(line.dropFirst(5)), trueTokens: sources.trueTokens))

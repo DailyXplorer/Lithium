@@ -58,7 +58,7 @@ final class ModelSummaries {
             source: source
         )
         do {
-            let pieces = SummaryText.chunks(text, limit: pieceLength)
+            let pieces = await SummaryText.chunksInBackground(text, limit: pieceLength)
             let answer = pieces.count == 1
                 ? try await summary(of: text, fromNotes: false, request)
                 : try await summary(of: try await condense(pieces, request), fromNotes: true, request)

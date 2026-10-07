@@ -308,6 +308,9 @@ final class Tab: NSObject, Identifiable {
     }
 
     func reload() {
+        // A sleeping tab has no page to reload: reading `webView` would only make an empty one,
+        // left on the tab until it wakes. Waking loads its page, which is the reload.
+        if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
         if let failedURL { load(failedURL) } else { webView.reload() }
     }

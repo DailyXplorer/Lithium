@@ -87,6 +87,12 @@
   const iframeSrcdoc = member(HTMLIFrameElement.prototype, 'srcdoc').set;
   const trustedTypesFactory = globalThis.trustedTypes;
   const isTrustedHTML = trustedTypesFactory && member(TrustedTypePolicyFactory.prototype, 'isHTML').value;
+  const trustedHTMLText = trustedTypesFactory && member(TrustedHTML.prototype, 'toString').value;
+  const windowTrustedTypes = trustedTypesFactory && (member(globalThis, 'trustedTypes').get || member(Window.prototype, 'trustedTypes').get);
+  const defaultPolicy = trustedTypesFactory && member(TrustedTypePolicyFactory.prototype, 'defaultPolicy').get;
+  const createHTML = trustedTypesFactory && member(TrustedTypePolicy.prototype, 'createHTML').value;
+  const readyState = member(Document.prototype, 'readyState').get;
+  const currentScript = member(Document.prototype, 'currentScript').get;
   const regExpExec = RegExp.prototype.exec;
   const FRAME_TAG = /frame/i;
 
@@ -521,32 +527,52 @@
       const nativeWrite = member(documentProto, 'write').value;
       const writes = ['write', 'writeln'];
       for (let i = 0; i < writes.length; i++) {
+        const sink = 'Document ' + writes[i];
         patch(documentProto, writes[i], (target, self, args) => {
+          // Each argument is converted once, as the native call does (a page can count its
+          // `toString` calls), and TrustedHTML is passed on as is.
+          let written = { __proto__: null, length: args.length }, joined = '', plain = false;
+          for (let j = 0; j < args.length; j++) {
+            const arg = args[j];
+            if (isTrustedHTML && apply(isTrustedHTML, trustedTypesFactory, [arg])) {
+              written[j] = arg;
+              joined += apply(trustedHTMLText, arg, []);
+            } else {
+              written[j] = `${arg}`;
+              joined += written[j];
+              plain = true;
+            }
+          }
           // A write the parser has no place for opens the document inside the native call, which
           // drops the `load` listener before the markup's frames fire it. An empty write opens it
           // first, exactly when the browser would (not while the document's external or module
           // script runs, say): the real write then finds the parser open and the listener back.
           // No arguments, so no Trusted Types check: the real write runs that before anything else,
-          // and one it rejects must throw with the document unopened. A never-inserted frame's
-          // `srcdoc` runs the same check on the joined markup (a default policy is called once
-          // more) without parsing or loading it.
-          let allowed = true;
-          if (isTrustedHTML) {
-            let joined = '', plain = false;
-            for (let j = 0; j < args.length; j++) {
-              joined += `${args[j]}`;
-              if (!apply(isTrustedHTML, trustedTypesFactory, [args[j]])) plain = true;
-            }
-            if (plain) {
-              try { apply(iframeSrcdoc, apply(createElement, self, ['iframe']), [joined]); } catch (_) { allowed = false; }
+          // and one it rejects must throw with the document unopened. So plain markup is checked
+          // first, unless a script of the parsing document is running: its write goes where the
+          // parser is, or is ignored, and never opens the document.
+          let open = true;
+          if (plain && isTrustedHTML && !(read(readyState, self) === 'loading' && read(currentScript, self))) {
+            const view = read(documentView, self);
+            const policy = view ? read(defaultPolicy, read(windowTrustedTypes, view)) : null;
+            if (policy) {
+              // Called as the browser would call it, with this sink: its answer then goes in
+              // as TrustedHTML, which the browser doesn't run it on again. An empty one may be a
+              // refusal, which only the browser's own call reports: that markup holds no frame.
+              const html = apply(createHTML, policy, [joined, 'TrustedHTML', sink]);
+              if (apply(trustedHTMLText, html, []) !== '') written = [html]; else open = false;
+            } else {
+              // Without a default policy the sink doesn't matter: a never-inserted frame's `srcdoc`
+              // runs the same check without parsing or loading the markup.
+              try { apply(iframeSrcdoc, apply(createElement, self, ['iframe']), [joined]); } catch (_) { open = false; }
             }
           }
-          if (allowed) { try { apply(nativeWrite, self, []); } catch (_) {} }
+          if (open) { try { apply(nativeWrite, self, []); } catch (_) {} }
           remark(self);
-          const result = apply(target, self, args);
+          const result = apply(target, self, written);
           remark(self);
-          for (let j = 0; j < args.length; j++) {
-            if (mayHoldFrame(args[j])) { protectAll(framesIn(self)); break; }
+          for (let j = 0; j < written.length; j++) {
+            if (mayHoldFrame(written[j])) { protectAll(framesIn(self)); break; }
           }
           return result;
         });

@@ -74,8 +74,11 @@ struct FingerprintingTests {
 
     /// `before` runs ahead of the script; `awaiting` runs the probe as an async function body,
     /// for what the page only gets later.
-    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", html: String = "<body></body>", before: String? = nil, awaiting: Bool = false) async throws -> Value {
+    /// `headers` serves the page with them, from a custom scheme, instead of loading the markup.
+    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", html: String = "<body></body>", headers: [String: String]? = nil, before: String? = nil, awaiting: Bool = false) async throws -> Value {
         let configuration = WKWebViewConfiguration()
+        let served = headers.map { ServedPage(html: html, headers: $0) }
+        if let served { configuration.setURLSchemeHandler(served, forURLScheme: ServedPage.scheme) }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         if let before {
             configuration.userContentController.addUserScript(WKUserScript(source: before, injectionTime: .atDocumentStart, forMainFrameOnly: false))
@@ -88,13 +91,39 @@ struct FingerprintingTests {
         let popups = Popups()
         webView.navigationDelegate = loaded
         webView.uiDelegate = popups
-        webView.loadHTMLString(html, baseURL: URL(string: base)!)
+        if served != nil {
+            webView.load(URLRequest(url: URL(string: "\(ServedPage.scheme)://example.com/")!))
+        } else {
+            webView.loadHTMLString(html, baseURL: URL(string: base)!)
+        }
         try await loaded.wait()
         let result: Any? = awaiting
             ? try await webView.callAsyncJavaScript(probe, contentWorld: .page)
             : try await webView.evaluateJavaScript(probe) as Any?
         let json = try #require(result as? String)
         return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? Value)
+    }
+
+    /// Serves one page with the given response headers.
+    @MainActor
+    private final class ServedPage: NSObject, WKURLSchemeHandler {
+        static let scheme = "lithium-test"
+        let html: String
+        let headers: [String: String]
+
+        init(html: String, headers: [String: String]) {
+            self.html = html
+            self.headers = headers
+        }
+
+        func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
+            let url = task.request.url!
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "text/html"]) { $1 })!)
+            task.didReceive(Data(html.utf8))
+            task.didFinish()
+        }
+
+        func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
     }
 
     /// Opens popups as Lithium does (`Privacy.harden`): with a content controller of their own,
@@ -620,6 +649,101 @@ struct FingerprintingTests {
                 let result: [String: Bool] = try await run(probe, farbling: source, html: page.html, awaiting: true)
                 #expect(result == page.expected, "\(name), farbling: \(source != nil)")
             }
+        }
+    }
+
+    /// A write converts each argument once, and never through TrustedHTML's `toString`: a page
+    /// counting the calls tells nothing apart.
+    @Test func writeConvertsItsArgumentsOnce() async throws {
+        let html = """
+            <body><script>
+              window.calls = 0;
+              const counted = { toString() { calls++; return '<p>written</p>'; } };
+              document.write(counted);
+              document.writeln(counted, '<p>more</p>');
+            </script></body>
+            """
+        let probe = """
+            const plain = calls;
+            let trusted = 0;
+            const text = TrustedHTML.prototype.toString;
+            TrustedHTML.prototype.toString = function () { trusted++; return text.call(this); };
+            const policy = trustedTypes.createPolicy('test', { createHTML: (s) => s });
+            calls = 0;
+            document.write(policy.createHTML('<p>late</p>'), counted);
+            document.close();
+            return JSON.stringify({ parsing: plain, loaded: calls, trusted });
+            """
+        for source in [nil, try Self.farbling()] {
+            let result: [String: Int] = try await run(probe, farbling: source, html: html, awaiting: true)
+            #expect(result == ["parsing": 2, "loaded": 1, "trusted": 0], "farbling: \(source != nil)")
+        }
+    }
+
+    /// A default policy gets the sink of the write itself, and once: one that answers by sink
+    /// decides as it would without farbling, and the frames of a write it allows are protected.
+    @Test func defaultPolicyAnsweringBySinkDecidesTheWrite() async throws {
+        let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"require-trusted-types-for 'script'\">"
+        let policy = { (allowed: String) in
+            csp + """
+                <body><p id="kept">kept</p><script>
+                  window.sinks = [];
+                  trustedTypes.createPolicy('default', { createHTML: (s, _, sink) => { sinks.push(sink); return sink === '\(allowed)' ? s : null; } });
+                </script></body>
+                """
+        }
+        let probe = """
+            let threw = false;
+            try {
+              document.write('<iframe onload="window.fromHandler = frames[0].HTMLCanvasElement.prototype.toDataURL"></iframe>');
+              document.close();
+            } catch (error) { threw = error instanceof TypeError; }
+            const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+            const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+            const hash = (d) => { let h = 0; for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0; return (h >>> 0).toString(16); };
+            return JSON.stringify({
+              threw, kept: document.getElementById('kept') !== null, sinks: [...new Set(sinks)].join(),
+              page: hash(c.toDataURL()), handler: window.fromHandler ? hash(window.fromHandler.call(c)) : 'missing',
+            });
+            """
+        let allowsWrite = policy("Document write")
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, html: allowsWrite, awaiting: true)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: allowsWrite, awaiting: true)
+        for result in [bare, protected] {
+            #expect(result["threw"] == AnyHashable(false))
+            #expect(result["kept"] == AnyHashable(false))
+            #expect(result["sinks"] == AnyHashable("Document write"))
+            #expect(result["handler"] == result["page"])
+        }
+        #expect(protected["page"] != bare["page"])
+
+        let allowsSrcdoc = policy("HTMLIFrameElement srcdoc")
+        for source in [nil, try Self.farbling()] {
+            let result: [String: AnyHashable] = try await run(probe, farbling: source, html: allowsSrcdoc, awaiting: true)
+            #expect(result["threw"] == AnyHashable(true), "farbling: \(source != nil)")
+            #expect(result["kept"] == AnyHashable(true), "farbling: \(source != nil)")
+            #expect(result["sinks"] == AnyHashable("Document write"), "farbling: \(source != nil)")
+        }
+    }
+
+    /// Under a report-only Trusted Types policy, a write while the page parses files the one
+    /// report the browser files, for the write's own sink.
+    @Test func reportOnlyTrustedTypesSeeOneReportPerWrite() async throws {
+        let html = """
+            <body><script>
+              window.reports = [];
+              document.addEventListener('securitypolicyviolation', (event) => reports.push(event.sample), true);
+            </script><script>document.write('<p>written</p>')</script></body>
+            """
+        let probe = """
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return JSON.stringify(reports);
+            """
+        let headers = ["Content-Security-Policy-Report-Only": "require-trusted-types-for 'script'"]
+        for source in [nil, try Self.farbling()] {
+            let reports: [String] = try await run(probe, farbling: source, html: html, headers: headers, awaiting: true)
+            #expect(reports.count == 1, "farbling: \(source != nil)")
+            #expect(reports.allSatisfy { $0.hasPrefix("Document write") }, "farbling: \(source != nil)")
         }
     }
 

@@ -356,6 +356,16 @@ struct AgentReadTests {
             <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10000px;width:400px;height:100px;background:rgb(0,0,255);border:0">
             <div style="position:absolute;left:0;top:11900px;width:1280px;height:100px;background:rgb(255,0,0)"></div>
             """),
+        "/deep": (Self.html, """
+            <title>Deep</title><style>body { margin: 0; background: white }</style>
+            <div role="button" aria-label="Deep" style="position:absolute;left:0;top:20000px;width:400px;height:200px;background:rgb(255,0,0)"></div>
+            <input type="password" value="hunter2secret" style="position:absolute;left:200px;top:20020px;width:150px;height:40px;background:rgb(0,0,255);border:0">
+            """),
+        "/endless": (Self.html, """
+            <title>Endless</title><style>body { margin: 0 }</style>
+            <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10px;width:400px;height:40px">
+            <div style="position:absolute;left:0;top:80000px;width:10px;height:10px"></div>
+            """),
         "/chart": (Self.html, """
             <title>Chart</title>
             <svg width="300" height="100"><a href="one"><rect width="100" height="40" fill="red"></rect><text x="10" y="30">Bar one</text></a></svg>
@@ -1767,6 +1777,34 @@ struct AgentReadTests {
             #expect(Self.near(Self.color(fifth, x: 200 * points, y: (10050 - 4 * 2048) * points), [128, 128, 128]))
             let last = try #require(Self.picture(pages[5]))
             #expect(Self.near(Self.color(last, x: 200 * points, y: (11950 - 5 * 2048) * points), [255, 0, 0]))
+        }
+    }
+
+    /// An element far down a long page: only its box is drawn, at its own density, with its masks.
+    @Test func elementsFarDownALongPageArePictured() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/deep")
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json", "scope": "page"])
+            let deep = try #require(node(snapshot, role: "button", name: "Deep")?["ref"])
+            let shot = await client.call("screenshot", ["tab": .string(tab), "ref": deep])
+            #expect(!shot.isError, "\(shot.message)")
+            let scale = Self.number(shot["scale"])
+            #expect(scale > 1.5, "\(shot.content)")
+            #expect(shot["width"] == .int(Int((400 * scale).rounded())))
+            let image = try #require(Self.image(shot))
+            #expect(Self.near(Self.color(image, x: 20 * scale, y: 20 * scale), [255, 0, 0]))
+            #expect(Self.near(Self.color(image, x: 275 * scale, y: 40 * scale), [128, 128, 128]))
+            #expect(items(shot["masked"]).count == 1)
+        }
+    }
+
+    /// Flattening a page this long would draw a bitmap per 2048 points: the PDF is refused, clearly.
+    @Test func aPageTooLongToMaskIsRefused() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/endless")
+            let pdf = await client.call("pdf", ["tab": .string(tab)])
+            #expect(pdf.code == "unsupported")
+            #expect(pdf.message.contains("too long"), "\(pdf.message)")
         }
     }
 

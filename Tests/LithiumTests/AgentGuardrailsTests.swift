@@ -196,6 +196,29 @@ struct AgentGuardrailsTests {
         #expect(confirmations.grants.isEmpty)
     }
 
+    /// The next prompt in the queue takes the place of the one answered, Allow once where it was:
+    /// a click that lands before it stayed in place a moment (a double click's second) answers nothing.
+    @Test func theBannerTakesClicksOnlyOnceItStayedInPlace() {
+        let confirmations = AgentConfirmations()
+        let first = confirmation(.payment, site: "shop.example")
+        let second = confirmation(.payment, site: "shop.example")
+        confirmations.ask(first)
+        confirmations.ask(second)
+        let shown = AgentConfirmationBanner(confirmation: first, confirmations: confirmations)
+        shown.answer(.allowOnce)
+        #expect(confirmations.pending.map(\.id) == [first.id, second.id])
+        shown.answer(.allowOnce, at: .now + ClickProtection.delay)
+        #expect(confirmations.answers[first.id] == .allowOnce)
+
+        let next = AgentConfirmationBanner(confirmation: second, confirmations: confirmations)
+        next.answer(.allowOnce)
+        next.answer(.deny)
+        #expect(confirmations.pending.map(\.id) == [second.id])
+        #expect(confirmations.answers[second.id] == nil)
+        next.answer(.deny, at: .now + ClickProtection.delay)
+        #expect(confirmations.answers[second.id] == .deny)
+    }
+
     @Test func paymentsAndFilesAreNeverGranted() {
         let confirmations = AgentConfirmations()
         for kind in [ConfirmationKind.payment, .file] {

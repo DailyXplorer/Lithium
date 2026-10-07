@@ -194,6 +194,73 @@ struct ContextMenuDownloadTests {
         #expect(Downloads.shared.byDownload[ObjectIdentifier(ordinary)] == nil)
     }
 
+    /// Two downloads of the same name at once each get a file of their own: WebKit creates the
+    /// file only later, so the first one's path is taken as soon as it is given.
+    @Test func concurrentDownloadsOfTheSameNameGetTheirOwnFiles() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>Page</p>")])
+        defer { listener.cancel() }
+        let name = "report-\(UUID().uuidString.prefix(8))"
+        let body = Data(repeating: 0x61, count: 2_000)
+        let slow = try await serveSlowly("\(name).bin", body)
+        defer { slow.listener.cancel() }
+        try FileManager.default.createDirectory(at: URL.downloadsDirectory, withIntermediateDirectories: true)
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        var items: [DownloadItem] = []
+        for path in ["one", "two"] {
+            let download = await tab.webView.startDownload(using: URLRequest(url: slow.url.appending(path: path)))
+            Downloads.shared.track(download)
+            items.append(try #require(Downloads.shared.items.first))
+        }
+        #expect(await waitUntil(30) { items.allSatisfy { $0.state != .downloading } })
+        let files = items.compactMap(\.destination)
+        defer { files.forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(items.allSatisfy { $0.state == .finished })
+        #expect(Set(files.map(\.lastPathComponent)) == ["\(name).bin", "\(name) 2.bin"])
+        for file in files { #expect(try Data(contentsOf: file) == body) }
+    }
+
+    /// A path picked in the save panel that a running download already holds gets a numbered
+    /// name: that file isn't on disk yet, so the panel didn't ask about replacing it. Here an
+    /// ordinary download takes the suggested name while the panel is open, then the user accepts it.
+    @Test func aPathPickedInThePanelThatAnotherDownloadHoldsGetsItsOwnFile() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>Page</p>")])
+        defer { listener.cancel() }
+        let name = "report-\(UUID().uuidString.prefix(8))"
+        let body = Data(repeating: 0x62, count: 2_000)
+        let slow = try await serveSlowly("\(name).bin", body)
+        defer { slow.listener.cancel() }
+        try FileManager.default.createDirectory(at: URL.downloadsDirectory, withIntermediateDirectories: true)
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        var ordinary: DownloadItem?
+        Downloads.shared.chooseDestination = { proposed, _ in
+            let download = await tab.webView.startDownload(using: URLRequest(url: slow.url.appending(path: "ordinary")))
+            Downloads.shared.track(download)
+            let item = Downloads.shared.items.first
+            ordinary = item
+            _ = await waitUntil(30) { item?.destination != nil }
+            return proposed
+        }
+        defer { Downloads.shared.chooseDestination = { _, _ in nil } }
+
+        let picked = try await downloadFromMenu(slow.url.appending(path: "picked"), in: tab)
+        #expect(await waitUntil(30) { ordinary != nil && picked.state != .downloading && ordinary?.state != .downloading })
+        let items = [picked, try #require(ordinary)]
+        let files = items.compactMap(\.destination)
+        defer { files.forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(items.allSatisfy { $0.state == .finished })
+        #expect(ordinary?.destination?.lastPathComponent == "\(name).bin")
+        #expect(picked.destination?.lastPathComponent == "\(name) 2.bin")
+        for file in files { #expect(try Data(contentsOf: file) == body) }
+    }
+
     /// A folder holding `logo.svg`, which says "original".
     private func existingFile() throws -> (folder: URL, file: URL) {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -217,6 +284,19 @@ struct ContextMenuDownloadTests {
     /// Closes every connection without a response.
     private func serveClosing() async throws -> (listener: NWListener, url: URL) {
         try await serve { $0.cancel() }
+    }
+
+    /// Serves `body` as an attachment named `filename`: half of it, then the rest two seconds
+    /// later, so downloads started together run at once.
+    private func serveSlowly(_ filename: String, _ body: Data) async throws -> (listener: NWListener, url: URL) {
+        try await serve { connection in
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"\(filename)\"\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(head.utf8) + body.prefix(1_000), completion: .contentProcessed { _ in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    connection.send(content: body.suffix(1_000), completion: .contentProcessed { _ in connection.cancel() })
+                }
+            })
+        }
     }
 
     /// Calls `answer` once each connection's request arrives.

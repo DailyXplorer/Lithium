@@ -27,9 +27,13 @@ struct LithiumApp: App {
 }
 
 /// The Dock menu, which SwiftUI has no scene API for: Stop Agent, reachable even when the
-/// window is hidden behind other apps.
+/// window is hidden behind other apps. And the session's last changes, written as the app quits.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        LithiumApp.sharedBrowser.saveNow()
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         guard LithiumApp.sharedBrowser.agent?.state == .listening else { return nil }
         let menu = NSMenu()

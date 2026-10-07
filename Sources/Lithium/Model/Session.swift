@@ -15,6 +15,9 @@ struct Session: Codable, Equatable {
 }
 
 enum SessionStore {
+    /// For tests.
+    nonisolated(unsafe) private(set) static var writes = 0
+
     private static var fileURL: URL {
         URL.applicationSupportDirectory.appending(path: "Lithium/session.json")
     }
@@ -28,6 +31,7 @@ enum SessionStore {
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(session).write(to: fileURL, options: .atomic)
+            writes += 1
         } catch {
             NSLog("Lithium: failed to save the session: %@", error.localizedDescription)
         }

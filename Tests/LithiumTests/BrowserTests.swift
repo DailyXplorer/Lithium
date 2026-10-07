@@ -241,6 +241,103 @@ struct BrowserTests {
         #expect(!visible.isAsleep)
     }
 
+    /// A tab zoomed in wakes from sleep at the same zoom.
+    @Test func sleepingTabKeepsItsZoom() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Zoomed</title>zoomed")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.webView.pageZoom = 1.5
+        #expect(await waitUntil(5) { tab.zoom == 1.5 })
+
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!)
+        defer { browser.close(other) }
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        #expect(tab.isAsleep)
+        #expect(tab.zoom == 1.5)
+        browser.select(tab)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Zoomed" })
+        #expect(tab.webView.pageZoom == 1.5)
+        #expect(tab.zoom == 1.5)
+    }
+
+    /// Idle sleep passes by a page the user typed in, or pressed a key in while it has a
+    /// `beforeunload` handler; a handler alone, with no interaction, keeps no tab awake. Critical
+    /// memory still sleeps them all, and a page woken afresh holds nothing unsaved.
+    @Test func idleSleepSparesAPageWithUnsavedInput() async throws {
+        let guarded = "<script>addEventListener('beforeunload', event => event.preventDefault())</script><title>Guarded</title><p>guarded"
+        let (listener, base) = try await LocalHTTP.serve([
+            "/form": ("Content-Type: text/html", "<title>Form</title><input id=field>"),
+            "/guarded": ("Content-Type: text/html", guarded),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let typed = browser.newTab(url: base.appending(path: "form"), selecting: false)
+        let pressed = browser.newTab(url: base.appending(path: "guarded"), selecting: false)
+        let untouched = browser.newTab(url: base.appending(path: "guarded"), selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        defer { [typed, pressed, untouched, visible].forEach(browser.close) }
+        #expect(await waitUntil(120) { [typed, pressed, untouched, visible].allSatisfy(loaded) })
+
+        _ = try await typed.webView.callAsyncJavaScript("document.getElementById('field').focus()", contentWorld: .page)
+        let client = try #require(typed.webView as NSView as? NSTextInputClient)
+        client.insertText("draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(await waitUntil(10) { typed.hasUnsavedInput })
+
+        // Off screen and never ordered in: the key goes to the page as a real one.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        window.contentView = pressed.webView
+        window.makeFirstResponder(pressed.webView)
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let key = try #require(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: "j", charactersIgnoringModifiers: "j", isARepeat: false, keyCode: 38
+            ))
+            if type == .keyDown { pressed.webView.keyDown(with: key) } else { pressed.webView.keyUp(with: key) }
+        }
+        #expect(await waitUntil(10) { pressed.hasUnsavedInput })
+        #expect(!untouched.hasUnsavedInput)
+
+        UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")
+        defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
+        browser.relieveMemoryPressure(critical: false)
+        #expect(untouched.isAsleep)
+        #expect(!typed.isAsleep && !pressed.isAsleep)
+
+        browser.relieveMemoryPressure(critical: true)
+        #expect(typed.isAsleep && pressed.isAsleep)
+        #expect(!visible.isAsleep)
+        browser.select(typed)
+        #expect(await waitUntil(10) { loaded(typed) && typed.webView.title == "Form" })
+        #expect(!typed.hasUnsavedInput)
+    }
+
+    /// A page that retitles itself again and again writes the session once, a moment later,
+    /// not at every change; quitting writes what waits at once.
+    @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Start</title>start")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) && tab.title == "Start" })
+        browser.saveNow()
+        let before = SessionStore.writes
+
+        // One at a time from here: the page's own timers are slowed while it isn't shown.
+        for count in 1...20 {
+            _ = try await tab.webView.evaluateJavaScript("document.title = 'Count \(count)'")
+            #expect(await waitUntil(5) { tab.title == "Count \(count)" })
+        }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.title == "Count 20" } })
+        #expect(SessionStore.writes - before <= 2)
+
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Final'")
+        #expect(await waitUntil(10) { tab.title == "Final" })
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
+    }
+
     /// The real Chrome Web Store, YouTube and SponsorBlock:
     /// `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension`.
     /// Adds SponsorBlock with the store's own button and Lithium's confirmation, then watches it skip a sponsor.

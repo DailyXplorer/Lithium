@@ -70,6 +70,8 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    /// The write a change to the session waits for (`saveSession`).
+    @ObservationIgnored private var sessionSave: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
     @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
@@ -140,7 +142,7 @@ final class Browser {
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
     /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
     /// window) and the page that opened it talk to each other, so neither sleeps while both
-    /// are open, unless memory is critical.
+    /// are open, unless memory is critical. Nor does a page holding the user's unsaved input.
     private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool = { _ in true }) {
         tabs.forEach { $0.noteSound() }
         for tab in tabsThatCanSleep(idleFor: interval, sparingPopups: sparingPopups, among: candidates) {
@@ -162,6 +164,7 @@ final class Browser {
         return tabs.filter { tab in
             candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
                 && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
+                && !(sparingPopups && tab.hasUnsavedInput)
                 && tab.canSleep(idleFor: interval)
         }
     }
@@ -202,8 +205,8 @@ final class Browser {
     }
 
     /// The rest of the tab list sleeps now, sparing what any sleep pass spares: the tab shown, a
-    /// tab playing sound, in a call or loading, a popup and its opener. Favorites' pages and the
-    /// Agent group are left alone.
+    /// tab playing sound, in a call or loading, a popup and its opener, a page with unsaved
+    /// input. Favorites' pages and the Agent group are left alone.
     func sleepOtherTabs(than tab: Tab) {
         sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
     }
@@ -750,14 +753,35 @@ final class Browser {
         }
     }
 
-    /// Writes the session now and again whenever a tab it describes changes.
+    /// Writes the session now, and again a moment after a tab it describes changes: a page that
+    /// retitles itself (an unread count, a clock) costs one write a second at most. Nothing runs
+    /// while nothing changes.
     private func saveSession() {
+        sessionSave?.cancel()
+        sessionSave = nil
         let session = withObservationTracking { self.session } onChange: { [weak self] in
-            Task { @MainActor in self?.saveSession() }
+            Task { @MainActor in self?.sessionChanged() }
         }
         guard session != savedSession else { return }
         SessionStore.save(session)
         savedSession = session
+    }
+
+    private func sessionChanged() {
+        guard sessionSave == nil else { return }
+        sessionSave = Task { [weak self] in
+            try? await Task.sleep(for: Self.sessionSaveDelay)
+            guard !Task.isCancelled else { return }
+            self?.saveSession()
+        }
+    }
+
+    static let sessionSaveDelay = Duration.seconds(1)
+
+    /// What waits to be written, at once: when the app quits.
+    func saveNow() {
+        saveSession()
+        history.writeTitles()
     }
 
     // MARK: Favorites

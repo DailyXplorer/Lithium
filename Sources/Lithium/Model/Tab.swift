@@ -100,8 +100,12 @@ final class Tab: NSObject, Identifiable {
     private(set) var faviconData: Data?
     private(set) var isLoading = false
     private(set) var progress = 0.0
-    /// The web view's `pageZoom`, which it keeps across this tab's pages.
+    /// The web view's `pageZoom`, which it keeps across this tab's pages, and the next web view
+    /// gets (waking from sleep).
     private(set) var zoom = 1.0
+    /// The user typed into the page, or interacted with one that asks before it is left, since it
+    /// was loaded (`UnsavedInput`): idle sleep, which would lose that work, passes the tab by.
+    @ObservationIgnored private(set) var hasUnsavedInput = false
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     /// Set while the page is a PDF, which Lithium draws with its own viewer.
@@ -225,6 +229,8 @@ final class Tab: NSObject, Identifiable {
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsMagnification = true
+        // Before the observer, which reads it back into `zoom`.
+        if zoom != 1 { webView.pageZoom = zoom }
         observeWebView()
         if isMuted { applyMute(to: webView) }
         browser?.agent?.didAttach(webView, to: self)
@@ -421,6 +427,12 @@ final class Tab: NSObject, Identifiable {
 
     private static let silenceBeforeSleep: TimeInterval = 5 * 60
 
+    /// From the page shown, not one put away or left behind by sleep.
+    func noteUnsavedInput(from webView: WKWebView) {
+        guard webView === loadedWebView, !isAsleep else { return }
+        hasUnsavedInput = true
+    }
+
     /// Notes whether the page plays sound: what Safari's speaker icon shows (private
     /// `_isPlayingAudio`, known in the app). WebKit's public media state is no substitute: it
     /// calls a page holding a video or sound it never started "playing", which would keep
@@ -496,7 +508,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
-        zoom = 1
+        hasUnsavedInput = false
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -584,6 +596,7 @@ final class Tab: NSObject, Identifiable {
         controller.addUserScript(PageTranslation.script)
         controller.addUserScript(PageOverrides.script)
         browser?.nowPlaying.install(on: controller)
+        UnsavedInput.shared.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, isPrivate: isEphemeral, to: controller)
         browser?.agent?.install(on: controller, for: self)
@@ -933,6 +946,8 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
         awaitCommit(false)
+        // A new document: its script tells again, a page back from the cache too.
+        hasUnsavedInput = false
         if navigation !== errorNavigation { loadError = nil }
         // Another page showing ends the redirect a stripped address guards against: a later link
         // to the same tracked address (after Back, say) is stripped again.

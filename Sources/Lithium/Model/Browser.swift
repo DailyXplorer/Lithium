@@ -558,6 +558,8 @@ final class Browser {
         tab.dialogOwner?.answerDialog(in: tab)
         agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
+        // A name field gone with its row would never end the rename, which holds Escape and the agent.
+        if renamingTabID == tab.id { renamingTabID = nil }
         summaries.discard(tab)
         tab.tearDown()
         tabs.remove(at: index)
@@ -568,10 +570,11 @@ final class Browser {
     }
 
     /// The last open tab of a private store gone, its cookies and storage go at once, rather
-    /// than whenever WebKit frees the store.
+    /// than whenever WebKit frees the store, and so do its permission answers.
     private func dropPrivateData(of tab: Tab) {
         guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
+        permissions.forget(privateSession: ObjectIdentifier(store))
     }
 
     func closeSelectedTab() {
@@ -805,6 +808,8 @@ final class Browser {
         tab.pinID = pin.id
         // The user's from now on: unpinned, it goes to the tab list.
         tab.openedByAgent = nil
+        // Its name field was in the list, which no longer shows it.
+        if renamingTabID == tab.id { renamingTabID = nil }
     }
 
     func pinTab(withID id: String, at index: Int? = nil) {
@@ -839,11 +844,13 @@ final class Browser {
         storeIcon(data, from: nil, inPinAt: index)
     }
 
-    /// Saved once, and only when something changed. `url` is where the page said its icon is.
+    /// Saved once, and only when something changed. `url` is where the page said its icon is;
+    /// only an http(s) one is kept, the only kind fetched again later: a `data:` icon the page
+    /// redraws would otherwise rewrite the favorites at each new address, pixels unchanged.
     private func storeIcon(_ data: Data, from url: URL?, inPinAt index: Int) {
         var pin = pins[index]
         pin.favicon = data
-        if let url { pin.iconURL = url }
+        if let url { pin.iconURL = ["http", "https"].contains(url.scheme?.lowercased()) ? url : nil }
         guard pin != pins[index] else { return }
         if pin.favicon != pins[index].favicon { pinIcons[pin.id] = nil }
         pins[index] = pin

@@ -56,6 +56,7 @@ struct BrowserView: View {
             }
         }
         .overlayPreferenceValue(TabHoverAnchors.self) { TabHoverLayer(anchors: $0) }
+        .overlay { TabCycleLayer() }
         .foregroundStyle(palette.ink)
         .environment(\.sidebarPalette, palette)
         .environment(tabHover)

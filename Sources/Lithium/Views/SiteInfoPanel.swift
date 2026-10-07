@@ -17,10 +17,13 @@ private struct LiveSiteInfo: View {
     let tab: Tab
     @State var info: SiteInfo
     @State private var showsCertificate = false
+    /// Set once switched here: the preference itself isn't observable.
+    @State private var usesSiteFont: Bool?
     @Environment(Browser.self) private var browser
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let url = tab.url
         SiteInfoView(
             host: info.host,
             favicon: tab.favicon,
@@ -29,6 +32,18 @@ private struct LiveSiteInfo: View {
             cookieCount: info.cookieCount,
             canClear: info.hasData && !info.isClearing,
             permissions: browser.permissions.decisions[info.host] ?? [:],
+            usesSiteFont: url.flatMap { url in
+                guard PageStyle.offersSiteFont(url) else { return nil }
+                return Binding(
+                    get: { usesSiteFont ?? !PageStyle.usesDMSans(url) },
+                    set: {
+                        usesSiteFont = $0
+                        PageStyle.setKeepsSiteFont($0, for: info.host)
+                        browser.navigate(tab, .reload)
+                    }
+                )
+            },
+            siteFontIsFixed: PageStyle.isLoopback(info.host),
             showsCertificate: $showsCertificate,
             onClear: {
                 Task {
@@ -58,6 +73,9 @@ struct SiteInfoView: View {
     let cookieCount: Int?
     let canClear: Bool
     let permissions: [PermissionKind: PermissionDecision]
+    /// Nil where DM Sans wouldn't apply anyway.
+    var usesSiteFont: Binding<Bool>?
+    var siteFontIsFixed = false
     @Binding var showsCertificate: Bool
     var onClear: () -> Void = {}
     var onOpenSettings: () -> Void = {}
@@ -121,6 +139,15 @@ struct SiteInfoView: View {
                 }
                 Row(label: "Permissions") {
                     Text(Self.permissionSummary(permissions))
+                }
+                if let usesSiteFont {
+                    Toggle(isOn: usesSiteFont) {
+                        Text("Use this site's font").foregroundStyle(.secondary)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .disabled(siteFontIsFixed)
+                    .help(siteFontIsFixed ? "Pages on this Mac keep their font" : "Instead of DM Sans")
                 }
             }
 

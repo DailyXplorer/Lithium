@@ -95,6 +95,8 @@ final class Tab: NSObject, Identifiable {
     private(set) var faviconData: Data?
     private(set) var isLoading = false
     private(set) var progress = 0.0
+    /// The web view's `pageZoom`, which it keeps across this tab's pages.
+    private(set) var zoom = 1.0
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     /// Set while the page is a PDF, which Lithium draws with its own viewer.
@@ -481,6 +483,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
+        zoom = 1
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -530,6 +533,9 @@ final class Tab: NSObject, Identifiable {
             webView.observe(\.estimatedProgress) { [weak self] webView, _ in
                 MainActor.assumeIsolated { self?.progress = webView.estimatedProgress }
             },
+            webView.observe(\.pageZoom, options: .initial) { [weak self] webView, _ in
+                MainActor.assumeIsolated { self?.zoom = webView.pageZoom }
+            },
             webView.observe(\.canGoBack) { [weak self] webView, _ in
                 MainActor.assumeIsolated { self?.canGoBack = webView.canGoBack }
             },
@@ -561,6 +567,7 @@ final class Tab: NSObject, Identifiable {
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
+        controller.addUserScript(PageOverrides.script)
         browser?.nowPlaying.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, to: controller)
@@ -787,7 +794,7 @@ extension Tab: WKNavigationDelegate {
         // mask 4); the user's own middle click follows it here.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil {
             if await browser?.agent?.open(url, from: self) != true {
-                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore)
+                browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore, openedFrom: self)
             }
             return (.cancel, preferences)
         }
@@ -916,7 +923,7 @@ extension Tab: WKNavigationDelegate {
             switch scheme {
             case "http", "https", "file":
                 guard scheme != "file" || isLocal else { return }
-                if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore) } else { self.load(url) }
+                if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore, openedFrom: self) } else { self.load(url) }
             case Internal.scheme, Extensions.scheme:
                 break
             default:
@@ -1017,14 +1024,14 @@ extension Tab: WKUIDelegate {
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
             } else {
-                browser.newTab(url: url, privateStore: privateStore)
+                browser.newTab(url: url, privateStore: privateStore, openedFrom: self)
             }
             return nil
         }
         browser.prepare(popup: configuration)
         // A private tab's popup shares its store, so a sign-in window's cookies reach its opener.
         let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
-            ?? browser.newTab(configuration: configuration, privateStore: privateStore)
+            ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a

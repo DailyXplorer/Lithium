@@ -74,6 +74,12 @@ struct BrowserCommands: Commands {
             Button("Print…") { browser.selectedTab?.print() }
                 .keyboardShortcut("p")
         }
+        CommandGroup(after: .pasteboard) {
+            // The focused page's, through the responder chain: nothing happens in the address bar.
+            // No shortcut: ⌥⇧⌘V is Paste and Match Style, which editors handle as a paste.
+            Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
+                .disabled(browser.selectedTab == nil)
+        }
         CommandGroup(after: .textEditing) {
             Divider()
             // ⌘F toggles the bar; closing it hands the keyboard back to the page.
@@ -150,8 +156,12 @@ struct BrowserCommands: Commands {
         }
         CommandMenu("Tabs") {
             Button("Next Tab") { browser.selectAdjacentTab(1) }
-                .keyboardShortcut(.tab, modifiers: .control)
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
             Button("Previous Tab") { browser.selectAdjacentTab(-1) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            Button("Next Recent Tab") { browser.cycleRecentTabs(backward: false) }
+                .keyboardShortcut(.tab, modifiers: .control)
+            Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Divider()
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
@@ -197,6 +207,6 @@ struct BrowserCommands: Commands {
             return
         }
         let webView = tab.webView
-        webView.pageZoom = min(max(webView.pageZoom + delta, 0.5), 3)
+        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
     }
 }

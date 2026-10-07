@@ -105,7 +105,7 @@ Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) ar
 
 ## Shortcuts
 
-⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab next tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌥⌘P pop out the video · ⌘, settings
+⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab recent tabs (hold ⌃ to go further back) · ⌥⌘→ / ⌥⌘← next and previous tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌥⌘P pop out the video · ⌘, settings
 
 ## License
 

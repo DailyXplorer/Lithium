@@ -45,6 +45,7 @@ private struct AddressBar: View {
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isEditing = false
+    @State private var showsZoom = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -62,6 +63,9 @@ private struct AddressBar: View {
                 onDarkBackground: palette.isDark,
                 browser: browser
             )
+            if !isEditing, let tab, ZoomPill.isShown(for: tab, isPresented: showsZoom) {
+                ZoomPill(tab: tab, isPresented: $showsZoom)
+            }
         }
         .padding(.leading, 4)
         .padding(.trailing, 10)
@@ -194,6 +198,7 @@ struct ShieldView: View {
 private struct PageMenu: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
+    @State private var qrCodeURL: URL?
 
     var body: some View {
         Menu {
@@ -203,6 +208,8 @@ private struct PageMenu: View {
                 NSPasteboard.general.setString(url.absoluteString, forType: .string)
             }
             .disabled(tab?.url == nil)
+            Button("QR Code for This Page") { qrCodeURL = tab?.url }
+                .disabled(tab?.url?.scheme?.hasPrefix("http") != true)
             Button(tab?.pinID == nil ? "Pin Tab" : "Unpin Tab") {
                 browser.togglePinForSelectedTab()
             }
@@ -224,6 +231,9 @@ private struct PageMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .opacity(0.85)
+        .popover(isPresented: Binding(get: { qrCodeURL != nil }, set: { if !$0 { qrCodeURL = nil } }), arrowEdge: .bottom) {
+            if let qrCodeURL { QRCodeView(url: qrCodeURL) }
+        }
     }
 }
 

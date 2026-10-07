@@ -14,7 +14,8 @@
   // Keyed hashes of the top page's site under a key of the launch (see Privacy.farbling): every
   // frame of a page shares them, and nothing leads from them to the key or another site's.
   const SEED = '__LITHIUM_SEED__';
-  // Names the marker below; hashed apart from SEED, so the marker gives no seed away.
+  // Names the marker below: one per launch key, not per site, so the copies of a popup and of
+  // the cross-site frame that opened it still find each other. A page never sees it.
   const MARK = '__LITHIUM_MARK__';
   const MAX_PIXELS = 500000;
   const MAX_SAMPLES = 500000;
@@ -72,6 +73,7 @@
   const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
   const nodeType = member(Node.prototype, 'nodeType').get;
   const parentNode = member(Node.prototype, 'parentNode').get;
+  const documentView = member(Document.prototype, 'defaultView').get;
   // By node type: elements, documents, fragments and shadow roots.
   const queryAll = { __proto__: null,
     1: member(Element.prototype, 'querySelectorAll').value,
@@ -121,10 +123,18 @@
   // as simple as clearing one undoes it. The gaps between them are drawn directly (geometric
   // distribution), so past the hash the cost follows the noisy pixels. A window gets this once
   // (the marker below), so the noise needn't hold when applied twice.
+  // Pixels this handed out and the page reads back (put back, or drawn from a data URL) are
+  // left as they are: noised afresh at other spots each round trip, an editor's canvas would
+  // drift into visible grain. The hashes of the last few results are kept for that.
   const LOG_CLEAN = log(0.95);
+  const NOISED = 64;
+  const noised = new Int32Array(NOISED);
+  let noisedCount = 0;
   const noisePixels = (data) => {
     const length = apply(typedLength, data, []);
-    const next = prng(hashBytes(data, length));
+    const hash = hashBytes(data, length);
+    for (let i = 0; i < noisedCount && i < NOISED; i++) if (noised[i] === hash) return;
+    const next = prng(hash);
     const gap = () => floor(log(1 - next()) / LOG_CLEAN);
     const pixels = length >> 2;
     for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
@@ -134,6 +144,7 @@
       // At either end of the range the write clamps or wraps: go the other way.
       if (data[at] !== value + step) data[at] = value - step;
     }
+    noised[noisedCount++ % NOISED] = hashBytes(data, length);
   };
 
   const noiseSamples = (samples) => {
@@ -166,7 +177,7 @@
   const answer = (event) => {
     apply(preventDefault, event, []);
     const box = read(eventDetail, event);
-    if (box) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
+    if (box && !hasOwn(box, 'disguises')) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
   };
   const ask = (win) => {
     const box = { __proto__: null };
@@ -440,18 +451,26 @@
       hookMarkup(win.Element.prototype, 'setHTMLUnsafe', 0);
       hookMarkup(win.ShadowRoot.prototype, 'setHTMLUnsafe', 0);
       const documentProto = hasOwn(win.Document.prototype, 'write') ? win.Document.prototype : win.HTMLDocument.prototype;
-      // Opening a document, which writing to a loaded one does, drops its window's listeners: the marker's too.
-      const remark = () => { try { apply(addEventListener, win, [MARK, answer]); } catch (_) {} };
+      // Opening a document, which writing to a loaded one does, drops its window's listeners: the
+      // marker's too. That is the document's own window, which may be a frame's, not `win`.
+      const remark = (doc) => {
+        try {
+          const view = read(documentView, doc);
+          const realm = view ? sameOrigin(view) : null;
+          if (realm && apply(weakSetHas, seen, [realm])) apply(addEventListener, view, [MARK, answer]);
+        } catch (_) {}
+      };
       patch(documentProto, 'open', (target, self, args) => {
         const result = apply(target, self, args);
-        remark();
+        // With three arguments it opens a window instead, as `open` does: a blank popup to protect.
+        if (args.length > 2) { try { protect(result); } catch (_) {} } else remark(self);
         return result;
       });
       const writes = ['write', 'writeln'];
       for (let i = 0; i < writes.length; i++) {
         patch(documentProto, writes[i], (target, self, args) => {
           const result = apply(target, self, args);
-          remark();
+          remark(self);
           for (let j = 0; j < args.length; j++) {
             if (mayHoldFrame(args[j])) { protectAll(framesIn(self)); break; }
           }
@@ -473,4 +492,44 @@
   };
 
   protect(window);
+
+  // The parser adds frames through no method the hooks see, and `frames[n]` reaches them past the
+  // getters: a blank `<iframe>` in the page's markup stayed a clean window for good. While the page
+  // parses, an observer protects them; its records come in before each inline script runs.
+  try {
+    const MutationObserverCtor = MutationObserver;
+    const observe = MutationObserver.prototype.observe;
+    const disconnect = MutationObserver.prototype.disconnect;
+    const takeRecords = MutationObserver.prototype.takeRecords;
+    const addedNodes = member(MutationRecord.prototype, 'addedNodes').get;
+    const localName = member(Element.prototype, 'localName').get;
+    const firstElementChild = member(Element.prototype, 'firstElementChild').get;
+    const protectFrame = (frame) => {
+      try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
+    };
+    const parsed = (records) => {
+      for (let i = 0; i < records.length; i++) {
+        const added = read(addedNodes, records[i]);
+        const count = added ? read(nodeCount, added) : 0;
+        for (let j = 0; j < count; j++) {
+          const node = added[j];
+          if (read(nodeType, node) !== 1) continue;
+          const name = read(localName, node);
+          if (name === 'iframe' || name === 'frame') protectFrame(node);
+          else if (read(firstElementChild, node)) {
+            const found = apply(queryAll[1], node, ['iframe, frame']);
+            const total = read(nodeCount, found);
+            for (let k = 0; k < total; k++) protectFrame(found[k]);
+          }
+        }
+      }
+    };
+    const observer = new MutationObserverCtor(parsed);
+    apply(observe, observer, [document, { __proto__: null, childList: true, subtree: true }]);
+    // Once parsed, the page adds frames only through the hooks.
+    apply(addEventListener, document, ['DOMContentLoaded', () => {
+      parsed(apply(takeRecords, observer, []));
+      apply(disconnect, observer, []);
+    }, { __proto__: null, once: true }]);
+  } catch (_) {}
 })();

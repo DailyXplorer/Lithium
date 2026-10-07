@@ -388,6 +388,116 @@ struct FingerprintingTests {
         #expect(protected["blank"] != protected["grey"])
     }
 
+    /// Pixels the page reads back after writing them (an editor's fill, a filter, an undo step)
+    /// aren't noised again: fresh noise each round trip once drifted a flat canvas into grain.
+    @Test func pixelNoiseDoesntBuildUpOverRoundTrips() async throws {
+        let probe = """
+            (() => {
+              const c = document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#808080'; x.fillRect(0, 0, 200, 40);
+              const first = x.getImageData(0, 0, 200, 40).data;
+              let image = x.getImageData(0, 0, 200, 40);
+              for (let i = 0; i < 100; i++) { x.putImageData(image, 0, 0); image = x.getImageData(0, 0, 200, 40); }
+              let noisy = 0, changed = 0, spread = 0;
+              for (let i = 0; i < first.length; i++) {
+                if (first[i] !== (i % 4 === 3 ? 255 : 128)) noisy++;
+                if (image.data[i] !== first[i]) changed++;
+                spread = Math.max(spread, Math.abs(image.data[i] - (i % 4 === 3 ? 255 : 128)));
+              }
+              return JSON.stringify({ noisy, changed, spread });
+            })()
+            """
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(try #require(protected["noisy"] as? Int) > 0)
+        #expect(protected["changed"] == AnyHashable(0))
+        #expect(protected["spread"] == AnyHashable(1))
+    }
+
+    /// A blank `<iframe>` in the page's own markup is protected before the next inline script can
+    /// reach it through `frames`: the parser calls none of the hooks, and WebKit injects nothing there.
+    @Test func blankFrameFromThePageMarkupIsProtected() async throws {
+        let html = """
+            <body><iframe></iframe><script>
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              window.result = JSON.stringify({ page: hash(window), frame: hash(frames[0]),
+                native: /\\[native code\\]/.test(Function.prototype.toString.call(frames[0].HTMLCanvasElement.prototype.toDataURL)) });
+            </script></body>
+            """
+        let bare: [String: AnyHashable] = try await run("window.result", farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run("window.result", farbling: Self.farbling(), html: html)
+
+        #expect(bare["page"] == bare["frame"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["frame"] == protected["page"])
+        #expect(protected["native"] == AnyHashable(true))
+    }
+
+    /// Copies of the script for different sites agree on the marker: a cross-site frame's copy (of
+    /// the top page's site) and that of the popup it opens (of its own) find each other, so
+    /// toString holds between them and a window they both reach is noised once.
+    @Test func copiesForDifferentSitesShareTheMarker() async throws {
+        let key = SymmetricKey(data: Data("test-key".utf8))
+        #expect(Privacy.farbling("__LITHIUM_MARK__", key: key, site: "a.example") == Privacy.farbling("__LITHIUM_MARK__", key: key, site: "b.example"))
+
+        let probe = """
+            const hash = (win) => {
+              const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+              return (h >>> 0).toString(16);
+            };
+            const native = (fn, toString) => /\\[native code\\]/.test(toString.call(fn));
+            // Through the getter, so the page's copy reaches the frame its own copy protected.
+            const child = document.querySelector('iframe').contentWindow;
+            return JSON.stringify({ frame: hash(child),
+              disguised: native(child.HTMLCanvasElement.prototype.toDataURL, Function.prototype.toString)
+                && native(HTMLCanvasElement.prototype.toDataURL, child.Function.prototype.toString) });
+            """
+        let html = "<body><iframe srcdoc=\"<p>frame</p>\"></iframe></body>"
+        // The top page farbles for one site, its frame with a copy for another.
+        let mixed = "if (window === top) {\(try Self.farbling(site: "a.example"))} else {\(try Self.farbling(site: "b.example"))}"
+        let frameOnly: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(site: "b.example"), html: html, awaiting: true)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: nil, html: html, before: mixed, awaiting: true)
+
+        #expect(protected["disguised"] == AnyHashable(true))
+        #expect(protected["frame"] == frameOnly["frame"])
+    }
+
+    /// `document.open` on a frame's document keeps that frame's marker (it drops the window's
+    /// listeners), and its three-argument form, which opens a popup, protects the popup.
+    @Test func documentOpenKeepsTheMarkerAndProtectsItsPopup() async throws {
+        let key = SymmetricKey(data: Data("test-key".utf8))
+        let mark = Privacy.farbling("__LITHIUM_MARK__", key: key, site: "example.com")
+        let probe = """
+            (() => {
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const frame = document.body.appendChild(document.createElement('iframe'));
+              Document.prototype.open.call(frame.contentDocument);
+              frame.contentDocument.close();
+              const marked = !frame.contentWindow.dispatchEvent(new CustomEvent('\(mark)', { cancelable: true, detail: {} }));
+              return JSON.stringify({ page: hash(window), popup: hash(document.open('', '', '')), marked });
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare["page"] == bare["popup"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["popup"] == protected["page"])
+        #expect(protected["marked"] == AnyHashable(true))
+    }
+
     /// Frequency data is in decibels, where an offset as small as the samples' rounds away in
     /// float32; the noise is relative there, so it shows.
     @Test func frequencyNoiseSurvivesFloat32Rounding() async throws {

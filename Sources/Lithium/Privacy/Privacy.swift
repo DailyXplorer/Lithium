@@ -58,16 +58,17 @@ final class Privacy {
         userAgentSuffix = "Version/\(safariVersion) Safari/605.1.15"
     }
 
-    /// The script for pages of `site`: its noise seed and marker name are HMACs of the site under
-    /// the launch's key, worked out here so a page that recovers its own values can't run them
-    /// back to the key or on to another site's.
+    /// The script for pages of `site`: its noise seed is an HMAC of the site under the launch's
+    /// key, worked out here so a page that recovers it can't run it back to the key or on to
+    /// another site's. The marker name is an HMAC of the key alone: the copies of every site must
+    /// agree on it (a cross-site frame and the popup it opens), and pages never see it.
     static func farbling(_ template: String, key: SymmetricKey, site: String) -> String {
-        let value = { (label: String) in
-            HMAC<SHA256>.authenticationCode(for: Data("\(label):\(site)".utf8), using: key)
+        let value = { (message: String) in
+            HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)
                 .prefix(16).map { String(format: "%02x", $0) }.joined()
         }
         return template
-            .replacingOccurrences(of: "__LITHIUM_SEED__", with: value("seed"))
+            .replacingOccurrences(of: "__LITHIUM_SEED__", with: value("seed:\(site)"))
             .replacingOccurrences(of: "__LITHIUM_MARK__", with: "m" + value("mark"))
     }
 

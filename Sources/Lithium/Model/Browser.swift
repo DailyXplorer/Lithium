@@ -610,10 +610,13 @@ final class Browser {
 
     /// ⌘W, which the menu sends whichever window is key: the selected tab only when that is the
     /// browser's window. Another one in front (a detached Web Inspector, a sheet) closes instead.
+    /// A video in full screen is in WebKit's own window, holding the page: that is the tab's too.
     func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
         guard let keyWindow else { return }
+        let page = selectedTab?.loadedWebView
+        let isTabs = keyWindow === page?.window || page.map { $0.fullscreenState != .notInFullscreen } == true
         // Before the browser's window is known, it is the one in front.
-        if window == nil || keyWindow === window { closeSelectedTab() } else { keyWindow.performClose(nil) }
+        if window == nil || keyWindow === window || isTabs { closeSelectedTab() } else { keyWindow.performClose(nil) }
     }
 
     /// The others of its group: favorites' pages stay open, as Chrome keeps pinned tabs, and so

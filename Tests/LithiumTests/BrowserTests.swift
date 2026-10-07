@@ -309,6 +309,18 @@ struct BrowserTests {
         browser.saveNow()
         #expect(browser.history.visits(matching: host).map(\.title) == ["Fine"])
         #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "Fine")
+
+        // Back to the error page, which WebKit's cache keeps: still the tab's title only.
+        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        tab.webView.loadHTMLString("<title>Next</title>", baseURL: URL(string: "https://next-\(UUID().uuidString.lowercased()).example/"))
+        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.isShowingError)
+        browser.saveNow()
+        #expect(browser.history.visits(matching: host).map(\.title) == ["Fine"])
+        #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "")
     }
 
     /// Private tabs (an agent's ephemeral tab, its popups and copies) are kept from extensions,

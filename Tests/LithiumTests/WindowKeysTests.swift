@@ -97,6 +97,15 @@ struct WindowKeysTests {
         let other = browser.newTab(url: URL(string: "data:text/html,closed")!)
         browser.closeTabOrWindow(keyWindow: window)
         #expect(!browser.tabs.contains { $0 === other })
+
+        // A video in full screen: WebKit's window in front holds the page, and ⌘W closes the tab.
+        let video = browser.newTab(url: URL(string: "data:text/html,video")!)
+        let fullScreen = ClosingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        fullScreen.isReleasedWhenClosed = false
+        fullScreen.contentView?.addSubview(video.webView)
+        browser.closeTabOrWindow(keyWindow: fullScreen)
+        #expect(!fullScreen.didClose)
+        #expect(!browser.tabs.contains { $0 === video }, "the tab closes")
     }
 
     /// The window can't be key off screen, so the key goes straight to the shortcuts.

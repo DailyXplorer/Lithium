@@ -384,7 +384,10 @@
   const controlStates = () => (frame.controls ?? []).map(controlState).join('\u0000');
   // Nor does a layout change: the boxes of what the last snapshot showed are read again, rules
   // added through the CSSOM counted, and nothing is taken as unchanged while something animates.
-  const boxStates = () => (frame.shown ?? []).map((element) => (element?.isConnected ? round(element.getBoundingClientRect()).join(' ') : '')).join(',');
+  // A custom element shown without a shadow root may attach one and render into it, which no
+  // observer sees: whether each has one is read again too.
+  const boxStates = () => (frame.shown ?? []).map((element) => (element?.isConnected
+    ? round(element.getBoundingClientRect()).join(' ') + (element.shadowRoot ? ' s' : '') : '')).join(',');
   const sheetStates = () => [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])].map((sheet) => {
     try { return sheet.cssRules.length; } catch { return -1; }
   }).join(',');
@@ -1140,8 +1143,11 @@
   };
 
   // DOM waits: re-checked when the document changes, never by polling faster than 4 times a
-  // second for changes no observer sees (a style animating, say).
-  const wait = ({ id, state, text, present, timeoutMs }) => {
+  // second for changes no observer sees (a style animating, say). A text check walks the whole
+  // body, so it runs on that 4-a-second timer alone. Each wait is kept under the key Lithium
+  // gave it, so the call that started it can end it.
+  const waits = new Map();
+  const wait = ({ id, state, text, present, timeoutMs, key }) => {
     const needle = text?.toLowerCase();
     const check = () => {
       if (needle !== undefined) {
@@ -1163,7 +1169,8 @@
     return new Promise((resolve) => {
       let pending = false;
       const done = (met) => {
-        observer.disconnect();
+        waits.delete(key);
+        observer?.disconnect();
         clearInterval(interval);
         clearTimeout(timer);
         resolve(answer(met));
@@ -1176,11 +1183,17 @@
           if (check()) done(true);
         }, 30);
       };
-      const observer = new MutationObserver(schedule);
-      observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+      const observer = needle === undefined ? new MutationObserver(schedule) : null;
+      observer?.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
       const interval = setInterval(() => { if (check()) done(true); }, 250);
       const timer = setTimeout(() => done(false), timeoutMs);
+      if (key !== undefined) waits.set(key, done);
     });
+  };
+  // The call that started the wait ended (met elsewhere, timed out, stopped): no more checks.
+  const cancelWait = ({ key }) => {
+    waits.get(key)?.(false);
+    return { token: frame.token };
   };
 
   // What a read checks before it reads: the page-wide check, and the frames a widget could be in.
@@ -1256,7 +1269,7 @@
     return { token: frame.token, found: true };
   };
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, cancelWait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.

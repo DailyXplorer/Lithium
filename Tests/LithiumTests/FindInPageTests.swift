@@ -79,6 +79,22 @@ struct FindInPageTests {
         #expect(find.currentMatch == 5)
     }
 
+    /// Only Find… gives the find field the keyboard: Find Next and Use Selection for Find show the
+    /// bar but leave the keyboard where it was, such as a form field in the page.
+    @Test func onlyFindTakesTheKeyboard() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.selection = "licence"
+        page.answer()
+        await find.useSelection(in: page)
+        #expect(find.isVisible && find.query == "licence")
+        #expect(find.focusToken == 0 && !find.focusesField)
+        find.show(focusingField: false)
+        #expect(find.focusToken == 0 && !find.focusesField)
+        find.show()
+        #expect(find.focusToken == 1 && find.focusesField)
+    }
+
     @MainActor
     final class Target: FindTarget {
         let matches: Int
@@ -88,6 +104,7 @@ struct FindInPageTests {
         var canShow = true
         /// Like a PDF: nothing to show once cleared, until counted again.
         var forgetsClearedMatches = false
+        var selection: String?
         private var position = 0
         private var hasMatches = false
         private var isAnswered = false
@@ -128,7 +145,7 @@ struct FindInPageTests {
             return .shown(position: knowsPosition ? position : nil)
         }
 
-        func selectedText() async -> String? { nil }
+        func selectedText() async -> String? { selection }
 
         func clearMatches() {
             cleared = true

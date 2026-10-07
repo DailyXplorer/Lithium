@@ -14,8 +14,20 @@ final class TidyTitles {
 
     /// Keyed by host and rule-cleaned title, so a changing counter ("(3) Inbox") reuses the answer.
     @ObservationIgnored private var cache: [String: String] = [:]
-    @ObservationIgnored private var pending: Set<String> = []
+    /// Tabs waiting for the model's answer, by key: every tab that showed the title while it was
+    /// asked gets the answer, not only the one that asked.
+    @ObservationIgnored private var pending: [String: [WaitingTab]] = [:]
     @ObservationIgnored private let model: AnyObject?
+    /// Stands in for Apple's model in tests.
+    @ObservationIgnored var shortener: (@MainActor (_ title: String, _ host: String) async -> TitleOutcome)?
+
+    private struct WaitingTab {
+        weak var tab: Tab?
+        /// The title it had: the answer is only for a tab still showing it.
+        let original: String
+
+        @MainActor var isCurrent: Bool { tab?.title == original }
+    }
 
     private static let cacheLimit = 500
 
@@ -64,25 +76,36 @@ final class TidyTitles {
             remember(cleaned, for: key)
             return
         }
-        guard !pending.contains(key) else { return }
+        let waiting = WaitingTab(tab: tab, original: original)
+        guard pending[key] == nil else {
+            pending[key]?.append(waiting)
+            return
+        }
 
-        guard #available(macOS 26.0, *), let model = model as? ModelTitles, model.isAvailable else { return }
-        pending.insert(key)
+        let shorten: @MainActor (String, String) async -> TitleOutcome
+        if let shortener {
+            shorten = shortener
+        } else if #available(macOS 26.0, *), let model = model as? ModelTitles, model.isAvailable {
+            shorten = { await model.shorten($0, host: $1) }
+        } else {
+            return
+        }
+        pending[key] = [waiting]
         Task {
             // Wait for the title to settle: pages that animate or rewrite it shouldn't reach the model.
             try? await Task.sleep(for: .milliseconds(800))
-            guard tab.title == original else {
-                pending.remove(key)
+            guard pending[key]?.contains(where: { $0.isCurrent }) == true else {
+                pending[key] = nil
                 return
             }
             // The model gets the rule-cleaned title: without the site name it can't fall back on it.
-            let outcome = await model.shorten(cleaned, host: host)
-            pending.remove(key)
+            let outcome = await shorten(cleaned, host)
+            let tabs = pending.removeValue(forKey: key) ?? []
             switch outcome {
             case .title(let candidate):
                 let accepted = TitleCleaner.acceptable(candidate, original: original, host: host) ?? cleaned
                 remember(accepted, for: key)
-                tab.setTidyTitle(accepted, from: original)
+                for waiting in tabs { waiting.tab?.setTidyTitle(accepted, from: waiting.original) }
             case .declined:
                 remember(cleaned, for: key)
             case .failed:

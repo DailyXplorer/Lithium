@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import Lithium
 
 struct TitleCleanerTests {
@@ -70,5 +71,58 @@ func modelShortensRealTitles() async throws {
         case .failed:
             Issue.record("model failed for \(title)")
         }
+    }
+}
+
+/// Tabs of a whole Browser with a stand-in for the model. Only in a throwaway home folder (see
+/// `BrowserTests`).
+@MainActor
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+struct TidyTitlesTabsTests {
+    @MainActor
+    final class Model {
+        var asked: [String] = []
+        var answers = false
+    }
+
+    /// Two tabs showing the same long title while the model is asked about it both get its
+    /// answer, not only the tab that asked.
+    @Test func everyTabWithTheTitleGetsTheShortName() async throws {
+        let title = "Swift concurrency explained with many practical examples for beginners"
+        let page = (headers: "Content-Type: text/html", body: "<title>\(title)</title><p>Page</p>")
+        let (listener, base) = try await LocalHTTP.serve(["/one": page, "/two": page])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            while !model.answers { try? await Task.sleep(for: .milliseconds(20)) }
+            return .title("Swift concurrency")
+        }
+        // Answers whatever happens, so the stand-in never outlives the test.
+        defer { model.answers = true }
+
+        let one = browser.newTab(url: base.appending(path: "one"))
+        let two = browser.newTab(url: base.appending(path: "two"))
+        defer { [one, two].forEach { browser.close($0) } }
+        #expect(await waitUntil(30) { [one, two].allSatisfy { !$0.webView.isLoading && $0.title == title } })
+        #expect(await waitUntil(10) { !model.asked.isEmpty })
+        model.answers = true
+
+        #expect(await waitUntil(10) { [one, two].allSatisfy { $0.tidyTitle == "Swift concurrency" } })
+        #expect(model.asked == [title], "asked once for both tabs")
+    }
+
+    private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
     }
 }

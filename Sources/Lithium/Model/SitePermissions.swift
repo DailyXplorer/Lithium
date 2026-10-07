@@ -81,6 +81,11 @@ final class SitePermissions {
         resolve(request.id, allow)
     }
 
+    /// Denied this once, without remembering anything: the prompt dismissed with Escape.
+    func dismiss(_ request: PermissionRequest) {
+        resolve(request.id, false)
+    }
+
     /// Unanswered prompts of a closed tab, or of the page it left, are denied, without remembering anything.
     func cancel(tabID: Tab.ID) {
         pending.filter { $0.tabID == tabID }.forEach { resolve($0.id, false) }

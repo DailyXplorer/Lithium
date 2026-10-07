@@ -40,6 +40,8 @@ cp "$bin_path/lithium-mcp" "$app/Contents/MacOS/lithium-mcp"
 cp Support/Info.plist "$app/Contents/Info.plist"
 cp Support/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 for bundle in "$bin_path"/*.bundle; do
+  # A test target's resources (Lithium_LithiumTests.bundle, left by a test build) aren't the app's.
+  case "$(basename "$bundle")" in *Tests.bundle) continue ;; esac
   ditto "$bundle" "$app/Contents/Resources/$(basename "$bundle")"
 done
 

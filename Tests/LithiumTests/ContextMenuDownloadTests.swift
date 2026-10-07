@@ -194,6 +194,43 @@ struct ContextMenuDownloadTests {
         #expect(Downloads.shared.byDownload[ObjectIdentifier(ordinary)] == nil)
     }
 
+    /// Two downloads of the same name at once each get a file of their own: WebKit creates the
+    /// file only later, so the first one's path is taken as soon as it is given.
+    @Test func concurrentDownloadsOfTheSameNameGetTheirOwnFiles() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>Page</p>")])
+        defer { listener.cancel() }
+        let name = "report-\(UUID().uuidString.prefix(8))"
+        let body = Data(repeating: 0x61, count: 2_000)
+        // Half the file, then the rest two seconds later: both transfers run at once.
+        let slow = try await serve { connection in
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"\(name).bin\"\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+            connection.send(content: Data(head.utf8) + body.prefix(1_000), completion: .contentProcessed { _ in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                    connection.send(content: body.suffix(1_000), completion: .contentProcessed { _ in connection.cancel() })
+                }
+            })
+        }
+        defer { slow.listener.cancel() }
+        try FileManager.default.createDirectory(at: URL.downloadsDirectory, withIntermediateDirectories: true)
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+
+        var items: [DownloadItem] = []
+        for path in ["one", "two"] {
+            let download = await tab.webView.startDownload(using: URLRequest(url: slow.url.appending(path: path)))
+            Downloads.shared.track(download)
+            items.append(try #require(Downloads.shared.items.first))
+        }
+        #expect(await waitUntil(30) { items.allSatisfy { $0.state != .downloading } })
+        let files = items.compactMap(\.destination)
+        defer { files.forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(items.allSatisfy { $0.state == .finished })
+        #expect(Set(files.map(\.lastPathComponent)) == ["\(name).bin", "\(name) 2.bin"])
+        for file in files { #expect(try Data(contentsOf: file) == body) }
+    }
+
     /// A folder holding `logo.svg`, which says "original".
     private func existingFile() throws -> (folder: URL, file: URL) {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

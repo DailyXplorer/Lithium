@@ -129,12 +129,15 @@ struct FingerprintingTests {
     }
 
     /// Built-ins the page replaced before adding a frame don't keep the frame unprotected: a
-    /// `call` that always answers true once made it look protected already.
+    /// `call` that always answers true once made it look protected already. Nor do they strip the
+    /// page's own noise (a `Math.floor` returning a huge gap once skipped every pixel).
     @Test func replacedBuiltInsDontUnprotectAFrame() async throws {
         let tamper = """
             Function.prototype.call = function () { return true; };
             Object.defineProperty = function (target) { return target; };
             Object.getOwnPropertyDescriptor = function () { return undefined; };
+            WeakMap = undefined;
+            Math.floor = () => 1e9;
             """
         let bare: [String: AnyHashable] = try await run(tamper + Self.probe, farbling: nil)
         let protected: [String: AnyHashable] = try await run(tamper + Self.probe, farbling: Self.farbling())

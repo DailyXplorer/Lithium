@@ -11,9 +11,12 @@
   const MAX_PIXELS = 500000;
   const MAX_SAMPLES = 500000;
   // Taken once: the page shares this world and could replace any of them before a frame or
-  // popup it opens is protected (a `call` that always returns true once skipped them).
+  // popup it opens is protected (a `call` that always returns true once skipped them), or skew
+  // the noise itself (a `Math.floor` that returns a huge gap leaves every pixel clean).
   const apply = Reflect.apply;
   const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
+  const { imul, floor, log, max, min } = Math;
+  const WeakMapCtor = WeakMap, WeakSetCtor = WeakSet;
   const weakMapGet = WeakMap.prototype.get;
   const weakMapSet = WeakMap.prototype.set;
   const weakSetHas = WeakSet.prototype.has;
@@ -29,7 +32,7 @@
     let hash = 0x811c9dc5;
     for (const char of text) {
       hash ^= char.charCodeAt(0);
-      hash = Math.imul(hash, 0x01000193);
+      hash = imul(hash, 0x01000193);
     }
     return hash >>> 0;
   };
@@ -64,8 +67,8 @@
   const MARK = '__' + sipHash(MARK_KEY, site).toString(36);
   const prng = (state) => () => {
     state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    let t = imul(state ^ (state >>> 15), 1 | state);
+    t = (t + imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 
@@ -73,13 +76,13 @@
   // WebKit's per-frame injection and by the iframe hook below gets the same result.
   // One pixel in twenty gets noise. The gaps between them are drawn directly (geometric
   // distribution), so the cost follows the noisy pixels rather than the size of the image.
-  const LOG_CLEAN = Math.log(0.95);
+  const LOG_CLEAN = log(0.95);
   const noisePixels = (data) => {
     const next = prng(seed);
-    const gap = () => Math.floor(Math.log(1 - next()) / LOG_CLEAN);
+    const gap = () => floor(log(1 - next()) / LOG_CLEAN);
     const pixels = data.length >> 2;
     for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
-      data[(pixel << 2) + Math.floor(next() * 3)] |= 1;
+      data[(pixel << 2) + floor(next() * 3)] |= 1;
     }
   };
 
@@ -89,14 +92,14 @@
     for (let i = 0; i < samples.length; i++) samples[i] += (next() - 0.5) * 1e-7;
   };
 
-  const cores = (real) => Math.max(2, Math.min(real, 2 + Math.floor(prng(seed ^ 0x51ed270b)() * (real - 1))));
+  const cores = (real) => max(2, min(real, 2 + floor(prng(seed ^ 0x51ed270b)() * (real - 1))));
 
   const protect = (win) => {
     if (!win || hasOwn(win, MARK)) return;
     defineProperty(win, MARK, { value: true });
 
     // Replacements report the original's source through toString, so pages cannot spot them.
-    const disguises = new WeakMap();
+    const disguises = new WeakMapCtor();
     const nativeToString = win.Function.prototype.toString;
     const disguise = (replacement, original) => {
       defineProperty(replacement, 'name', { value: original.name });
@@ -180,7 +183,7 @@
     } catch (_) {}
 
     try {
-      const farbled = new WeakSet();
+      const farbled = new WeakSetCtor();
       patch(win.AudioBuffer.prototype, 'getChannelData', (target, self, args) => {
         const samples = apply(target, self, args);
         if (!apply(weakSetHas, farbled, [samples])) {
@@ -226,7 +229,8 @@
       const name = node.localName;
       if (name === 'iframe' || name === 'frame') protectFrame(node);
       else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) {
-        node.querySelectorAll('iframe, frame').forEach(protectFrame);
+        const found = node.querySelectorAll('iframe, frame');
+        for (let i = 0; i < found.length; i++) protectFrame(found[i]);
       }
     };
     // Insertion methods are among the hottest DOM calls: their replacements forward

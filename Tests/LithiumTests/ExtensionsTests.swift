@@ -131,6 +131,32 @@ struct ExtensionsTests {
         #expect(try text(folder.appending(path: "lithium-background.js")) == "importScripts(\"/lithium-compat.js\", \"worker.js\");\n")
     }
 
+    /// The worker's path comes from the package: one leading out of the extension's folder is
+    /// refused before anything is written, there or in the folder.
+    @Test func aServiceWorkerPathCannotLeadOutOfTheFolder() throws {
+        let parent = folder()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let extensionFolder = parent.appending(path: "extension")
+        let outside = parent.appending(path: "outside")
+        try FileManager.default.createDirectory(at: extensionFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let original = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "background": {"service_worker": "../outside/worker.js"}}"#
+        try Data(original.utf8).write(to: extensionFolder.appending(path: "manifest.json"))
+
+        #expect(throws: ExtensionCompatibility.OutsideFolder.self) { try ExtensionCompatibility.apply(to: extensionFolder) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+        #expect(try text(extensionFolder.appending(path: "manifest.json")) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: extensionFolder.path) == ["manifest.json"])
+    }
+
+    /// A quote in the worker's name stays inside the string the loader passes on.
+    @Test func aWorkerNameIsQuotedInTheLoader() throws {
+        let (folder, _) = try prepared(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "background": {"service_worker": "a\");evil(\".js"}}"#)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        #expect(try text(folder.appending(path: "lithium-background.js")) == #"importScripts("/lithium-compat.js", "a\");evil(\".js");"# + "\n")
+    }
+
     @Test func anExtensionWithoutAServiceWorkerIsLeftAlone() throws {
         let original = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#
         let (folder, _) = try prepared(manifest: original)

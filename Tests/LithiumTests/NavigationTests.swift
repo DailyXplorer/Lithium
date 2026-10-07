@@ -255,7 +255,9 @@ struct NavigationTests {
         (request, _) = await click(URL(string: "lithium-other:x")!, isPrivate: true)
         shown = try #require(request)
         #expect(!shown.canRemember)
+        let opening = ExternalApps.recorded
         links.answer(shown, open: true, always: true)
+        #expect(await waitUntil(2) { ExternalApps.recorded == opening + [.open(URL(string: "lithium-other:x")!)] })
         #expect(links.allowed[site] == ["lithium-test"], "a private tab remembers nothing")
 
         let mail = URL(string: "mailto:x@example.com")!
@@ -265,21 +267,22 @@ struct NavigationTests {
         #expect(request == nil && opened.isEmpty)
     }
 
-    /// The user's own click on another app's link in a page asks, naming the site; a script's
-    /// `click()` does nothing.
+    /// The user's own click on another app's link in a page asks, naming the site; the page's
+    /// own `click()` (from a timer, with no press) does nothing.
     @Test func aClickedAppLinkAsksFirst() async throws {
-        let (listener, base) = try await LocalHTTP.serve([
-            "/": ("Content-Type: text/html", #"<title>Links</title><style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style><a id="app" href="lithium-test:open">Open</a>"#),
-        ])
+        let page = #"""
+            <title>Links</title><style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
+            <a id="app" href="lithium-test:open">Open</a>
+            <script>setTimeout(() => { document.getElementById('app').click(); document.title = 'Clicked' }, 300)</script>
+            """#
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
         defer { listener.cancel() }
         let browser = Browser()
         browser.appLinks.appOpening = { _ in URL(fileURLWithPath: "/Applications/Example.app") }
+        let before = ExternalApps.recorded
         let tab = browser.newTab(url: base)
         defer { browser.close(tab) }
-        #expect(await waitUntil(30) { tab.webView.title == "Links" && !tab.webView.isLoading })
-        let before = ExternalApps.recorded
-
-        _ = try await tab.webView.evaluateJavaScript("document.getElementById('app').click(); 0")
+        #expect(await waitUntil(30) { tab.webView.title == "Clicked" && !tab.webView.isLoading })
         try await Task.sleep(for: .milliseconds(500))
         #expect(browser.appLinks.pending.isEmpty, "a script's click asks nothing")
 

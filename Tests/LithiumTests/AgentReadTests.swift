@@ -1437,6 +1437,20 @@ struct AgentReadTests {
         }
     }
 
+    /// Every reconnect opens a new session, so an ended one's baselines must not stay with the tab.
+    @Test func anEndedSessionsSnapshotsAreFreed() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            #expect(!(await client.call("snapshot", ["tab": .string(tab)])).isError)
+            let state = try #require(client.tab(tab).flatMap(client.hub.agentTab(for:)))
+            #expect(state.snapshots.keys.contains { $0.hasPrefix("\(client.session) ") })
+            #expect(state.seqs[client.session] == 1)
+            _ = await client.hub.handle(.endSession(client.session))
+            #expect(state.snapshots.isEmpty)
+            #expect(state.seqs.isEmpty)
+        }
+    }
+
     /// Text made only of spaces and line breaks is no text to wait for or find.
     @Test func blankTextIsInvalid() async throws {
         try await withAgent { client, base in

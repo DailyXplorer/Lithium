@@ -78,8 +78,9 @@ final class CallNotes {
         attemptUnguarded = false
     }
 
-    /// The arguments that carry what goes into a field, by tool.
-    private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"]]
+    /// The arguments that carry what goes into a field, by tool. A prompt's answer (a PIN, a code)
+    /// never goes into a known field, so it is always redacted.
+    private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"], "dialog_respond": ["text"]]
 
     /// The page's password and card values, once `evaluate` read them: masked wherever its
     /// function or args quote one.
@@ -240,10 +241,11 @@ final class AgentHub {
     // MARK: Lifecycle
 
     /// Listens on the port of the last run when it is free, else on a new one, and writes the
-    /// endpoint file. A token left by the last run is kept, so HTTP clients survive a relaunch.
+    /// endpoint file. The token is new on every start: a file left by a quit names a port anyone
+    /// may have taken since, so its token must not open the next run. Only `relisten` keeps it.
     func start() async {
         if keyGuard == nil { keyGuard = NativeInput.installKeyGuard() }
-        token = AgentEndpoint.read(in: folder)?.token ?? AgentEndpoint.makeToken()
+        token = AgentEndpoint.makeToken()
         let server = AgentServer(token: token, listenerDidFail: { [weak self] error in
             Task { @MainActor in await self?.listenerDied(error) }
         }) { [weak self] request in
@@ -403,6 +405,7 @@ final class AgentHub {
         for state in tabs.values where state.holder == session.id {
             if let tab = state.tab { handDialogToUser(in: tab) }
         }
+        for state in tabs.values { state.forget(session: session.id) }
         lastSeen[session.id] = nil
         recentCalls[session.id] = nil
     }

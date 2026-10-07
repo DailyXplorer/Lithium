@@ -387,6 +387,13 @@ extension AgentTab {
         return previous
     }
 
+    /// The session ended: nothing will diff against its snapshots again, and every reconnect
+    /// opens a new one.
+    func forget(session: String) {
+        snapshots = snapshots.filter { !$0.key.hasPrefix("\(session) ") }
+        seqs[session] = nil
+    }
+
     private static func childPath(_ path: String, _ index: Int) -> String {
         path.isEmpty ? "\(index)" : "\(path).\(index)"
     }

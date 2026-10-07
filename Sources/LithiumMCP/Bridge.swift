@@ -138,16 +138,21 @@ actor Bridge {
             return try await waitForEndpoint { [lithium] in $0.isRunning(as: lithium) }
         }
         guard let stale, stale == endpoint else { return endpoint }
-        // Running, but not taking connections: starting, or listening again elsewhere.
-        return try await waitForEndpoint { [lithium] in $0 != stale && $0.isRunning(as: lithium) }
+        // Running, but not taking connections: starting, or listening again elsewhere. A listener
+        // that comes back on the same port writes the same file, so only a connection tells.
+        return try await waitForEndpoint { [lithium] in
+            guard $0.isRunning(as: lithium) else { return false }
+            if $0 != stale { return true }
+            return await self.accepts($0)
+        }
     }
 
     /// The one wait the bridge has: Lithium writes a fresh file once its server listens.
-    private func waitForEndpoint(_ isFresh: (Endpoint) -> Bool) async throws(Failure) -> Endpoint {
+    private func waitForEndpoint(_ isFresh: (Endpoint) async -> Bool) async throws(Failure) -> Endpoint {
         let deadline = ContinuousClock.now + launchTimeout
         while true {
             let endpoint = try Endpoint.read(file)
-            if isFresh(endpoint) { return endpoint }
+            if await isFresh(endpoint) { return endpoint }
             guard ContinuousClock.now < deadline else { throw .notReady }
             try? await Task.sleep(for: .milliseconds(100))
         }
@@ -236,7 +241,9 @@ actor Bridge {
     }
 
     private func post(_ body: Data?, to endpoint: Endpoint, session: String?, method: String = "POST", timeout: TimeInterval? = nil) async -> Outcome {
-        guard let url = URL(string: endpoint.url) else { return .refused }
+        // The token only goes to the Lithium that wrote it: once that one quits, anyone may hold
+        // its port. A refusal reads the file again, which starts Lithium if needed.
+        guard endpoint.isRunning(as: lithium), let url = URL(string: endpoint.url) else { return .refused }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
@@ -257,6 +264,15 @@ actor Bridge {
         } catch {
             return .failed
         }
+    }
+
+    /// Whether a server listens at `endpoint` again, asked without the token.
+    private func accepts(_ endpoint: Endpoint) async -> Bool {
+        guard let url = URL(string: endpoint.url) else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 1
+        return (try? await http.data(for: request)) != nil
     }
 
     // MARK: Output

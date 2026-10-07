@@ -31,8 +31,9 @@ let signalSources = [SIGTERM, SIGINT, SIGHUP].map { number in
 }
 
 // Lines split on "\n" alone: JSON may hold U+2028 unescaped, which `lines` would also split on.
-// Each message runs on its own, so a long call doesn't hold up the next.
-await withTaskGroup(of: Void.self) { group in
+// Each message runs on its own, so a long call doesn't hold up the next. A discarding group
+// frees each one as it ends; a plain one would keep them all until the bridge exits.
+await withDiscardingTaskGroup { group in
     var line = Data()
     do {
         for try await byte in FileHandle.standardInput.bytes {

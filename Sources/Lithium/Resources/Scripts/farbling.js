@@ -84,7 +84,6 @@
   const nodeCount = member(NodeList.prototype, 'length').get;
   const iframeWindow = member(HTMLIFrameElement.prototype, 'contentWindow').get;
   const frameWindow = member(HTMLFrameElement.prototype, 'contentWindow').get;
-  const iframeSrcdoc = member(HTMLIFrameElement.prototype, 'srcdoc').set;
   const trustedTypesFactory = globalThis.trustedTypes;
   const isTrustedHTML = trustedTypesFactory && member(TrustedTypePolicyFactory.prototype, 'isHTML').value;
   const trustedHTMLText = trustedTypesFactory && member(TrustedHTML.prototype, 'toString').value;
@@ -95,6 +94,7 @@
   const currentScript = member(Document.prototype, 'currentScript').get;
   const regExpExec = RegExp.prototype.exec;
   const FRAME_TAG = /frame/i;
+  const TRUSTED_TYPES_META = 'head meta[http-equiv="content-security-policy" i][content*="require-trusted-types-for" i]';
 
   // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
   // noisy pixels, unlike the 32 bits it once had. The first outputs are dropped to spread the salt.
@@ -214,10 +214,17 @@
   // and hands over its disguises. WebKit's per-frame injection and the hooks below can both reach a
   // frame (a blank one keeps its realm when its page loads), so each copy asks before protecting.
   // An event listener can't be listed or forged, unlike the window property this once was.
+  // The same event, sent by the script Privacy adds for a response that asks for Trusted Types,
+  // tells the window's realm whether its policy enforces them or only reports.
+  const trustedTypesModes = new WeakMapCtor();
   const answer = (event) => {
     apply(preventDefault, event, []);
     const box = read(eventDetail, event);
     if (box && !hasOwn(box, 'disguises')) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
+    if (box && hasOwn(box, 'trustedTypes')) {
+      const realm = sameOrigin(read(eventTarget, event));
+      if (realm) apply(weakMapSet, trustedTypesModes, [realm, box.trustedTypes]);
+    }
   };
   const ask = (win) => {
     const box = { __proto__: null };
@@ -544,27 +551,32 @@
             }
           }
           // A write the parser has no place for opens the document inside the native call, which
-          // drops the `load` listener before the markup's frames fire it. An empty write opens it
-          // first, exactly when the browser would (not while the document's external or module
-          // script runs, say): the real write then finds the parser open and the listener back.
-          // No arguments, so no Trusted Types check: the real write runs that before anything else,
-          // and one it rejects must throw with the document unopened. So plain markup is checked
-          // first, unless a script of the parsing document is running: its write goes where the
-          // parser is, or is ignored, and never opens the document.
-          let open = true;
-          if (plain && isTrustedHTML && !(read(readyState, self) === 'loading' && read(currentScript, self))) {
+          // drops the `load` listener before the markup's frames fire it. For markup that may hold
+          // one, an empty write opens it first, exactly when the browser would (not while the
+          // document's external or module script runs, say): the real write then finds the parser
+          // open and the listener back. No arguments, so no Trusted Types check: the real write
+          // runs that before anything else, and one it rejects must throw with the document
+          // unopened. So plain markup is checked first where Trusted Types apply, unless a script
+          // of the parsing document is running: its write goes where the parser is, or is
+          // ignored, and never opens the document.
+          let open = mayHoldFrame(joined);
+          if (open && plain && isTrustedHTML && !(read(readyState, self) === 'loading' && read(currentScript, self))) {
             const view = read(documentView, self);
-            const policy = view ? read(defaultPolicy, read(windowTrustedTypes, view)) : null;
+            const realm = view ? sameOrigin(view) : null;
+            // From the response's headers (see Privacy.trustedTypes), or a policy in the markup.
+            let mode = realm ? apply(weakMapGet, trustedTypesModes, [realm]) : undefined;
+            try { if (mode !== 'enforce' && read(nodeCount, apply(queryAll[9], self, [TRUSTED_TYPES_META]))) mode = 'enforce'; } catch (_) {}
+            const policy = mode && view ? read(defaultPolicy, read(windowTrustedTypes, view)) : null;
             if (policy) {
               // Called as the browser would call it, with this sink: its answer then goes in
               // as TrustedHTML, which the browser doesn't run it on again. An empty one may be a
-              // refusal, which only the browser's own call reports: that markup holds no frame.
+              // refusal, which only the browser's own call reports (and throws for, if enforced):
+              // the plain markup goes on, and the policy sees it a second time.
               const html = apply(createHTML, policy, [joined, 'TrustedHTML', sink]);
-              if (apply(trustedHTMLText, html, []) !== '') written = [html]; else open = false;
+              if (apply(trustedHTMLText, html, []) !== '') written = [html]; else open = mode !== 'enforce';
             } else {
-              // Without a default policy the sink doesn't matter: a never-inserted frame's `srcdoc`
-              // runs the same check without parsing or loading the markup.
-              try { apply(iframeSrcdoc, apply(createElement, self, ['iframe']), [joined]); } catch (_) { open = false; }
+              // Without one, an enforced policy rejects the write; one that only reports lets it through.
+              open = mode !== 'enforce';
             }
           }
           if (open) { try { apply(nativeWrite, self, []); } catch (_) {} }

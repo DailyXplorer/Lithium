@@ -166,6 +166,11 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                let kind = entry["kind"].flatMap(PermissionKind.init(rawValue:)) {
                 browser.permissions.set(entry["decision"].flatMap(PermissionDecision.init(rawValue:)), for: kind, host: host)
             }
+        case "removeAppLink":
+            // Asks again next time: "Always allow" is all that is remembered.
+            if let entry = value as? [String: String], let host = entry["host"], let scheme = entry["scheme"] {
+                browser.appLinks.set(false, scheme: scheme, host: host)
+            }
         case "site", "clearSiteData":
             guard let host = value as? String, !host.isEmpty else { return (nil, "No site") }
             let info = SiteInfo(host: host)
@@ -320,6 +325,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 var entry: [String: String] = ["host": host]
                 for (kind, decision) in browser.permissions.decisions[host] ?? [:] { entry[kind.rawValue] = decision.rawValue }
                 return entry
+            },
+            "appLinks": browser.appLinks.allowed.keys.sorted().flatMap { host in
+                (browser.appLinks.allowed[host] ?? []).sorted().map { scheme in
+                    let app = URL(string: "\(scheme):").flatMap(browser.appLinks.appOpening)
+                    return ["host": host, "scheme": scheme, "app": app.map(AppLinks.name(ofApp:)) ?? ""]
+                }
             },
             "max": [
                 "tidyTitles": browser.tidyTitles.isEnabled,

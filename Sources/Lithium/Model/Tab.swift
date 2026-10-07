@@ -317,6 +317,9 @@ final class Tab: NSObject, Identifiable {
     }
 
     func reload() {
+        // A sleeping tab has no page to reload: reading `webView` would only make an empty one,
+        // left on the tab until it wakes. Waking loads its page, which is the reload.
+        if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
         if let failedURL { load(failedURL) } else { webView.reload() }
     }
@@ -832,9 +835,11 @@ extension Tab: WKNavigationDelegate {
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             // Only the user's own click hands an address to another app, never an agent's, nor a
-            // script's `click()`: that does nothing.
+            // script's `click()`: that does nothing. The site whose frame has the link (an ad's,
+            // say) is the one asking.
             if action.navigationType == .linkActivated, Self.isPressed(action, in: webView), (webView as? PageWebView)?.agentPressedLast != true {
-                ExternalApps.open(url)
+                let host = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.host ?? shownHost ?? ""
+                openInApp(url, from: host)
             }
             // A load refused here ends without a word from WebKit.
             if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
@@ -906,8 +911,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
-        // A site the user turned protections off for keeps its parameters too.
-        if browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
+        // A site the user turned protections off for keeps its parameters too. Back, Forward and
+        // Reload return to an entry the history already has: cancelled for a new load, they would
+        // drop the forward list and keep the user from going back past that page.
+        if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
+           browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             Task { webView.load(URLRequest(url: clean)) }
@@ -999,6 +1007,7 @@ extension Tab: WKNavigationDelegate {
         if !goToAddressAfterWaking() { commits += 1 }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
+        browser?.appLinks.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
         if let old = shownHost, old != webView.url?.host() {
@@ -1024,6 +1033,7 @@ extension Tab: WKNavigationDelegate {
         // Like a website's links: never Lithium's own pages, local files only from a local PDF
         // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
         let isLocal = url.isFileURL
+        let site = url.host() ?? ""
         reader.onOpenLink = { [weak self] url, inNewTab in
             guard let self else { return }
             let scheme = url.scheme?.lowercased()
@@ -1035,7 +1045,7 @@ extension Tab: WKNavigationDelegate {
                 break
             default:
                 // As in a page: an agent's click never hands an address to another app.
-                if NSApp.currentEvent.map(NativeInput.isAgents) != true { ExternalApps.open(url) }
+                if NSApp.currentEvent.map(NativeInput.isAgents) != true { self.openInApp(url, from: site) }
             }
         }
         pdf = reader
@@ -1075,6 +1085,12 @@ extension Tab: WKNavigationDelegate {
     private static func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
         if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true { return true }
         return (webView as? PageWebView)?.pressedRecently == true
+    }
+
+    /// Another app's address, from a click in this tab's page or PDF: asked first (`AppLinks`).
+    private func openInApp(_ url: URL, from host: String) {
+        guard let browser else { return }
+        Task { await browser.appLinks.open(url, from: host, tabID: id, isPrivate: isEphemeral) }
     }
 
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.

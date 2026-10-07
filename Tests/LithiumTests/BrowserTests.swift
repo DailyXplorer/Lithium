@@ -35,6 +35,48 @@ struct BrowserTests {
         #expect(tab.favicon != nil)
     }
 
+    /// Return in the address bar sends the text to the tab it was typed for, even once the
+    /// selection moved on its own (a download-only tab closing, a popup closed by its page); to a
+    /// new tab once that tab is gone, never to the one now shown.
+    @Test func typedAddressGoesToTheTabBeingEdited() throws {
+        let browser = Browser()
+        let opener = browser.newTab(url: URL(string: "data:text/html,opener")!)
+        let edited = browser.newTab(url: URL(string: "data:text/html,edited")!)
+        defer { browser.tabs.forEach(browser.close) }
+        let typed = URL(string: "data:text/html,typed")!
+
+        browser.select(opener)
+        browser.submitAddress(typed.absoluteString, editing: edited.id)
+        #expect(edited.url == typed)
+        #expect(opener.url == URL(string: "data:text/html,opener"))
+        #expect(browser.selectedTab === edited)
+
+        let gone = edited.id
+        browser.close(edited)
+        #expect(browser.selectedTab === opener)
+        let count = browser.tabs.count
+        browser.submitAddress(typed.absoluteString, editing: gone)
+        #expect(browser.tabs.count == count + 1)
+        #expect(opener.url == URL(string: "data:text/html,opener"))
+        let opened = try #require(browser.selectedTab)
+        #expect(opened !== opener)
+        #expect(opened.url == typed)
+    }
+
+    /// A typed `mailto:` address goes to Mail (only recorded in tests); the tab stays on its page.
+    @Test func typedMailtoGoesToMail() {
+        let browser = Browser()
+        let page = URL(string: "data:text/html,page")!
+        let tab = browser.newTab(url: page)
+        defer { browser.close(tab) }
+        let mail = URL(string: "mailto:alice@example.com")!
+        let (before, count) = (ExternalApps.recorded, browser.tabs.count)
+        browser.submitAddress(mail.absoluteString)
+        #expect(ExternalApps.recorded == before + [.open(mail)])
+        #expect(tab.url == page)
+        #expect(browser.tabs.count == count)
+    }
+
     /// A tab out of sight waits to be selected; the visible one reloads once, then stops.
     @Test func crashedTabs() async throws {
         let browser = Browser()

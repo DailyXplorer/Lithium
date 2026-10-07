@@ -92,6 +92,38 @@ struct NavigationTests {
         #expect(requests["/a?utm_source=test"] == 0)
     }
 
+    /// Back, Forward and Reload return to a history entry with tracking parameters (put there by
+    /// the page's own `replaceState`, as analytics scripts do) as it is: stripping them would
+    /// load a new page in its place and wipe the forward history.
+    @Test func backForwardAndReloadKeepATrackedEntry() async throws {
+        let requests = Requests()
+        let tracked = #"<title>Tracked</title><script>history.replaceState(null, "", "/y?utm_source=test")</script>"#
+        let (listener, base) = try await LocalHTTP.serve([
+            "/y": ("Content-Type: text/html", Data(tracked.utf8)),
+            "/y?utm_source=test": ("Content-Type: text/html", Data(tracked.utf8)),
+            "/x": ("Content-Type: text/html", Data("<title>Next</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let entry = try #require(URL(string: "y?utm_source=test", relativeTo: base)?.absoluteURL)
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "y"))
+        #expect(await waitUntil(30) { tab.webView.url == entry && !tab.webView.isLoading })
+        tab.load(base.appending(path: "x"))
+        #expect(await waitUntil(30) { tab.webView.title == "Next" && !tab.webView.isLoading })
+
+        browser.navigate(tab, .back)
+        #expect(await waitUntil(30) { tab.webView.title == "Tracked" && !tab.webView.isLoading })
+        #expect(tab.webView.url == entry)
+        #expect(tab.webView.canGoForward, "the forward history is still there")
+        browser.navigate(tab, .reload)
+        #expect(await waitUntil(30) { requests["/y?utm_source=test"] == 1 && !tab.webView.isLoading })
+        #expect(tab.webView.url == entry)
+        #expect(tab.webView.canGoForward)
+        browser.navigate(tab, .forward)
+        #expect(await waitUntil(30) { tab.webView.title == "Next" && !tab.webView.isLoading })
+        #expect(requests["/y"] == 1, "never loaded again without its parameters")
+    }
+
     /// Back from a website returns to Lithium's page, which can still talk to the app; a
     /// website's own script still can't open one.
     @Test func backReturnsToAnInternalPage() async throws {
@@ -171,6 +203,110 @@ struct NavigationTests {
         let url = base.appending(path: "first").absoluteString
         #expect(await waitUntil(10) { options.webView.title == "Activated \(url)" }, "\(options.webView.title ?? "")")
         await browser.extensions.remove(id: id)
+    }
+
+    /// Another app's link asks first, once per site and scheme. Cancel opens nothing; "Always
+    /// allow" is remembered for that site and scheme only, never from a private tab; `mailto:`
+    /// and a scheme no app opens never ask. Hand-offs are only recorded in tests.
+    @Test func appLinksAskOncePerSiteAndScheme() async throws {
+        let links = AppLinks()
+        let app = URL(fileURLWithPath: "/Applications/Example.app")
+        links.appOpening = { $0.scheme == "lithium-none" ? nil : app }
+        let site = "app-links-\(UUID().uuidString).example"
+        defer { ["lithium-test", "lithium-other"].forEach { links.set(false, scheme: $0, host: site) } }
+        let tab = UUID()
+        let url = URL(string: "lithium-test:open?id=1")!
+
+        func click(_ url: URL, from host: String = site, isPrivate: Bool = false) async -> (AppLinkRequest?, [ExternalApps.HandOff]) {
+            let before = ExternalApps.recorded
+            let task = Task { await links.open(url, from: host, tabID: tab, isPrivate: isPrivate) }
+            _ = await waitUntil(2) { !links.pending.isEmpty || ExternalApps.recorded.count > before.count }
+            let request = links.pending.first
+            if request == nil { await task.value }
+            return (request, Array(ExternalApps.recorded.dropFirst(before.count)))
+        }
+
+        let start = ExternalApps.recorded
+        var (request, opened) = await click(url)
+        var shown = try #require(request)
+        #expect(opened.isEmpty)
+        #expect((shown.host, shown.scheme, shown.app, shown.canRemember) == (site, "lithium-test", app, true))
+        links.answer(shown, open: false)
+        #expect(await waitUntil(2) { links.pending.isEmpty })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(ExternalApps.recorded == start, "Cancel opens nothing")
+
+        (request, _) = await click(url)
+        shown = try #require(request)
+        let before = ExternalApps.recorded
+        links.answer(shown, open: true, always: true)
+        #expect(await waitUntil(2) { ExternalApps.recorded == before + [.open(url)] })
+
+        (request, opened) = await click(url)
+        #expect(request == nil, "allowed for this site and scheme")
+        #expect(opened == [.open(url)])
+        (request, _) = await click(URL(string: "lithium-other:x")!)
+        #expect(request != nil, "another scheme asks")
+        links.cancel(tabID: tab)
+        (request, _) = await click(url, from: "other-\(site)")
+        #expect(request != nil, "another site asks")
+        links.cancel(tabID: tab)
+
+        (request, _) = await click(URL(string: "lithium-other:x")!, isPrivate: true)
+        shown = try #require(request)
+        #expect(!shown.canRemember)
+        let opening = ExternalApps.recorded
+        links.answer(shown, open: true, always: true)
+        #expect(await waitUntil(2) { ExternalApps.recorded == opening + [.open(URL(string: "lithium-other:x")!)] })
+        #expect(links.allowed[site] == ["lithium-test"], "a private tab remembers nothing")
+
+        let mail = URL(string: "mailto:x@example.com")!
+        (request, opened) = await click(mail)
+        #expect(request == nil && opened == [.open(mail)])
+        (request, opened) = await click(URL(string: "lithium-none:x")!)
+        #expect(request == nil && opened.isEmpty)
+    }
+
+    /// The user's own click on another app's link in a page asks, naming the site; the page's
+    /// own `click()` (from a timer, with no press) does nothing.
+    @Test func aClickedAppLinkAsksFirst() async throws {
+        let page = #"""
+            <title>Links</title><style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
+            <a id="app" href="lithium-test:open">Open</a>
+            <script>setTimeout(() => { document.getElementById('app').click(); document.title = 'Clicked' }, 300)</script>
+            """#
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
+        defer { listener.cancel() }
+        let browser = Browser()
+        browser.appLinks.appOpening = { _ in URL(fileURLWithPath: "/Applications/Example.app") }
+        let before = ExternalApps.recorded
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Clicked" && !tab.webView.isLoading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(browser.appLinks.pending.isEmpty, "a script's click asks nothing")
+
+        let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        shown.isReleasedWhenClosed = false
+        let webView = tab.webView
+        webView.removeFromSuperview()
+        webView.frame = shown.contentLayoutRect
+        shown.contentView = webView
+        defer { shown.contentView = nil }
+        let point = webView.convert(CGPoint(x: 55, y: 50), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+            type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+        }
+        #expect(await waitUntil(5) { browser.appLinks.pending.contains { $0.tabID == tab.id } })
+        let request = try #require(browser.appLinks.pending.first)
+        #expect(request.host == base.host())
+        #expect(request.url == URL(string: "lithium-test:open"))
+        #expect(ExternalApps.recorded == before, "nothing opens before the answer")
+        #expect(browser.dismissOverlay())
+        #expect(browser.appLinks.pending.isEmpty)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(ExternalApps.recorded == before, "Escape cancels")
     }
 
     /// The internal page's `call` reaches the app and gets its state back.

@@ -11,6 +11,9 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
 
     weak var hub: AgentHub?
     private let controllers = NSHashTable<WKUserContentController>.weakObjects()
+    /// Bodies being redacted, in every tab.
+    private(set) var redactions = 0
+    static let maxRedactions = 8
 
     init(hub: AgentHub) {
         self.hub = hub
@@ -58,14 +61,20 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub,
-              let capture = hub.tabs[tab.id]?.capture, ![Internal.scheme, Extensions.scheme].contains(message.frameInfo.securityOrigin.protocol) else { return }
+              let capture = hub.tabs[tab.id]?.capture, ![Internal.scheme, Extensions.scheme].contains(message.frameInfo.securityOrigin.protocol),
+              capture.admitsMessage() else { return }
         let frameID = ResourceLoadSpy.frameID(of: message.frameInfo)
         if let response = body["body"] as? [String: Any] {
-            guard hub.capturesBodies, let url = response["url"] as? String, let method = response["method"] as? String, let text = response["text"] as? String else { return }
+            // Each body is up to 256 KB of regex work: a page posting them faster than they are
+            // redacted would pile up tasks and memory. One over the cap is not kept.
+            guard hub.capturesBodies, redactions < Self.maxRedactions, let url = response["url"] as? String, let method = response["method"] as? String,
+                  let text = response["text"] as? String else { return }
             let truncated = response["truncated"] as? Bool ?? false
             let raw = String(text.prefix(TabCapture.maxBody))
+            redactions += 1
             Task {
                 let redacted = await Task.detached { AgentRedaction.body(raw) }.value
+                redactions -= 1
                 capture.attach(CapturedBody(text: redacted, truncated: truncated || raw.count < text.count), url: url, method: method, frameID: frameID)
             }
         } else if let level = body["level"] as? String, Self.levels.contains(level) {

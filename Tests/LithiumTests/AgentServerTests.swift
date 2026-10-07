@@ -424,20 +424,29 @@ struct AgentServerTests {
         #expect(try await fixture.post(Fixture.initializeMessage()).status == 200)
     }
 
-    @Test func keepsTheTokenAcrossARelaunchButNotAcrossTurningOff() async throws {
+    /// A quit leaves the endpoint file behind, and its port to whoever takes it: the token it
+    /// names must not open the next run.
+    @Test func makesANewTokenOnEveryStart() async throws {
         let first = try await Fixture()
         let token = first.endpoint.token
-        let relaunched = AgentHub(folder: first.folder, defaults: UserDefaults(suiteName: first.suite)!)
         first.hub.stop()
+        let relaunched = AgentHub(folder: first.folder, defaults: UserDefaults(suiteName: first.suite)!)
         await relaunched.start()
-        #expect(AgentEndpoint.read(in: first.folder)?.token == token)
-        relaunched.shutdown()
+        defer { relaunched.shutdown() }
+        let fresh = try #require(AgentEndpoint.read(in: first.folder)?.token)
+        #expect(fresh != token)
+        let port = try #require(relaunched.port)
+        let withOld = try await RawHTTP.send(port: port, method: "POST", headers: [
+            "Content-Type": "application/json", "Authorization": "Bearer \(token)",
+        ], body: Fixture.initializeMessage().encoded())
+        #expect(withOld.status == 401)
         first.hub.shutdown()
-        #expect(AgentEndpoint.read(in: first.folder) == nil)
-        let again = AgentHub(folder: first.folder, defaults: UserDefaults(suiteName: first.suite)!)
-        await again.start()
-        defer { again.shutdown() }
-        #expect(AgentEndpoint.read(in: first.folder)?.token != token)
+    }
+
+    /// A prompt's answer may be a PIN or a code, and goes into no field the log could weigh.
+    @Test func neverLogsADialogAnswer() {
+        let logged = CallNotes().logged(["tab": "t1", "accept": true, "text": "4921"], tool: "dialog_respond")
+        #expect(logged == ["tab": "t1", "accept": true, "text": "[redacted]"])
     }
 
     @Test func takesAnotherPortWhenTheLastOneIsTaken() async throws {

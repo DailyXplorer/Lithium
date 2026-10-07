@@ -122,7 +122,19 @@ final class SiteInfo {
             // Closed before the answer: still to load, so opening the certificate again asks again.
             guard !Task.isCancelled else { return }
         }
-        certificate = trust.flatMap(Self.certificate).map(CertificateLookup.found) ?? .unavailable
+        let found = if let trust { await Self.certificateInBackground(from: SharedTrust(trust: trust)) } else { Certificate?.none }
+        certificate = found.map(CertificateLookup.found) ?? .unavailable
+    }
+
+    /// Only read once handed over; SecTrust is thread-safe, but not marked Sendable.
+    private struct SharedTrust: @unchecked Sendable {
+        let trust: SecTrust
+    }
+
+    /// Reading the chain has the Security framework evaluate a trust nothing evaluated yet, which
+    /// can wait on the network (revocation, a missing intermediate): never on the main thread.
+    private nonisolated static func certificateInBackground(from shared: SharedTrust) async -> Certificate? {
+        certificate(from: shared.trust)
     }
 
     private nonisolated static func fetchTrust(_ url: URL) async -> SecTrust? {
@@ -135,7 +147,8 @@ final class SiteInfo {
         return catcher.trust
     }
 
-    private static func certificate(from trust: SecTrust) -> Certificate? {
+    private nonisolated static func certificate(from trust: SecTrust) -> Certificate? {
+        assert(!Thread.isMainThread, "Security evaluates the trust here, which may block")
         guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first else { return nil }
         let subject = SecCertificateCopySubjectSummary(leaf) as String? ?? ""
         let issuer = chain.count > 1 ? (SecCertificateCopySubjectSummary(chain[1]) as String? ?? "") : subject

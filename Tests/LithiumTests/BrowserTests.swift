@@ -208,6 +208,91 @@ struct BrowserTests {
         #expect(browser.permissions.pending.isEmpty, "the page itself downloads without asking")
     }
 
+    /// A frame's `<a download>` asks too, like its attachments: it isn't the page the user is on.
+    @Test func aFramesDownloadLinkAsksFirst() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<iframe src="/frame"></iframe>"#),
+            "/frame": ("Content-Type: text/html", #"<a id="file" href="/note.txt" download>Note</a><script>document.getElementById('file').click()</script>"#),
+            "/note.txt": ("Content-Type: text/plain", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let host = try #require(base.host())
+        let before = Downloads.shared.items.count
+        let page = browser.newTab(url: base)
+        defer { browser.close(page) }
+        #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } })
+        let request = try #require(browser.permissions.pending.first { $0.tabID == page.id })
+        #expect(request.kinds == [.downloads] && request.host == host)
+        #expect(Downloads.shared.items.count == before)
+
+        browser.permissions.dismiss(request)
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
+    }
+
+    /// A private tab's answer holds for its private session only, in memory: nothing is saved,
+    /// normal tabs still ask, and it goes when the session's last tab closes.
+    @Test func privateTabPermissionsStayInTheirSession() async throws {
+        let browser = Browser()
+        let store = WKWebsiteDataStore.nonPersistent()
+        let tab = browser.newTab(url: URL(string: "data:text/html,private")!, selecting: false, privateStore: store)
+        let session = try #require(tab.privateSession)
+        let host = "private-\(UUID().uuidString.lowercased()).example"
+        let permissions = browser.permissions
+        func ask(_ privateSession: ObjectIdentifier?, tabID: Tab.ID) -> Task<Bool, Never> {
+            Task { await permissions.request([.camera], host: host, tabID: tabID, privateSession: privateSession) }
+        }
+        func prompt(for tabID: Tab.ID) async -> PermissionRequest? {
+            _ = await waitUntil(10) { permissions.pending.contains { $0.tabID == tabID } }
+            return permissions.pending.first { $0.tabID == tabID }
+        }
+
+        let first = ask(session, tabID: tab.id)
+        permissions.answer(try #require(await prompt(for: tab.id)), allow: true)
+        #expect(await first.value)
+        #expect(permissions.decisions[host] == nil)
+        let saved = UserDefaults.standard.dictionary(forKey: "sitePermissions") ?? [:]
+        #expect(saved[host] == nil, "nothing written to disk")
+        #expect(await ask(session, tabID: tab.id).value, "remembered in the session")
+
+        let normalTab = UUID()
+        let normal = ask(nil, tabID: normalTab)
+        permissions.dismiss(try #require(await prompt(for: normalTab)))
+        #expect(await normal.value == false)
+
+        browser.close(tab)
+        let again = ask(session, tabID: tab.id)
+        permissions.dismiss(try #require(await prompt(for: tab.id)))
+        #expect(await again.value == false, "forgotten with its last tab")
+    }
+
+    /// A tab closed or pinned while its name was being edited ends the rename: its field went
+    /// with its row, and the rename would otherwise hold Escape and the agent.
+    @Test func closingOrPinningARenamedTabEndsTheRename() {
+        let browser = Browser()
+        let closed = browser.newTab(url: URL(string: "data:text/html,closed")!, selecting: false)
+        browser.renamingTabID = closed.id
+        browser.close(closed)
+        #expect(browser.renamingTabID == nil)
+
+        let pinned = browser.newTab(url: URL(string: "data:text/html,pinned")!, selecting: false)
+        defer { browser.pins.filter { $0.id == pinned.pinID }.forEach(browser.unpin) }
+        browser.renamingTabID = pinned.id
+        browser.pin(pinned)
+        #expect(pinned.pinID != nil)
+        #expect(browser.renamingTabID == nil)
+
+        // Another tab's rename goes on.
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!, selecting: false)
+        let renamed = browser.newTab(url: URL(string: "data:text/html,renamed")!, selecting: false)
+        browser.renamingTabID = renamed.id
+        browser.close(other)
+        #expect(browser.renamingTabID == renamed.id)
+        browser.renamingTabID = nil
+        browser.close(renamed)
+    }
+
     /// A prompt left unanswered goes away with its page: answered over the next one, it would be
     /// taken for that page's.
     @Test func aDownloadPromptGoesAwayWithItsPage() async throws {

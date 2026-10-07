@@ -190,6 +190,92 @@ struct PinnedIcons {
         SessionStore.save(Session())
     }
 
+    /// A page's `<link>` can name anything: Lithium reads icons only from the web (or a `data:`
+    /// address), never a file on the Mac, and never a body or image too big to be an icon.
+    @Test func iconsComeOnlyFromTheWebAndStaySmall() async throws {
+        // Trailing bytes don't stop a PNG from drawing: only the size limit refuses this one.
+        let padded = Self.red + Data(count: Favicons.largestIcon)
+        let (server, base) = try await LocalHTTP.serve([
+            "/red.png": ("Content-Type: image/png", Self.red),
+            "/padded.png": ("Content-Type: image/png", padded),
+        ])
+        defer { server.cancel() }
+        let session = URLSession(configuration: .ephemeral)
+        #expect(await Favicons.fetch(base.appending(path: "red.png"), with: session) != nil)
+        #expect(await Favicons.fetch(base.appending(path: "padded.png"), with: session) == nil)
+        #expect(Favicons.normalized(padded) != nil)
+
+        let file = FileManager.default.temporaryDirectory.appending(path: "icon-\(UUID().uuidString).png")
+        try Self.red.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        #expect(await Favicons.fetch(file, with: session) == nil)
+
+        // A one-color image compresses to a few KB however many pixels it declares.
+        func gray(_ side: Int) throws -> Data {
+            let bitmap = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 1, samplesPerPixel: 1,
+                hasAlpha: false, isPlanar: false, colorSpaceName: .deviceWhite, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            return try #require(bitmap.representation(using: .png, properties: [:]))
+        }
+        let huge = try gray(5000)
+        #expect(huge.count < Favicons.largestIcon)
+        #expect(Favicons.normalized(huge) == nil)
+        #expect(Favicons.normalized(try gray(64)) != nil)
+    }
+
+    /// A page animating its icon gets it fetched, and the favorite saved, at most every
+    /// `Tab.iconInterval`, not at every frame; it ends on the icon named last.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func anAnimatedIconIsFetchedAtItsOwnPace() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Timer</title><link rel="icon" href="/red.png">"#, requests: requests)
+        defer { server.cancel() }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let red = try #require(Favicons.normalized(Self.red))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { tab.faviconData == red && pin()?.iconURL == base.appending(path: "red.png") })
+        let before = requests["/red.png"] + requests["/blue.png"]
+
+        // 60 swaps in 3 seconds, ending on blue.
+        _ = try await tab.webView.evaluateJavaScript("""
+            let swaps = 0;
+            const timer = setInterval(() => {
+                document.querySelector('link[rel=icon]').href = ++swaps % 2 ? '/blue.png' : '/red.png';
+                if (swaps === 59) clearInterval(timer);
+            }, 50);
+            0
+            """)
+        try await Task.sleep(for: .seconds(3.5))
+        #expect(requests["/red.png"] + requests["/blue.png"] - before <= 4)
+        let blue = try #require(Favicons.normalized(Self.blue))
+        #expect(await waitUntil(10) { tab.faviconData == blue && pin()?.iconURL == base.appending(path: "blue.png") })
+    }
+
+    /// A `data:` icon is shown and kept as the favorite's icon, but not as its address: only an
+    /// http(s) one is fetched again, and a page redrawing its icon would rewrite the favorites.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func aDataIconIsNotSavedAsTheFavoritesAddress() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Calendar</title><link rel="icon" href="/red.png">"#)
+        defer { server.cancel() }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let blue = try #require(Favicons.normalized(Self.blue))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { pin()?.iconURL == base.appending(path: "red.png") })
+
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = 'data:image/png;base64,\(Self.blue.base64EncodedString())'; 0")
+        #expect(await waitUntil(30) { tab.faviconData == blue && pin()?.favicon == blue })
+        #expect(pin()?.iconURL == nil)
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

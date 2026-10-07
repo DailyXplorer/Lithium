@@ -80,11 +80,15 @@ struct FilterUpdateTests {
 
     private func url(_ list: String) -> URL { URL(string: "https://\(host)/\(list).txt")! }
 
-    private func updater(_ groups: [String: [String]], bundledFilters: URL? = nil) -> FilterUpdater {
+    /// Lists of a rule or two pass with `minimumRules` at 1.
+    private func updater(_ groups: [String: [String]], bundledFilters: URL? = nil, minimumRules: Int = 1) -> FilterUpdater {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubLists.self]
         let lists = Dictionary(uniqueKeysWithValues: Set(groups.values.joined()).map { ($0, url($0)) })
-        return FilterUpdater(sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration), bundledFilters: bundledFilters)
+        return FilterUpdater(
+            sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration),
+            bundledFilters: bundledFilters, minimumRules: minimumRules
+        )
     }
 
     private func read(_ file: String) throws -> String {
@@ -154,6 +158,35 @@ struct FilterUpdateTests {
         await #expect(throws: (any Error).self) { try await updater.update(into: destination) }
         #expect(try read("manifest.json") == before)
         #expect(try read("ads.json") == rules)
+    }
+
+    /// A 200 answer that isn't a filter list (empty, an HTML page, a handful of lines) counts as
+    /// failed and keeps the last good copy, so the next update retries it soon.
+    @Test func aBodyThatIsNotAListKeepsTheLastGoodCopy() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let updater = updater(["ads": ["steady", "flaky"]], minimumRules: 10)
+        func list(_ prefix: String) -> String { (1...12).map { "||\(prefix)-\($0).example^" }.joined(separator: "\n") }
+        StubLists.serve(list("steady"), at: url("steady"))
+        StubLists.serve(list("good"), at: url("flaky"))
+        try await updater.update(into: destination)
+        #expect(try manifest().failedLists == nil)
+        let goodCopy = try read("lists/flaky.txt")
+
+        for body in ["", "\n  \n! Title: empty\n", "\u{FEFF}  <!DOCTYPE html>\n<html><body>Sign in</body></html>", "||few-1.example^\n||few-2.example^"] {
+            StubLists.serve(body, at: url("flaky"))
+            try await updater.update(into: destination)
+            #expect(try manifest().failedLists == ["flaky"])
+            #expect(try read("lists/flaky.txt") == goodCopy)
+            let rules = try read("ads.json")
+            #expect(rules.contains("good-12") && rules.contains("steady-12") && !rules.contains("few-1") && !rules.contains("Sign in"))
+        }
+
+        // An HTML page behind an include fails the list too.
+        StubLists.serve("!#include \(url("portal").absoluteString)\n" + list("included"), at: url("flaky"))
+        StubLists.serve("<html><body>Sign in</body></html>", at: url("portal"))
+        try await updater.update(into: destination)
+        #expect(try manifest().failedLists == ["flaky"])
+        #expect(try read("lists/flaky.txt") == goodCopy)
     }
 
     /// Automatic updates after a failure wait longer each time, up to a day, instead of fetching every list each hour.

@@ -88,7 +88,8 @@ def convert(rules: list[str], output: Path) -> dict:
 
 def main() -> int:
     ensure_converter()
-    OUT.mkdir(parents=True, exist_ok=True)
+    # lists/ keeps each list as downloaded: the app's updater falls back to it when a list fails.
+    (OUT / "lists").mkdir(parents=True, exist_ok=True)
     cache: dict[str, list[str]] = {}
     # Format 2 (Manifest.currentFormat in the app): scriptlets.txt holds uBO's +js() filters.
     manifest = {"format": 2, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": {}}
@@ -100,10 +101,13 @@ def main() -> int:
             if name not in cache:
                 print(f"fetch {name}", file=sys.stderr)
                 cache[name] = expand(LISTS[name], set())
+                (OUT / "lists" / f"{name}.txt").write_text("\n".join(cache[name]))
             # uBO's +js() filters run with uBO's own scriptlets in the app (UBOScriptlets.swift), unconverted.
             is_scriptlet = lambda r: name.startswith("ubo-") and ("##+js(" in r or "#@#+js(" in r)
+            # Rules that run code in pages come only from uBO's own lists (FilterUpdater.isAllowed).
+            allowed = lambda r: name.startswith("ubo-") or not ("+js(" in r or "#%#" in r or "#@%#" in r)
             scriptlets += [r for r in cache[name] if is_scriptlet(r)]
-            rules += [r for r in cache[name] if not is_scriptlet(r)]
+            rules += [r for r in cache[name] if allowed(r) and not is_scriptlet(r)]
         rules = list(dict.fromkeys(rules))
         stats = convert(rules, OUT / f"{group}.json")
         advanced += (stats.get("advancedRulesText") or "").splitlines()

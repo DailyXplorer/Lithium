@@ -17,10 +17,20 @@ final class Privacy {
     /// Set by tests too, for a rule of their own.
     @ObservationIgnored var ruleLists: [WKContentRuleList] = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    /// The rule-list load queued last. Each load waits for the one before: two at once (Update
+    /// now during the launch load) would remove each other's compiled lists and engine build.
+    @ObservationIgnored private var lastLoad: Task<Void, Never>?
     @ObservationIgnored private var updateLoop: Task<Void, Never>?
     /// False when the loaded filters predate a change to FilterSources.json, such as a new group:
     /// they are then refreshed at once instead of when they turn a day old.
     @ObservationIgnored private var filtersMatchSources = true
+    /// False when a list failed to download or a group failed to compile: the filters are stale
+    /// until an update gets them all.
+    @ObservationIgnored private var filtersComplete = true
+    /// Automatic updates that failed in a row, and when the next may start: a list that stays
+    /// down is retried after 1, 2, 4… hours, up to a day, not with every other list each hour.
+    @ObservationIgnored private var failedUpdates = 0
+    @ObservationIgnored private var nextUpdate = Date.distantPast
     @ObservationIgnored private let farbling: WKUserScript
     /// Private tabs farble with keys of their own: nothing in them matches the same site in a normal tab.
     @ObservationIgnored private let privateFarbling: WKUserScript
@@ -60,6 +70,7 @@ final class Privacy {
     func start() {
         guard loadTask == nil else { return }
         loadTask = Task { await loadRuleLists() }
+        lastLoad = loadTask
         // scripts/test sets it: each test's Browser would download and convert the lists on its
         // own, and a dozen of them landing at once stalled a later test for two minutes.
         guard ProcessInfo.processInfo.environment["LITHIUM_NO_FILTER_UPDATES"] != "1" else { return }
@@ -82,9 +93,21 @@ final class Privacy {
 
     private func updateFiltersIfStale() async {
         guard !isUpdatingFilters,
-              !filtersMatchSources || Date().timeIntervalSince(filtersUpdated ?? .distantPast) > Self.updateInterval else { return }
+              Self.needsUpdate(updated: filtersUpdated, matchesSources: filtersMatchSources, complete: filtersComplete, notBefore: nextUpdate) else { return }
         isUpdatingFilters = true
         await updateFilters()
+    }
+
+    /// Whether the hourly check updates the filters: they are a day old, built from other
+    /// sources, or incomplete, and the wait after the last failed update is over.
+    static func needsUpdate(updated: Date?, matchesSources: Bool, complete: Bool, notBefore: Date, now: Date = Date()) -> Bool {
+        guard now >= notBefore else { return false }
+        return !matchesSources || !complete || now.timeIntervalSince(updated ?? .distantPast) > updateInterval
+    }
+
+    /// The wait before the next automatic update after `failures` failed ones in a row.
+    static func retryDelay(afterFailures failures: Int) -> TimeInterval {
+        min(60 * 60 * pow(2, Double(min(max(failures - 1, 0), 10))), updateInterval)
     }
 
     /// Runs with `isUpdatingFilters` set by the caller, and clears it when done.
@@ -92,13 +115,33 @@ final class Privacy {
         defer { isUpdatingFilters = false }
         guard let updater = FilterUpdater.bundled() else { return }
         let destination = Self.downloadedFilters
+        var updated = false
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try await Task.detached(priority: .utility) { try await updater.update(into: destination) }.value
-            await loadRuleLists()
+            await reloadRuleLists()
+            updated = filtersComplete
         } catch {
             NSLog("Lithium: filter update failed: %@", error.localizedDescription)
         }
+        if updated {
+            failedUpdates = 0
+            nextUpdate = .distantPast
+        } else {
+            failedUpdates += 1
+            nextUpdate = Date().addingTimeInterval(Self.retryDelay(afterFailures: failedUpdates))
+        }
+    }
+
+    /// Loads the current filters once every load queued before has finished.
+    private func reloadRuleLists() async {
+        let previous = lastLoad
+        let load = Task {
+            await previous?.value
+            await loadRuleLists()
+        }
+        lastLoad = load
+        await load.value
     }
 
     /// The newer of the lists shipped in the app and the last downloaded ones.
@@ -166,6 +209,14 @@ final class Privacy {
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }
 
+    /// The advanced rules for a frame of `page` showing `frame` (an embed, an ad, a consent
+    /// prompt), looked up for the frame's own site. The script goes to every frame and runs only
+    /// in frames of that host.
+    func frameScript(_ enabled: Bool, for frame: URL, in page: URL) -> WKUserScript? {
+        guard enabled, let source = advanced.script(for: frame, inFrameOf: page) else { return nil }
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+    }
+
     /// WebKit's Advanced Tracking and Fingerprinting Protection (Safari's private-browsing
     /// shield): engine-level canvas noise, window-sized `screen`, and link decoration filtering.
     /// Private API, so it is applied only when this WebKit build has it.
@@ -221,40 +272,68 @@ final class Privacy {
               let store = WKContentRuleListStore.default() else { return }
 
         let stamp = manifest.updated.filter(\.isNumber)
-        var lists: [WKContentRuleList] = []
-        var current: Set<String> = []
-        for group in manifest.groups.keys.sorted() {
-            let identifier = "lithium-\(group)-\(stamp)-p\(Self.preparation)"
-            current.insert(identifier)
-            if let cached = try? await store.contentRuleList(forIdentifier: identifier) {
-                lists.append(cached)
-                continue
-            }
-            // Reading and rewriting ten megabytes of JSON happens off the main thread.
-            let file = folder.appending(path: "\(group).json")
-            guard let json = await Task.detached(priority: .utility, operation: { Self.prepared(file) }).value else { continue }
-            do {
-                if let compiled = try await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) {
-                    lists.append(compiled)
-                }
-            } catch {
-                NSLog("Lithium: failed to compile %@ filters: %@", group, error.localizedDescription)
-            }
-        }
-
-        for identifier in await store.availableIdentifiers() ?? [] where identifier.hasPrefix("lithium-") && !current.contains(identifier) {
-            try? await store.removeContentRuleList(forIdentifier: identifier)
-        }
-
-        ruleLists = lists
-        ruleCount = manifest.groups.values.reduce(0) { $0 + $1.webkitRules } + (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0)
+        let groups = await Self.loadGroups(from: folder, manifest: manifest, into: store)
+        ruleLists = groups.lists
+        ruleCount = groups.ruleCount + (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0)
         filtersUpdated = manifest.date
         filtersMatchSources = FilterUpdater.bundled()?.sources.built(manifest) ?? true
+        filtersComplete = groups.complete && (manifest.failedLists ?? []).isEmpty
         generation += 1
 
         // Awaited, so pages also wait for the in-page engine (waitUntilReady). Without it, the tab
         // restored at launch loads without uBO's scriptlets while the engine builds, and plays ads.
         // A later rebuild swaps the new engine in without making pages wait.
         await advanced.load(folder: folder, stamp: stamp)
+    }
+
+    /// Each group's compiled list, compiled now if this filter set is new, then removes the lists
+    /// no group uses any more. A group that fails to compile keeps the list compiled from an
+    /// earlier set, still loaded, but isn't counted, and makes the set incomplete so it is tried again.
+    static func loadGroups(from folder: URL, manifest: Manifest, into store: WKContentRuleListStore) async
+        -> (lists: [WKContentRuleList], ruleCount: Int, complete: Bool) {
+        let stamp = manifest.updated.filter(\.isNumber)
+        let available = await store.availableIdentifiers() ?? []
+        var lists: [WKContentRuleList] = []
+        var kept: Set<String> = []
+        var ruleCount = 0
+        var complete = true
+        for group in manifest.groups.keys.sorted() {
+            let identifier = "lithium-\(group)-\(stamp)-p\(Self.preparation)"
+            if let list = await compiled(group, identifier: identifier, folder: folder, store: store) {
+                lists.append(list)
+                kept.insert(identifier)
+                ruleCount += manifest.groups[group]?.webkitRules ?? 0
+                continue
+            }
+            complete = false
+            let previous = available
+                .filter { $0.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) } == group }
+                .max { $0.filter(\.isNumber) < $1.filter(\.isNumber) }
+            if let previous, let list = try? await store.contentRuleList(forIdentifier: previous) {
+                lists.append(list)
+                kept.insert(previous)
+            }
+        }
+
+        for identifier in available where identifier.hasPrefix("lithium-") && !kept.contains(identifier) {
+            try? await store.removeContentRuleList(forIdentifier: identifier)
+        }
+        return (lists, ruleCount, complete)
+    }
+
+    private static func compiled(_ group: String, identifier: String, folder: URL, store: WKContentRuleListStore) async -> WKContentRuleList? {
+        if let cached = try? await store.contentRuleList(forIdentifier: identifier) { return cached }
+        // Reading and rewriting ten megabytes of JSON happens off the main thread.
+        let file = folder.appending(path: "\(group).json")
+        guard let json = await Task.detached(priority: .utility, operation: { Self.prepared(file) }).value else {
+            NSLog("Lithium: failed to read %@ filters", group)
+            return nil
+        }
+        do {
+            return try await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json)
+        } catch {
+            NSLog("Lithium: failed to compile %@ filters: %@", group, error.localizedDescription)
+            return nil
+        }
     }
 }

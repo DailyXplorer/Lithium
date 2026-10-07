@@ -138,7 +138,7 @@ final class Browser {
     /// A pass runs in one go on the main actor: nothing can change a tab between its check
     /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
     /// window) and the page that opened it talk to each other, so neither sleeps while both
-    /// are open, unless memory is critical.
+    /// are open, unless memory is critical. Nor does a page holding the user's unsaved input.
     private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool = { _ in true }) {
         tabs.forEach { $0.noteSound() }
         for tab in tabsThatCanSleep(idleFor: interval, sparingPopups: sparingPopups, among: candidates) {
@@ -160,6 +160,7 @@ final class Browser {
         return tabs.filter { tab in
             candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
                 && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
+                && !(sparingPopups && tab.hasUnsavedInput)
                 && tab.canSleep(idleFor: interval)
         }
     }
@@ -200,8 +201,8 @@ final class Browser {
     }
 
     /// The rest of the tab list sleeps now, sparing what any sleep pass spares: the tab shown, a
-    /// tab playing sound, in a call or loading, a popup and its opener. Favorites' pages and the
-    /// Agent group are left alone.
+    /// tab playing sound, in a call or loading, a popup and its opener, a page with unsaved
+    /// input. Favorites' pages and the Agent group are left alone.
     func sleepOtherTabs(than tab: Tab) {
         sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
     }

@@ -538,7 +538,8 @@ final class Browser {
         }
         // In split view the other side fills the window.
         let partner = leaveSplit(tab)
-        if tab.id == selectedTabID {
+        let wasSelected = tab.id == selectedTabID
+        if wasSelected {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
@@ -558,6 +559,8 @@ final class Browser {
         tab.tearDown()
         tabs.remove(at: index)
         extensions.didClose(tab)
+        // Extensions would otherwise go on taking the closed tab for the active one.
+        if wasSelected, let selectedTab { extensions.didActivate(selectedTab, previous: nil) }
         dropPrivateData(of: tab)
     }
 

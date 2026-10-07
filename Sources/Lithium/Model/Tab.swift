@@ -122,6 +122,10 @@ final class Tab: NSObject, Identifiable {
     private(set) var loadError: NSError?
     var connection: SiteInfo.Connection { SiteInfo.Connection(url: url, loadError: loadError) }
     @ObservationIgnored private var lastCrashReload: Date?
+    /// The address last loaded without its tracking parameters, until another page commits. A
+    /// server sending it back with them (a redirect) is let through, rather than stripped and
+    /// reloaded forever.
+    @ObservationIgnored private var strippedURL: URL?
     /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
     @ObservationIgnored private var hasInternalBridge = false
@@ -252,6 +256,8 @@ final class Tab: NSObject, Identifiable {
         addressAfterWaking = nil
         // A page the user sends elsewhere is no longer what its popup was talking to.
         unpair()
+        // An address the user or the app sends the tab to loads without tracking parameters again.
+        strippedURL = nil
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -798,14 +804,20 @@ extension Tab: WKNavigationDelegate {
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
             // Websites may not open Lithium's pages; only the app or another Lithium page can.
-            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme else {
+            // Back, Forward and Reload only return to one the tab already showed: a website can't
+            // put Lithium's pages in the history.
+            let isRevisit = [.backForward, .reload].contains(action.navigationType)
+            guard isMainFrame, url == trustedInternalURL || source == Internal.scheme || isRevisit else {
                 if isMainFrame { endedUnshown(.refused(scheme: Internal.scheme)) }
                 return (.cancel, preferences)
             }
+            // A new tab's page is set up by that tab's own decision, not in this one.
+            guard action.targetFrame != nil else { return (.allow, preferences) }
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
             browser?.agent?.removeConsole(from: webView.configuration.userContentController)
             setWebstoreBridge(false)
+            // Before the page's first script asks for it; taken away only once another page commits.
             setInternalBridge(true)
             return (.allow, preferences)
         }
@@ -827,18 +839,24 @@ extension Tab: WKNavigationDelegate {
             }
             return (.cancel, preferences)
         }
+        // A link or script opening a new tab (target=_blank, window.open): WebKit asks the opener
+        // first, then makes the tab in `createWebViewWith`, whose page then decides for itself.
+        // Nothing here is this page's to change.
+        guard action.targetFrame != nil else { return (.allow, preferences) }
         // An extension's page sending its tab to a website (1Password's Sign In button) goes on
         // in a new web view. Only that way round: a website may not open an extension's pages.
         if ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
             Task { self.load(action.request) }
             return (.cancel, preferences)
         }
-        setInternalBridge(false)
         setWebstoreBridge(ChromeWebStore.isStore(url))
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
-        if action.request.httpMethod == "GET", let clean = TrackingParameters.stripped(url) {
+        // A site the user turned protections off for keeps its parameters too.
+        if browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
+           let clean = TrackingParameters.stripped(url), clean != strippedURL {
+            strippedURL = clean
             Task { webView.load(URLRequest(url: clean)) }
             return (.cancel, preferences)
         }
@@ -916,6 +934,11 @@ extension Tab: WKNavigationDelegate {
         hasShownPage = true
         awaitCommit(false)
         if navigation !== errorNavigation { loadError = nil }
+        // Another page showing ends the redirect a stripped address guards against: a later link
+        // to the same tracked address (after Back, say) is stripped again.
+        if webView.url != strippedURL { strippedURL = nil }
+        // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.
+        setInternalBridge(Internal.isInternal(webView.url))
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.
         if !goToAddressAfterWaking() { commits += 1 }

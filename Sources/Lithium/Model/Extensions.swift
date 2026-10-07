@@ -105,7 +105,11 @@ final class Extensions: NSObject {
         guard contexts[entry.id] == nil else { return }
         do {
             try await unpackIfNeeded(entry.id)
-            try activate(try await open(entry.id), id: entry.id)
+            let webExtension = try await open(entry.id)
+            // Turned off, removed or loaded by another call while it was opening: the settings
+            // page doesn't wait for one call before sending the next.
+            guard installed.first(where: { $0.id == entry.id })?.isEnabled == true, contexts[entry.id] == nil else { return }
+            try activate(webExtension, id: entry.id)
         } catch {
             NSLog("Lithium: couldn’t load extension %@: %@", entry.id, error.localizedDescription)
         }

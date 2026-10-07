@@ -866,8 +866,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
-        // A site the user turned protections off for keeps its parameters too.
-        if browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
+        // A site the user turned protections off for keeps its parameters too. Back, Forward and
+        // Reload return to an entry the history already has: cancelled for a new load, they would
+        // drop the forward list and keep the user from going back past that page.
+        if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
+           browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             Task { webView.load(URLRequest(url: clean)) }

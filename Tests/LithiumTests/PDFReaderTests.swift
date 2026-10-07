@@ -79,6 +79,26 @@ extension BrowserTests {
         #expect(await waitForPDF(30) { local.webView.title == "Neighbour" })
     }
 
+    /// A PDF's link to another app asks first, as a page's does; with no site to name, "Always
+    /// allow" isn't offered.
+    @Test func aPDFsAppLinkAsksFirst() async throws {
+        let file = try makePDF(title: "App link", pages: ["Here"])
+        let browser = Browser()
+        browser.appLinks.appOpening = { _ in URL(fileURLWithPath: "/Applications/Example.app") }
+        let tab = browser.newTab(url: URL(string: "data:application/pdf;base64,\(try Data(contentsOf: file).base64EncodedString())")!)
+        defer { browser.close(tab) }
+        #expect(await waitForPDF(30) { tab.pdf?.pageCount == 1 })
+        let before = ExternalApps.recorded
+        let link = URL(string: "lithium-test:open")!
+        tab.pdf?.onOpenLink?(link, false)
+        #expect(await waitForPDF(5) { browser.appLinks.pending.contains { $0.tabID == tab.id } })
+        let request = try #require(browser.appLinks.pending.first)
+        #expect(request.url == link)
+        #expect(!request.canRemember)
+        #expect(ExternalApps.recorded == before)
+        browser.appLinks.cancel(tabID: tab.id)
+    }
+
     /// A page restored from the back-forward cache never gets a navigation response; it still shows in the viewer.
     @Test func leavingAndComingBackToAPDF() async throws {
         let file = try makePDF(title: "Menu", pages: ["Soup"])

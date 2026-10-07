@@ -41,6 +41,7 @@ final class Browser {
     let find = FindInPage()
     let suggestions = AddressSuggestions()
     let permissions = SitePermissions()
+    let appLinks = AppLinks()
     let tidyTitles = TidyTitles()
     let summaries = PageSummaries()
     let extensions = Extensions()
@@ -349,6 +350,12 @@ final class Browser {
             permissions.dismiss(request)
             return true
         }
+        // Likewise "Open <App>?", cancelled.
+        if agent?.confirmations.front(selected: selectedTabID) == nil,
+           let request = appLinks.pending.first(where: { $0.tabID == selectedTabID }) {
+            appLinks.answer(request, open: false)
+            return true
+        }
         return false
     }
 
@@ -577,6 +584,7 @@ final class Browser {
         tab.dialogOwner?.answerDialog(in: tab)
         agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
+        appLinks.cancel(tabID: tab.id)
         summaries.discard(tab)
         tab.tearDown()
         tabs.remove(at: index)

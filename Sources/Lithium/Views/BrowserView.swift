@@ -99,6 +99,11 @@ struct ContentCard: View {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            if let request = browser.appLinks.pending.first(where: { $0.tabID == tab?.id }) {
+                AppLinkPrompt(request: request)
+                    .id(request.id)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             Group {
                 if let tab, let split = browser.split(of: tab) {
                     SplitPages(split: split)
@@ -148,6 +153,7 @@ struct ContentCard: View {
             }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
+        .animation(.snappy(duration: 0.2), value: browser.appLinks.pending)
         .animation(.snappy(duration: 0.2), value: browser.agent?.confirmations.pending)
         .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

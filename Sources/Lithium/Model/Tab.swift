@@ -95,6 +95,8 @@ final class Tab: NSObject, Identifiable {
     private(set) var faviconData: Data?
     private(set) var isLoading = false
     private(set) var progress = 0.0
+    /// The web view's `pageZoom`, which it keeps across this tab's pages.
+    private(set) var zoom = 1.0
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     /// Set while the page is a PDF, which Lithium draws with its own viewer.
@@ -481,6 +483,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
+        zoom = 1
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -529,6 +532,9 @@ final class Tab: NSObject, Identifiable {
             },
             webView.observe(\.estimatedProgress) { [weak self] webView, _ in
                 MainActor.assumeIsolated { self?.progress = webView.estimatedProgress }
+            },
+            webView.observe(\.pageZoom, options: .initial) { [weak self] webView, _ in
+                MainActor.assumeIsolated { self?.zoom = webView.pageZoom }
             },
             webView.observe(\.canGoBack) { [weak self] webView, _ in
                 MainActor.assumeIsolated { self?.canGoBack = webView.canGoBack }

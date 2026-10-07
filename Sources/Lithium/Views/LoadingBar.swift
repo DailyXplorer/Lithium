@@ -1,20 +1,54 @@
 import SwiftUI
 
+/// What the loading bar shows of a tab's load. Progress only moves forward within a load; at
+/// the end it runs to 100 %, and the bar stays until its exit animation is over.
+struct LoadingProgress: Equatable {
+    enum Phase { case idle, loading, finishing }
+
+    private(set) var phase = Phase.idle
+    private(set) var value = 0.0
+    /// Counts loads, so the exit of one never ends the next.
+    private(set) var generation = 0
+
+    static let minimumVisible = 0.05
+
+    var isVisible: Bool { phase != .idle }
+
+    mutating func update(isLoading: Bool, progress: Double) {
+        if isLoading {
+            if phase != .loading {
+                phase = .loading
+                generation += 1
+                value = max(progress, Self.minimumVisible)
+            } else if progress > value {
+                value = progress
+            }
+        } else if phase == .loading {
+            phase = .finishing
+            value = 1
+        }
+    }
+
+    /// The exit animation of load `generation` is over; a load that started meanwhile keeps
+    /// the bar, even if it is already finishing too.
+    mutating func finish(generation: Int) {
+        guard phase == .finishing, generation == self.generation else { return }
+        phase = .idle
+        value = 0
+    }
+}
+
 /// Page-load progress along the bottom edge of the address bar, after Helium's design
-/// (imputnet/helium#2463): a thin line with a pulsing glowing head. Progress only moves
-/// forward within a load; at the end it runs to 100 %, then sweeps away left to right.
+/// (imputnet/helium#2463): a thin line with a pulsing glowing head, driven by the web view's
+/// `estimatedProgress`. At the end it sweeps away left to right, or with Reduce Motion, fades.
 struct LoadingBar: View {
     let tab: Tab
 
-    private enum Phase { case idle, loading, finishing }
-
-    @State private var phase = Phase.idle
-    @State private var displayed = 0.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var load = LoadingProgress()
     @State private var fade = 1.0
     @State private var pulse = 0.5
-    @State private var finishTask: Task<Void, Never>?
 
-    private static let minimumVisible = 0.05
     private static let step = Animation.easeOut(duration: 0.18)
     private static let fadeOut = Animation.easeOut(duration: 0.32)
     private static let headWidth: CGFloat = 280
@@ -23,8 +57,8 @@ struct LoadingBar: View {
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
-            let head = width * displayed
-            let exit = 1 - fade
+            let head = width * load.value
+            let exit = reduceMotion ? 0 : 1 - fade
             let glowHead = head + exit * Self.headWidth
             let glowStart = max(0, glowHead - Self.headWidth)
             let glowOpacity = fade * (0.5 + 0.38 * pulse)
@@ -60,14 +94,11 @@ struct LoadingBar: View {
             }
             .frame(width: width, height: proxy.size.height, alignment: .bottomLeading)
         }
-        .opacity(phase == .idle ? 0 : 1)
+        .opacity(load.isVisible ? (reduceMotion ? fade : 1) : 0)
         .allowsHitTesting(false)
         .onAppear { sync() }
         .onChange(of: tab.isLoading) { sync() }
-        .onChange(of: tab.progress) {
-            guard phase == .loading, tab.progress > displayed else { return }
-            withAnimation(Self.step) { displayed = tab.progress }
-        }
+        .onChange(of: tab.progress) { sync() }
     }
 
     private func glow(width: CGFloat, opacity: Double) -> some View {
@@ -85,27 +116,32 @@ struct LoadingBar: View {
     }
 
     private func sync() {
-        if tab.isLoading, tab.url?.scheme?.hasPrefix("http") == true {
-            guard phase != .loading else { return }
-            finishTask?.cancel()
-            phase = .loading
-            displayed = 0
+        var next = load
+        next.update(isLoading: tab.isLoading && tab.url?.scheme?.hasPrefix("http") == true, progress: tab.progress)
+        guard next != load else { return }
+        let starting = load.phase != .loading && next.phase == .loading
+        if starting {
+            load = LoadingProgress()
             fade = 1
-            pulse = 0
-            withAnimation(Self.step) { displayed = max(tab.progress, Self.minimumVisible) }
-            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = 1 }
-        } else if phase == .loading {
-            phase = .finishing
-            withAnimation(Self.step) { displayed = 1 }
-            finishTask = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(180))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.2)) { pulse = 0.5 }
-                withAnimation(Self.fadeOut) { fade = 0 }
-                try? await Task.sleep(for: .milliseconds(340))
-                guard !Task.isCancelled, phase == .finishing else { return }
-                phase = .idle
+            pulse = reduceMotion ? 0.5 : 0
+        }
+        if next.phase == .finishing {
+            // The exit chains off the run to 100 %, so no timer outlives the load.
+            withAnimation(Self.step) { load = next } completion: {
+                if load.phase == .finishing, load.generation == next.generation { exit(next.generation) }
             }
+        } else {
+            withAnimation(Self.step) { load = next }
+        }
+        if starting, !reduceMotion {
+            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = 1 }
+        }
+    }
+
+    private func exit(_ generation: Int) {
+        withAnimation(.easeOut(duration: 0.2)) { pulse = 0.5 }
+        withAnimation(Self.fadeOut) { fade = 0 } completion: {
+            load.finish(generation: generation)
         }
     }
 }

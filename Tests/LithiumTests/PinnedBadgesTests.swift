@@ -29,6 +29,11 @@ struct PinnedBadges {
         ("", nil),
         ("   ", nil),
         ("(-3) Inbox", nil),
+        // Int.max and one more would overflow.
+        ("(9223372036854775807+) Inbox", 1_000_000),
+        ("Inbox (9,223,372,036,854,775,807+) - Gmail", 1_000_000),
+        ("(9223372036854775807) Inbox", 9_223_372_036_854_775_807),
+        ("(99999999999999999999+) Inbox", nil),
     ] as [(String, Int?)])
     func titleCount(title: String, expected: Int?) {
         #expect(UnreadBadge.count(inTitle: title) == expected)

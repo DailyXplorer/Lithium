@@ -81,6 +81,8 @@ struct UnreadBadge: Equatable {
             found = nil
         }
         guard let found, let count = Int(found.digits.filter { $0 != "," }), count > 0 else { return nil }
-        return found.more.isEmpty ? count : count + 1
+        // The first two patterns take any number of digits: "(9223372036854775807+)" is Int.max,
+        // which can't take one more.
+        return found.more.isEmpty ? count : min(count, 999_999) + 1
     }
 }

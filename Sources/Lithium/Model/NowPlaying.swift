@@ -216,8 +216,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     /// WebKit started or stopped hearing the tab (Safari's speaker icon). Heard, the iframe that
     /// said so first takes the player, and the tab heard before pauses if the page reported too
-    /// early for it. A page that holds no player then is asked what it plays: its sound may come
-    /// from no media element (Web Audio). Silent, a sound shown that way shows paused.
+    /// early for it. A page is then asked what it plays, whether it holds the player or not: its
+    /// sound may come from no media element (Web Audio). Silent, a sound shown that way shows paused.
     func hearingChanged(_ tab: Tab) {
         guard browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
         guard isHeard(tab) == true else {
@@ -228,6 +228,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             receive(waiting.media, from: tab, frame: waiting.frame)
         } else if tab === self.tab, let reported, let frame {
             receive(reported, from: tab, frame: frame)
+            // A sound shown paused when it went silent plays again (Web Audio resumed).
+            if !frame.isSubframe { tell(tab, "heard", nil) }
         } else {
             tell(tab, "heard", nil)
         }

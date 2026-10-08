@@ -164,7 +164,7 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var readerRecheck: Task<Void, Never>?
 
     @ObservationIgnored private weak var browser: Browser?
-    @ObservationIgnored private var observations: [NSObject] = []
+    @ObservationIgnored private(set) var observations: [NSObject] = []
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
     /// The address the page's scripts were last set up for (nil: none, as on Lithium's pages), and
     /// what it was when the shown page committed: see `restoreProtections`.

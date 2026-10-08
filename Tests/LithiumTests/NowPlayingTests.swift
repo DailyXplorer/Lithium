@@ -423,23 +423,53 @@ struct NowPlayingBrowserTests {
         player.hearingChanged(tab)
         #expect(told == ["heard"])
         player.receive(playing, from: tab, frame: NowPlaying.Frame(id: "page"))
-        player.hearingChanged(tab)
-        #expect(told == ["heard"], "it holds the player")
         heard = false
         player.hearingChanged(tab)
         #expect(told == ["heard", "silent"])
-
         heard = true
+        player.hearingChanged(tab)
+        #expect(told == ["heard", "silent", "heard"], "it holds the player, shown paused since silent")
+        told = []
+
         player.receive(playing, from: tab, frame: NowPlaying.Frame(id: "embed", isSubframe: true))
         player.hearingChanged(tab)
         heard = false
         player.hearingChanged(tab)
-        #expect(player.tab === tab && told == ["heard", "silent"], "an iframe reports its own media")
+        #expect(player.tab === tab && told.isEmpty, "an iframe reports its own media")
 
         tab.sleep(configuration: browser.makeConfiguration())
         heard = true
         player.hearingChanged(tab)
-        #expect(told == ["heard", "silent"], "asleep")
+        #expect(told.isEmpty, "asleep")
+    }
+
+    /// A tab restored asleep, then woken, is heard in its new web view; an iframe report from
+    /// before it slept is not taken.
+    @Test func hearsATabWokenFromSleep() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.tell = { _, _, _ in }
+        var heard = false
+        player.isHeard = { _ in heard }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Song"], at: Date())
+        let embed = NowPlaying.Frame(id: "embed", isSubframe: true)
+
+        player.receive(playing, from: tab, frame: embed)
+        tab.sleep(configuration: browser.makeConfiguration())
+        tab.load(URL(string: "about:blank")!)
+        #expect(!tab.isAsleep)
+        #expect(tab.observations.contains { $0 is Hearing }, "the new web view is heard")
+        heard = true
+        player.hearingChanged(tab)
+        #expect(player.tab == nil, "a report from before it slept")
+
+        heard = false
+        player.receive(playing, from: tab, frame: embed)
+        #expect(player.tab == nil)
+        heard = true
+        player.hearingChanged(tab)
+        #expect(player.tab === tab && player.media?.title == "Song")
     }
 
     @Test func pausesNothingForMediaNotHeard() {
@@ -895,6 +925,8 @@ struct NowPlayingPageTests {
         #expect(page.last?.artist == "Tone" && page.last?.isAudible == true && page.last?.duration == nil)
         await NowPlaying.run("silent", in: page.webView)
         #expect(await waitUntil { page.last?.isPaused == true })
+        await NowPlaying.run("heard", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == false }, "plays again")
     }
 
     /// A page that replaced its timers still reports.

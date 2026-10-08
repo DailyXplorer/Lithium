@@ -891,6 +891,8 @@ extension Tab: WKNavigationDelegate {
     ) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         guard let url = action.request.url else { return (.cancel, preferences) }
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
+        // Asked once, and only when needed: the answer uses the press up.
+        lazy var pressed = isPressed(action, in: webView)
         // Only the first decision after an extension sent a sleeping tab on can be its old page's
         // load, started first; whatever it is, the next ones (the new address's redirects, a
         // Reload after a download) go through.
@@ -910,12 +912,12 @@ extension Tab: WKNavigationDelegate {
             }
             // A frame's `<a download>` asks first, as its attachments do (see the response policy),
             // whichever frame it names; so does the page's own when no press started it.
-            if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true, Self.isPressed(action, in: webView) { return (.download, preferences) }
+            if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true, pressed { return (.download, preferences) }
             return (await askToDownload() ? .download : .cancel, preferences)
         }
         if isMainFrame, action.targetFrame != nil, !Self.isRedirect(action) {
             // Not every Back or Reload: a page's own `history.go(0)` comes as one too.
-            loadWasRequested = appStartedLoad || Self.isPressed(action, in: webView)
+            loadWasRequested = appStartedLoad || pressed
             appStartedLoad = false
         }
 
@@ -923,7 +925,7 @@ extension Tab: WKNavigationDelegate {
             // Only the user's own click hands an address to another app, never an agent's, nor a
             // script's `click()`: that does nothing. The site whose frame has the link (an ad's,
             // say) is the one asking.
-            if action.navigationType == .linkActivated, Self.isPressed(action, in: webView), (webView as? PageWebView)?.agentPressedLast != true {
+            if action.navigationType == .linkActivated, pressed, (webView as? PageWebView)?.agentPressedLast != true {
                 let host = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.host ?? shownHost ?? ""
                 openInApp(url, from: host)
             }
@@ -978,7 +980,7 @@ extension Tab: WKNavigationDelegate {
         // `MouseEvent` with `metaKey`) follows it here too, as in WebKit: a new tab of Lithium's
         // would get around the popup blocker.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil,
-           Self.isPressed(action, in: webView) {
+           pressed {
             if await browser?.agent?.open(url, from: self) != true {
                 browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore, openedFrom: self)
             }
@@ -1002,7 +1004,7 @@ extension Tab: WKNavigationDelegate {
 
         // A link or form the user pressed is a new load, not the page bouncing back to its tracked
         // address: stripped again, even on the stripped address it landed on.
-        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), Self.isPressed(action, in: webView) {
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), pressed {
             strippedURL = nil
         }
         // A site the user turned protections off for keeps its parameters too. Back, Forward and
@@ -1201,10 +1203,18 @@ extension Tab: WKNavigationDelegate {
 
     /// A real press (the user's or `NativeInput`'s) started this navigation, not a script on its
     /// own: WebKit's user gesture (private `WKNavigationAction._isUserInitiated`), or a press in
-    /// the page just before, for a redirect or a WebKit without it.
-    private static func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
-        if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true { return true }
-        return (webView as? PageWebView)?.pressedRecently == true
+    /// the page just before, for a frame's redirect or a WebKit without it. Either uses the press
+    /// up; a redirect of the page's own load keeps whatever started that load.
+    private func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
+        let page = webView as? PageWebView
+        if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true {
+            page?.usePress()
+            return true
+        }
+        if Self.isRedirect(action), action.targetFrame?.isMainFrame == true { return loadWasRequested }
+        guard page?.pressedRecently == true else { return false }
+        page?.usePress()
+        return true
     }
 
     /// Another app's address, from a click in this tab's page or PDF: asked first (`AppLinks`).

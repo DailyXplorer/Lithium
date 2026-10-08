@@ -40,6 +40,10 @@ final class PageWebView: WKWebView {
         lastPress.map { .now - $0 < .seconds(1) } ?? false
     }
 
+    /// The press is used up by the navigation it allowed: it can't also let the page that link
+    /// opened, or a second download or app link, through without a press of its own.
+    func usePress() { lastPress = nil }
+
     /// The page's own undo stack. WebKit records its edits with the view's undo manager, else
     /// the window's: shared with the address bar, and in the stage with every page an agent
     /// acts in, where one page's Undo would undo another's typing.

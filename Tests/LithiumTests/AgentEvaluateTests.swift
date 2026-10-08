@@ -297,14 +297,16 @@ struct AgentEvaluateTests {
     }
 
     /// A script that fills a password, then keeps the page busy past the after-run read, leaves
-    /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed.
+    /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed. The
+    /// password is split in the function, which Lithium can't mask either, so the day's log the
+    /// last test reads never holds it whole, whichever runs first.
     @Test func aResultLithiumCantCheckIsWithheld() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
             let busy = await evaluate(client, id, """
                 () => {
                   const pw = document.querySelector('#pw');
-                  pw.value = ['\(Self.password)'].join('');
+                  pw.value = ['\(Self.password.prefix(3))', '\(Self.password.dropFirst(3))'].join('');
                   setTimeout(() => { const end = Date.now() + 3000; while (Date.now() < end) {} });
                   return pw.value;
                 }
@@ -432,7 +434,7 @@ struct AgentEvaluateTests {
             let result = await evaluate(client, id, function, ["world": "page"])
             #expect(result.code == "blocked", "\(result.content)")
             let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
-            #expect(!log.contains(Self.password))
+            #expect(!log.contains(Self.password), "\(log.split(separator: "\n").filter { $0.contains(Self.password) })")
             let line = try #require(log.split(separator: "\n").last { $0.contains("\"evaluate\"") }.map { try JSONValue.decode(Data($0.utf8)) })
             let logged = try #require(line["params"]?["function"]?.string)
             #expect(logged.hasPrefix("() => '[redacted]' === document.title"), "\(logged)")

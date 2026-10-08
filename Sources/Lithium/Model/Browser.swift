@@ -251,11 +251,12 @@ final class Browser {
 
     func openAgentLog() { openInternal(Internal.agentsURL) }
 
-    /// Settings › Agents. Off by default; the choice outlives the app.
-    func setAgentAccess(_ enabled: Bool) async {
+    /// Settings › Agents. Off by default; the choice outlives the app. `folder` holds the endpoint
+    /// file and the log: a test gives its own, so another test's calls can't land in the log it reads.
+    func setAgentAccess(_ enabled: Bool, folder: URL = AgentFiles.folder) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
-            let hub = AgentHub(browser: self, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools + AgentHub.parityTools + AgentHub.networkTools + AgentHub.evaluateTools + AgentHub.batchTools)
+            let hub = AgentHub(browser: self, folder: folder, tools: AgentHub.tabTools + AgentHub.readTools + AgentHub.dialogTools + AgentHub.inputTools + AgentHub.parityTools + AgentHub.networkTools + AgentHub.evaluateTools + AgentHub.batchTools)
             agent = hub
             await hub.start()
         } else if !enabled, let hub = agent {

@@ -117,6 +117,49 @@ struct TidyTitlesTabsTests {
         #expect(model.asked == [title], "asked once for both tabs")
     }
 
+    /// A long title that keeps changing while the model answers (a live count) asks one title at
+    /// a time; titles gone by the model's turn are dropped, and the one shown is asked.
+    @Test func titlesGoneByTheirTurnNeverReachTheModel() async throws {
+        let first = "Live match commentary and every score update from the stadium tonight"
+        let page = (headers: "Content-Type: text/html", body: "<title>\(first)</title><p>Page</p>")
+        let (listener, base) = try await LocalHTTP.serve(["/live": page])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            while !model.answers { try? await Task.sleep(for: .milliseconds(20)) }
+            return .title("Live match")
+        }
+        defer { model.answers = true }
+
+        let tab = browser.newTab(url: base.appending(path: "live"))
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.title == first })
+        #expect(await waitUntil(10) { model.asked == [first] })
+
+        // Each a new long title while the first is still answered, each held past the settling
+        // delay: only the wait for the request before it keeps it from the model.
+        var last = first
+        for minute in 1...5 {
+            last = "Live match commentary at minute \(minute) with every score update from the stadium"
+            _ = try await tab.webView.evaluateJavaScript("document.title = '\(last)'")
+            #expect(await waitUntil(5) { tab.title == last })
+            try await Task.sleep(for: .seconds(1))
+        }
+        #expect(model.asked == [first], "one title at a time")
+        model.answers = true
+
+        #expect(await waitUntil(10) { model.asked.count == 2 })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.asked == [first, last], "the titles in between were dropped")
+        #expect(await waitUntil(10) { tab.tidyTitle == "Live match" })
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

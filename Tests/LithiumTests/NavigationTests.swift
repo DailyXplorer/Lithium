@@ -82,6 +82,30 @@ struct NavigationTests {
         #expect(requests["/c"] == 1)
     }
 
+    /// Changed from a private tab, protections reload that private session's tabs of the site
+    /// only: a normal tab of the site keeps the saved setting and is left alone.
+    @Test func privateProtectionsChangeReloadsOnlyItsSessionsTabs() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/a": ("Content-Type: text/html", Data("<title>A</title>".utf8)),
+            "/b": ("Content-Type: text/html", Data("<title>B</title>".utf8)),
+            "/c": ("Content-Type: text/html", Data("<title>C</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let a = browser.newTab(url: base.appending(path: "a"), privateStore: .nonPersistent())
+        let b = browser.newTab(url: base.appending(path: "b"), selecting: false, privateStore: a.privateStore)
+        let c = browser.newTab(url: base.appending(path: "c"), selecting: false)
+        #expect(await waitUntil(30) { a.webView.title == "A" && b.webView.title == "B" && c.webView.title == "C" })
+
+        browser.setProtections(false, for: a)
+        #expect(await waitUntil(15) { requests["/a"] == 2 && requests["/b"] == 2 })
+        #expect(!browser.privacy.isEnabled(for: b.url, privateSession: b.privateSession))
+        #expect(browser.privacy.isEnabled(for: c.url), "nothing saved")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests["/c"] == 1)
+    }
+
     /// A server that sends the address back with its tracking parameters gets them: the tab
     /// strips them once, not in an endless loop of loads.
     @Test func aServerAddingTheParametersBackIsNotLoopedOn() async throws {

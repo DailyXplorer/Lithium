@@ -260,8 +260,11 @@ final class Browser {
     }
 
     func setProtections(_ enabled: Bool, for tab: Tab?) {
-        guard let host = Privacy.siteHost(tab?.url) else { return }
-        setProtections(enabled, host: host)
+        guard let tab, let host = Privacy.siteHost(tab.url) else { return }
+        guard let session = tab.privateSession else { return setProtections(enabled, host: host) }
+        // A private tab's choice holds for its private session only, and so do the reloads.
+        privacy.setEnabled(enabled, for: tab.url, privateSession: session)
+        tabs.filter { !$0.isAsleep && $0.privateSession == session && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
 
     /// Reloads every open page of the site, not just the one the user changed it from, so their
@@ -338,10 +341,15 @@ final class Browser {
         }
         if renamingTabID != nil {
             renamingTabID = nil
+            // The name field, when a field has it: Escape comes here only for find's or that one.
+            let nameHadKeyboard = (selectedTab?.contentView.window?.firstResponder as? NSTextView)?.isFieldEditor == true
+            returnKeyboardToPage(fieldHadKeyboard: nameHadKeyboard && !find.isFieldFocused)
             return true
         }
         if find.isVisible {
+            let hadKeyboard = find.isFieldFocused
             find.hide()
+            returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
             return true
         }
         // Opened with ⇧⌘S, the popover never takes the keyboard, so Escape reaches the window.
@@ -363,6 +371,14 @@ final class Browser {
             return true
         }
         return false
+    }
+
+    /// Hands the keyboard back to the page shown once a field of Lithium's own closes (the find
+    /// bar, a tab's name), as ⌘F does: the field leaving would leave it on the window, where keys
+    /// beep. Unless that field had it, a field still editing (the address bar) keeps it.
+    func returnKeyboardToPage(fieldHadKeyboard: Bool) {
+        guard let page = selectedTab?.contentView, let window = page.window else { return }
+        if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
 
     func toggleSidebar() {
@@ -603,11 +619,13 @@ final class Browser {
     }
 
     /// The last open tab of a private store gone, its cookies and storage go at once, rather
-    /// than whenever WebKit frees the store, and so do its permission answers.
+    /// than whenever WebKit frees the store, and so do its permission answers and site settings.
     private func dropPrivateData(of tab: Tab) {
         guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
         permissions.forget(privateSession: ObjectIdentifier(store))
+        privacy.forget(privateSession: ObjectIdentifier(store))
+        PageStyle.forget(privateSession: ObjectIdentifier(store))
     }
 
     func closeSelectedTab() {

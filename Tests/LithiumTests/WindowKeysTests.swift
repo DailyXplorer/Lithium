@@ -158,6 +158,29 @@ struct WindowKeysTests {
         #expect(tab.customTitle == "Docs")
     }
 
+    /// A name typed in the peeked sidebar is still there when ⌘B shows the sidebar, whose own
+    /// field takes the rename over.
+    @Test func showingTheSidebarKeepsANameTypedInThePeek() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        browser.toggleSidebar()
+        defer { if !browser.isSidebarVisible { browser.toggleSidebar() } }
+        try await Task.sleep(for: .milliseconds(300))
+        browser.renamingTabID = tab.id
+        let editor = try #require(await nameEditor(in: window))
+        editor.insertText("Docs", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+
+        browser.toggleSidebar()
+        try await Task.sleep(for: .milliseconds(800))
+        if browser.renamingTabID == tab.id {
+            let field = try #require(await nameEditor(in: window))
+            #expect(field.string == "Docs")
+            browser.renamingTabID = nil
+        } else {
+            #expect(tab.customTitle == "Docs")
+        }
+    }
+
     /// A row being renamed that only scrolls out of the sidebar's lazy list keeps its rename.
     @Test func scrollingARenamedRowAwayKeepsTheRename() async throws {
         let (browser, _, window) = try await shownBrowser()

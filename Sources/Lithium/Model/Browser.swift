@@ -26,7 +26,12 @@ final class Browser {
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
-    var renamingTabID: Tab.ID?
+    var renamingTabID: Tab.ID? {
+        didSet { if renamingTabID != oldValue { renameDraft = nil } }
+    }
+    /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
+    /// sidebar's field for the sidebar's own.
+    @ObservationIgnored var renameDraft: String?
     /// Settings › Advanced › Developer tools, on unless turned off. Pages already open follow at once.
     var developerTools = UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool ?? true {
         didSet {

@@ -1309,6 +1309,51 @@ struct FingerprintingTests {
         #expect(protected["small"] == AnyHashable(true))
     }
 
+    /// An array longer than the old sample limit still gets its frequencies noised: it once came
+    /// back exact. Only the analyser's bins are touched, not the rest of the page's array.
+    @Test func frequencyNoiseCoversLargeArrays() async throws {
+        let analyser = "AnalyserNode.prototype.getFloatFrequencyData = function (values) { values.fill(-30.5, 0, this.frequencyBinCount); };"
+        let probe = """
+            (() => {
+              const analyser = new OfflineAudioContext(1, 128, 44100).createAnalyser();
+              const values = new Float32Array(600000), count = analyser.frequencyBinCount;
+              analyser.getFloatFrequencyData(values);
+              let moved = 0, past = 0;
+              for (let i = 0; i < values.length; i++) if (i < count ? values[i] !== -30.5 : values[i] !== 0) i < count ? moved++ : past++;
+              return JSON.stringify({ moved, count, past });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil, before: analyser)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling(), before: analyser)
+
+        #expect(bare["moved"] == 0)
+        #expect(try #require(protected["moved"]) > (protected["count"] ?? 0) / 2)
+        #expect(protected["past"] == 0)
+    }
+
+    /// Canvas reads past the pixel limit are noised on a share of their pixels: a large
+    /// `getImageData`, `toDataURL` or OffscreenCanvas `convertToBlob` once came back exact.
+    @Test func largeCanvasReadsAreNoised() async throws {
+        let probe = """
+            const hash = (bytes) => { let h = 0; for (let i = 0; i < bytes.length; i++) h = (Math.imul(h, 31) + bytes[i]) | 0; return h >>> 0; };
+            const text = (s) => hash(Array.from(s, (c) => c.charCodeAt(0)));
+            const draw = (x) => { x.fillStyle = '#f60'; x.fillRect(0, 0, 1000, 600); x.fillStyle = '#069'; x.fillRect(100, 100, 500, 300); };
+            const c = document.createElement('canvas'); c.width = 1000; c.height = 600;
+            const x = c.getContext('2d'); draw(x);
+            const image = hash(x.getImageData(0, 0, 1000, 600).data);
+            const url = text(c.toDataURL());
+            const o = new OffscreenCanvas(1000, 600); draw(o.getContext('2d'));
+            const blob = hash(new Uint8Array(await (await o.convertToBlob()).arrayBuffer()));
+            return JSON.stringify({ image, url, blob });
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil, awaiting: true)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling(), awaiting: true)
+
+        #expect(protected["image"] != bare["image"])
+        #expect(protected["url"] != bare["url"])
+        #expect(protected["blob"] != bare["blob"])
+    }
+
     /// Sample noise depends on each sample's value: what a silent buffer shows can't be taken off
     /// another buffer's samples, as it once could, leaving them exact. A window copied from the
     /// middle gets the whole buffer's noise there, and nothing past what it copied; a long buffer is

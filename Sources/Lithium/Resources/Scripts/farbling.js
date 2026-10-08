@@ -19,7 +19,6 @@
   // the cross-site frame that opened it still find each other. A page never sees it.
   const MARK = '__LITHIUM_MARK__';
   const MAX_PIXELS = 500000;
-  const MAX_SAMPLES = 500000;
   // Taken once: the page shares this world and could replace any of them before a frame or
   // popup it opens is protected (a `call` that always returns true once skipped them), or skew
   // the noise itself (a `Math.floor` that returned a huge gap once left every pixel clean).
@@ -45,6 +44,7 @@
   const imageHeight = member(ImageData.prototype, 'height').get;
   const imageData = member(ImageData.prototype, 'data').get;
   const audioBufferLength = member(globalThis.AudioBuffer && AudioBuffer.prototype, 'length').get;
+  const frequencyBinCount = member(globalThis.AnalyserNode && AnalyserNode.prototype, 'frequencyBinCount').get;
   const createElement = member(Document.prototype, 'createElement').value;
   const canvasWidth = member(HTMLCanvasElement.prototype, 'width');
   const canvasHeight = member(HTMLCanvasElement.prototype, 'height');
@@ -198,10 +198,10 @@
     if (args.length >= 4) for (let i = 0; i < 4; i++) args[i] = +args[i];
     const image = apply(target, self, args);
     const width = apply(imageWidth, image, []), height = apply(imageHeight, image, []);
-    if (width * height <= MAX_PIXELS) {
-      // A negative width or height reads that far back from the spot given.
-      noisePixels(apply(imageData, image, []), (args[0] | 0) + min(args[2] | 0, 0), (args[1] | 0) + min(args[3] | 0, 0), width, height, 0);
-    }
+    // A negative width or height reads that far back from the spot given. Past the limit, a share
+    // of the pixels (see readPixelsNoise): skipping such reads left them exact.
+    noisePixels(apply(imageData, image, []), (args[0] | 0) + min(args[2] | 0, 0), (args[1] | 0) + min(args[3] | 0, 0),
+      width, height, 0, width * 4, ceil(width * height / MAX_PIXELS));
     return image;
   };
 
@@ -314,9 +314,10 @@
 
   // Frequencies are decibels, around -30 to -100: an offset as small as the samples' rounds away
   // in float32, so each moves by up to 1e-5 of itself instead (a ten-thousandth of a decibel).
-  const noiseFrequencies = (values) => {
-    const length = values ? apply(typedLength, values, []) : 0;
-    if (length > MAX_SAMPLES) return;
+  // Only the analyser's bins are written, whatever the array's size: a huge array once skipped the
+  // noise and read them exact.
+  const noiseFrequencies = (values, analyser) => {
+    const length = min(values ? read(typedLength, values) : 0, read(frequencyBinCount, analyser));
     const next = prng(0x2545f491);
     for (let i = 0; i < length; i++) values[i] *= 1 + (next() - 0.5) * 2e-5;
   };
@@ -434,14 +435,15 @@
       const farbledCopy = (canvas) => {
         // Anything but a canvas reads as empty and goes on to the native call, which throws as usual.
         const width = read(canvasWidth.get, canvas), height = read(canvasHeight.get, canvas);
-        if (!width || !height || width * height > MAX_PIXELS) return canvas;
+        if (!width || !height) return canvas;
         const copy = apply(createElement, win.document, ['canvas']);
         apply(canvasWidth.set, copy, [width]);
         apply(canvasHeight.set, copy, [height]);
         const context = apply(getContext, copy, ['2d']);
         apply(drawImage, context, [canvas, 0, 0]);
         const image = apply(getImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0);
+        // Past the limit, a share of the pixels, as in readImage: large canvases once came back exact.
+        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0, width * 4, ceil(width * height / MAX_PIXELS));
         apply(putImageData, context, [image, 0, 0]);
         return copy;
       };
@@ -453,12 +455,12 @@
       const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', readImage);
       patch(win.OffscreenCanvas.prototype, 'convertToBlob', (target, self, args) => {
         const width = read(offscreenWidth, self), height = read(offscreenHeight, self);
-        if (!width || !height || width * height > MAX_PIXELS) return apply(target, self, args);
+        if (!width || !height) return apply(target, self, args);
         const copy = new OffscreenCanvasCtor(width, height);
         const context = apply(offscreenGetContext, copy, ['2d']);
         apply(offscreenDrawImage, context, [self, 0, 0]);
         const image = apply(offscreenGetImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0);
+        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0, width * 4, ceil(width * height / MAX_PIXELS));
         apply(offscreenPutImageData, context, [image, 0, 0]);
         return apply(target, copy, args);
       });
@@ -499,7 +501,7 @@
       });
       patch(win.AnalyserNode.prototype, 'getFloatFrequencyData', (target, self, args) => {
         const result = apply(target, self, args);
-        noiseFrequencies(args[0]);
+        noiseFrequencies(args[0], self);
         return result;
       });
       patch(win.AnalyserNode.prototype, 'getFloatTimeDomainData', (target, self, args) => {

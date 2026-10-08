@@ -822,6 +822,36 @@ struct AgentServerTests {
         #expect(try await fixture.post(["jsonrpc": "2.0", "id": 1, "method": "ping"], session: session).status == 200)
     }
 
+    /// A client killed mid-call closes its socket with nothing sent after the request, which
+    /// leaves the connection ready: the server still notices and cancels the call at once,
+    /// instead of running it (and any banner it shows) to the end. The session stays.
+    @Test func aClientThatClosesMidCallCancelsIt() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let body = Self.call("wait").encoded()
+        let head = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:\(fixture.port)\r\nAuthorization: Bearer \(fixture.endpoint.token)\r\n"
+            + "Accept: application/json, text/event-stream\r\nMcp-Session-Id: \(session)\r\n"
+            + "Content-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n"
+        let socket = try RawHTTP.connectedSocket(port: fixture.port)
+        try RawHTTP.write(Data(head.utf8) + body, to: socket)
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        #expect(fixture.hub.isActing)
+
+        Darwin.close(socket)
+        let server = try #require(fixture.hub.server)
+        #expect(await Self.eventually { server.connectionCount == 0 })
+        #expect(await Self.eventually { !fixture.hub.isActing })
+        #expect(fixture.hub.sessions.count == 1)
+        let file = fixture.folder.appending(path: "log/\(AgentLog.fileName(for: Date()))")
+        #expect(await Self.eventually {
+            let line = (try? String(contentsOf: file, encoding: .utf8))?.split(separator: "\n").last
+            return line.flatMap { try? JSONValue.decode(Data($0.utf8)) }?["result"] == ["ok": false, "error": "cancelled"]
+        })
+    }
+
     // MARK: Connections
 
     /// A server with token `t` whose `hold` calls wait for `release`; every message is answered
@@ -972,6 +1002,20 @@ struct AgentServerTests {
         await log.prune(now: now)
         let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
         #expect(files == [AgentLog.fileName(for: recent)])
+    }
+
+    /// A Lithium left running past midnight prunes as it starts the new day's file, not only
+    /// when the hub starts.
+    @Test func startingADayFilePrunesOldOnes() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-log-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let log = AgentLog(folder: folder)
+        let now = Date()
+        let old = AgentLog.dayCalendar.date(byAdding: .day, value: -31, to: now)!
+        await log.append(["tool": "a"], at: old)
+        await log.append(["tool": "b"], at: now)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(files == [AgentLog.fileName(for: now)])
     }
 
     /// Day files an earlier version named in a Buddhist year sort after every Gregorian one:

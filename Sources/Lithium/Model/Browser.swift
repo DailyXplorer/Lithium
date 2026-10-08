@@ -628,7 +628,8 @@ final class Browser {
     }
 
     func addressTextChanged(_ text: String) {
-        suggestions.update(query: text, tabs: tabs, pins: pins, history: history)
+        let edited = suggestions.editedTabID.flatMap { id in tabs.first { $0.id == id } }
+        suggestions.update(query: text, tabs: tabs, pins: pins, history: history, actions: barActions(for: edited))
     }
 
     func submitAddress(_ text: String) {
@@ -660,6 +661,7 @@ final class Browser {
         case .address(let url), .history(_, let url): open(url, in: tab)
         case .openTab(let id, _, _): if let tab = tabs.first(where: { $0.id == id }) { select(tab) }
         case .pin(let id, _, _): if let pin = pins.first(where: { $0.id == id }) { activate(pin) }
+        case .action(let action): perform(action, on: tab)
         }
     }
 

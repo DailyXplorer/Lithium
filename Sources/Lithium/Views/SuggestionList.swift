@@ -32,7 +32,7 @@ struct SuggestionList: View {
     }
 }
 
-private struct SuggestionRow: View {
+struct SuggestionRow: View {
     let suggestion: Suggestion
     let isSelected: Bool
 
@@ -68,6 +68,8 @@ private struct SuggestionRow: View {
         switch suggestion {
         case .search:
             Icon(.search, size: 15)
+        case .action(let action):
+            Icon(action.icon, size: 15)
         case .address, .openTab, .pin, .history:
             if let image = Favicons.shared.cached(host: suggestion.url?.host()) {
                 Favicon(image: image, fallback: "", size: 16)
@@ -80,6 +82,7 @@ private struct SuggestionRow: View {
     private var title: String {
         switch suggestion {
         case .search(let query): query
+        case .action(let action): action.title
         case .address(let url): url.absoluteString
         case .openTab(_, let title, let url), .pin(_, let title, let url), .history(let title, let url):
             title.isEmpty ? (url.host() ?? url.absoluteString) : title
@@ -89,7 +92,7 @@ private struct SuggestionRow: View {
     private var detail: String? {
         switch suggestion {
         case .search: "Search with \(SearchEngine.current.name)"
-        case .address: nil
+        case .address, .action: nil
         case .openTab(_, _, let url), .pin(_, _, let url), .history(_, let url):
             url.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
         }
@@ -99,7 +102,25 @@ private struct SuggestionRow: View {
         switch suggestion {
         case .openTab: "Switch to Tab"
         case .pin: "Pinned"
+        // Tells a command from a page or a search, as Safari's and Chrome's bars do.
+        case .action: "Action"
         default: nil
+        }
+    }
+}
+
+extension BarAction {
+    var icon: Phosphor {
+        switch self {
+        case .copyLink: .copy
+        case .newPrivateTab: .privateTab
+        case .duplicateTab: .plus
+        case .reopenClosedTab: .retry
+        case .pinTab, .unpinTab: .location
+        case .openSplitView, .exitSplitView: .sidebar
+        case .enterZenMode, .exitZenMode: .fitPage
+        case .clearSiteData: .trash
+        case .settings: .settings
         }
     }
 }

@@ -1,0 +1,191 @@
+import Foundation
+import SwiftUI
+import WebKit
+
+/// A few browser commands the address bar offers, as Arc's command bar did. They never show on
+/// their own: only a row or two, once the typed words clearly name one (`matches`).
+enum BarAction: Hashable, CaseIterable {
+    case copyLink, newPrivateTab, duplicateTab, reopenClosedTab
+    case pinTab, unpinTab, openSplitView, exitSplitView, enterZenMode, exitZenMode
+    case clearSiteData, settings
+
+    var title: String {
+        switch self {
+        case .copyLink: "Copy link"
+        case .newPrivateTab: "New private tab"
+        case .duplicateTab: "Duplicate tab"
+        case .reopenClosedTab: "Reopen closed tab"
+        case .pinTab: "Pin tab"
+        case .unpinTab: "Unpin tab"
+        case .openSplitView: "Open in split view"
+        case .exitSplitView: "Exit split view"
+        case .enterZenMode: "Enter zen mode"
+        case .exitZenMode: "Exit zen mode"
+        case .clearSiteData: "Clear site data"
+        case .settings: "Settings"
+        }
+    }
+
+    /// Other names people type for it; matched like the title, never shown.
+    private var aliases: [String] {
+        switch self {
+        case .copyLink: ["Copy URL", "Copy address"]
+        case .newPrivateTab: ["Private window", "Incognito"]
+        case .duplicateTab: []
+        case .reopenClosedTab: ["Undo close tab", "Restore tab"]
+        case .pinTab: ["Add to favorites"]
+        case .unpinTab: ["Remove from favorites"]
+        case .openSplitView: ["Split view", "Side by side"]
+        case .exitSplitView: ["Close split view"]
+        case .enterZenMode, .exitZenMode: ["Zen mode", "Focus mode"]
+        case .clearSiteData: ["Clear cookies", "Clear cache", "Delete cookies"]
+        case .settings: ["Preferences"]
+        }
+    }
+
+    /// How well typed words name an action; lower sorts first.
+    struct Match: Comparable {
+        /// Every word of a name typed out whole: Return runs it rather than the search.
+        var isWhole: Bool
+        var hasTypo: Bool
+        /// Matched from the name's first word ("copy" for Copy link, not "link").
+        var fromStart: Bool
+
+        fileprivate var rank: Int { (isWhole ? 0 : 4) + (hasTypo ? 2 : 0) + (fromStart ? 0 : 1) }
+
+        static func < (lhs: Match, rhs: Match) -> Bool { lhs.rank < rhs.rank }
+    }
+
+    static let shownLimit = 2
+
+    /// The actions among `available` the query clearly names, best first, at most `shownLimit`.
+    /// Each typed word starts a word of the name, in order, with at most one small typo in
+    /// the whole query. Three letters at least, and four to match past a name's first word, so
+    /// everyday searches ("new", "tab") don't bring actions up.
+    static func matches(_ query: String, among available: [BarAction]) -> [(action: BarAction, match: Match)] {
+        let typed = words(query)
+        guard typed.joined().count >= 3 else { return [] }
+        let found = available.compactMap { action -> (BarAction, Match)? in
+            let best = ([action.title] + action.aliases).compactMap { match(typed, words($0)) }.min()
+            return best.map { (action, $0) }
+        }
+        // Stable: equal matches keep the catalogue's order.
+        return found.enumerated()
+            .sorted { ($0.element.1.rank, $0.offset) < ($1.element.1.rank, $1.offset) }
+            .prefix(shownLimit).map { (action: $0.element.0, match: $0.element.1) }
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    }
+
+    private static func match(_ typed: [String], _ name: [String]) -> Match? {
+        var next = 0
+        var typos = 0
+        var whole = typed.count == name.count
+        var fromStart = false
+        for (position, word) in typed.enumerated() {
+            guard let (index, (typo, isWholeWord)) = (next..<name.count).lazy
+                .compactMap({ index in wordMatch(word, name[index]).map { (index, $0) } }).first else { return nil }
+            if position == 0 {
+                fromStart = index == 0
+                if !fromStart, word.count < 4 { return nil }
+            }
+            typos += typo ? 1 : 0
+            whole = whole && isWholeWord
+            next = index + 1
+        }
+        guard typos <= 1 else { return nil }
+        return Match(isWhole: whole, hasTypo: typos > 0, fromStart: fromStart)
+    }
+
+    /// Whether `typed` starts `word`, or would with one letter wrong, missing, extra or swapped
+    /// (words of four letters or more, first letter right). Nil when it doesn't.
+    private static func wordMatch(_ typed: String, _ word: String) -> (typo: Bool, whole: Bool)? {
+        if word.hasPrefix(typed) { return (false, typed.count == word.count) }
+        guard typed.count >= 4, word.count >= max(4, typed.count - 1), typed.first == word.first else { return nil }
+        let letters = Array(word)
+        for length in max(1, typed.count - 1)...min(word.count, typed.count + 1)
+        where editDistance(Array(typed), Array(letters[..<length])) <= 1 {
+            return (true, length == word.count)
+        }
+        return nil
+    }
+
+    /// Optimal string alignment distance: insertions, deletions, substitutions and swaps of two
+    /// neighbours each count one.
+    private static func editDistance(_ a: [Character], _ b: [Character]) -> Int {
+        var table = Array(repeating: Array(repeating: 0, count: b.count + 1), count: a.count + 1)
+        for i in 0...a.count { table[i][0] = i }
+        for j in 0...b.count { table[0][j] = j }
+        for i in stride(from: 1, through: a.count, by: 1) {
+            for j in stride(from: 1, through: b.count, by: 1) {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                table[i][j] = min(table[i - 1][j] + 1, table[i][j - 1] + 1, table[i - 1][j - 1] + cost)
+                if i > 1, j > 1, a[i - 1] == b[j - 2], a[i - 2] == b[j - 1] {
+                    table[i][j] = min(table[i][j], table[i - 2][j - 2] + 1)
+                }
+            }
+        }
+        return table[a.count][b.count]
+    }
+}
+
+extension Browser {
+    /// What the bar can do now for `tab`, the one shown when editing began: only what the menus
+    /// would have enabled, and of a toggle only its current side (Pin or Unpin). Read as the
+    /// user types, from state already at hand.
+    func barActions(for tab: Tab?) -> [BarAction] {
+        var actions: [BarAction] = []
+        let hasPage = tab?.url != nil
+        if hasPage { actions.append(.copyLink) }
+        actions.append(.newPrivateTab)
+        if hasPage { actions.append(.duplicateTab) }
+        if canReopenClosedTab { actions.append(.reopenClosedTab) }
+        // As the menus: a private tab is never pinned.
+        if let tab, hasPage, !tab.isEphemeral { actions.append(tab.pinID == nil ? .pinTab : .unpinTab) }
+        if let tab, tab.isInTabList {
+            if split(of: tab) != nil { actions.append(.exitSplitView) } else if splitPartner(for: tab) != nil { actions.append(.openSplitView) }
+        }
+        actions.append(isZenMode ? .exitZenMode : .enterZenMode)
+        if let scheme = tab?.url?.scheme?.lowercased(), ["http", "https"].contains(scheme) { actions.append(.clearSiteData) }
+        actions.append(.settings)
+        return actions
+    }
+
+    /// Runs on `tab` as the menus and the lock panel do. A new private tab starts empty, with the
+    /// address bar focused for where it goes.
+    func perform(_ action: BarAction, on tab: Tab?) {
+        switch action {
+        case .copyLink: copyLink(of: tab)
+        case .newPrivateTab:
+            newTab(privateStore: .nonPersistent())
+            requestAddressFocus()
+        case .duplicateTab: if let tab { duplicate(tab) }
+        case .reopenClosedTab: reopenClosedTab()
+        case .pinTab: if let tab { pin(tab) }
+        case .unpinTab: if let favorite = pins.first(where: { $0.id == tab?.pinID }) { unpin(favorite) }
+        case .openSplitView: if let tab { openInSplit(tab) }
+        case .exitSplitView: if let tab { exitSplit(of: tab) }
+        case .enterZenMode, .exitZenMode:
+            guard isZenMode == (action == .exitZenMode) else { return }
+            withAnimation(.snappy(duration: 0.2)) { toggleZenMode() }
+        case .clearSiteData: clearSiteData(of: tab)
+        case .settings: openSettings()
+        }
+    }
+
+    /// As the lock panel's Clear: the site's cookies and data in the tab's own store (a private
+    /// tab's stays its own), then a reload. Returned for tests to await.
+    @discardableResult
+    func clearSiteData(of tab: Tab?) -> Task<Void, Never>? {
+        guard let tab, let url = tab.url else { return nil }
+        let info = SiteInfo(url: url, store: tab.dataStore)
+        return Task {
+            await info.load()
+            await info.clear()
+            navigate(tab, .reload)
+        }
+    }
+}

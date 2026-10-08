@@ -253,6 +253,7 @@ struct AgentReadTests {
             <title>Focus</title><input id="search" aria-label="Search"><iframe id="inner" src="/focus-child"></iframe>
             """),
         "/focus-child": (Self.html, "<input id=\"field\" aria-label=\"Inner\">"),
+        "/rootless": (Self.html, "<title>Rootless</title><script>document.removeChild(document.documentElement)</script>"),
         "/object": (Self.html, """
             <title>Object</title><style>body { margin: 0; background: white }</style>
             <object data="/secret-box" type="text/html" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"></object>
@@ -1832,6 +1833,17 @@ struct AgentReadTests {
             #expect(first.isSubset(of: state.frames.keys))
             client.hub.pageGone(named)
             #expect(state.frames.isEmpty)
+        }
+    }
+
+    /// A page that removed its root element still reads, as empty, the first time and after.
+    @Test func aPageWithoutARootElementStillReads() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/rootless")
+            for round in 0..<2 {
+                let read = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+                #expect(!read.isError, "\(round): \(read.message)")
+            }
         }
     }
 

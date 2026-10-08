@@ -58,7 +58,8 @@
   // Layout also changes with no mutation: a web font arriving, the page growing.
   document.fonts?.addEventListener('loadingdone', dirty);
   const resizes = new ResizeObserver(dirty);
-  resizes.observe(document.documentElement);
+  // A page may remove its root element: agent.js still goes in, and reads it as empty.
+  if (document.documentElement) resizes.observe(document.documentElement);
   if (document.body) resizes.observe(document.body);
 
   const collapse = (text) => (text || '').replace(/\s+/g, ' ').trim();
@@ -365,7 +366,7 @@
 
   const viewport = () => ({
     w: innerWidth, h: innerHeight, sx: Math.round(scrollX), sy: Math.round(scrollY),
-    pw: document.documentElement.scrollWidth, ph: document.documentElement.scrollHeight,
+    pw: document.documentElement?.scrollWidth ?? 0, ph: document.documentElement?.scrollHeight ?? 0,
     dpr: devicePixelRatio, vx: visualViewport?.offsetLeft ?? 0, vy: visualViewport?.offsetTop ?? 0, vs: visualViewport?.scale ?? 1,
   });
 

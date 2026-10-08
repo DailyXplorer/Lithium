@@ -69,12 +69,15 @@ final class ScreenCapture {
 
     /// Both looks, so the preview can switch the sidebar instantly. The current look goes first,
     /// and the sidebar ends as it was.
+    /// In Zen mode, the look with the sidebar is the window out of Zen mode.
     private func windowWithAndWithoutSidebar(_ window: NSWindow) async throws -> Shot.Content {
-        let original = browser.isSidebarVisible
-        defer { browser.isSidebarVisible = original }
+        let original = (sidebar: browser.isSidebarVisible, zen: browser.isZenMode)
+        defer { (browser.isSidebarVisible, browser.isZenMode) = original }
+        let shown = browser.showsSidebar
         var images: [Bool: CGImage] = [:]
-        for visible in [original, !original] {
-            if visible != original {
+        for visible in [shown, !shown] {
+            if visible != shown {
+                browser.isZenMode = false
                 browser.isSidebarVisible = visible
                 await Self.settle(window)
             }

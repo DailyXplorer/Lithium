@@ -119,10 +119,14 @@ struct BrowserCommands: Commands {
             .disabled(browser.selectedTab == nil)
         }
         CommandGroup(before: .sidebar) {
-            Button(browser.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
+            Button(browser.showsSidebar ? "Hide Sidebar" : "Show Sidebar") {
                 withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
             }
             .keyboardShortcut("b")
+            Button(browser.isZenMode ? "Exit Zen Mode" : "Enter Zen Mode") {
+                withAnimation(.snappy(duration: 0.2)) { browser.toggleZenMode() }
+            }
+            .keyboardShortcut("f", modifiers: [.command, .shift])
             Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")
                 .disabled(browser.commandTab == nil)

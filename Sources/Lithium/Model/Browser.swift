@@ -26,6 +26,14 @@ final class Browser {
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
+    /// Zen mode: the page alone in the window's frame, the sidebar and the top bar peeking from
+    /// the edges. Kept apart from `isSidebarVisible`, so leaving it brings the sidebar back as it
+    /// was. Saved like the sidebar, by `toggleZenMode()` only.
+    var isZenMode = UserDefaults.standard.bool(forKey: Preference.zenMode)
+    /// Whether the sidebar takes its column, rather than peeking over the page.
+    var showsSidebar: Bool { isSidebarVisible && !isZenMode }
+    /// Set by the address bar as it starts and ends editing: Zen mode's top bar stays out meanwhile.
+    var isEditingAddress = false
     var renamingTabID: Tab.ID? {
         didSet { if renamingTabID != oldValue { renameDraft = nil } }
     }
@@ -426,9 +434,24 @@ final class Browser {
         if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
 
+    /// In Zen mode, Show Sidebar (⌘B, the top bar's button) asks for the sidebar back, which takes
+    /// the window out of Zen mode.
     func toggleSidebar() {
-        isSidebarVisible.toggle()
+        if isZenMode {
+            toggleZenMode()
+            isSidebarVisible = true
+        } else {
+            isSidebarVisible.toggle()
+        }
         UserDefaults.standard.set(isSidebarVisible, forKey: Preference.sidebarVisible)
+    }
+
+    /// The top bar changes for another, so an edit in the address bar ends first: its field gone
+    /// mid-edit would leave the keyboard nowhere and the new bar held out for it.
+    func toggleZenMode() {
+        if isEditingAddress { window?.makeFirstResponder(nil) }
+        isZenMode.toggle()
+        UserDefaults.standard.set(isZenMode, forKey: Preference.zenMode)
     }
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }

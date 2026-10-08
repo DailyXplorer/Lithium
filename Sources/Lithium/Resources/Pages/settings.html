@@ -40,8 +40,8 @@
   .extension .actions { display: flex; align-items: center; gap: 10px; }
   #start-kind button { padding: 5px 11px; white-space: nowrap; }
   #site-font-site { flex: 1; min-width: 0; }
-  /* Both font pickers line up, wide enough for most family names. */
-  .font-picker { width: 220px; }
+  /* Both font pickers line up at 220px; a longer family name widens its picker rather than being clipped. */
+  .font-picker { min-width: 220px; }
   .sample { font-size: 13px; }
   .snippet > div { min-width: 0; }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);

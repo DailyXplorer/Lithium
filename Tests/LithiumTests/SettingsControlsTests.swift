@@ -41,6 +41,19 @@ struct SettingsControlsTests {
         const [interfaceFont, websiteFont] = [$('#interface-font'), $('#website-family')].map((s) => s.getBoundingClientRect().width);
         check('font pickers line up', interfaceFont, websiteFont);
         if (interfaceFont < 200) problems.push(`font picker ${interfaceFont}px wide`);
+        // A long family name widens both pickers rather than being clipped under the caret.
+        const long = 'Noto Sans Egyptian Hieroglyphs', picker = $('#interface-font'), picked = picker.value;
+        const added = [picker, $('#website-family')].map((s) => s.appendChild(new Option(long, long)));
+        picker.value = long;
+        const pickerStyle = getComputedStyle(picker), ruler = document.body.appendChild(document.createElement('span'));
+        Object.assign(ruler.style, { position: 'absolute', whiteSpace: 'nowrap', fontFamily: pickerStyle.fontFamily,
+          fontSize: pickerStyle.fontSize, fontWeight: pickerStyle.fontWeight, letterSpacing: pickerStyle.letterSpacing });
+        ruler.textContent = long;
+        const room = picker.clientWidth - parseFloat(pickerStyle.paddingLeft) - parseFloat(pickerStyle.paddingRight);
+        if (room < ruler.getBoundingClientRect().width) problems.push(`long font name clipped: ${room}px for ${ruler.getBoundingClientRect().width}px`);
+        ruler.remove();
+        added.forEach((option) => option.remove());
+        picker.value = picked;
 
         const select = $('#summary-language');
         select.disabled = true;
@@ -52,10 +65,11 @@ struct SettingsControlsTests {
         check('text field height', field.height, add.getBoundingClientRect().height);
         check('text field radius', getComputedStyle($('#site-font-site')).borderTopLeftRadius, getComputedStyle(add).borderTopLeftRadius);
         check('button radius', getComputedStyle(add).borderTopLeftRadius, seg.borderTopLeftRadius);
+        // The sample state shows one start page background at a time: show every well's row to measure them all.
+        for (const row of ['#color-row', '#start-color-row', '#start-gradient-row']) $(row).style.display = '';
         const swatch = $('#swatches .swatch').getBoundingClientRect();
         for (const well of document.querySelectorAll('#appearance input[type=color]')) {
           const box = well.getBoundingClientRect();
-          if (!box.width) continue;
           check(`${well.id} size`, `${box.width}x${box.height}`, `${swatch.width}x${swatch.height}`);
           check(`${well.id} shape`, getComputedStyle(well).borderTopLeftRadius, '50%');
         }
@@ -71,7 +85,7 @@ struct SettingsControlsTests {
         webView.navigationDelegate = loaded
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         try await loaded.wait()
-        let problems = try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String]
-        #expect(problems == [])
+        let problems = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String])
+        for problem in problems { Issue.record("\(problem)") }
     }
 }

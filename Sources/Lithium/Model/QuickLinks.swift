@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import WebKit
 
 /// Links from other apps (Mail, Slack, Notes), each in a small window of its own instead of a new
 /// tab, like Little Arc. The page is a `Tab` kept out of `Browser.tabs`, so the tab list, the
@@ -27,11 +28,13 @@ final class QuickLinks {
         ["http", "https"].contains(url.scheme?.lowercased())
     }
 
+    /// Also where a link's page opens a page of its own (a `target=_blank` link, a sign-in popup,
+    /// with WebKit's `configuration`): in the main window it would land behind this one, unseen.
     @discardableResult
-    func open(_ url: URL) -> Tab? {
+    func open(_ url: URL? = nil, configuration: WKWebViewConfiguration? = nil) -> Tab? {
         guard let browser else { return nil }
-        let tab = Tab(browser: browser, configuration: browser.makeConfiguration(for: url))
-        tab.load(url)
+        let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url))
+        if let url { tab.load(url) }
         tabs.append(tab)
         windows[tab.id] = showWindow(tab, browser)
         return tab

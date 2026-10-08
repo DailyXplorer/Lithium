@@ -1309,6 +1309,8 @@ extension Tab: WKUIDelegate {
                 let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore)
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
+            } else if browser.quickLinks.contains(self) {
+                browser.quickLinks.open(url)
             } else {
                 browser.newTab(url: url, privateStore: privateStore, openedFrom: self)
             }
@@ -1316,7 +1318,9 @@ extension Tab: WKUIDelegate {
         }
         browser.prepare(popup: configuration)
         // A private tab's popup shares its store, so a sign-in window's cookies reach its opener.
+        // A link's own window opens its pages in windows of their own, leaving the tab list alone.
         let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
+            ?? (browser.quickLinks.contains(self) ? browser.quickLinks.open(configuration: configuration) : nil)
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         popup.scriptOpener = self

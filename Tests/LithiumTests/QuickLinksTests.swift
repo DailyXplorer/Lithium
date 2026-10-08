@@ -96,6 +96,39 @@ struct QuickLinksTests {
         #expect(SessionStore.load().tabs.contains { $0.url == base })
     }
 
+    /// A page the link's page opens (a target=_blank link, a sign-in popup) gets a window of its
+    /// own too, in front, its opener kept; the tab list and the selection stay as they were.
+    @Test func pagesItOpensGetWindowsOfTheirOwn() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"""
+                <title>Quick</title><a id="link" href="/next" target="_blank">Next</a>
+                <button id="signin" onclick="window.open('/next', '', 'width=400,height=300')">Sign in</button>
+                """#),
+            "/next": ("Content-Type: text/html", "<title>Next</title>"),
+        ])
+        defer { listener.cancel() }
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let before = browser.tabs.map(\.id)
+        let selected = browser.selectedTabID
+
+        let tab = try #require(browser.quickLinks.open(base))
+        defer { browser.quickLinks.tabs.forEach(browser.quickLinks.close) }
+        #expect(await waitUntil(15) { tab.title == "Quick" && !tab.isLoading })
+        _ = try await tab.webView.evaluateJavaScript("document.getElementById('link').click(); 0")
+        #expect(await waitUntil(15) { browser.quickLinks.tabs.count == 2 })
+        _ = try await tab.webView.evaluateJavaScript("document.getElementById('signin').click(); 0")
+        #expect(await waitUntil(15) { browser.quickLinks.tabs.count == 3 })
+
+        let opened = browser.quickLinks.tabs.filter { $0 !== tab }
+        #expect(windows.opened.map(\.tab) == browser.quickLinks.tabs)
+        #expect(browser.tabs.map(\.id) == before)
+        #expect(browser.selectedTabID == selected)
+        #expect(await waitUntil(15) { opened.allSatisfy { $0.title == "Next" } })
+        #expect(opened.allSatisfy { $0.scriptOpener === tab })
+        #expect(opened.last?.opener === tab)
+    }
+
     /// Closing the window discards the page, which leaves its visit in the history and nothing to
     /// reopen; so does a page closing itself, which closes its window.
     @Test func closingDiscardsThePage() async throws {

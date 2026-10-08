@@ -576,28 +576,33 @@ struct BrowserTests {
         #expect(browser.selectedTab?.url == typed)
     }
 
-    /// Settings' "Use DM Sans on websites" reloads the open pages it changes, not Lithium's own.
-    @Test func websiteFontSettingReloadsOpenPages() async throws {
+    /// Settings' "Use … on websites" changes the font of open pages in place, both ways, without
+    /// reloading them.
+    @Test func websiteFontSettingAppliesToOpenPagesWithoutReload() async throws {
         let browser = Browser()
-        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
-        let settings = browser.newTab(url: Internal.settingsURL, selecting: false)
-        defer { [tab, settings].forEach(browser.close) }
-        let original = PageStyle.usesDMSansEverywhere
-        defer { PageStyle.usesDMSansEverywhere = original }
-        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false && settings.loadedWebView?.isLoading == false })
-        for webView in [tab.webView, settings.webView] {
-            _ = try await webView.callAsyncJavaScript("window.marked = true", contentWorld: .page)
+        let tab = browser.newTab(url: URL(string: "data:text/html,<p>page</p>")!)
+        defer { browser.close(tab) }
+        let original = PageStyle.usesFontEverywhere
+        defer { PageStyle.usesFontEverywhere = original }
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+        _ = try await tab.webView.callAsyncJavaScript("window.marked = true", contentWorld: .page)
+        let usesFont = { () async -> Bool? in
+            (try? await tab.webView.callAsyncJavaScript(
+                "return getComputedStyle(document.body).fontFamily.startsWith('\"Lithium DM Sans\"')", contentWorld: .page)) as? Bool
         }
-        let marked = { (tab: Tab) async in (try? await tab.webView.callAsyncJavaScript("return window.marked === true", contentWorld: .page)) as? Bool }
+        try #require(PageStyle.websiteFamily == FontChoice.dmSans)
+        #expect(await usesFont() == original)
 
-        browser.changePageFont { PageStyle.usesDMSansEverywhere = !original }
-        var reloaded = false
-        for _ in 0..<50 where !reloaded {
-            try await Task.sleep(for: .milliseconds(100))
-            reloaded = await marked(tab) == false
+        for on in [!original, original] {
+            browser.changePageFont { PageStyle.usesFontEverywhere = on }
+            var applied = false
+            for _ in 0..<50 where !applied {
+                try await Task.sleep(for: .milliseconds(100))
+                applied = await usesFont() == on
+            }
+            #expect(applied, "font \(on ? "on" : "off")")
         }
-        #expect(reloaded)
-        #expect(await marked(settings) == true)
+        #expect(try await tab.webView.callAsyncJavaScript("return window.marked === true", contentWorld: .page) as? Bool == true)
     }
 
     /// A tab closed or pinned while its name was being edited ends the rename: its field went

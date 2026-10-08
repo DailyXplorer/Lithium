@@ -355,17 +355,24 @@ final class Browser {
         tabs.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
 
-    /// Settings' font choices ("Use DM Sans on websites", a site's own font) reach the open pages
-    /// they change, as protections do: the font is a script set up as a page loads, so those pages
-    /// reload. Lithium's own pages stay, Settings among them. Sleeping tabs get it when they wake.
+    /// Settings' font choices (the fonts, "Use … on websites", a site's own font) reach the open
+    /// pages they change without a reload: the font script runs again there with the new font, or
+    /// turns itself off. Their next load sets it up from the start. Lithium's own pages are left
+    /// out, and sleeping tabs get it when they wake.
     func changePageFont(_ change: () -> Void) {
-        let pages = tabs.compactMap { tab -> (Tab, URL, Bool)? in
+        let font = { (tab: Tab, url: URL) in
+            PageStyle.usesPageFont(url, privateSession: tab.privateSession) ? PageStyle.websiteFamily : nil
+        }
+        let pages = tabs.compactMap { tab -> (Tab, URL, String?)? in
             guard !tab.isAsleep, let url = tab.url, !Internal.isInternal(url) else { return nil }
-            return (tab, url, PageStyle.usesDMSans(url, privateSession: tab.privateSession))
+            return (tab, url, font(tab, url))
         }
         change()
-        for (tab, url, used) in pages where PageStyle.usesDMSans(url, privateSession: tab.privateSession) != used {
-            navigate(tab, .reload)
+        for (tab, url, used) in pages {
+            let family = font(tab, url)
+            guard family != used, let webView = tab.loadedWebView else { continue }
+            let source = family == nil ? PageStyle.fontOffSource : PageStyle.fontScript.source
+            webView.evaluateJavaScript(source, in: nil, in: .defaultClient)
         }
     }
 

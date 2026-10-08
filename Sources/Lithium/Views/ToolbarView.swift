@@ -291,6 +291,8 @@ private struct AddressField: NSViewRepresentable {
             }
         }
         field.textColor = onDarkBackground && !isEditing ? .white : .labelColor
+        // The interface font changed in Settings.
+        if let font = Theme.nsFont(13), field.font != font { field.font = font }
         if field.url != url || !field.isEditing {
             field.url = url
             if !field.isEditing { field.showSummary() }

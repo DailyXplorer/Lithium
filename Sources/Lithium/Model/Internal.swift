@@ -90,8 +90,16 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         case (_, "app-icon"): bundle.url(forResource: "AppIcon", withExtension: "png", subdirectory: "Pages")
         default: nil
         }
-        guard let file, let data = try? Data(contentsOf: file) else { return nil }
+        guard let file, var data = try? Data(contentsOf: file) else { return nil }
+        if file.lastPathComponent == "lithium.css" { data.append(Data(interfaceFontCSS(FontChoice.shared.interface).utf8)) }
         return (data, file.pathExtension)
+    }
+
+    /// Lithium's own pages are its interface: they take the interface font, DM Sans behind it.
+    /// Nothing for DM Sans, which the style sheet already names.
+    static func interfaceFontCSS(_ family: String?) -> String {
+        guard let family else { return "" }
+        return #"body { font-family: "\#(family.replacingOccurrences(of: "\"", with: ""))", "DM Sans", -apple-system, sans-serif; }"#
     }
 }
 
@@ -148,7 +156,14 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "chooseStartImage":
             _ = await StartImage.choose()
         case "setWebsiteFont":
-            browser.changePageFont { PageStyle.usesDMSansEverywhere = value as? Bool ?? true }
+            browser.changePageFont { PageStyle.usesFontEverywhere = value as? Bool ?? true }
+        case "fonts":
+            return (FontChoice.families(), nil)
+        case "setInterfaceFont":
+            // Websites that follow the interface font change with it.
+            browser.changePageFont { FontChoice.shared.setInterface(value as? String) }
+        case "setWebsiteFamily":
+            browser.changePageFont { FontChoice.shared.setWebsite(value as? String) }
         case "setReaderButton":
             browser.setReaderButton(value as? Bool ?? true)
         case "setSiteFont":
@@ -315,7 +330,11 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "sidebarReveal": defaults.string(forKey: Preference.sidebarReveal) ?? SidebarReveal.normal.rawValue,
                 "miniPlayer": NowPlaying.isEnabled,
                 "tabUsage": defaults.object(forKey: Preference.tabUsage) as? Bool ?? true,
-                "websiteFont": PageStyle.usesDMSansEverywhere,
+                "websiteFont": PageStyle.usesFontEverywhere,
+                "interfaceFont": FontChoice.shared.interface ?? FontChoice.dmSans,
+                // Empty while websites follow the interface font.
+                "websiteFamily": FontChoice.shared.website ?? "",
+                "websiteFontName": PageStyle.websiteFamily,
                 "readerButton": ReaderMode.showsButton,
                 "siteFontDomains": PageStyle.siteFontDomains,
                 "startPage": [

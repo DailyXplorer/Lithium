@@ -2,8 +2,8 @@ import Foundation
 import WebKit
 
 /// Styles Lithium adds to every page, whatever the protection settings: no horizontal page
-/// scrolling, and DM Sans instead of the site's fonts (a setting, always on for Brave Search,
-/// Lithium's start page and search engine).
+/// scrolling, and the user's font (DM Sans unless they picked another) instead of the site's
+/// (a setting, always on for Brave Search, Lithium's start page and search engine).
 @MainActor
 enum PageStyle {
     /// Wide layouts are clipped instead of making the whole page scroll sideways.
@@ -24,35 +24,57 @@ enum PageStyle {
           src: local("DM Sans"), url(data:font/woff2;base64,\(fontBase64)) format("woff2"); }
         """
 
-    static let fontScript: WKUserScript = {
-        let source = Resources.bundle.url(forResource: "page-font", withExtension: "js")
-            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        return WKUserScript(
-            source: source.replacingOccurrences(of: "__LITHIUM_FONT__", with: fontBase64),
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true,
-            in: .defaultClient
-        )
-    }()
+    private static let fontSource = Resources.bundle.url(forResource: "page-font", withExtension: "js")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
 
-    static var usesDMSansEverywhere: Bool {
+    /// The script for the website font the user picked, built again only when that changes.
+    static var fontScript: WKUserScript { currentFont().script }
+
+    /// The family websites get, DM Sans unless the user picked another.
+    static var websiteFamily: String { currentFont().family }
+
+    /// Run in an open page, turns its font script off; running the script again turns it back on.
+    static let fontOffSource = "window.__lithiumFont?.stop();"
+
+    private static var builtFont: (choice: String?, family: String, script: WKUserScript)?
+
+    private static func currentFont() -> (family: String, script: WKUserScript) {
+        let choice = FontChoice.shared.website ?? FontChoice.shared.interface
+        if let builtFont, builtFont.choice == choice { return (builtFont.family, builtFont.script) }
+        let family = FontChoice.shared.websiteFamily
+        let script = fontScript(family: family)
+        builtFont = (choice, family, script)
+        return (family, script)
+    }
+
+    /// DM Sans travels in the script; any other family is installed on the Mac, where pages find
+    /// it by name, so they decode nothing.
+    static func fontScript(family: String) -> WKUserScript {
+        let isBundled = family == FontChoice.dmSans
+        let source = fontSource
+            .replacingOccurrences(of: "__LITHIUM_FONT__", with: isBundled ? fontBase64 : "")
+            .replacingOccurrences(of: "__LITHIUM_FAMILY__", with: literal(isBundled ? "Lithium DM Sans" : family))
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient)
+    }
+
+    static var usesFontEverywhere: Bool {
         get { UserDefaults.standard.object(forKey: Preference.websiteFont) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: Preference.websiteFont) }
     }
 
     static func scripts(for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
-        usesDMSans(url, privateSession: privateSession) ? [baseScript, fontScript] : [baseScript]
+        usesPageFont(url, privateSession: privateSession) ? [baseScript, fontScript] : [baseScript]
     }
 
-    static func usesDMSans(_ url: URL, privateSession: ObjectIdentifier? = nil) -> Bool {
-        guard let host = url.host()?.lowercased() else { return usesDMSansEverywhere }
-        return choosesDMSans(host) && !keepsSiteFont(host, privateSession: privateSession)
+    static func usesPageFont(_ url: URL, privateSession: ObjectIdentifier? = nil) -> Bool {
+        guard let host = url.host()?.lowercased() else { return usesFontEverywhere }
+        return choosesPageFont(host) && !keepsSiteFont(host, privateSession: privateSession)
     }
 
-    /// Whether the site menu offers "Use this site's font": DM Sans would apply but for it.
+    /// Whether the site menu offers "Use this site's font": the website font would apply but for it.
     static func offersSiteFont(_ url: URL) -> Bool {
         guard url.scheme == "http" || url.scheme == "https", let host = url.host()?.lowercased() else { return false }
-        return choosesDMSans(host)
+        return choosesPageFont(host)
     }
 
     /// Sites that keep their own font, by registrable domain.
@@ -95,12 +117,17 @@ enum PageStyle {
     /// Site fonts chosen in private tabs, by private session, then registrable domain; never saved.
     private static var privateSiteFonts: [ObjectIdentifier: [String: Bool]] = [:]
 
-    private static func choosesDMSans(_ host: String) -> Bool {
-        usesDMSansEverywhere || host == "search.brave.com" || host.hasSuffix(".search.brave.com")
+    private static func choosesPageFont(_ host: String) -> Bool {
+        usesFontEverywhere || host == "search.brave.com" || host.hasSuffix(".search.brave.com")
+    }
+
+    /// A JavaScript string literal.
+    private static func literal(_ text: String) -> String {
+        (try? String(data: JSONEncoder().encode(text), encoding: .utf8)) ?? "\"\""
     }
 
     private static func script(css: String) -> WKUserScript {
-        let literal = (try? String(data: JSONEncoder().encode(css), encoding: .utf8)) ?? "\"\""
+        let literal = Self.literal(css)
         let source = """
             (() => {
               const style = document.createElement('style');

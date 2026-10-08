@@ -74,11 +74,17 @@ enum Phosphor: String {
         return cache
     }()
 
+    /// Names with no bundled file. Only names saved in spaces get here, so it stays tiny.
+    @MainActor private static var missing: Set<String> = []
+
     /// Any bundled icon by file name; nil if there's none.
     @MainActor static func image(named name: String) -> NSImage? {
         if let icon = Phosphor(rawValue: name) { return icon.image }
         if let cached = named.object(forKey: name as NSString) { return cached }
-        guard let image = load(name) else { return nil }
+        // A name with no file (an icon from a newer version, a typo) would be looked up on disk
+        // again at every render: remember the miss.
+        if missing.contains(name) { return nil }
+        guard let image = load(name) else { missing.insert(name); return nil }
         named.setObject(image, forKey: name as NSString)
         return image
     }

@@ -861,6 +861,13 @@ final class Browser {
         history.writeTitles()
     }
 
+    /// With the history cleared, the icons kept for the sites in it; favorites and open tabs
+    /// keep theirs. A private tab's host doesn't count: keeping it would keep an earlier visit.
+    func clearIcons() async {
+        let hosts = pins.map(\.url) + tabs.filter { !$0.isEphemeral }.compactMap(\.url)
+        await favicons.clear(keeping: Set(hosts.compactMap { $0.host() }))
+    }
+
     // MARK: Favorites
 
     func activate(_ pin: Pin) {

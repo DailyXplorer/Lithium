@@ -38,6 +38,7 @@ final class HistoryStore {
             NSLog("Lithium: cannot open history database")
             return
         }
+        Self.addUnicodeLower(to: db)
         execute("""
             PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS visits (
@@ -101,10 +102,32 @@ final class HistoryStore {
         return await search.visits(matching: query, limit: limit)
     }
 
+    /// What the user typed, compared literally: `%` and `_` are LIKE wildcards, and `\` escapes them.
+    /// SQLite folds the case of ASCII letters only, so a query with other letters (accents,
+    /// Greek, Cyrillic…) compares lowercased text, through `unicode_lower`. ASCII queries, nearly
+    /// all of them, keep SQLite's own folding and its speed.
+    nonisolated private static func searchTerms(_ text: String) -> (text: String, column: (String) -> String) {
+        let escaped = text.replacing("\\", with: "\\\\").replacing("%", with: "\\%").replacing("_", with: "\\_")
+        guard !text.allSatisfy(\.isASCII) else { return (escaped, { $0 }) }
+        return (escaped.lowercased(), { "unicode_lower(\($0))" })
+    }
+
+    /// `unicode_lower(text)`, used by `searchTerms` on each connection that searches.
+    nonisolated fileprivate static func addUnicodeLower(to db: OpaquePointer?) {
+        sqlite3_create_function_v2(db, "unicode_lower", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { context, _, values in
+            guard let text = sqlite3_value_text(values?[0]) else { return sqlite3_result_null(context) }
+            sqlite3_result_text(context, String(cString: text).lowercased(), -1, HistoryStore.transient)
+        }, nil, nil, nil)
+    }
+
     nonisolated fileprivate static func visits(in db: OpaquePointer?, matching query: String, limit: Int) -> [Visit] {
-        let pattern = "%\(query.trimmingCharacters(in: .whitespaces))%"
+        let (text, column) = searchTerms(query.trimmingCharacters(in: .whitespaces))
+        let pattern = "%\(text)%"
         var statement: OpaquePointer?
-        let sql = "SELECT id, url, title, visited_at FROM visits WHERE url LIKE ?1 OR title LIKE ?1 ORDER BY visited_at DESC LIMIT ?2"
+        let sql = """
+            SELECT id, url, title, visited_at FROM visits WHERE \(column("url")) LIKE ?1 ESCAPE '\\' OR \(column("title")) LIKE ?1 ESCAPE '\\'
+            ORDER BY visited_at DESC LIMIT ?2
+            """
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_text(statement, 1, pattern, -1, Self.transient)
@@ -136,17 +159,18 @@ final class HistoryStore {
     }
 
     nonisolated fileprivate static func topSites(in db: OpaquePointer?, matching query: String, limit: Int) -> [(url: URL, title: String)] {
-        let text = query.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return [] }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        let (text, column) = searchTerms(trimmed)
         var statement: OpaquePointer?
         // The title lookup uses visits_by_url. The outer scan must not: walking that index for
         // GROUP BY reads the table in random order, 3 to 4 times slower than a plain scan
         // (measured on 50,000 visits).
         let sql = """
             SELECT url, (SELECT title FROM visits v2 WHERE v2.url = v.url AND title != '' ORDER BY visited_at DESC LIMIT 1),
-                   (url LIKE 'http%://' || ?2 || '%' OR url LIKE 'http%://www.' || ?2 || '%') AS prefix,
+                   (\(column("url")) LIKE 'http%://' || ?2 || '%' ESCAPE '\\' OR \(column("url")) LIKE 'http%://www.' || ?2 || '%' ESCAPE '\\') AS prefix,
                    COUNT(*) AS visits, MAX(visited_at) AS latest
-            FROM visits v NOT INDEXED WHERE url LIKE ?1 OR title LIKE ?1
+            FROM visits v NOT INDEXED WHERE \(column("url")) LIKE ?1 ESCAPE '\\' OR \(column("title")) LIKE ?1 ESCAPE '\\'
             GROUP BY url ORDER BY prefix DESC, visits DESC, latest DESC LIMIT ?3
             """
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
@@ -265,9 +289,13 @@ private final class HistorySearch: @unchecked Sendable {
         return await withCheckedContinuation { continuation in
             queue.async { [self] in
                 guard lock.withLock({ ticket == newest[kind] }) else { return continuation.resume(returning: nil) }
-                if db == nil, sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
-                    sqlite3_close(db)
-                    db = nil
+                if db == nil {
+                    if sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
+                        HistoryStore.addUnicodeLower(to: db)
+                    } else {
+                        sqlite3_close(db)
+                        db = nil
+                    }
                 }
                 continuation.resume(returning: read(db))
             }

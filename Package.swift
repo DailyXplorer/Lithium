@@ -23,6 +23,7 @@ let package = Package(
                 .process("Resources/Fonts"),
                 .process("Resources/Icons"),
                 .copy("Resources/Pages"),
+                .copy("Resources/SpaceIcons.tsv"),
                 .process("Resources/Scripts"),
             ]
         ),

@@ -107,6 +107,38 @@ struct PageColorPickerTests {
         #expect(shown.count == 3)
     }
 
+    /// Pinch zoom scales the visual viewport and pans it, which the swatch's rect doesn't count.
+    @Test func thePickerFollowsTheSwatchUnderPinchZoom() async throws {
+        let browser = Browser()
+        browser.colorPicker.present = { _, _ in }
+        let restore = keepingSidebarSettings()
+        let (webView, window) = try await settingsInWindow(browser)
+        defer { window.close(); restore() }
+
+        webView.setMagnification(2, centeredAt: .zero)
+        var visual: [Double] = []
+        for _ in 0..<100 where visual.first != 2 {
+            try await Task.sleep(for: .milliseconds(50))
+            visual = try await webView.evaluateJavaScript("[visualViewport.scale, visualViewport.offsetLeft, visualViewport.offsetTop]") as? [Double] ?? []
+        }
+        #expect(visual.first == 2)
+        guard visual.count == 3 else { return }
+        let pinched = try await clickSwatch(webView, browser.colorPicker)
+        #expect(pinched.css.width > 0)
+        let css = pinched.css
+        let expected = CGRect(x: 100 + (css.minX - visual[1]) * 2, y: 100 + 500 - (css.maxY - visual[2]) * 2, width: css.width * 2, height: css.height * 2)
+        #expect(near(pinched.anchor, expected))
+
+        // Panned, the swatch sits left and up of where it would unpanned, by the pan times the scale.
+        let panned = PageViewport(w: 0, h: 0, sx: 0, sy: 0, pw: 0, ph: 0, dpr: 1, vx: 40, vy: 30, vs: 2)
+        let still = PageViewport(w: 0, h: 0, sx: 0, sy: 0, pw: 0, ph: 0, dpr: 1, vx: 0, vy: 0, vs: 2)
+        let swatch = CGRect(x: 200, y: 100, width: 28, height: 28)
+        let moved = try #require(PageColorPicker.screenRect(of: swatch, viewport: panned, in: webView))
+        let unmoved = try #require(PageColorPicker.screenRect(of: swatch, viewport: still, in: webView))
+        #expect(abs(unmoved.minX - moved.minX - 80) < 0.5)
+        #expect(abs(moved.minY - unmoved.minY - 60) < 0.5)
+    }
+
     @Test func aPickedColorReachesTheSetting() async throws {
         let browser = Browser()
         browser.colorPicker.present = { _, _ in }

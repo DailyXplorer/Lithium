@@ -21,10 +21,10 @@ final class PageColorPicker: NSObject {
     /// Space between the swatch and the panel.
     static let gap: CGFloat = 6
 
-    /// `css` is the swatch's rect in the page's viewport, in CSS pixels. `onChange` gets each
-    /// color picked, as "#RRGGBB".
-    func pick(css: CGRect, hex: String, in webView: WKWebView, onChange: @escaping (String) -> Void) {
-        guard let swatch = Self.screenRect(of: css, in: webView) else { return }
+    /// `css` is the swatch's rect in the page's viewport, in CSS pixels, and `viewport` the visual
+    /// viewport's offset and scale (`vx`, `vy`, `vs`). `onChange` gets each color picked, as "#RRGGBB".
+    func pick(css: CGRect, viewport: PageViewport, hex: String, in webView: WKWebView, onChange: @escaping (String) -> Void) {
+        guard let swatch = Self.screenRect(of: css, viewport: viewport, in: webView) else { return }
         self.onChange = onChange
         anchor = swatch
         let color = NSColor(Color(hex: hex))
@@ -36,11 +36,11 @@ final class PageColorPicker: NSObject {
         onChange?(Color(nsColor: color).hex)
     }
 
-    /// The viewport's CSS pixels are the page zoom's points from the web view's top left.
-    static func screenRect(of css: CGRect, in webView: WKWebView) -> CGRect? {
+    /// The viewport's CSS pixels go to the web view's points through the visual viewport (pinch
+    /// zoom and its pan), then page zoom, from the web view's top left.
+    static func screenRect(of css: CGRect, viewport: PageViewport, in webView: WKWebView) -> CGRect? {
         guard let window = webView.window else { return nil }
-        let zoom = webView.pageZoom
-        var rect = CGRect(x: css.minX * zoom, y: css.minY * zoom, width: css.width * zoom, height: css.height * zoom)
+        var rect = AgentScreenshot.viewRect(css, viewport: viewport, zoom: webView.pageZoom)
         if !webView.isFlipped { rect.origin.y = webView.bounds.height - rect.maxY }
         return window.convertToScreen(webView.convert(rect, to: nil))
     }

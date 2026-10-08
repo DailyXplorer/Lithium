@@ -570,10 +570,12 @@
       event.preventDefault();
       picking = input;
       const { x, y, width, height } = input.getBoundingClientRect();
-      call('pickColor', { x, y, width, height, color: input.value });
+      // Pinch zoom scales and pans the visual viewport, which the rect doesn't count.
+      const { offsetLeft, offsetTop, scale } = visualViewport;
+      call('pickColor', { x, y, width, height, offsetLeft, offsetTop, scale, color: input.value });
     });
   });
-  $('#start-image').onclick =() => call('chooseStartImage').then(render);
+  $('#start-image').onclick = () => call('chooseStartImage').then(render);
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
   $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);

@@ -6,7 +6,7 @@ struct ToolbarView: View {
     var body: some View {
         let tab = browser.selectedTab
         HStack(spacing: 2) {
-            if !browser.isSidebarVisible {
+            if !browser.showsSidebar {
                 SidebarToggle()
             }
             IconButton(icon: .back, help: "Back (⌘[)", isEnabled: tab?.canGoBack == true) {
@@ -264,6 +264,7 @@ private struct AddressField: NSViewRepresentable {
             let browser = coordinator.parent.browser
             if editing { browser.suggestions.editedTabID = browser.selectedTabID }
             coordinator.parent.isEditing = editing
+            browser.isEditingAddress = editing
         }
         context.coordinator.focusToken = focusToken
         context.coordinator.pickToken = pickToken

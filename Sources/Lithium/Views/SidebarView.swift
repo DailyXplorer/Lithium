@@ -375,7 +375,7 @@ private struct TabNameField: View {
             // the agent's input and the sidebar's peek. Not when the row only scrolls out of the
             // lazy list: the rename goes on there.
             .onDisappear {
-                if browser.renamingTabID == tab.id, !browser.isSidebarVisible { commit() }
+                if browser.renamingTabID == tab.id, !browser.showsSidebar { commit() }
             }
     }
 

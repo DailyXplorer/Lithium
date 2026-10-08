@@ -14,35 +14,48 @@ struct BrowserView: View {
     @AppStorage(Preference.sidebarStyle) private var style = SidebarStyle.solid
     @AppStorage(Preference.sidebarColor) private var colorHex = Theme.defaultSidebarHex
     @State private var tabHover = TabHover()
+    @State private var showsZenLights = false
 
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)
+        let zen = browser.isZenMode
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                if browser.isSidebarVisible {
-                    SidebarHeader().frame(width: Layout.sidebarWidth)
-                } else {
-                    Color.clear.frame(width: Layout.trafficLightsWidth)
+            if !zen {
+                HStack(spacing: 0) {
+                    if browser.showsSidebar {
+                        SidebarHeader().frame(width: Layout.sidebarWidth)
+                    } else {
+                        Color.clear.frame(width: Layout.trafficLightsWidth)
+                    }
+                    ToolbarView()
                 }
-                ToolbarView()
+                .frame(height: Layout.topBarHeight)
+                .background(WindowDragArea())
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .frame(height: Layout.topBarHeight)
-            .background(WindowDragArea())
 
             HStack(spacing: 0) {
-                if browser.isSidebarVisible {
+                if browser.showsSidebar {
                     SidebarView()
                         .frame(width: Layout.sidebarWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 ContentCard()
-                    .padding(.leading, browser.isSidebarVisible ? 0 : Layout.margin)
+                    .padding(.leading, browser.showsSidebar ? 0 : Layout.margin)
+                    .padding(.top, zen ? Layout.margin : 0)
                     .padding([.trailing, .bottom], Layout.margin)
             }
             .overlay(alignment: .leading) {
-                if !browser.isSidebarVisible {
-                    SidebarPeek(style: style, colorHex: colorHex)
+                if !browser.showsSidebar {
+                    SidebarPeek(style: style, colorHex: colorHex, isZen: zen)
                 }
+            }
+        }
+        // With the top bar gone, the frame around the page is what moves the window.
+        .background { if zen { WindowDragArea() } }
+        .overlay(alignment: .top) {
+            if zen {
+                ZenTopBarPeek(style: style, colorHex: colorHex, showsLights: $showsZenLights)
             }
         }
         .overlayPreferenceValue(AddressBarBounds.self) { anchor in
@@ -62,7 +75,7 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator(browser: browser))
+        .background(WindowConfigurator(browser: browser, hidesLights: zen && !showsZenLights))
         .ignoresSafeArea()
         .overlay {
             if browser.capture.isSelecting {
@@ -195,9 +208,12 @@ final class WebContainerView: NSView {
 /// With the sidebar hidden, the pointer resting on the window's left edge slides it out over the
 /// page. It slides back once the pointer has stayed off it and its margin for a while, or a tab
 /// is picked. The reveal setting picks the delays and the margin.
+/// In Zen mode it spans the window's height, in the frame around the page. Its edge starts below
+/// the traffic lights' corner, and its tabs below the lights, where the sidebar's own start.
 private struct SidebarPeek: View {
     let style: SidebarStyle
     let colorHex: String
+    let isZen: Bool
     @Environment(Browser.self) private var browser
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
     @State private var zone = PeekZone.outside
@@ -205,20 +221,23 @@ private struct SidebarPeek: View {
     @State private var pending: Task<Void, Never>?
 
     var body: some View {
+        let edgeTop = reveal.margin + (isZen ? Layout.topBarHeight : 0)
         ZStack(alignment: .leading) {
             // Spans the panel plus its margin, above it too, so its own frame is the keep-open zone.
-            PeekTracker(topMargin: reveal.margin) { zone = $0 }
+            // The edge starts below the top margin, where the page does.
+            PeekTracker(locate: { PeekZone.left(of: $0, below: edgeTop) }) { zone = $0 }
                 .frame(width: Layout.margin + Layout.sidebarWidth + reveal.margin)
                 .padding(.top, -reveal.margin)
                 .allowsHitTesting(false)
             if isShown {
                 SidebarView()
-                    .padding(.top, 8)
+                    .padding(.top, isZen ? Layout.topBarHeight - Layout.margin : 8)
                     .frame(width: Layout.sidebarWidth)
                     .frame(maxHeight: .infinity)
                     .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
+                    .padding(.top, isZen ? Layout.margin : 0)
                     .padding([.leading, .bottom], Layout.margin)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
@@ -258,27 +277,142 @@ private struct SidebarPeek: View {
     }
 }
 
-private enum PeekZone { case outside, near, edge }
+/// In Zen mode the top bar waits above the window. The pointer resting on the top edge slides it
+/// down over the page, which stays where it is, and it goes once the pointer has stayed off it for
+/// a while, with the sidebar's delays. ⌘L and ⌘T bring it at once for typing and keep it until the
+/// address bar is done. The traffic lights come with it, or alone in their corner.
+private struct ZenTopBarPeek: View {
+    let style: SidebarStyle
+    let colorHex: String
+    @Binding var showsLights: Bool
+    @Environment(Browser.self) private var browser
+    @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
+    @State private var zone = PeekZone.outside
+    @State private var isShown = false
+    /// ⌘L came while the bar was away: its field takes the keyboard once it is there.
+    @State private var focusOnAppear = false
+    @State private var pending: Task<Void, Never>?
 
-/// Where the pointer is, for the hidden sidebar. One tracking area judged by geometry alone: hover
-/// on the panel itself got exits and entries as the panel slid in under the pointer, and flickered.
-/// It never takes clicks, which go on to the page below, and only exists while the sidebar is hidden.
+    var body: some View {
+        ZStack(alignment: .top) {
+            // The bar plus a margin below it, so its own frame is the keep-open zone.
+            PeekTracker(locate: PeekZone.top(of:)) { zone = $0 }
+                .frame(height: Layout.topBarHeight + reveal.margin)
+                .allowsHitTesting(false)
+            if isShown {
+                ZenTopBar(style: style, colorHex: colorHex)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onAppear {
+                        guard focusOnAppear else { return }
+                        // On the next turn the field is in the window and sees the request.
+                        DispatchQueue.main.async {
+                            focusOnAppear = false
+                            browser.requestAddressFocus()
+                        }
+                    }
+            }
+        }
+        .onChange(of: zone) { update() }
+        .onChange(of: browser.addressFocusToken) {
+            guard !isShown else { return }
+            focusOnAppear = true
+            update()
+        }
+        .onChange(of: browser.isEditingAddress) { _, editing in
+            // Return or Escape leaves the keyboard on the window, where keys beep; the bar is going.
+            if !editing { browser.returnKeyboardToPage(fieldHadKeyboard: false) }
+            update()
+        }
+        .onDisappear {
+            pending?.cancel()
+            showsLights = false
+        }
+    }
+
+    /// As the sidebar's peek decides (`SidebarPeek.update`), and typing keeps it out.
+    private func update() {
+        pending?.cancel()
+        showsLights = isShown || zone == .corner
+        let typing = focusOnAppear || browser.isEditingAddress
+        let wanted = typing || (isShown ? zone != .outside : zone == .edge)
+        guard wanted != isShown else { return }
+        if typing {
+            setShown(true)
+            return
+        }
+        let delay = wanted ? reveal.openDelay : reveal.closeDelay
+        pending = Task {
+            try? await Task.sleep(for: delay)
+            // A popover of the bar's (site information, downloads) would go with it.
+            while !wanted, !Task.isCancelled, hasPopover { try? await Task.sleep(for: delay) }
+            if !Task.isCancelled { setShown(wanted) }
+        }
+    }
+
+    private var hasPopover: Bool {
+        browser.window?.childWindows?.contains(where: \.isVisible) == true
+    }
+
+    private func setShown(_ shown: Bool) {
+        withAnimation(.snappy(duration: 0.2)) { isShown = shown }
+        showsLights = shown || zone == .corner
+    }
+}
+
+/// Zen mode's top bar, as the window shows it out of Zen mode, over the page.
+struct ZenTopBar: View {
+    let style: SidebarStyle
+    let colorHex: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: Layout.trafficLightsWidth)
+            ToolbarView()
+        }
+        .frame(height: Layout.topBarHeight)
+        .background(WindowDragArea())
+        .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
+        // Cast by a shape: a visual effect view (the translucent style) casts none.
+        .background { Rectangle().fill(.background).shadow(color: .black.opacity(0.18), radius: 10, y: 2) }
+    }
+}
+
+enum PeekZone {
+    case outside, near, edge, corner
+
+    /// A little wider than the window margin, so an edge is easy to hit without covering more
+    /// than a sliver of the page.
+    static let edgeSize: CGFloat = 10
+
+    /// For the hidden sidebar: the left edge, from `top` down.
+    static func left(of point: CGPoint, below top: CGFloat) -> PeekZone {
+        point.x < edgeSize && point.y >= top ? .edge : .near
+    }
+
+    /// For Zen mode's top bar: the traffic lights' corner, and the top edge past it.
+    static func top(of point: CGPoint) -> PeekZone {
+        if point.x < Layout.trafficLightsWidth && point.y < Layout.topBarHeight { return .corner }
+        return point.y < edgeSize ? .edge : .near
+    }
+}
+
+/// Where the pointer is, for a hidden sidebar or top bar. One tracking area judged by geometry
+/// alone (`locate`, in the tracker's top-left coordinates): hover on the panel itself got exits and
+/// entries as the panel slid in under the pointer, and flickered. It never takes clicks, which go
+/// on to the page below, and only exists while the sidebar is hidden or Zen mode is on.
 private struct PeekTracker: NSViewRepresentable {
-    let topMargin: CGFloat
+    let locate: (CGPoint) -> PeekZone
     let onChange: (PeekZone) -> Void
 
     func makeNSView(context: Context) -> TrackerView { TrackerView() }
 
     func updateNSView(_ view: TrackerView, context: Context) {
-        view.topMargin = topMargin
+        view.locate = locate
         view.onChange = onChange
     }
 
     final class TrackerView: NSView {
-        /// A little wider than the window margin, so the edge is easy to hit without covering
-        /// more than a sliver of the page.
-        private static let edgeWidth: CGFloat = 10
-        var topMargin: CGFloat = 0
+        var locate: (CGPoint) -> PeekZone = { _ in .near }
         var onChange: (PeekZone) -> Void = { _ in }
         private var zone = PeekZone.outside
 
@@ -292,14 +426,12 @@ private struct PeekTracker: NSViewRepresentable {
             addTrackingArea(NSTrackingArea(rect: .zero, options: options, owner: self))
         }
 
-        override func mouseEntered(with event: NSEvent) { locate(event) }
-        override func mouseMoved(with event: NSEvent) { locate(event) }
+        override func mouseEntered(with event: NSEvent) { track(event) }
+        override func mouseMoved(with event: NSEvent) { track(event) }
         override func mouseExited(with event: NSEvent) { report(.outside) }
 
-        /// The edge starts below the top margin, where the page does.
-        private func locate(_ event: NSEvent) {
-            let point = convert(event.locationInWindow, from: nil)
-            report(point.x < Self.edgeWidth && point.y >= topMargin ? .edge : .near)
+        private func track(_ event: NSEvent) {
+            report(locate(convert(event.locationInWindow, from: nil)))
         }
 
         /// Only changes reach SwiftUI, so a moving pointer doesn't redraw anything.
@@ -347,17 +479,25 @@ struct WindowDragArea: View {
     }
 }
 
-/// Moves the traffic lights down so they sit centered in Lithium's taller top bar, and tells the
-/// browser which window it is in.
+/// Moves the traffic lights down so they sit centered in Lithium's taller top bar, hides them in
+/// Zen mode, and tells the browser which window it is in.
 private struct WindowConfigurator: NSViewRepresentable {
     let browser: Browser
+    let hidesLights: Bool
 
-    func makeNSView(context: Context) -> NSView { TrafficLightsView(browser: browser) }
-    func updateNSView(_ view: NSView, context: Context) {}
+    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView(browser: browser) }
+
+    func updateNSView(_ view: TrafficLightsView, context: Context) {
+        view.hidesLights = hidesLights
+    }
 
     final class TrafficLightsView: NSView {
         private weak var browser: Browser?
         private var observers: [NSObjectProtocol] = []
+        private var isFullScreen = false
+        var hidesLights = false {
+            didSet { if hidesLights != oldValue { showOrHideLights() } }
+        }
 
         init(browser: Browser) {
             self.browser = browser
@@ -374,13 +514,24 @@ private struct WindowConfigurator: NSViewRepresentable {
             browser?.window = window
             window.isMovableByWindowBackground = false
             let names: [Notification.Name] = [
-                NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+                NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.willEnterFullScreenNotification,
                 NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification,
             ]
             observers = names.map { name in
                 NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.layoutTrafficLights() }
+                    MainActor.assumeIsolated { self?.windowChanged(name) }
                 }
+            }
+            isFullScreen = window.styleMask.contains(.fullScreen)
+            showOrHideLights()
+            layoutTrafficLights()
+        }
+
+        private func windowChanged(_ name: Notification.Name) {
+            // Noted as the transitions start and end: layout runs in between, before the style mask says.
+            if name == NSWindow.willEnterFullScreenNotification || name == NSWindow.didExitFullScreenNotification {
+                isFullScreen = name == NSWindow.willEnterFullScreenNotification
+                showOrHideLights()
             }
             layoutTrafficLights()
         }
@@ -388,6 +539,17 @@ private struct WindowConfigurator: NSViewRepresentable {
         override func layout() {
             super.layout()
             layoutTrafficLights()
+        }
+
+        /// Hidden rather than faded, so they take no clicks. Full screen keeps them, in the title
+        /// bar that slides down from the menu bar.
+        private func showOrHideLights() {
+            guard let window else { return }
+            let hidden = hidesLights && !isFullScreen
+            for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                guard let button = window.standardWindowButton(type), button.isHidden != hidden else { continue }
+                button.isHidden = hidden
+            }
         }
 
         private func layoutTrafficLights() {

@@ -19,11 +19,11 @@ struct BarActionMatchTests {
         HistoryStore(fileURL: FileManager.default.temporaryDirectory.appending(path: "history-\(UUID()).sqlite"))
     }
 
-    /// A word's start, any word of four letters or more, or an alias, names an action.
+    /// A word's start of five letters, a whole word of four or more, or an alias, names an action.
     @Test func wordStartsAndAliasesNameAnAction() {
         #expect(named("copy") == [.copyLink])
         #expect(named("Settings") == [.settings])
-        #expect(named("dupl") == [.duplicateTab])
+        #expect(named("dupli") == [.duplicateTab])
         #expect(named("private") == [.newPrivateTab])
         #expect(named("zen", among: [.enterZenMode]) == [.enterZenMode], "through its alias Zen")
         #expect(BarAction.matches("zen", among: [.enterZenMode]).first?.match.isWhole == true)
@@ -34,10 +34,11 @@ struct BarActionMatchTests {
     }
 
     /// Everyday searches stay searches: too short, three letters that aren't a whole name, past a
-    /// name's first word with three letters, a typo under five letters, out of order, or more
-    /// than one typo.
+    /// name's first word with three letters, a lone word's start under five letters, a typo under
+    /// five letters, a word's start plus one more letter, out of order, or more than one typo.
     @Test func everydaySearchesBringNoAction() {
         for query in ["", "co", "tab", "new", "res", "pin", "del", "set", "deli", "clou", "pres", "clear cache",
+                      "rest", "resta", "restr", "opena", "copyr", "cook", "settingss",
                       "new york", "news", "link copy", "weather", "stuff", "setigns x", "pin code"] {
             #expect(named(query).isEmpty, "\(query)")
         }
@@ -47,7 +48,7 @@ struct BarActionMatchTests {
     @Test func oneSmallTypoIsForgiven() {
         #expect(named("settigns") == [.settings])
         #expect(named("dupicate") == [.duplicateTab])
-        #expect(named("settingss") == [.settings])
+        #expect(named("setttings") == [.settings])
         #expect(named("sttings") == [.settings])
         #expect(named("clera site") == [.clearSiteData])
         #expect(named("clera stie").isEmpty, "two typos")

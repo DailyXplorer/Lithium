@@ -60,9 +60,9 @@ enum BarAction: Hashable, CaseIterable {
 
     /// The actions among `available` the query clearly names, best first, at most `shownLimit`.
     /// Each typed word starts a word of the name, in order, with at most one small typo in
-    /// the whole query. Four letters at least, three only for a whole name ("zen"), and four to
-    /// match past a name's first word, so the start of everyday searches ("new", "pin", "tab")
-    /// doesn't bring actions up.
+    /// the whole query. Four letters at least, three only for a whole name ("zen"), four to match
+    /// past a name's first word, and five for a lone word only started, so the start of everyday
+    /// searches ("new", "pin", "tab", "rest") doesn't bring actions up.
     static func matches(_ query: String, among available: [BarAction]) -> [(action: BarAction, match: Match)] {
         let typed = words(query)
         let letters = typed.joined().count
@@ -94,6 +94,8 @@ enum BarAction: Hashable, CaseIterable {
             if position == 0 {
                 fromStart = index == 0
                 if !fromStart, word.count < 4 { return nil }
+                // "rest" starts restaurant as much as Restore tab.
+                if typed.count == 1, !isWholeWord, word.count < 5 { return nil }
             }
             typos += typo ? 1 : 0
             whole = whole && isWholeWord
@@ -109,6 +111,9 @@ enum BarAction: Hashable, CaseIterable {
     private static func wordMatch(_ typed: String, _ word: String) -> (typo: Bool, whole: Bool)? {
         if word.hasPrefix(typed) { return (false, typed.count == word.count) }
         guard typed.count >= 5, word.count >= max(4, typed.count - 1), typed.first == word.first else { return nil }
+        // A start of the word plus one more letter starts another word ("resta", "opena", "copyr"),
+        // not a typo: only a whole word typed just as long may end on one ("clera").
+        if word.hasPrefix(typed.dropLast()), word.count != typed.count { return nil }
         let letters = Array(word)
         for length in max(1, typed.count - 1)...min(word.count, typed.count + 1)
         where editDistance(Array(typed), Array(letters[..<length])) <= 1 {

@@ -121,10 +121,17 @@ struct CapturePreviewTests {
             )!)
         }
 
+        /// Read at 2× whatever the Mac's screen: on a 1× display the preview's thin strokes blend
+        /// with the screenshot under them and no longer read as ink.
         func color(at point: CGPoint) -> Seen {
-            let snapshot = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            let scale: CGFloat = 2
+            let snapshot = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(host.bounds.width * scale), pixelsHigh: Int(host.bounds.height * scale),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0
+            )!
+            snapshot.size = host.bounds.size
             host.cacheDisplay(in: host.bounds, to: snapshot)
-            let scale = CGFloat(snapshot.pixelsWide) / host.bounds.width
             let location = inView(point)
             let color = snapshot.colorAt(x: Int(location.x * scale), y: Int(location.y * scale))!.usingColorSpace(.sRGB)!
             switch (color.redComponent, color.greenComponent, color.blueComponent) {

@@ -129,6 +129,7 @@ final class Tab: NSObject, Identifiable {
                 // The reader's article was the old address's: a page moving on by itself
                 // (pushState) shows its own content again.
                 if isReading { leaveReader() }
+                readerPageMovedOn()
             }
         }
     }
@@ -158,6 +159,8 @@ final class Tab: NSObject, Identifiable {
     /// The reader was used in this web view: a page back from the cache may still show it, so
     /// pages are asked even with the button off.
     @ObservationIgnored private var hasRead = false
+    /// The one check of an address the page moved to by itself (`readerPageMovedOn`).
+    @ObservationIgnored private var readerRecheck: Task<Void, Never>?
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
@@ -467,6 +470,21 @@ final class Tab: NSObject, Identifiable {
         guard !isReading else { return }
         isReaderAvailable = false
         readerChecked = false
+    }
+
+    /// A page moving on by itself (pushState) neither commits nor finishes: its new address is
+    /// asked once, a moment later, when its content has likely come in. A load is asked at its end.
+    private func readerPageMovedOn() {
+        readerChecked = false
+        if isReaderAvailable { isReaderAvailable = false }
+        guard ReaderMode.showsButton || hasRead, let webView = loadedWebView, !webView.isLoading else { return }
+        let marks = commits
+        readerRecheck?.cancel()
+        readerRecheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled, commits == marks, !webView.isLoading, browser?.isOnScreen(self) == true else { return }
+            checkReader()
+        }
     }
 
     /// A new document, or none: neither an article known nor the reader shown.

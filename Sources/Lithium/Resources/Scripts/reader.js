@@ -1,6 +1,7 @@
 // Body of an async function run by ReaderMode in Lithium's own content world, only when the user
 // asks for the reader. Swaps the page's document for one holding its article alone, and back: the
-// page's own stays as it was, detached, so leaving returns to it without a reload.
+// page's own stays as it was, detached, so leaving returns to it without a reload (its frames,
+// which lose their document when detached, load again).
 // Arguments: action ('enter', 'exit' or 'style'), style ({ size, theme, font }), css (for 'enter').
 
 const applyStyle = (root) => {

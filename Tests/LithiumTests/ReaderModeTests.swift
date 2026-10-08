@@ -120,6 +120,23 @@ struct ReaderModeTests {
         #expect(try await value("getComputedStyle(document.querySelector('article')).fontSize", in: webView) == "15px")
     }
 
+    /// With DM Sans on websites (the default), the page's font script leaves the reader's font
+    /// alone, and gives the page DM Sans again once the reader is left.
+    @Test func keepsItsFontWithDMSansOnWebsites() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = try await load(ReaderPages.article, configuration: configuration)
+        let font = "getComputedStyle(document.querySelector('p')).fontFamily.split(',')[0].replace(/\"/g, '').trim()"
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(try await value(font, in: webView) == "Lithium DM Sans")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle(font: .serif)))
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(try await value(font, in: webView) == "ui-serif")
+        await ReaderMode.exit(webView)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(try await value(font, in: webView) == "Lithium DM Sans")
+    }
+
     @Test func savesOneStyleForEverySite() {
         let saved = UserDefaults.standard.data(forKey: Preference.readerStyle)
         defer { UserDefaults.standard.set(saved, forKey: Preference.readerStyle) }
@@ -229,6 +246,30 @@ struct ReaderTabTests {
         #expect(!tab.isReaderAvailable)
         #expect(!tab.isReading)
         #expect(await !tab.toggleReader())
+    }
+
+    /// A page that moves on by itself (pushState) is asked again for its new address.
+    @Test func asksAgainWhenThePageMovesOnByItself() async throws {
+        let (article, _) = try pages()
+        let browser = Browser()
+        browser.newTab(url: article)
+        let tab = try #require(browser.selectedTab)
+        #expect(await waitUntil(10) { tab.isReaderAvailable })
+        let commits = tab.commits
+        _ = try await tab.webView.evaluateJavaScript("""
+            window.article = document.body.innerHTML;
+            history.pushState(null, '', '?page=index');
+            document.body.innerHTML = '<p>Hello.</p>'; 0
+            """)
+        #expect(await waitUntil(3) { !tab.isReaderAvailable })
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(!tab.isReaderAvailable)
+        _ = try await tab.webView.evaluateJavaScript("""
+            history.pushState(null, '', '?page=article');
+            document.body.innerHTML = window.article; 0
+            """)
+        #expect(await waitUntil(5) { tab.isReaderAvailable })
+        #expect(tab.commits == commits)
     }
 
     /// Turned off, the button asks pages nothing; the shortcut still opens the reader.

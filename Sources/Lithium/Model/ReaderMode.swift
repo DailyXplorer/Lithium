@@ -3,7 +3,8 @@ import WebKit
 
 /// The reader: a page's article alone, in a clean view the user sizes and colors. It takes the
 /// page's place in the same web view (`reader.js`), so find, zoom, print, translation and summaries
-/// all work on what is read, and leaving it puts the page back as it was, without a reload.
+/// all work on what is read, and leaving it puts the page back as it was, without a reload. Its
+/// frames alone load again: detached, a frame loses its document.
 /// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
 /// the address bar's button, which asks once per page shown, and not at all once turned off.
 @MainActor

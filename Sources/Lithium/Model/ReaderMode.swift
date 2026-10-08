@@ -7,6 +7,8 @@ import WebKit
 /// frames alone load again: detached, a frame loses its document.
 /// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
 /// the address bar's button, which asks once per page shown, and not at all once turned off.
+/// The article is found by Mozilla Readability, Firefox's reader, which `reader.js` carries: it
+/// reaches a page only when the reader opens there.
 @MainActor
 enum ReaderMode {
     enum PageState: String {

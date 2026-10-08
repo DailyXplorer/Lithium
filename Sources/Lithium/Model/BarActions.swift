@@ -61,14 +61,16 @@ enum BarAction: Hashable, CaseIterable {
     /// The actions among `available` the query clearly names, best first, at most `shownLimit`.
     /// Each typed word starts a word of the name, in order, with at most one small typo in
     /// the whole query. Four letters at least, three only for a whole name ("zen"), four to match
-    /// past a name's first word, and five for a lone word only started, so the start of everyday
-    /// searches ("new", "pin", "tab", "rest") doesn't bring actions up.
+    /// past a name's first word, and five for a lone word unless it is a title's first word or a
+    /// one-word alias, typed whole, so everyday searches ("new", "pin", "rest", "data") don't
+    /// bring actions up.
     static func matches(_ query: String, among available: [BarAction]) -> [(action: BarAction, match: Match)] {
         let typed = words(query)
         let letters = typed.joined().count
         guard letters >= 3 else { return [] }
         let found = available.compactMap { action -> (BarAction, Match)? in
-            let best = ([action.title] + action.aliases).compactMap { match(typed, words($0)) }
+            let best = ([action.title] + action.aliases).enumerated()
+                .compactMap { match(typed, words($0.element), isTitle: $0.offset == 0) }
                 .filter { letters >= 4 || $0.isWhole }.min()
             return best.map { (action, $0) }
         }
@@ -83,7 +85,7 @@ enum BarAction: Hashable, CaseIterable {
             .split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
-    private static func match(_ typed: [String], _ name: [String]) -> Match? {
+    private static func match(_ typed: [String], _ name: [String], isTitle: Bool) -> Match? {
         var next = 0
         var typos = 0
         var whole = typed.count == name.count
@@ -94,8 +96,11 @@ enum BarAction: Hashable, CaseIterable {
             if position == 0 {
                 fromStart = index == 0
                 if !fromStart, word.count < 4 { return nil }
-                // "rest" starts restaurant as much as Restore tab.
-                if typed.count == 1, !isWholeWord, word.count < 5 { return nil }
+                // "rest" starts restaurant as much as Restore tab, and "data", "site" or "side" are
+                // searches too: under five letters, a lone word names an action only as the title's
+                // first word typed whole ("copy", "exit") or a whole one-word alias ("zen").
+                if typed.count == 1, word.count < 5,
+                   !(isWholeWord && fromStart && (isTitle || name.count == 1)) { return nil }
             }
             typos += typo ? 1 : 0
             whole = whole && isWholeWord

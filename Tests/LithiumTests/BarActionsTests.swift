@@ -19,9 +19,12 @@ struct BarActionMatchTests {
         HistoryStore(fileURL: FileManager.default.temporaryDirectory.appending(path: "history-\(UUID()).sqlite"))
     }
 
-    /// A word's start of five letters, a whole word of four or more, or an alias, names an action.
+    /// A word's start of five letters, a title's first word of four or more, or an alias, names an
+    /// action.
     @Test func wordStartsAndAliasesNameAnAction() {
         #expect(named("copy") == [.copyLink])
+        #expect(named("open") == [.openSplitView], "a title's first word typed whole")
+        #expect(named("site data") == [.clearSiteData], "past the first word with more than one word")
         #expect(named("Settings") == [.settings])
         #expect(named("dupli") == [.duplicateTab])
         #expect(named("private") == [.newPrivateTab])
@@ -34,11 +37,13 @@ struct BarActionMatchTests {
     }
 
     /// Everyday searches stay searches: too short, three letters that aren't a whole name, past a
-    /// name's first word with three letters, a lone word's start under five letters, a typo under
-    /// five letters, a word's start plus one more letter, out of order, or more than one typo.
+    /// name's first word with three letters, a lone word under five letters that isn't a title's
+    /// first word or a one-word alias typed whole ("data", "side"), a typo under five letters, a
+    /// word's start plus one more letter, out of order, or more than one typo.
     @Test func everydaySearchesBringNoAction() {
         for query in ["", "co", "tab", "new", "res", "pin", "del", "set", "deli", "clou", "pres", "clear cache",
                       "rest", "resta", "restr", "opena", "copyr", "cook", "settingss",
+                      "data", "site", "view", "side", "mode", "link", "undo",
                       "new york", "news", "link copy", "weather", "stuff", "setigns x", "pin code"] {
             #expect(named(query).isEmpty, "\(query)")
         }

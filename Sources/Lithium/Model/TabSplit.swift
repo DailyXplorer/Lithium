@@ -182,16 +182,17 @@ extension Browser {
     /// From the window's click monitor, before the click goes on. A click in the other side of
     /// the split focuses it, as Arc does; any click ends a tab drag that was dropped elsewhere.
     /// The other side's video popped out, its web view is in the player: a click there is the player's.
-    /// Only a click the page itself gets: one on whatever lies over it (the peeked sidebar, the
-    /// address bar's suggestions) is that view's, and selecting the partner there slid the peeked
-    /// sidebar away under a right-click's menu.
+    /// Only a click the page itself or its PDF viewer gets (`SplitPDFReader`): one on whatever lies
+    /// over it (the peeked sidebar, the address bar's suggestions) is that view's, and selecting the
+    /// partner there slid the peeked sidebar away under a right-click's menu.
     func noteClick(_ event: NSEvent) {
         endTabDrag()
         guard let partner = shownPartner, partner !== videoPopout.tab, !NativeInput.isAgents(event),
               let view = partner.loadedWebView, view.window === event.window,
               let content = view.window?.contentView,
               let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) else { return }
-        if hit.isDescendant(of: view) || partner.pdf.map({ hit.isDescendant(of: $0.view) }) == true { select(partner) }
+        let inPDF = sequence(first: hit, next: \.superview).contains { ($0 as? SplitPDFReader.Host)?.tabID == partner.id }
+        if hit.isDescendant(of: view) || inPDF { select(partner) }
     }
 
     func savedSplits(at places: [Tab.ID: Int]) -> [Session.Split]? {

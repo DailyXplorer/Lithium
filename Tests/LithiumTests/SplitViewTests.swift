@@ -317,6 +317,40 @@ struct SplitViewTests {
         #expect(browser.selectedTab === a)
     }
 
+    /// The other side shows a PDF: a click on its viewer's own controls (the toolbar here), not
+    /// only on its pages, focuses that side.
+    @Test func aClickOnTheOtherSidesPDFToolbarFocusesIt() throws {
+        let browser = browser(with: ["a", "b"])
+        let a = tab("a", in: browser), b = tab("b", in: browser)
+        browser.select(a)
+        browser.openInSplit(b)
+        #expect(browser.shownPartner === a)
+
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.contentView = nil }
+        let content = NSView(frame: window.contentLayoutRect)
+        window.contentView = content
+        a.webView.frame = NSRect(x: 0, y: 0, width: 396, height: 400)
+        b.webView.frame = NSRect(x: 404, y: 0, width: 396, height: 400)
+        content.addSubview(a.webView)
+        content.addSubview(b.webView)
+        let reader = PDFReader(url: URL(string: "https://example.com/report.pdf")!)
+        let viewer = SplitPDFReader.Host(rootView: PDFReaderView(reader: reader, takesKeyboard: false))
+        viewer.sizingOptions = []
+        viewer.tabID = a.id
+        viewer.frame = a.webView.frame
+        content.addSubview(viewer)
+        content.layoutSubtreeIfNeeded()
+
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: 200, y: 380), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let hit = try #require(content.hitTest(NSPoint(x: 200, y: 380)))
+        #expect(!hit.isDescendant(of: a.webView), "the viewer lies over the page")
+        browser.noteClick(event)
+        #expect(browser.selectedTab === a)
+    }
+
     /// Both sides are on screen: low memory puts other tabs to sleep, never the one beside the
     /// selected tab.
     @Test func theOtherSideNeverSleeps() async throws {

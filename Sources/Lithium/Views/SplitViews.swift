@@ -130,7 +130,7 @@ private struct SplitPane: View {
                 PageContainer(view: tab.webView)
                     .overlay {
                         if let pdf = tab.pdf {
-                            PDFReaderView(reader: pdf, takesKeyboard: browser.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
+                            SplitPDFReader(reader: pdf, tabID: tab.id, takesKeyboard: browser.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
                         }
                     }
                     .overlay {
@@ -152,6 +152,32 @@ private struct SplitPane: View {
         // Both sides wake as one of them is selected (`Browser.select`); this covers a split
         // shown some other way, as the window opens.
         .onAppear { tab.markActive() }
+    }
+}
+
+/// A split side's PDF viewer in its own AppKit view, so a click on its controls (the toolbar, the
+/// pages on the side, the password) lands in it: the window's click monitor focuses that side for
+/// those (`Browser.noteClick`), and not for a click on the peeked sidebar over them.
+struct SplitPDFReader: NSViewRepresentable {
+    let reader: PDFReader
+    let tabID: Tab.ID
+    let takesKeyboard: Bool
+
+    func makeNSView(context: Context) -> Host {
+        let host = Host(rootView: PDFReaderView(reader: reader, takesKeyboard: takesKeyboard))
+        // Fills the side, whatever the viewer's own size.
+        host.sizingOptions = []
+        host.tabID = tabID
+        return host
+    }
+
+    func updateNSView(_ host: Host, context: Context) {
+        host.rootView = PDFReaderView(reader: reader, takesKeyboard: takesKeyboard)
+        host.tabID = tabID
+    }
+
+    final class Host: NSHostingView<PDFReaderView> {
+        var tabID: Tab.ID?
     }
 }
 

@@ -97,6 +97,16 @@ struct FaviconTests {
         let png = try #require(Favicons.normalized(Data(plain.utf8)))
         #expect(NSImage(data: png)?.size == NSSize(width: 64, height: 64))
     }
+
+    /// Hosts without an icon are remembered for the session, but only so many of them.
+    @Test func remembersABoundedNumberOfHostsWithoutIcons() async {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "favicons-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder, missingLimit: 2)
+        // Nothing listens on these ports: each fetch fails at once.
+        for port in 1...3 { _ = await favicons.icon(forHost: "127.0.0.1:\(port)") }
+        #expect(favicons.missing == ["127.0.0.1:3"])
+    }
 }
 
 struct DeclaredIconTests {

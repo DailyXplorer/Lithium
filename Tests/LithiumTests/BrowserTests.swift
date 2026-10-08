@@ -229,6 +229,30 @@ struct BrowserTests {
         if let reopened = browser.selectedTab { browser.close(reopened) }
     }
 
+    /// A tab from the last session wakes without its history: if its address now answers with a
+    /// file, the file downloads and the tab stays, unlike one opened just to fetch it.
+    @Test func aRestoredTabWhoseAddressNowDownloadsStays() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/report": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        SessionStore.save(Session(tabs: [
+            .init(url: URL(string: "data:text/html,first")!, title: "First"),
+            .init(url: base.appending(path: "report"), title: "Report"),
+        ], selectedIndex: 0))
+        defer { SessionStore.save(Session()) }
+        let browser = Browser()
+        let restored = try #require(browser.tabs.last)
+        #expect(restored.isAsleep)
+        let before = Downloads.shared.items.count
+        browser.select(restored)
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 })
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(30) { item.state != .downloading })
+        if let file = item.destination { try? FileManager.default.removeItem(at: file) }
+        #expect(browser.tabs.contains { $0 === restored })
+    }
+
     /// A frame's `<a download>` asks too, like its attachments: it isn't the page the user is on.
     @Test func aFramesDownloadLinkAsksFirst() async throws {
         let (listener, base) = try await LocalHTTP.serve([

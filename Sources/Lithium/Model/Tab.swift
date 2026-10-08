@@ -95,6 +95,10 @@ final class Tab: NSObject, Identifiable {
     /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
     /// fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
+    /// Whether the tab has ever had a page, in any web view, or came back from the last session.
+    /// One that wakes without its history has none in its new web view, yet isn't a tab opened
+    /// just to fetch a file.
+    @ObservationIgnored private var hasHadPage = false
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
@@ -338,6 +342,7 @@ final class Tab: NSObject, Identifiable {
         faviconData = (browser?.favicons ?? .shared).cachedData(host: url.host() ?? "")
         favicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : faviconData.flatMap(NSImage.init(data:))
         isAsleep = true
+        hasHadPage = true
     }
 
     /// Stops the page, and whatever it was to go on to once shown.
@@ -726,7 +731,7 @@ final class Tab: NSObject, Identifiable {
         if inMainFrame { endedUnshown(.download(fileName: fileName)) }
         // A tab opened just to fetch a file has no page to show once the download starts; like
         // Safari, close it, without a Reopen Closed Tab entry that would only download it again.
-        if webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false) }
+        if !hasHadPage, webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false) }
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
@@ -1099,6 +1104,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        hasHadPage = true
         shownProtectedURL = protectedURL
         awaitCommit(false)
         // A new document: its script tells again, a page back from the cache too.

@@ -258,7 +258,7 @@ private struct SidebarPeek: View {
     /// Opening waits for the pointer to rest on the edge, closing for it to stay away, and any
     /// move in between calls the change off. A double click that renames a background tab selects
     /// it first, which hides the panel; the rename brings it back at once and keeps it until the
-    /// name is in.
+    /// name is in. Anything else opened from the panel keeps it too (`Browser.holdsPeek`).
     private func update() {
         pending?.cancel()
         let renaming = browser.renamingTabID != nil
@@ -271,6 +271,7 @@ private struct SidebarPeek: View {
         let delay = wanted ? reveal.openDelay : reveal.closeDelay
         pending = Task {
             try? await Task.sleep(for: delay)
+            while !wanted, !Task.isCancelled, browser.holdsPeek { try? await Task.sleep(for: delay) }
             if !Task.isCancelled { setShown(wanted) }
         }
     }
@@ -347,13 +348,9 @@ private struct ZenTopBarPeek: View {
         pending = Task {
             try? await Task.sleep(for: delay)
             // A popover of the bar's (site information, downloads) would go with it.
-            while !wanted, !Task.isCancelled, hasPopover { try? await Task.sleep(for: delay) }
+            while !wanted, !Task.isCancelled, browser.holdsPeek { try? await Task.sleep(for: delay) }
             if !Task.isCancelled { setShown(wanted) }
         }
-    }
-
-    private var hasPopover: Bool {
-        browser.window?.childWindows?.contains(where: \.isVisible) == true
     }
 
     private func setShown(_ shown: Bool) {

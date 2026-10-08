@@ -314,6 +314,55 @@ struct SpacesTests {
         #expect(browser.currentSpaceID == Space.mainID)
     }
 
+    /// The peeked sidebar slides back on `tabPickToken`: making, switching (a click, ⌃1…⌃9, a
+    /// swipe) and deleting spaces keep it out, still showing the space's last tab as read.
+    @Test func switchingSpacesIsNotATabPick() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let home = browser.newTab(url: page("home"))
+        browser.addSpace(browser.newSpaceDraft())
+        let work = browser.currentSpaceID
+        browser.newTab(url: page("work"))
+        let picks = browser.tabPickToken
+
+        browser.switchToSpace(Space.mainID)
+        #expect(browser.selectedTab === home)
+        browser.switchToSpace(at: 1)
+        browser.switchSpace(by: -1)
+        browser.addSpace(browser.newSpaceDraft())
+        #expect(browser.selectedTab == nil)
+        browser.deleteSpace(browser.currentSpaceID)
+        #expect(browser.currentSpaceID == work)
+        browser.deleteSpace(work)
+        #expect(browser.currentSpaceID == Space.mainID)
+        #expect(browser.tabPickToken == picks)
+    }
+
+    /// Something opened from the peeked sidebar keeps it out until it is done: a tab's name being
+    /// typed, or a popover such as a space's editor (the window's child, standing in here).
+    @Test func aRenameOrAPopoverHoldsThePeekedSidebar() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let tab = browser.newTab(url: page("home"))
+        let window = PeekWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        browser.window = window
+        defer { browser.window = nil }
+        #expect(!browser.holdsPeek)
+
+        browser.renamingTabID = tab.id
+        #expect(browser.holdsPeek, "the name field")
+        browser.renamingTabID = nil
+        #expect(!browser.holdsPeek)
+
+        window.children = [ShownWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)]
+        #expect(browser.holdsPeek, "a popover")
+        window.children = [NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)]
+        #expect(!browser.holdsPeek, "a child window already gone")
+        window.children = []
+        #expect(!browser.holdsPeek)
+    }
+
     private func makeBrowser() -> Browser {
         SessionStore.save(Session())
         PinStore.save([])
@@ -338,6 +387,17 @@ struct SpacesTests {
         }
         return await condition()
     }
+}
+
+/// A window whose child windows a test sets, never ordered in.
+private final class PeekWindow: NSWindow {
+    var children: [NSWindow] = []
+    override var childWindows: [NSWindow]? { children }
+}
+
+/// Says it is visible, as a popover's window does, without ever being on screen.
+private final class ShownWindow: NSWindow {
+    override var isVisible: Bool { true }
 }
 
 /// The sidebar's two-finger swipe, as the events of a trackpad gesture reach it.

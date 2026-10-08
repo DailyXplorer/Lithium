@@ -158,6 +158,34 @@ struct WindowKeysTests {
         #expect(tab.customTitle == "Docs")
     }
 
+    /// A row being renamed that only scrolls out of the sidebar's lazy list keeps its rename.
+    @Test func scrollingARenamedRowAwayKeepsTheRename() async throws {
+        let (browser, _, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        let others = (1...50).map { browser.newTab(url: URL(string: "data:text/html,\($0)")!, selecting: false) }
+        defer { others.forEach { browser.close($0) } }
+        let first = try #require(browser.tabListEntries.first?.tab)
+        browser.renamingTabID = first.id
+        #expect(await nameEditor(in: window) != nil)
+
+        // The tab list is the only scroll view taller than the window.
+        func scrollViews(in view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
+        }
+        let content = try #require(window.contentView)
+        let list = try #require(scrollViews(in: content).first {
+            ($0.documentView?.frame.height ?? 0) > window.frame.height
+        })
+        let bottom = (list.documentView?.frame.height ?? 0) - list.contentView.bounds.height
+        list.contentView.scroll(to: NSPoint(x: 0, y: list.documentView?.isFlipped == true ? bottom : 0))
+        list.reflectScrolledClipView(list.contentView)
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(browser.renamingTabID == first.id, "the rename goes on")
+        #expect(first.customTitle == nil)
+        browser.renamingTabID = nil
+    }
+
     /// A tab picked with the keyboard while the address bar edits ends the edit: Return then
     /// can't send the text to the tab left and bring it back.
     @Test func pickingAnotherTabEndsAddressEditing() async throws {

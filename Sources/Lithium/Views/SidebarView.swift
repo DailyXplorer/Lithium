@@ -367,9 +367,10 @@ private struct TabNameField: View {
                 if !focused, browser.renamingTabID == tab.id { commit() }
             }
             // Gone with the sidebar (⌘B): the rename would otherwise stay open, holding Escape,
-            // the agent's input and the sidebar's peek.
+            // the agent's input and the sidebar's peek. Not when the row only scrolls out of the
+            // lazy list: the rename goes on there.
             .onDisappear {
-                if browser.renamingTabID == tab.id { commit() }
+                if browser.renamingTabID == tab.id, !browser.isSidebarVisible { commit() }
             }
     }
 

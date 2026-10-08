@@ -59,6 +59,7 @@ struct CaptureSelectionOverlay: View {
             }
         }
         .pointerStyle(.rectSelection)
+        .background(PointerReset())
         .onAppear {
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard event.keyCode == 53 else { return event }
@@ -102,6 +103,24 @@ struct CaptureSelectionOverlay: View {
     private func capture(_ area: CGRect?) {
         guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
         Task { await browser.capture.capture(area, of: window) }
+    }
+}
+
+/// SwiftUI leaves a view's pointer style showing when the view goes away under a still pointer,
+/// and Lithium's own chrome never sets the arrow back: after a capture, the crosshair stayed over
+/// the toolbar and sidebar (pages set their own pointer as it moves over them). Behind a view that
+/// shows the crosshair, this sets the arrow back as the view leaves.
+struct PointerReset: NSViewRepresentable {
+    func makeNSView(context: Context) -> ResetView { ResetView() }
+
+    func updateNSView(_ view: ResetView, context: Context) {}
+
+    static func dismantleNSView(_ view: ResetView, coordinator: ()) {
+        NSCursor.arrow.set()
+    }
+
+    final class ResetView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
@@ -357,6 +376,7 @@ struct CapturePreview: View {
         }
         .font(Theme.font(13))
         .frame(width: 920)
+        .background(PointerReset())
         .onChange(of: style, initial: true) {
             rendered = CaptureComposition.render(shot, style)
             if drag == nil { draft = nil }

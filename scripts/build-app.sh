@@ -16,10 +16,13 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 
 # iCloud-synced folders tag build products with xattrs that break codesign; build outside them.
-if [ ! -L .build ]; then
+# One folder per checkout: shared, another checkout's build between this build and the copy
+# below swapped the binary that ships. A link to the old shared folder is moved; one of your own stays.
+build_dir="$HOME/Library/Caches/Lithium/builds/$(pwd -P | shasum | cut -c1-12)"
+if [ ! -L .build ] || [ "$(readlink .build)" = "$HOME/Library/Caches/Lithium/build" ]; then
   rm -rf .build
-  mkdir -p "$HOME/Library/Caches/Lithium/build"
-  ln -s "$HOME/Library/Caches/Lithium/build" .build
+  mkdir -p "$build_dir"
+  ln -s "$build_dir" .build
 fi
 
 # A missing, half-written or outdated set (FilterSources.json changed since) is built again.

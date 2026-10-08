@@ -72,4 +72,56 @@ struct TestScriptTests {
         }
         #expect(alive.isEmpty, "test run and helper stopped")
     }
+
+    /// Each checkout builds in a folder of its own, so a run never tests another checkout's build.
+    /// A link to the old shared folder is moved; one the user made stays.
+    @Test func eachCheckoutBuildsInItsOwnFolder() throws {
+        let manager = FileManager.default
+        let folder = manager.temporaryDirectory.appending(path: "test-script-\(UUID())")
+        let bin = folder.appending(path: "bin")
+        let home = folder.appending(path: "home")
+        try manager.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: folder) }
+        // A build that fails, so the script stops right after setting up `.build`.
+        let swift = bin.appending(path: "swift")
+        try "#!/bin/bash\nexit 7\n".write(to: swift, atomically: false, encoding: .utf8)
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: swift.path)
+        let source = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/test").standardized
+
+        func checkout(_ name: String, linkedTo destination: String? = nil) throws -> URL {
+            let checkout = folder.appending(path: name)
+            try manager.createDirectory(at: checkout.appending(path: "scripts"), withIntermediateDirectories: true)
+            try manager.copyItem(at: source, to: checkout.appending(path: "scripts/test"))
+            if let destination { try manager.createSymbolicLink(atPath: checkout.appending(path: ".build").path, withDestinationPath: destination) }
+            return checkout
+        }
+        func build(_ checkout: URL) throws -> String {
+            let script = Process()
+            script.executableURL = URL(filePath: "/bin/bash")
+            script.arguments = [checkout.appending(path: "scripts/test").path]
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = "\(bin.path):\(environment["PATH"] ?? "/usr/bin:/bin")"
+            environment["HOME"] = home.path
+            script.environment = environment
+            script.standardInput = FileHandle.nullDevice
+            script.standardOutput = FileHandle.nullDevice
+            script.standardError = FileHandle.nullDevice
+            try script.run()
+            script.waitUntilExit()
+            #expect(script.terminationStatus == 7, "stopped at the build")
+            return try manager.destinationOfSymbolicLink(atPath: checkout.appending(path: ".build").path)
+        }
+
+        let builds = home.appending(path: "Library/Caches/Lithium/builds").path + "/"
+        let firstCheckout = try checkout("first")
+        let first = try build(firstCheckout)
+        let second = try build(checkout("second", linkedTo: home.appending(path: "Library/Caches/Lithium/build").path))
+        #expect(first.hasPrefix(builds) && second.hasPrefix(builds))
+        #expect(first != second)
+        #expect(manager.fileExists(atPath: first) && manager.fileExists(atPath: second))
+        #expect(try build(firstCheckout) == first, "a checkout keeps its folder")
+
+        let own = folder.appending(path: "own").path
+        #expect(try build(checkout("custom", linkedTo: own)) == own)
+    }
 }

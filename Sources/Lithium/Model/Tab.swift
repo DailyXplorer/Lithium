@@ -900,6 +900,9 @@ extension Tab: WKNavigationDelegate {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
         }
+        // A link or form's own load uses the press up whether or not a check below asks for it
+        // (a frame's, a new tab's): the page it opens can't use it again.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action) { _ = pressed }
         // A server's redirect keeps the type of the click that started its load, whoever pressed since.
         if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), (webView as? PageWebView)?.agentPressedLast != true {
             browser?.agent?.userStartedLoad(in: self)

@@ -473,17 +473,20 @@ struct NavigationTests {
     }
 
     /// The press on a link is used up by the load it starts: the page it opens can't `click()`
-    /// another app's link (nor start a download) on it, however soon after the press it runs.
-    @Test func aPressDoesNotCarryOverToTheNextPage() async throws {
+    /// another app's link (nor start a download) on it, however soon after the press it runs. So
+    /// too in a frame, whose own load nothing else checks the press for.
+    @Test(arguments: [false, true]) func aPressDoesNotCarryOverToTheNextPage(inFrame: Bool) async throws {
         let html = "Content-Type: text/html"
+        let link = #"""
+            <style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
+            <a href="/next">Next</a>
+            """#
         let (listener, base) = try await LocalHTTP.serve([
-            "/": (html, #"""
-                <title>First</title><style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
-                <a href="/next">Next</a>
-                """#),
+            "/": (html, "<title>First</title>" + (inFrame ? #"<style>body { margin: 0 } iframe { border: 0; width: 400px; height: 300px }</style><iframe src="/link"></iframe>"# : link)),
+            "/link": (html, link),
             "/next": (html, #"""
                 <title>Next</title><a id="app" href="lithium-test:open">Open</a>
-                <script>document.getElementById('app').click(); document.title = 'Clicked'</script>
+                <script>document.getElementById('app').click(); top.document.title = 'Clicked'</script>
                 """#),
         ])
         defer { listener.cancel() }
@@ -493,6 +496,9 @@ struct NavigationTests {
         let tab = browser.newTab(url: base)
         defer { browser.close(tab) }
         #expect(await waitUntil(30) { tab.webView.title == "First" && !tab.webView.isLoading })
+        if inFrame {
+            #expect(await waitUntil(10) { (try? await tab.webView.evaluateJavaScript("!!document.querySelector('iframe').contentDocument?.querySelector('a')")) as? Bool == true })
+        }
 
         let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
         shown.isReleasedWhenClosed = false

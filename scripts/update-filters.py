@@ -30,12 +30,28 @@ GROUPS = SOURCES["groups"]
 TRUE_TOKENS = set(SOURCES["trueTokens"])
 # Manifest.currentFormat in the app: 2 keeps uBO's +js() filters apart in scriptlets.txt.
 FORMAT = 2
+# Rules a download needs to count as a list, as in the app's updater (FilterUpdater.minimumRules).
+MINIMUM_RULES = 10
 
 
 def fetch(url: str) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": "Lithium-filter-updater"})
     with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read().decode("utf-8", errors="replace")
+        body = response.read().decode("utf-8", errors="replace")
+    # An HTML page (an error or login page served with 200) would parse into junk rules, which
+    # the app would then ship and fall back to.
+    if next((c for c in body if not c.isspace() and c != "﻿"), "") == "<":
+        raise SystemExit(f"update-filters.py: {url} answered an HTML page, not a filter list")
+    return body
+
+
+def download(name: str) -> list[str]:
+    """The list's rules. A captive portal, a parked domain or an emptied file answers 200 too:
+    a list with fewer than MINIMUM_RULES rules fails the build, as the app's updater fails it."""
+    lines = expand(LISTS[name], set())
+    if len(lines) < MINIMUM_RULES:
+        raise SystemExit(f"update-filters.py: {name} has {len(lines)} rules, not a filter list")
+    return lines
 
 
 def eval_condition(expr: str) -> bool:
@@ -102,7 +118,7 @@ def build(out: Path) -> None:
         for name in names:
             if name not in cache:
                 print(f"fetch {name}", file=sys.stderr)
-                cache[name] = expand(LISTS[name], set())
+                cache[name] = download(name)
                 (out / "lists" / f"{name}.txt").write_text("\n".join(cache[name]))
             # uBO's +js() filters run with uBO's own scriptlets in the app (UBOScriptlets.swift), unconverted.
             is_scriptlet = lambda r: name.startswith("ubo-") and ("##+js(" in r or "#@#+js(" in r)

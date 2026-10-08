@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WebKit
@@ -272,6 +273,37 @@ struct NavigationTests {
         #expect(controller.userScripts.contains { $0.source == shown })
         #expect(!controller.userScripts.contains { $0.source == farbling(other) })
         #expect(tab.webView.url == base)
+    }
+
+    /// A load of another site that never shows a page (a 204 here) leaves the page its icon, and
+    /// its address coming back is no second visit.
+    @Test func aLoadThatNeverShowsKeepsTheIconAndAddsNoVisit() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data("<title>Shown</title>".utf8)),
+            "/empty": ("HTTP/1.1 204 No Content\r\nContent-Type: text/plain", Data()),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Shown" && !tab.webView.isLoading })
+        let icon = try #require(NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            NSColor.red.setFill()
+            rect.fill()
+            return true
+        }.tiffRepresentation)
+        tab.showFavicon(icon)
+        // Another visit in between, so the history's own one-minute merge can't hide a second one.
+        browser.history.record(URL(string: "https://elsewhere.example/")!, title: "")
+
+        let other = try #require(URL(string: "http://localhost:\(base.port ?? 0)/empty"))
+        _ = try await tab.webView.evaluateJavaScript("location.href = '\(other.absoluteString)'; 0")
+        #expect(await waitUntil(15) { requests["/empty"] == 1 && !tab.webView.isLoading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(tab.webView.url == base)
+        #expect(tab.favicon != nil)
+        #expect(browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").count == 1)
     }
 
     /// Closing the selected tab tells extensions (`chrome.tabs.onActivated`) which tab took over.

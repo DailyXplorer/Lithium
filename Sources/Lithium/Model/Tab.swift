@@ -233,6 +233,13 @@ final class Tab: NSObject, Identifiable {
     var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
     /// Where visits are recorded; a private tab records none.
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
+    /// The address of the last visit recorded.
+    @ObservationIgnored private var recordedURL: URL?
+
+    private func recordVisit(_ url: URL, title: String) {
+        recordedURL = url
+        historyStore?.record(url, title: title)
+    }
 
     init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) {
         self.browser = browser
@@ -572,10 +579,10 @@ final class Tab: NSObject, Identifiable {
             webView.observe(\.url) { [weak self] webView, _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep, let url = webView.url, url != self.url else { return }
-                    if url.host() != self.url?.host() { self.favicon = nil; self.faviconData = nil }
                     self.url = url
-                    // Same-document navigations (pushState) never reach didFinish.
-                    if !webView.isLoading { self.historyStore?.record(url, title: self.title) }
+                    // Same-document navigations (pushState) never reach didFinish. A load that
+                    // never shows hands back the address already recorded: no new visit.
+                    if !webView.isLoading, url != self.recordedURL { self.recordVisit(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -1076,9 +1083,12 @@ extension Tab: WKNavigationDelegate {
         browser?.appLinks.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
+        // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {
             updateUnread { $0.leaveSite() }
             forgetLiveIcon()
+            favicon = nil
+            faviconData = nil
         }
         shownHost = webView.url?.host()
         let list = webView.backForwardList
@@ -1127,7 +1137,7 @@ extension Tab: WKNavigationDelegate {
             }
         }
         guard failedURL == nil else { return }
-        if let url = webView.url { historyStore?.record(url, title: webView.title ?? "") }
+        if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         faviconLoad?.cancel()
         faviconLoad = Task { await refreshFavicon() }

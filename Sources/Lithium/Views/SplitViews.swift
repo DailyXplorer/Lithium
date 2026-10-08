@@ -141,7 +141,7 @@ private struct SplitPane: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if browser.find.isVisible, browser.selectedTabID == tab.id {
+            if browser.showsFindBar(over: tab) {
                 FindBar(tab: tab)
                     .padding(.top, tab.pdf == nil ? 10 : 50)
                     .padding(.horizontal, 10)

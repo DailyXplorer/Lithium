@@ -351,6 +351,44 @@ extension BrowserTests {
         #expect(await lockedReader.content(limit: 100) == nil)
     }
 
+    /// Each step scrolls its match into view, pages away included, and draws it in its own color.
+    @Test func findScrollsToEachMatch() async throws {
+        let pages = (1...40).map { $0 == 2 ? "Needle and needle" : $0 == 38 ? "One more needle" : "Page \($0)" }
+        let file = try makePDF(title: "Long", pages: pages)
+        let reader = PDFReader(url: file)
+        #expect(reader.open(try Data(contentsOf: file)))
+        reader.view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        reader.view.layoutDocumentView()
+        let document = try #require(reader.view.documentView)
+        let clip = try #require(document.enclosingScrollView?.contentView)
+        let find = FindInPage()
+
+        /// The current match, drawn last over the others in a color of its own, is on `pageIndex` and in view.
+        func expectShown(_ match: Int, onPage pageIndex: Int) throws {
+            #expect(find.currentMatch == match)
+            let marked = try #require(reader.view.highlightedSelections)
+            let current = try #require(marked.last)
+            #expect(marked.count == 4)
+            #expect(marked.dropLast().allSatisfy { $0.color != current.color })
+            let page = try #require(current.pages.first)
+            #expect(reader.document?.index(for: page) == pageIndex)
+            let box = reader.view.convert(reader.view.convert(current.bounds(for: page), from: page), to: document)
+            #expect(clip.documentVisibleRect.contains(box), "match \(match) on page \(pageIndex + 1) is out of view")
+        }
+
+        await find.update(query: "needle", in: reader)
+        #expect(find.matchCount == 3)
+        try expectShown(1, onPage: 1)
+        await find.step(forward: true, in: reader)
+        try expectShown(2, onPage: 1)
+        await find.step(forward: true, in: reader)
+        try expectShown(3, onPage: 37)
+        await find.step(forward: true, in: reader)
+        try expectShown(1, onPage: 1)
+        await find.step(forward: false, in: reader)
+        try expectShown(3, onPage: 37)
+    }
+
     /// A text PDF with one outline entry per page, written by hand: PDFKit drops outlines it is given.
     private func makePDF(title: String, pages: [String], password: String? = nil) throws -> URL {
         let count = pages.count

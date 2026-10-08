@@ -96,27 +96,20 @@ struct BrowserCommands: Commands {
         CommandGroup(after: .textEditing) {
             Divider()
             // ⌘F toggles the bar; closing it hands the keyboard back to the page.
-            Button(browser.find.isVisible ? "Hide Find Bar" : "Find…") {
-                if browser.find.isVisible {
-                    browser.find.hide()
-                    if let view = browser.selectedTab?.contentView { view.window?.makeFirstResponder(view) }
-                } else if browser.selectedTab != nil {
-                    browser.find.show()
-                }
-            }
-            .keyboardShortcut("f")
-            Button("Find Next") { findStep(forward: true) }
+            Button(browser.findBarIsInFront ? "Hide Find Bar" : "Find…") { browser.toggleFind() }
+                .keyboardShortcut("f")
+            Button("Find Next") { Task { await browser.findStep(forward: true) } }
                 .keyboardShortcut("g")
-                .disabled(browser.selectedTab == nil)
-            Button("Find Previous") { findStep(forward: false) }
+                .disabled(browser.commandTab == nil)
+            Button("Find Previous") { Task { await browser.findStep(forward: false) } }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             Button("Use Selection for Find") {
-                guard let tab = browser.selectedTab else { return }
-                Task { await browser.find.useSelection(in: tab.findTarget) }
+                guard let tab = browser.commandTab else { return }
+                Task { await browser.find.useSelection(in: tab.findTarget, inLink: browser.quickLinks.keyTab) }
             }
             .keyboardShortcut("e")
-            .disabled(browser.selectedTab == nil)
+            .disabled(browser.commandTab == nil)
         }
         CommandGroup(before: .sidebar) {
             Button(browser.showsSidebar ? "Hide Sidebar" : "Show Sidebar") {
@@ -239,12 +232,6 @@ struct BrowserCommands: Commands {
 
     private var protectionsEnabled: Bool {
         browser.privacy.isEnabled(for: browser.selectedTab?.url, privateSession: browser.selectedTab?.privateSession)
-    }
-
-    private func findStep(forward: Bool) {
-        guard let tab = browser.selectedTab else { return }
-        browser.find.show(focusingField: false)
-        Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 
     private func showDeveloperTools(_ panel: DeveloperTools.Panel) {

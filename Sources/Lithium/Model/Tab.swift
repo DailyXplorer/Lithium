@@ -1312,7 +1312,7 @@ extension Tab: WKNavigationDelegate {
             }
         }
         // The find bar's count was the page before's: the new page is searched again.
-        if let browser, browser.find.isVisible, !browser.find.query.isEmpty, browser.selectedTab === self {
+        if let browser, browser.showsFindBar(over: self), !browser.find.query.isEmpty {
             let find = browser.find
             Task { await find.update(query: find.query, in: findTarget) }
         }

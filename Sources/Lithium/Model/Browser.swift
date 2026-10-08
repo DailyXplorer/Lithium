@@ -453,13 +453,17 @@ final class Browser {
     /// or under a sheet (the capture preview), and not while a text field edits (the address bar
     /// ends its editing itself), unless it is the find field or a tab's name, which Escape closes.
     func ownsEscape(in window: NSWindow?) -> Bool {
-        guard let window, window === self.window, window.attachedSheet == nil else { return false }
+        guard let window, window.attachedSheet == nil else { return false }
+        // A link's window has only the find bar to close.
+        if window !== self.window { return window === quickLinks.keyWindow && findBarIsInFront }
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return true }
         return find.isFieldFocused || isRenaming
     }
 
     /// Closes the topmost Lithium overlay. Returns false when there was none.
     func dismissOverlay() -> Bool {
+        // A link's window has only its find bar: a tab's name editing in the main window stays.
+        if quickLinks.keyTab != nil { return closeFindBar() }
         if recentTabs.target != nil {
             endTabCycle(commit: false)
             return true
@@ -472,12 +476,7 @@ final class Browser {
             returnKeyboardToPage(fieldHadKeyboard: nameHadKeyboard && !find.isFieldFocused)
             return true
         }
-        if find.isVisible {
-            let hadKeyboard = find.isFieldFocused
-            find.hide()
-            returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
-            return true
-        }
+        if closeFindBar() { return true }
         // Opened with ⇧⌘S, the popover never takes the keyboard, so Escape reaches the window.
         if summaries.isPanelPresented {
             summaries.isPanelPresented = false
@@ -503,9 +502,46 @@ final class Browser {
     /// bar, a tab's name), as ⌘F does: the field leaving would leave it on the window, where keys
     /// beep. Unless that field had it, a field still editing (the address bar) keeps it.
     func returnKeyboardToPage(fieldHadKeyboard: Bool) {
-        guard let page = selectedTab?.contentView, let window = page.window else { return }
+        guard let page = commandTab?.contentView, let window = page.window else { return }
         if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
+
+    /// Escape: closes the find bar of the window in front, if it has it.
+    private func closeFindBar() -> Bool {
+        guard findBarIsInFront else { return false }
+        let hadKeyboard = find.isFieldFocused
+        find.hide()
+        returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
+        return true
+    }
+
+    /// ⌘F. Find acts on the window in front, as the other page commands do (`commandTab`): a
+    /// link's window finds in its own page, and ⌘F there moves the bar from the main window.
+    func toggleFind() {
+        if findBarIsInFront {
+            find.hide()
+            returnKeyboardToPage(fieldHadKeyboard: true)
+        } else if commandTab != nil {
+            find.show(inLink: quickLinks.keyTab)
+        }
+    }
+
+    /// ⌘G and ⇧⌘G, which open the bar without taking the keyboard.
+    func findStep(forward: Bool) async {
+        guard let tab = commandTab else { return }
+        find.show(focusingField: false, inLink: quickLinks.keyTab)
+        await find.step(forward: forward, in: tab.findTarget)
+    }
+
+    /// Whether the find bar shows over `tab`: the window it was opened in keeps it while another
+    /// is in front, so going back to it doesn't search again or take the keyboard. In the main
+    /// window it follows the selected tab (in split view, the focused pane).
+    func showsFindBar(over tab: Tab) -> Bool {
+        find.isVisible && (find.linkTab ?? selectedTab) === tab
+    }
+
+    /// Whether the window in front shows the find bar: ⌘F there hides it rather than moving it.
+    var findBarIsInFront: Bool { commandTab.map(showsFindBar(over:)) ?? false }
 
     /// In Zen mode, Show Sidebar (⌘B, the top bar's button) asks for the sidebar back, which takes
     /// the window out of Zen mode.
@@ -704,7 +740,8 @@ final class Browser {
     }
 
     private func showStartPage(picked: Bool = true) {
-        find.hide()
+        // A link's window keeps its bar.
+        if find.linkTab == nil { find.hide() }
         // Left for the address bar: it counts as used until now, as does the other side of its split.
         selectedTab?.markActive()
         shownPartner?.markActive()
@@ -798,7 +835,7 @@ final class Browser {
         if picked { tab.didOpen() }
         if tab.id != selectedTabID {
             if picked { tabPickToken &+= 1 }
-            find.hide()
+            if find.linkTab == nil { find.hide() }
             previous?.markActive()
             // Leaving the screen too, and no view says so: its idle time starts now.
             shownPartner?.markActive()

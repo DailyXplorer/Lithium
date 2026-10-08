@@ -27,6 +27,9 @@ final class FindInPage {
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
     private(set) var focusToken = 0
+    /// The link's page (`QuickLinks`) the bar was opened over, nil for the main window's. The bar
+    /// stays in that window when another comes to the front (`Browser.showsFindBar`).
+    private(set) var linkTab: Tab?
     /// Whether the bar takes the keyboard when it appears: only Find… asks for it. Find Next and
     /// Use Selection for Find leave the keyboard where it is, such as a form field in the page.
     @ObservationIgnored private(set) var focusesField = true
@@ -37,7 +40,8 @@ final class FindInPage {
     /// Only the newest search sets the count: an older one may finish later, even for the same text.
     @ObservationIgnored private var search = 0
 
-    func show(focusingField: Bool = true) {
+    func show(focusingField: Bool = true, inLink linkTab: Tab? = nil) {
+        self.linkTab = linkTab
         isVisible = true
         focusesField = focusingField
         if focusingField { focusToken &+= 1 }
@@ -45,6 +49,7 @@ final class FindInPage {
 
     func hide() {
         isVisible = false
+        linkTab = nil
         // A search still running must not show a match once the bar is closed.
         search += 1
         target?.clearMatches()
@@ -94,9 +99,9 @@ final class FindInPage {
         return forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
     }
 
-    func useSelection(in target: FindTarget) async {
+    func useSelection(in target: FindTarget, inLink linkTab: Tab? = nil) async {
         guard let text = await target.selectedText(), !text.isEmpty else { return }
-        show(focusingField: false)
+        show(focusingField: false, inLink: linkTab)
         await update(query: text, in: target)
     }
 }
@@ -115,18 +120,90 @@ extension WKWebView: FindTarget {
         return (count as? Int) ?? 0
     }
 
+    /// WebKit's find selects the match and scrolls it just into view, but a selection outside the
+    /// focused view is a faint gray, and the find bar floats over the top of the page. So the match
+    /// gets the find color (a CSS highlight, in Lithium's world) and is centered when near an edge;
+    /// the selection steps aside to a caret after it, and comes back for the next search to start from.
+    private static let markScript = """
+        const selection = getSelection();
+        const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+        // Text in a form field selects the field, which has no range to mark.
+        if (!range || range.collapsed) {
+          CSS.highlights.delete('lithium-find');
+          window.__lithiumFind = null;
+          return;
+        }
+        let sheet = window.__lithiumFindSheet;
+        if (!sheet) {
+          sheet = window.__lithiumFindSheet = new CSSStyleSheet();
+          sheet.replaceSync(`::highlight(lithium-find) { background-color: ${color}; color: black; }`);
+        }
+        if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        const mark = range.cloneRange();
+        CSS.highlights.set('lithium-find', new Highlight(mark));
+        selection.collapseToEnd();
+        window.__lithiumFind = { mark, node: selection.anchorNode, offset: selection.anchorOffset };
+
+        const middle = (box, view) => box.top + box.height / 2 - (view.top + view.height / 2);
+        const outside = (box, view) => box.top < view.top + margin || box.bottom > view.bottom - margin;
+        // Each box scrolling around it first, innermost out, then the window.
+        for (let element = mark.startContainer.parentElement; element; element = element.parentElement) {
+          if (element === document.scrollingElement || element.scrollHeight <= element.clientHeight) continue;
+          if (!/(auto|scroll|overlay)/.test(getComputedStyle(element).overflowY)) continue;
+          const box = mark.getBoundingClientRect();
+          const view = element.getBoundingClientRect();
+          if (outside(box, view)) element.scrollTop += middle(box, view);
+        }
+        const box = mark.getBoundingClientRect();
+        const view = new DOMRect(0, 0, innerWidth, innerHeight);
+        const top = outside(box, view) ? middle(box, view) : 0;
+        const left = box.left < 0 || box.right > innerWidth ? box.left + box.width / 2 - innerWidth / 2 : 0;
+        if (top || left) scrollBy({ top, left, behavior: 'instant' });
+        """
+
+    /// Puts the match back in the selection, unless the user has clicked or selected since.
+    private static let reselectScript = """
+        const found = window.__lithiumFind;
+        const selection = getSelection();
+        if (found && selection.isCollapsed && selection.anchorNode === found.node && selection.anchorOffset === found.offset) {
+          selection.removeAllRanges();
+          selection.addRange(found.mark);
+        }
+        """
+
+    private static let unmarkScript = reselectScript + """
+
+        CSS.highlights.delete('lithium-find');
+        window.__lithiumFind = null;
+        if (window.__lithiumFindSheet) document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== window.__lithiumFindSheet);
+        """
+
+    /// Safari's find yellow, on the current match: a web page marks no other.
+    private static let matchColor = "#ffd60a"
+
+    /// Clear of the edges, where the find bar floats over the top.
+    private static let revealMargin = 56
+
     func showNextMatch(of query: String, forward: Bool) async -> FindStep {
+        _ = try? await callAsyncJavaScript(Self.reselectScript, contentWorld: .defaultClient)
         let configuration = WKFindConfiguration()
         configuration.backwards = !forward
         configuration.wraps = true
-        let found = (try? await find(query, configuration: configuration))?.matchFound == true
-        return found ? .shown(position: nil) : .none
+        guard (try? await find(query, configuration: configuration))?.matchFound == true else {
+            _ = try? await callAsyncJavaScript(Self.unmarkScript, contentWorld: .defaultClient)
+            return .none
+        }
+        let arguments: [String: Any] = ["color": Self.matchColor, "margin": Self.revealMargin]
+        _ = try? await callAsyncJavaScript(Self.markScript, arguments: arguments, contentWorld: .defaultClient)
+        return .shown(position: nil)
     }
 
     func selectedText() async -> String? {
         try? await callAsyncJavaScript("return String(getSelection());", contentWorld: .defaultClient) as? String
     }
 
-    /// WebKit clears its own highlight on the next search or click.
-    func clearMatches() {}
+    /// Unmarks the match and leaves it selected, as Safari does once its find bar closes.
+    func clearMatches() {
+        Task { _ = try? await callAsyncJavaScript(Self.unmarkScript, contentWorld: .defaultClient) }
+    }
 }

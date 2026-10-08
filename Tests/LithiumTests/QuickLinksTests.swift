@@ -96,6 +96,101 @@ struct QuickLinksTests {
         #expect(SessionStore.load().tabs.contains { $0.url == base })
     }
 
+    /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
+    /// steps through that page's matches, and Escape there closes the bar.
+    @Test func findWorksInALinksWindow() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>Quick</title><p>needle</p><p>needle</p><p>needle</p>")])
+        defer { listener.cancel() }
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let other = browser.newTab(url: URL(string: "data:text/html,needle")!)
+        defer { browser.tabs.forEach(browser.close) }
+        let tab = try #require(browser.quickLinks.open(base))
+        defer { browser.quickLinks.close(tab) }
+        #expect(await waitUntil(15) { tab.title == "Quick" && !tab.isLoading })
+        let window = try #require(windows.opened.first?.window)
+        // The size its window gives it: unsized, the page lays nothing out and has no text to find.
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+
+        browser.quickLinks.windowBecameKey(tab)
+        browser.toggleFind()
+        #expect(browser.showsFindBar(over: tab))
+        #expect(!browser.showsFindBar(over: other))
+        // What the bar does as the user types.
+        await browser.find.update(query: "needle", in: tab.findTarget)
+        #expect(browser.find.matchCount == 3)
+        // The main window's page loading doesn't take the search over.
+        other.load(URL(string: "data:text/html,needle again")!)
+        #expect(await waitUntil(15) { other.url?.absoluteString.hasSuffix("again") == true && !other.isLoading })
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(browser.find.matchCount == 3)
+        await browser.findStep(forward: true)
+        #expect(browser.find.currentMatch == 2)
+        let marked = try await tab.webView.callAsyncJavaScript("return CSS.highlights.has('lithium-find');", contentWorld: .defaultClient) as? Bool
+        #expect(marked == true, "the link's page shows the match")
+
+        #expect(browser.ownsEscape(in: window))
+        #expect(browser.dismissOverlay())
+        #expect(!browser.find.isVisible)
+        #expect(!browser.ownsEscape(in: window), "nothing left to close there")
+
+        browser.quickLinks.windowResignedKey(tab)
+        browser.toggleFind()
+        #expect(browser.showsFindBar(over: other))
+        #expect(!browser.showsFindBar(over: tab))
+        browser.find.hide()
+    }
+
+    /// The bar stays in the window it was opened in: a link's window coming to the front and
+    /// going again leaves the main window's search where it was, and never shows the bar there
+    /// (which would search again and take the keyboard). ⌘F in the link's window moves it, and
+    /// Escape there closes only it, not a tab's name being edited in the main window.
+    @Test func findBarStaysInTheWindowItWasOpenedIn() async throws {
+        let page = "<title>Find</title><p>needle</p><p>needle</p><p>needle</p>"
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
+        defer { listener.cancel() }
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let main = browser.newTab(url: base)
+        defer { browser.tabs.forEach(browser.close) }
+        #expect(await waitUntil(15) { main.title == "Find" && !main.isLoading })
+        main.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+
+        browser.toggleFind()
+        await browser.find.update(query: "needle", in: main.findTarget)
+        await browser.findStep(forward: true)
+        #expect(browser.find.currentMatch == 2 && browser.find.matchCount == 3)
+        let focusToken = browser.find.focusToken
+
+        let link = try #require(browser.quickLinks.open(base))
+        defer { browser.quickLinks.close(link) }
+        let window = try #require(windows.opened.first?.window)
+        browser.quickLinks.windowBecameKey(link)
+        #expect(browser.showsFindBar(over: main))
+        #expect(!browser.showsFindBar(over: link))
+        #expect(!browser.findBarIsInFront && !browser.ownsEscape(in: window))
+        browser.quickLinks.windowResignedKey(link)
+        #expect(browser.showsFindBar(over: main))
+        #expect(browser.find.currentMatch == 2 && browser.find.matchCount == 3)
+        #expect(browser.find.focusToken == focusToken, "the field didn't ask for the keyboard again")
+
+        browser.quickLinks.windowBecameKey(link)
+        browser.renamingTabID = main.id
+        defer { browser.renamingTabID = nil }
+        browser.toggleFind()
+        #expect(browser.showsFindBar(over: link) && !browser.showsFindBar(over: main))
+        #expect(browser.ownsEscape(in: window))
+        #expect(browser.dismissOverlay())
+        #expect(!browser.find.isVisible)
+        #expect(browser.renamingTabID == main.id, "the tab's name is still being edited")
+
+        // A link's window closing takes its bar with it.
+        browser.toggleFind()
+        #expect(browser.showsFindBar(over: link))
+        browser.quickLinks.close(link)
+        #expect(!browser.find.isVisible)
+    }
+
     /// A page the link's page opens (a target=_blank link, a sign-in popup) gets a window of its
     /// own too, in front, its opener kept; the tab list and the selection stay as they were.
     @Test func pagesItOpensGetWindowsOfTheirOwn() async throws {

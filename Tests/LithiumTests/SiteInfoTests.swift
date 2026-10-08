@@ -130,6 +130,33 @@ struct SiteInfoTests {
         #expect(collapsedAgain == collapsed)
     }
 
+    /// Every switch in the lock's panel and the shield's panel ends at the panel's right padding,
+    /// in line with the values of the rows above, instead of sitting where its width centres it.
+    @Test func popoverSwitchesAlignRight() throws {
+        Theme.registerFonts()
+        let siteInfo = SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 15, canClear: true, permissions: [:], protections: .constant(true), usesSiteFont: .constant(false), showsCertificate: .constant(false))
+        let shield = ShieldView(host: "youtube.com", isOn: .constant(true), updated: nil)
+        for (view, width) in [(AnyView(siteInfo), 280.0), (AnyView(shield), 260.0)] {
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+            // Never shown: a window only so the switches lay out as they would in the popover.
+            let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: hosting.frame.width, height: hosting.frame.height), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = hosting
+            defer { window.contentView = nil }
+            hosting.layoutSubtreeIfNeeded()
+
+            func switches(in view: NSView) -> [NSSwitch] {
+                (view as? NSSwitch).map { [$0] } ?? view.subviews.flatMap(switches(in:))
+            }
+            let found = switches(in: hosting)
+            #expect(found.count == (width == 280 ? 2 : 1))
+            for control in found {
+                let frame = control.convert(control.bounds, to: hosting)
+                #expect(abs(frame.maxX - (width - 16)) <= 2, "switch ends at \(frame.maxX) in a \(width)-wide panel")
+            }
+        }
+    }
+
     /// The panel with sample values, for a look without launching the app:
     /// `LITHIUM_SNAPSHOT_DIR=/tmp/shots ./scripts/test --filter SiteInfo`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SNAPSHOT_DIR"] != nil, "Writes PNGs only when LITHIUM_SNAPSHOT_DIR is set"))

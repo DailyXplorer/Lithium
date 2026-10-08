@@ -155,15 +155,19 @@ struct ShieldView: View {
                 Text("Protections").font(Theme.font(15, .semibold))
                 Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
             }
-            Toggle(isOn: $isOn) {
+            // The switch on the right edge, as in the lock's panel, not right after its text.
+            HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("On for this site")
                     Text("Blocks ads and trackers")
                         .font(Theme.font(11))
                         .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 8)
+                Toggle("On for this site", isOn: $isOn)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
             }
-            .toggleStyle(.switch)
             Divider()
             HStack {
                 if let updated {

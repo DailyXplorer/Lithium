@@ -164,9 +164,7 @@ final class Privacy {
             let site = URL(string: String(url.absoluteString.dropFirst(5))).map(farblingSite) ?? ""
             return site.isEmpty ? UUID().uuidString : site
         }
-        guard let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")), !host.isEmpty else { return "" }
-        var address = in6_addr()
-        if host.contains(":") ? inet_pton(AF_INET6, host, &address) == 1 : inet_pton(AF_INET, host, &address) == 1 { return host }
+        guard let host = url.host(), !host.isEmpty else { return "" }
         return SiteInfo.registrable(host)
     }
 
@@ -392,16 +390,37 @@ final class Privacy {
                 rules[index]["trigger"] = trigger
             }
             if let selector = action["selector"] as? String, selector.contains("~") {
-                action["selector"] = selector.split(separator: ",").map { part in
-                    let selector = part.trimmingCharacters(in: .whitespaces)
-                    guard let match = selector.wholeMatch(of: /(#[\w-]+)\s*~\s*\*/) else { return selector }
-                    return "\(match.1) + *, \(match.1) + * + *, \(match.1) + * + * + *"
-                }.joined(separator: ", ")
+                // Only those parts change: the rest is kept as written, commas in values included.
+                action["selector"] = selectorParts(selector).map { part in
+                    guard let match = part.trimmingCharacters(in: .whitespaces).wholeMatch(of: /(#[\w-]+)\s*~\s*\*/) else { return String(part) }
+                    return "\(part.prefix(while: \.isWhitespace))\(match.1) + *, \(match.1) + * + *, \(match.1) + * + * + *"
+                }.joined(separator: ",")
                 rules[index]["action"] = action
             }
         }
         guard let prepared = try? JSONSerialization.data(withJSONObject: rules) else { return nil }
         return String(decoding: prepared, as: UTF8.self)
+    }
+
+    /// A selector list's parts, split on its own commas only: not those in quotes, brackets or
+    /// parentheses, or escaped (`[href*="a,b"]`, `:is(.a, .b)` and `.a\,b` are one part each).
+    nonisolated static func selectorParts(_ selector: String) -> [Substring] {
+        var parts: [Substring] = [], start = selector.startIndex, depth = 0, quote: Character?, escaped = false
+        for index in selector.indices {
+            let character = selector[index]
+            if escaped { escaped = false }
+            else if character == "\\" { escaped = true }
+            else if let open = quote { if character == open { quote = nil } }
+            else if character == "\"" || character == "'" { quote = character }
+            else if character == "[" || character == "(" { depth += 1 }
+            else if character == "]" || character == ")" { depth = max(0, depth - 1) }
+            else if character == ",", depth == 0 {
+                parts.append(selector[start..<index])
+                start = selector.index(after: index)
+            }
+        }
+        parts.append(selector[start...])
+        return parts
     }
 
     private func loadRuleLists() async {

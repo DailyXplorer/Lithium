@@ -120,4 +120,17 @@ struct SiteGroupingTests {
     func groupsSubdomainsUnderTheRegistrableDomain(host: String, site: String) {
         #expect(SiteInfo.registrable(host) == site)
     }
+
+    /// An IP host is its own site: grouping by the last labels made "Clear site data" on
+    /// 192.168.0.1 clear 10.0.0.1 too ("0.1" for both).
+    @Test(arguments: [
+        ("192.168.0.1", "192.168.0.1"),
+        ("10.0.0.1", "10.0.0.1"),
+        ("[::1]", "::1"),
+        ("::1", "::1"),
+        ("[FE80::1]", "fe80::1"),
+    ])
+    func ipAddressesAreTheirOwnSite(host: String, site: String) {
+        #expect(SiteInfo.registrable(host) == site)
+    }
 }

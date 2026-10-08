@@ -109,10 +109,13 @@ final class Privacy {
             """
     }
 
-    /// `trustedTypesScript` for a page's document or frame, keyed as that page's farbling is.
-    func trustedTypesScript(_ enabled: Bool, for response: URLResponse, isPrivate: Bool = false) -> WKUserScript? {
-        guard enabled, let source = Self.trustedTypesScript(for: response, key: isPrivate ? privateFarblingKey : farblingKey) else { return nil }
-        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+    /// Adds `trustedTypesScript` for a page's document or frame, keyed as that page's farbling is.
+    /// Once per address: a frame that reloads, or several frames of one address, don't pile up
+    /// copies until the next main-frame navigation drops them.
+    func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, isPrivate: Bool = false, to controller: WKUserContentController) {
+        guard enabled, let source = Self.trustedTypesScript(for: response, key: isPrivate ? privateFarblingKey : farblingKey),
+              !controller.userScripts.contains(where: { $0.source == source }) else { return }
+        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
     }
 
     /// The site farbling is keyed on: the registrable domain from the public suffix list (so

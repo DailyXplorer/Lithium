@@ -74,10 +74,11 @@ struct FingerprintingTests {
 
     /// `before` runs ahead of the script; `awaiting` runs the probe as an async function body,
     /// for what the page only gets later.
-    /// `headers` serves the page with them, from a custom scheme, instead of loading the markup.
-    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", html: String = "<body></body>", headers: [String: String]? = nil, before: String? = nil, awaiting: Bool = false) async throws -> Value {
+    /// `headers` serves the page with them, from a custom scheme, instead of loading the markup;
+    /// `frames` serves other hosts of that scheme, for the page's frames.
+    private func run<Value>(_ probe: String, farbling source: String?, at base: String = "https://example.com/", html: String = "<body></body>", headers: [String: String]? = nil, frames: [String: String] = [:], before: String? = nil, awaiting: Bool = false) async throws -> Value {
         let configuration = WKWebViewConfiguration()
-        let served = headers.map { ServedPage(html: html, headers: $0) }
+        let served = headers.map { ServedPage(html: html, headers: $0, frames: frames) }
         if let served { configuration.setURLSchemeHandler(served, forURLScheme: ServedPage.scheme) }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         if let before {
@@ -109,22 +110,25 @@ struct FingerprintingTests {
         return try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? Value)
     }
 
-    /// Serves one page with the given response headers.
+    /// Serves one page with the given response headers, and the markup of `frames` for their hosts.
     @MainActor
     private final class ServedPage: NSObject, WKURLSchemeHandler {
         static let scheme = "lithium-test"
         let html: String
         let headers: [String: String]
+        let frames: [String: String]
 
-        init(html: String, headers: [String: String]) {
+        init(html: String, headers: [String: String], frames: [String: String] = [:]) {
             self.html = html
             self.headers = headers
+            self.frames = frames
         }
 
         func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
             let url = task.request.url!
-            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "text/html"]) { $1 })!)
-            task.didReceive(Data(html.utf8))
+            let frame = url.host().flatMap { frames[$0] }
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: (frame == nil ? headers : [:]).merging(["Content-Type": "text/html"]) { $1 })!)
+            task.didReceive(Data((frame ?? html).utf8))
             task.didFinish()
         }
 
@@ -264,28 +268,214 @@ struct FingerprintingTests {
         #expect(protected["after"] as? Int == shown)
     }
 
-    /// WebGL2 integer reads into an `Int8Array` get the same noise as byte reads.
-    @Test func signedByteReadPixelsGetsNoise() async throws {
+    /// `readPixels` noise stays inside what the read wrote (from its offset into the array), and
+    /// leaves exact the reads GPU picking relies on: integer formats and reads of a few pixels.
+    @Test func readPixelsNoiseSparesPickingAndTheRestOfTheArray() async throws {
         let probe = """
             (() => {
-              const gl = document.createElement('canvas').getContext('webgl2');
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 64; gl.canvas.height = 64; gl.viewport(0, 0, 64, 64);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const one = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+              const clean = [...one];
+              // Every pixel read alone, as picking does.
+              let picked = 0;
+              for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+                gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+                for (let i = 0; i < 4; i++) if (one[i] !== clean[i]) picked++;
+              }
+              // The whole buffer, 8 bytes into a larger array.
+              const big = new Uint8Array(64 * 64 * 4 + 16).fill(7);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, big, 8);
+              let outside = 0, noisy = 0;
+              for (let i = 0; i < big.length; i++) {
+                if (i < 8 || i >= 8 + 64 * 64 * 4) { if (big[i] !== 7) outside++; }
+                else if (big[i] !== clean[(i - 8) % 4]) noisy++;
+              }
+              // An integer target.
               const buffer = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, buffer);
               gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8I, 64, 64);
               gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
               gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, buffer);
               gl.clearBufferiv(gl.COLOR, 0, new Int32Array([2, 4, 6, 8]));
-              const pixels = new Int8Array(64 * 64 * 4);
-              gl.readPixels(0, 0, 64, 64, gl.RGBA_INTEGER, gl.BYTE, pixels);
-              let sum = 0; for (let i = 0; i < pixels.length; i++) sum += pixels[i];
-              return JSON.stringify({ error: gl.getError(), sum });
+              const ids = new Int8Array(64 * 64 * 4);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA_INTEGER, gl.BYTE, ids);
+              let sum = 0; for (let i = 0; i < ids.length; i++) sum += ids[i];
+              return JSON.stringify({ error: gl.getError(), picked, outside, noisy, sum });
             })()
             """
         let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
         let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
 
         #expect(bare["error"] == AnyHashable(0))
-        #expect(bare["sum"] == AnyHashable(64 * 64 * 20))
-        #expect(try #require(protected["sum"] as? Int) > 64 * 64 * 20)
+        #expect(protected["error"] == AnyHashable(0))
+        #expect(bare["noisy"] == AnyHashable(0))
+        #expect(protected["picked"] == AnyHashable(0))
+        #expect(protected["outside"] == AnyHashable(0))
+        #expect(try #require(protected["noisy"] as? Int) > 0)
+        #expect(protected["sum"] == AnyHashable(64 * 64 * 20))
+    }
+
+    /// `readPixels` noise follows the arguments as the native call converts them and the rows as
+    /// the pack settings lay them out, and stays off a read that wrote nothing and off pixels past
+    /// the canvas's edges.
+    @Test func readPixelsNoiseFollowsThePackedLayout() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 64; gl.canvas.height = 64; gl.viewport(0, 0, 64, 64);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const result = {};
+              // Counts the read bytes off the clean color, and the bytes around them (filled with 7) changed.
+              const layout = (name, pixels, first, stride, rows, width) => {
+                let noisy = 0, outside = 0;
+                for (let i = 0; i < pixels.length; i++) {
+                  const at = i - first, row = Math.floor(at / stride), column = at - row * stride;
+                  if (at >= 0 && row < rows && column < width * 4) { if (pixels[i] !== clean[column % 4]) noisy++; }
+                  else if (pixels[i] !== 7) outside++;
+                }
+                result[name + 'Noisy'] = noisy; result[name + 'Outside'] = outside;
+              };
+              const strings = new Uint8Array(64 * 64 * 4).fill(7);
+              gl.readPixels('0', '0', '64', '64', String(gl.RGBA), String(gl.UNSIGNED_BYTE), strings);
+              layout('strings', strings, 0, 256, 64, 64);
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 80); gl.pixelStorei(gl.PACK_SKIP_ROWS, 2); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 8);
+              const skipped = new Uint8Array(31 * 320 + 32 + 256).fill(7);
+              gl.readPixels(0, 0, 64, 30, gl.RGBA, gl.UNSIGNED_BYTE, skipped);
+              layout('skipped', skipped, 2 * 320 + 32, 320, 30, 64);
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 0); gl.pixelStorei(gl.PACK_SKIP_ROWS, 0); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 0);
+              gl.pixelStorei(gl.PACK_ALIGNMENT, 8);
+              const aligned = new Uint8Array(32 * 136 + 132).fill(7);
+              gl.readPixels(0, 0, 33, 33, gl.RGBA, gl.UNSIGNED_BYTE, aligned);
+              layout('aligned', aligned, 0, 136, 33, 33);
+              gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
+              // A read past the canvas's edges: only the 64 × 64 pixels inside are written.
+              const past = new Uint8Array(80 * 80 * 4).fill(7);
+              gl.readPixels(-8, -8, 80, 80, gl.RGBA, gl.UNSIGNED_BYTE, past);
+              result.pastNoisy = 0; result.pastOutside = 0;
+              for (let i = 0; i < past.length; i++) {
+                const x = (i >> 2) % 80 - 8, y = Math.floor(i / 320) - 8;
+                if (x >= 0 && x < 64 && y >= 0 && y < 64) { if (past[i] !== clean[i % 4]) result.pastNoisy++; }
+                else if (past[i] !== 7) result.pastOutside++;
+              }
+              // WebGL1 ignores an 8th argument: the read lands at the start of the array all the same.
+              const one = document.createElement('canvas').getContext('webgl', { preserveDrawingBuffer: true });
+              one.canvas.width = 16; one.canvas.height = 16; one.viewport(0, 0, 16, 16);
+              one.clearColor(0.5, 0.25, 0.75, 1); one.clear(one.COLOR_BUFFER_BIT);
+              const plain = new Uint8Array(16 * 16 * 4), offset = new Uint8Array(16 * 16 * 4 + 16).fill(7);
+              one.readPixels(0, 0, 16, 16, one.RGBA, one.UNSIGNED_BYTE, plain);
+              one.readPixels(0, 0, 16, 16, one.RGBA, one.UNSIGNED_BYTE, offset, 16);
+              result.webgl1Noisy = plain.filter((value, i) => value !== clean[i % 4]).length;
+              result.webgl1Moved = offset.filter((value, i) => i < plain.length ? value !== plain[i] : value !== 7).length;
+              // Reads that write nothing: through a bound pack buffer, from an incomplete framebuffer, on a lost context,
+              // with a row length shorter than the row and its skipped pixels.
+              const unwritten = new Uint8Array(64 * 64 * 4).fill(7), errors = [];
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 60); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 8);
+              gl.readPixels(0, 0, 56, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 0); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 0);
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, gl.createBuffer());
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4, gl.STREAM_READ);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              gl.getExtension('WEBGL_lose_context').loseContext();
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              result.unwritten = unwritten.filter((value) => value !== 7).length;
+              result.errors = errors.join();
+              return JSON.stringify(result);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        for name in ["strings", "skipped", "aligned", "past"] {
+            #expect(bare["\(name)Noisy"] == AnyHashable(0), "\(name)")
+            #expect(bare["\(name)Outside"] == AnyHashable(0), "\(name)")
+            #expect(try #require(protected["\(name)Noisy"] as? Int) > 0, "\(name)")
+            #expect(protected["\(name)Outside"] == AnyHashable(0), "\(name)")
+        }
+        #expect(bare["webgl1Noisy"] == AnyHashable(0))
+        #expect(try #require(protected["webgl1Noisy"] as? Int) > 0)
+        #expect(bare["webgl1Moved"] == AnyHashable(0))
+        #expect(protected["webgl1Moved"] == AnyHashable(0))
+        #expect(bare["unwritten"] == AnyHashable(0))
+        #expect(protected["unwritten"] == AnyHashable(0))
+        #expect(bare["errors"] == AnyHashable("1282,1282,1286,37442"))
+        #expect(protected["errors"] == bare["errors"])
+    }
+
+    /// Canvas noise follows the pixel's spot in the canvas, not where the read starts: a 1×1 read,
+    /// an offset window or one with a negative size hands back what the full read has there.
+    @Test func smallReadsGetTheNoiseOfTheFullRead() async throws {
+        let probe = """
+            (() => {
+              const draw = (x) => { x.font = '18px Arial'; x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40); x.fillStyle = '#069'; x.fillText('Lithium fp', 4, 26); };
+              const check = (x) => {
+                const full = x.getImageData(0, 0, 200, 40).data;
+                let different = 0;
+                for (let y = 0; y < 40; y++) for (let left = 0; left < 200; left++) {
+                  const one = x.getImageData(left, y, 1, 1).data;
+                  for (let i = 0; i < 4; i++) if (one[i] !== full[(y * 200 + left) * 4 + i]) different++;
+                }
+                const windows = [[3, 5, 17, 9], [150, 20, 50, 20], [40, 30, -13, -7]];
+                for (const [sx, sy, sw, sh] of windows) {
+                  const part = x.getImageData(sx, sy, sw, sh).data;
+                  const left = sw < 0 ? sx + sw : sx, top = sh < 0 ? sy + sh : sy, width = Math.abs(sw);
+                  for (let i = 0; i < part.length; i++) {
+                    const p = i >> 2;
+                    if (part[i] !== full[((top + Math.floor(p / width)) * 200 + left + p % width) * 4 + (i & 3)]) different++;
+                  }
+                }
+                let h = 0; for (let i = 0; i < full.length; i++) h = (Math.imul(h, 31) + full[i]) | 0;
+                return { different, hash: h };
+              };
+              const canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 40;
+              const page = canvas.getContext('2d'); draw(page);
+              const offscreen = new OffscreenCanvas(200, 40).getContext('2d'); draw(offscreen);
+              return JSON.stringify({ page: check(page), offscreen: check(offscreen) });
+            })()
+            """
+        let bare: [String: [String: Int]] = try await run(probe, farbling: nil)
+        let protected: [String: [String: Int]] = try await run(probe, farbling: Self.farbling())
+
+        for kind in ["page", "offscreen"] {
+            #expect(protected[kind]?["different"] == 0, "\(kind)")
+            #expect(protected[kind]?["hash"] != bare[kind]?["hash"], "\(kind)")
+        }
+    }
+
+    /// A frame of another origin mixes its origin into the top site's noise: a tracker framed on a
+    /// site doesn't farble as the site's own pages do (nor as it does on another site).
+    @Test func crossOriginFrameFarblesApartFromItsPage() async throws {
+        let hash = """
+            const hash = (win) => {
+              const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+              return (h >>> 0).toString(16);
+            };
+            """
+        let html = """
+            <body><script>window.fromFrame = new Promise((done) => addEventListener('message', (event) => done(event.data)));</script>
+            <iframe src="\(ServedPage.scheme)://tracker.example/"></iframe></body>
+            """
+        let frames = ["tracker.example": "<body><script>\(hash) parent.postMessage(hash(window), '*');</script></body>"]
+        let probe = hash + "return JSON.stringify({ page: hash(window), frame: await fromFrame });"
+        let result = { (source: String?) async throws -> [String: String] in
+            try await self.run(probe, farbling: source, html: html, headers: [:], frames: frames, awaiting: true)
+        }
+        let bare = try await result(nil)
+        let protected = try await result(Self.farbling())
+        let elsewhere = try await result(Self.farbling(site: "other.example"))
+
+        #expect(bare["page"] == bare["frame"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["frame"] != bare["frame"])
+        #expect(protected["frame"] != protected["page"])
+        #expect(elsewhere["frame"] != protected["frame"])
     }
 
     @Test func popupIsProtectedBeforeItsFirstPage() async throws {
@@ -502,6 +692,50 @@ struct FingerprintingTests {
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
         #expect(protected["native"] == AnyHashable(true))
+    }
+
+    /// Frames deep in the page's markup, and one the parser moves along with its parent (misnested
+    /// `<a>`), are protected too: the observer searches only the outermost elements of a batch.
+    @Test func framesNestedInThePageMarkupAreProtected() async throws {
+        let html = """
+            <body><div><section><div><p><span><iframe></iframe></span></p></div></section></div>
+            <a>link<div><iframe></iframe>text</a>more</div><script>
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const result = { page: hash(window), count: frames.length };
+              for (let i = 0; i < frames.length; i++) result['frame' + i] = hash(frames[i]);
+              window.result = JSON.stringify(result);
+            </script></body>
+            """
+        let bare: [String: AnyHashable] = try await run("window.result", farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run("window.result", farbling: Self.farbling(), html: html)
+
+        #expect(bare["count"] == AnyHashable(2))
+        #expect(bare["frame0"] == bare["page"] && bare["frame1"] == bare["page"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["frame0"] == protected["page"])
+        #expect(protected["frame1"] == protected["page"])
+    }
+
+    /// A frame that reloads with Trusted Types, or several frames of one address, add their script
+    /// once: copies piled up until the next main-frame navigation.
+    @Test func trustedTypesScriptIsAddedOncePerAddress() throws {
+        let privacy = Privacy()
+        let controller = WKUserContentController()
+        let response = { (address: String) in
+            HTTPURLResponse(url: URL(string: address)!, statusCode: 200, httpVersion: nil,
+                            headerFields: ["Content-Security-Policy": "require-trusted-types-for 'script'"])!
+        }
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame"), to: controller)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again"), to: controller)
+        #expect(controller.userScripts.count == 1)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/other"), to: controller)
+        privacy.addTrustedTypesScript(false, for: response("https://example.com/off"), to: controller)
+        #expect(controller.userScripts.count == 2)
     }
 
     /// A blank frame fires `load` while it is inserted, before the observer or the insertion hooks

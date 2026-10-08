@@ -817,21 +817,38 @@ struct FingerprintingTests {
         #expect(protected["frame1"] == protected["page"])
     }
 
-    /// A frame that reloads with Trusted Types, or several frames of one address, add their script
-    /// once: copies piled up until the next main-frame navigation.
-    @Test func trustedTypesScriptIsAddedOncePerAddress() throws {
+    /// A page keeps one Trusted Types script, whatever its frames' addresses: a frame that reloads,
+    /// several frames of one address, and frames of new addresses once added a script each, which
+    /// piled up until the next main-frame navigation. That navigation's page starts afresh.
+    @Test func trustedTypesScriptsDontPileUp() throws {
         let privacy = Privacy()
         let controller = WKUserContentController()
-        let response = { (address: String) in
+        let response = { (address: String, header: String) in
             HTTPURLResponse(url: URL(string: address)!, statusCode: 200, httpVersion: nil,
-                            headerFields: ["Content-Security-Policy": "require-trusted-types-for 'script'"])!
+                            headerFields: [header: "require-trusted-types-for 'script'"])!
         }
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame"), to: controller)
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again"), to: controller)
-        #expect(controller.userScripts.count == 1)
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/other"), to: controller)
-        privacy.addTrustedTypesScript(false, for: response("https://example.com/off"), to: controller)
+        let enforced = "Content-Security-Policy", reported = "Content-Security-Policy-Report-Only"
+        let farbling = WKUserScript(source: "farbling", injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        controller.addUserScript(farbling)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame", enforced), to: controller)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again", enforced), to: controller)
         #expect(controller.userScripts.count == 2)
+        for index in 0..<20 {
+            privacy.addTrustedTypesScript(true, for: response("https://example.com/other?\(index)", reported), to: controller)
+        }
+        privacy.addTrustedTypesScript(false, for: response("https://example.com/off", enforced), to: controller)
+        #expect(controller.userScripts.count == 2)
+        // After the page's farbling, holding every address but the one it was off for.
+        let source = try #require(controller.userScripts.last?.source)
+        #expect(controller.userScripts.first?.source == farbling.source)
+        #expect(source.contains("\"https:\\/\\/example.com\\/frame\":\"enforce\""))
+        #expect(source.contains("\"https:\\/\\/example.com\\/other?19\":\"report\""))
+        #expect(!source.contains("off"))
+
+        controller.removeAllUserScripts()
+        privacy.addTrustedTypesScript(true, for: response("https://example.org/", enforced), to: controller)
+        #expect(controller.userScripts.count == 1)
+        #expect(controller.userScripts.first?.source.contains("example.com") == false)
     }
 
     /// A blank frame fires `load` while it is inserted, before the observer or the insertion hooks

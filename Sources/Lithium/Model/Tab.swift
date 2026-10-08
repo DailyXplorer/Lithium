@@ -1111,9 +1111,11 @@ extension Tab: WKNavigationDelegate {
     }
 
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
-    private static func isDropped(_ error: Error) -> Bool {
+    /// Nor is WebKit's 204, "plug-in will handle load": a direct video or audio link's player took
+    /// the load over, and shows the file.
+    static func isDropped(_ error: Error) -> Bool {
         let error = error as NSError
-        return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
+        return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && [102, 204].contains(error.code))
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

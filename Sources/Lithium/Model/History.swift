@@ -21,10 +21,12 @@ final class HistoryStore {
     /// The address bar's query reads every visit (70 ms at 200,000), so it runs on a connection
     /// of its own, off the main thread.
     private let search: HistorySearch
+    private let fileURL: URL
 
     nonisolated(unsafe) private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init(fileURL: URL = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")) {
+        self.fileURL = fileURL
         search = HistorySearch(fileURL: fileURL)
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open(fileURL.path, &db) == SQLITE_OK else {
@@ -166,12 +168,22 @@ final class HistoryStore {
         run("DELETE FROM visits WHERE id = ?", id)
     }
 
-    func clear() {
+    /// Deleting every visit and rewriting the file takes seconds on a long history: it runs on a
+    /// connection of its own, off the main thread, which waits for the main one's short writes.
+    func clear() async {
         titleWrite?.cancel()
         titleWrite = nil
         pendingTitles = [:]
-        execute("DELETE FROM visits; VACUUM;")
         lastRecorded = nil
+        guard db != nil else { return }
+        let fileURL = fileURL
+        await Task.detached(priority: .userInitiated) {
+            var db: OpaquePointer?
+            defer { sqlite3_close(db) }
+            guard sqlite3_open(fileURL.path, &db) == SQLITE_OK else { return }
+            sqlite3_busy_timeout(db, 5_000)
+            sqlite3_exec(db, "DELETE FROM visits; VACUUM;", nil, nil, nil)
+        }.value
     }
 
     private func execute(_ sql: String) {

@@ -5,24 +5,15 @@ import SwiftUI
 struct SplitPages: View {
     let split: TabSplit
     @Environment(Browser.self) private var browser
-    /// While the divider moves; the split itself (and the saved session) changes once, on release.
-    @State private var liveFraction: Double?
 
     var body: some View {
         if let first = browser.tabs.first(where: { $0.id == split.first }),
            let second = browser.tabs.first(where: { $0.id == split.second }) {
             SplitLayout(
                 isStacked: split.isStacked,
-                fraction: liveFraction ?? split.fraction,
+                fraction: split.fraction,
                 focused: split.side(of: browser.selectedTabID ?? first.id) ?? .first,
-                resize: { fraction, ended in
-                    if ended {
-                        browser.resizeSplit(of: first, to: fraction)
-                        liveFraction = nil
-                    } else {
-                        liveFraction = min(max(fraction, TabSplit.fractions.lowerBound), TabSplit.fractions.upperBound)
-                    }
-                },
+                resize: { browser.resizeSplit(of: first, to: $0) },
                 menu: { SplitMenu(tab: first, isStacked: split.isStacked) },
                 first: { SplitPane(tab: first) },
                 second: { SplitPane(tab: second) }
@@ -52,17 +43,21 @@ struct SplitLayout<Menu: View, First: View, Second: View>: View {
     /// The first page's share.
     let fraction: Double
     let focused: TabSplit.Side
-    let resize: (_ fraction: Double, _ ended: Bool) -> Void
+    /// On release only: the split itself (and the saved session) changes once.
+    let resize: (_ fraction: Double) -> Void
     @ViewBuilder let menu: Menu
     @ViewBuilder let first: First
     @ViewBuilder let second: Second
+    /// While the divider moves. Resets when the drag ends and also when it is cancelled (⌘-Tab
+    /// away mid-drag), which skips `onEnded` and would leave the divider stuck where it was let go.
+    @GestureState private var dragFraction: Double?
 
     static var gap: CGFloat { 8 }
 
     var body: some View {
         GeometryReader { proxy in
             let length = isStacked ? proxy.size.height : proxy.size.width
-            let firstLength = ((length - Self.gap) * fraction).rounded()
+            let firstLength = ((length - Self.gap) * (dragFraction ?? fraction)).rounded()
             let layout = isStacked ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
             layout {
                 SplitPaneFrame(isFocused: focused == .first) { first }
@@ -71,8 +66,10 @@ struct SplitLayout<Menu: View, First: View, Second: View>: View {
                     .frame(width: isStacked ? nil : Self.gap, height: isStacked ? Self.gap : nil)
                     .gesture(
                         DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
-                            .onChanged { resize(share(at: $0.location, in: length), false) }
-                            .onEnded { resize(share(at: $0.location, in: length), true) }
+                            .updating($dragFraction) { value, fraction, _ in
+                                fraction = min(max(share(at: value.location, in: length), TabSplit.fractions.lowerBound), TabSplit.fractions.upperBound)
+                            }
+                            .onEnded { resize(share(at: $0.location, in: length)) }
                     )
                     .contextMenu { menu }
                 SplitPaneFrame(isFocused: focused == .second) { second }

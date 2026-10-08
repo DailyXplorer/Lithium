@@ -361,7 +361,7 @@ struct SplitViewSnapshots {
                 }
                 .padding(10)
                 .frame(width: 240)
-                SplitLayout(isStacked: false, fraction: split.fraction, focused: .first, resize: { _, _ in }, menu: { EmptyView() },
+                SplitLayout(isStacked: false, fraction: split.fraction, focused: .first, resize: { _ in }, menu: { EmptyView() },
                             first: { Image(nsImage: images[0]) }, second: { Image(nsImage: images[1]) })
                     .padding([.trailing, .bottom, .top], 8)
             }

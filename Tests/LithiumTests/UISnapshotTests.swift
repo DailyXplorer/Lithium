@@ -195,6 +195,20 @@ struct UISnapshotTests {
         }
     }
 
+    /// The bar of a link's own window, on a secure page and on one that isn't.
+    @Test func quickLinkBarSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        for (name, url, isSecure) in [("secure", "https://www.example.com/docs/start", true), ("insecure", "http://example.org/", false)] {
+            let bar = QuickLinkBar(url: URL(string: url), isSecure: isSecure, onClose: {}, onMove: {})
+                .font(Theme.font(13))
+                .frame(width: 520)
+            for isDark in [false, true] {
+                try render(bar, isDark: isDark).write(to: directory.appending(path: "quick-link-bar-\(name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))
@@ -254,7 +268,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         ] as [String: Any],
         "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false, "runScripts": true,
                    "bridge": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp"] as [String: Any],
-        "advanced": ["developerTools": true],
+        "advanced": ["developerTools": true, "quickLinks": true],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],
     ]

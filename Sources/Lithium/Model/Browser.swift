@@ -55,6 +55,7 @@ final class Browser {
     let pinnedPages = PinnedPages()
     let splits = TabSplits()
     let recentTabs = RecentTabs()
+    let quickLinks = QuickLinks()
     let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
@@ -115,6 +116,7 @@ final class Browser {
         extensions.browser = self
         videoPopout.browser = self
         nowPlaying.browser = self
+        quickLinks.browser = self
         extensions.start()
         restore(SessionStore.load())
         saveSession()
@@ -346,7 +348,7 @@ final class Browser {
 
     /// Zoom In and Zoom Out: the PDF viewer's own steps, or the page's zoom.
     func zoomSelectedTab(by delta: Double) {
-        guard let tab = selectedTab else { return }
+        guard let tab = commandTab else { return }
         if let pdf = tab.pdf {
             if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
             return
@@ -430,6 +432,9 @@ final class Browser {
     }
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
+    /// The page the menu's page commands (Reload, Back, Print…) act on: a link's own window
+    /// while it is in front, the selected tab otherwise.
+    var commandTab: Tab? { quickLinks.keyTab ?? selectedTab }
     /// The tab list. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabs.filter(\.isInTabList) }
     var agentTabs: [Tab] { tabs.filter(\.isInAgentGroup) }
@@ -459,6 +464,19 @@ final class Browser {
         if let url { tab.load(url) }
         if selecting { select(tab) }
         return tab
+    }
+
+    /// A link from another app (`onOpenURL`): in a small window of its own when Settings says so,
+    /// leaving the tab list alone; in a new tab otherwise.
+    func openFromOtherApp(_ url: URL) {
+        if quickLinks.isEnabled, QuickLinks.takes(url) { quickLinks.open(url) } else { newTab(url: url) }
+    }
+
+    /// A page made outside the tab list (a link's own window) joins it at the top, selected.
+    func adopt(_ tab: Tab) {
+        tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs))
+        extensions.didOpen(tab)
+        select(tab)
     }
 
     /// `index` is a place in the tab list, clamped to it. `tabs` also holds favorites' pages, in
@@ -635,6 +653,7 @@ final class Browser {
     /// `remembering` false keeps the tab out of Reopen Closed Tab: a tab that closed itself once
     /// its address became a download would only start the download again.
     func close(_ tab: Tab, remembering: Bool) {
+        if quickLinks.contains(tab) { return quickLinks.close(tab) }
         let order = peers(of: tab)
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)

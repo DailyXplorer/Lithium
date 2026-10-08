@@ -235,8 +235,8 @@ struct SplitDropZone: NSViewRepresentable {
         /// Escape) is over once the click monitor has seen the next click, though SwiftUI has
         /// yet to take this view away.
         var isDragging: () -> Bool = { false }
-        /// Whether the drag's text is the dragged tab's; anything else ends that drag, and the
-        /// view lets it through to the page from the next move on.
+        /// Whether the drag's text is the dragged tab's; anything else (a file, an image, a link
+        /// from another app) ends that drag, and the view lets it through to the page.
         var carries: (String?) -> Bool = { _ in false }
         var drop: (String, TabSplit.Side) -> Bool = { _, _ in false }
         private let highlight = CALayer()
@@ -255,13 +255,15 @@ struct SplitDropZone: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Clicks go on to the page; only a drag, with the button down, lands here.
+        /// Clicks go on to the page; only the dragged tab, with the button down, lands here. Asked
+        /// here rather than once the drag enters: the view only registers for text, so a drag
+        /// without any (a file from Finder) would never reach it, yet never reach the page either.
         override func hitTest(_ point: NSPoint) -> NSView? {
             takesMouse(buttons: NSEvent.pressedMouseButtons) ? super.hitTest(point) : nil
         }
 
-        func takesMouse(buttons: Int) -> Bool {
-            buttons & 1 != 0 && isDragging()
+        func takesMouse(buttons: Int, drag: @autoclosure () -> String? = NSPasteboard(name: .drag).string(forType: .string)) -> Bool {
+            buttons & 1 != 0 && isDragging() && carries(drag())
         }
 
         /// The outer two fifths of each side; the middle drops nothing.

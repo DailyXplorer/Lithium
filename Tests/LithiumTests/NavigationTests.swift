@@ -504,6 +504,33 @@ struct NavigationTests {
         #expect(tab.url?.path() == "/sound.wav")
     }
 
+    /// Closing a tab while it asks whether to send a form again takes the question away: answered
+    /// later, it would send the form from a page that is gone.
+    @Test func closingATabEndsItsSendAgainQuestion() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data(#"<title>Order</title><form method="post" action="/result"><input name="item" value="1"></form>"#.utf8)),
+            "/result": ("Content-Type: text/html\r\nCache-Control: no-store", Data("<title>Ordered</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = tab.webView
+        defer { window.contentView = nil }
+        #expect(await waitUntil(30) { tab.webView.title == "Order" && !tab.webView.isLoading })
+        _ = try await tab.webView.evaluateJavaScript("document.forms[0].submit(); 0")
+        #expect(await waitUntil(30) { tab.webView.title == "Ordered" && !tab.webView.isLoading })
+        #expect(requests["/result"] == 1)
+
+        tab.reload()
+        #expect(await waitUntil(10) { window.attachedSheet != nil })
+        browser.close(tab)
+        #expect(await waitUntil(10) { window.attachedSheet == nil })
+        try await Task.sleep(for: .seconds(1))
+        #expect(requests["/result"] == 1, "the form isn't sent again")
+    }
+
     /// A ZIP of `files` at its root, like a store package.
     private static func archive(_ files: [String: String]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")

@@ -99,6 +99,8 @@ final class Tab: NSObject, Identifiable {
     /// One that wakes without its history has none in its new web view, yet isn't a tab opened
     /// just to fetch a file.
     @ObservationIgnored private var hasHadPage = false
+    /// "Send the form again?", while it is on the window.
+    @ObservationIgnored private var resubmissionSheet: NSWindow?
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
@@ -576,6 +578,7 @@ final class Tab: NSObject, Identifiable {
 
     func tearDown() {
         answerHiddenDialog()
+        endResubmissionSheet()
         observations.removeAll()
         // A favicon fetch holds the tab and its web view, and can last a minute on a page that
         // names many icons: a closed tab's page would keep running until it ends.
@@ -943,9 +946,10 @@ extension Tab: WKNavigationDelegate {
         // stays blank. Refused, a web view with nothing shown yet (a tab waking on that page)
         // loads the address instead, without the form.
         if action.navigationType == .formResubmitted {
-            guard await confirmResubmission(of: url, inFrame: !isMainFrame) else {
+            // A web view put away meanwhile (its tab closed or asleep) never sends it, nor reloads.
+            guard await confirmResubmission(of: url, inFrame: !isMainFrame), webView.navigationDelegate === self else {
                 // Unless the tab was sent elsewhere meanwhile (an extension's address, say).
-                if isMainFrame, !hasShownPage { Task { if self.url == url { self.load(url) } } }
+                if isMainFrame, !hasShownPage, webView.navigationDelegate === self { Task { if self.url == url { self.load(url) } } }
                 return (.cancel, preferences)
             }
         }
@@ -1448,7 +1452,17 @@ extension Tab: WKUIDelegate {
             : "This page sends a form to \(site) again. This can repeat an order or a payment."
         alert.addButton(withTitle: "Send Again")
         alert.addButton(withTitle: "Cancel")
+        resubmissionSheet = alert.window
+        defer { if resubmissionSheet === alert.window { resubmissionSheet = nil } }
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
+    }
+
+    /// Cancels the question when the tab's web view is put away: the sheet would stay on the
+    /// window, for a page that is gone.
+    private func endResubmissionSheet() {
+        guard let sheet = resubmissionSheet else { return }
+        resubmissionSheet = nil
+        sheet.sheetParent?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
     }
 
     /// A sheet on the tab's window, never an app-modal alert: a page out of sight would hold up

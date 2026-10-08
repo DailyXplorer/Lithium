@@ -95,16 +95,17 @@ struct ExtensionsTests {
         #expect(extensions.installed.count == 1)
     }
 
-    /// Removed while an install of it is still opening its files, the extension stays removed.
+    /// Removed while an install of it is still under way, the extension stays removed.
     @Test(.timeLimit(.minutes(1))) func removedWhileInstallingStaysRemoved() async throws {
         let folder = folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let extensions = Extensions(folder: folder, configuration: .nonPersistent())
-        let installing = Task { try await extensions.install(archive: try archive(), id: id) }
-        // The files are in place before WebKit opens them, and the list changes once it has.
-        let manifest = folder.appending(path: "\(id)/manifest.json").path
-        while !FileManager.default.fileExists(atPath: manifest), extensions.installed.isEmpty { await Task.yield() }
+        let package = try archive()
+        let installing = Task { try await extensions.install(archive: package, id: id) }
+        // The install writes the package before it waits for `ditto` to unpack it.
+        while (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty != false { await Task.yield() }
         try #require(extensions.installed.isEmpty, "the install ended before it could be removed")
+        let manifest = folder.appending(path: "\(id)/manifest.json").path
         await extensions.remove(id: id)
         try await installing.value
 

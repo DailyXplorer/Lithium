@@ -31,8 +31,9 @@ final class Browser {
     /// Clearing a deleted space's store; awaited in tests.
     @ObservationIgnored private(set) var storeCleanup: Task<Void, Never>?
     private(set) var addressFocusToken = 0
-    /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection, so
-    /// the peeked sidebar can slide back on a pick yet stay out while tabs close in a row.
+    /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection
+    /// or switching spaces shows the space's own, so the peeked sidebar can slide back on a pick yet stay out while
+    /// tabs close or spaces switch in a row.
     private(set) var tabPickToken = 0
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
@@ -88,6 +89,21 @@ final class Browser {
     @ObservationIgnored private var eventMonitors: [Any] = []
     /// The window the browser shows in, set as it appears: the Escape monitor only acts there.
     @ObservationIgnored weak var window: NSWindow?
+
+    /// Something opened from a peeked panel (the sidebar, Zen mode's top bar) is still in use: a
+    /// tab's name being typed, a popover such as a space's editor, an alert, a menu or a drag.
+    /// The panel stays out meanwhile, as they would go with it. Read only as the panel would go,
+    /// so nothing watches for them.
+    var holdsPeek: Bool {
+        renamingTabID != nil || window.map(Self.hasOpenUI(in:)) == true
+    }
+
+    /// Popovers are the window's child windows and alerts its sheets; menus and drags run the
+    /// event tracking loop until they end.
+    static func hasOpenUI(in window: NSWindow) -> Bool {
+        window.attachedSheet != nil || window.childWindows?.contains(where: \.isVisible) == true
+            || RunLoop.main.currentMode == .eventTracking
+    }
     /// Observed, so Reopen Closed Tab is enabled as soon as there is one. Never saved.
     private var closedTabs: [ClosedTab] = []
     // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
@@ -575,12 +591,12 @@ final class Browser {
         requestAddressFocus()
     }
 
-    private func showStartPage() {
+    private func showStartPage(picked: Bool = true) {
         find.hide()
         // Left for the address bar: it counts as used until now, as does the other side of its split.
         selectedTab?.markActive()
         shownPartner?.markActive()
-        if selectedTabID != nil { tabPickToken &+= 1 }
+        if picked, selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
     }
 
@@ -1059,7 +1075,8 @@ final class Browser {
     }
 
     /// Back to the tab last shown in the space, or to the start page. An edit in the address bar
-    /// or a tab's name ends first: its field would be left editing a tab no longer shown.
+    /// or a tab's name ends first: its field would be left editing a tab no longer shown. Not a
+    /// pick (`tabPickToken`): a peeked sidebar stays out on the space switched to.
     func switchToSpace(_ id: Space.ID) {
         guard id != currentSpaceID, spaces.contains(where: { $0.id == id }) else { return }
         if isEditingAddress || renamingTabID != nil { window?.makeFirstResponder(nil) }
@@ -1067,10 +1084,11 @@ final class Browser {
         let order = spaces.map(\.id)
         spaceStepsForward = (order.firstIndex(of: id) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
         if let last = spaceSelections[id], let tab = tabs.first(where: { $0.id == last && $0.spaceID == id }) {
-            select(tab)
+            tab.didOpen()
+            select(tab, picked: false)
         } else {
             enterSpace(id)
-            showStartPage()
+            showStartPage(picked: false)
         }
     }
 

@@ -94,6 +94,19 @@ struct PageTranslationMenuTests {
         #expect(item.action == #selector(NSText.copy(_:)))
     }
 
+    /// A selection too long to copy to the app before the menu shows keeps WebKit's Translate.
+    @Test func veryLongSelectionsKeepWebKitsTranslate() async throws {
+        let (webView, _, window) = try await loadedPage()
+        defer { window.orderOut(nil) }
+        let item = try await rightClick("""
+            const text = document.getElementById('text');
+            text.textContent = 'The weather is lovely today. '.repeat(\(PageTranslation.maximumLength / 20));
+            getSelection().selectAllChildren(text)
+            """, in: webView)
+        #expect(item.target == nil)
+        #expect(item.action == #selector(NSText.copy(_:)))
+    }
+
     @Test func pagesCantReachTheHandler() async throws {
         let (webView, _, window) = try await loadedPage()
         defer { window.orderOut(nil) }

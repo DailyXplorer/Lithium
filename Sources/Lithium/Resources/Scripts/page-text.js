@@ -66,4 +66,5 @@ return {
   selection: selection.slice(0, limit),
   text: text.slice(0, limit),
   truncated: text.length > limit,
+  selectionTruncated: selection.length > limit,
 };

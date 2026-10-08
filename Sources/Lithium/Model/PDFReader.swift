@@ -354,6 +354,17 @@ final class PDFReader: NSObject {
         ExternalApps.open(file, withApplicationAt: preview)
     }
 
+    /// What a summary reads: the tab's web view holds WebKit's PDF viewer, which has no text to
+    /// give. Read off the main thread by the worker; nil while locked or still loading.
+    func content(limit: Int) async -> PageContent? {
+        guard !isLocked, let worker, let read = await worker.text(limit: limit, password: password) else { return nil }
+        let selection = view.currentSelection?.string ?? ""
+        return PageContent(
+            title: title, text: read.text, selection: String(selection.prefix(limit)),
+            isTruncated: read.isTruncated, isSelectionTruncated: selection.count > limit
+        )
+    }
+
     func print() {
         guard let document, !isLocked,
               let operation = document.printOperation(for: .shared, scalingMode: .pageScaleToFit, autoRotate: true) else { return }
@@ -478,6 +489,24 @@ actor PDFWorker {
             await Task.yield()
         }
         return nil
+    }
+
+    /// The document's text, page by page, up to `limit` characters: only as many pages as that takes are read.
+    func text(limit: Int, password: String?) -> (text: String, isTruncated: Bool)? {
+        guard let document = unlocked(password) else { return nil }
+        var text = ""
+        var length = 0
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index)?.string, !page.isEmpty else { continue }
+            if !text.isEmpty {
+                text += "\n"
+                length += 1
+            }
+            text += page
+            length += page.count
+            if length > limit { return (String(text.prefix(limit)), true) }
+        }
+        return (text, false)
     }
 
     func thumbnail(of index: Int, rotation: Int, size: CGSize, password: String?) -> CGImage? {

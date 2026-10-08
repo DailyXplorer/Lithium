@@ -164,6 +164,8 @@ struct PageContent {
     let selection: String
     /// The page is longer than `SummaryText.maximumLength`; `text` is its beginning.
     let isTruncated: Bool
+    /// The same for `selection`.
+    let isSelectionTruncated: Bool
 }
 
 @MainActor
@@ -183,7 +185,8 @@ enum PageReader {
             title: values["title"] as? String ?? "",
             text: values["text"] as? String ?? "",
             selection: values["selection"] as? String ?? "",
-            isTruncated: values["truncated"] as? Bool ?? false
+            isTruncated: values["truncated"] as? Bool ?? false,
+            isSelectionTruncated: values["selectionTruncated"] as? Bool ?? false
         )
     }
 }

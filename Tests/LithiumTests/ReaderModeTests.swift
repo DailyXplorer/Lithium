@@ -248,7 +248,7 @@ struct ReaderModeTests {
         #expect(await ReaderMode.check(webView) == .none)
         #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
         let text = try #require(try await value("document.body.innerText", in: webView))
-        #expect(text.contains("It thinks through problems"))
+        #expect(text.contains("It thinks through problems") && text.contains("Our most capable model yet"))
         #expect(!text.contains("Slide 1 of") && !text.contains("See what it can build") && !text.contains("Learn more"))
 
         let website = ReaderPages.article.replacingOccurrences(of: "<title>", with: "<meta property=\"og:type\" content=\"website\"><title>")
@@ -257,7 +257,7 @@ struct ReaderModeTests {
 
     /// Pages modeled on the reported one and on other strict-policy sites, each served with its
     /// site's kind of policy: the button comes on the articles alone, and the reader, even forced,
-    /// is styled and has no slide labels.
+    /// is styled in its loaded font and has no slide labels nor "Learn more" links, even beside another.
     @Test(arguments: [
         ("reader-corpus-deepmind", ReaderPages.googlePolicy, "none", "It thinks through hard problems"),
         ("reader-corpus-github", ReaderPages.githubPolicy, "article", "Paragraph 05: contributions are welcome"),
@@ -277,9 +277,15 @@ struct ReaderModeTests {
         #expect(try await value("\(article).fontSize", in: webView) == "19px", "\(name)")
         #expect(try await value("\(article).maxWidth", in: webView) != "none", "\(name)")
         #expect(try await value("\(article).fontFamily.split(',')[0].replace(/\"/g, '')", in: webView) == "Lithium DM Sans", "\(name)")
+        let fontLoaded = try await webView.callAsyncJavaScript("""
+            await document.fonts.ready;
+            return [...document.fonts].some((face) => face.family.replace(/"/g, '') === 'Lithium DM Sans' && face.status === 'loaded');
+            """, contentWorld: .page)
+        #expect(fontLoaded as? Bool == true, "\(name)")
         let text = try #require(try await value("document.body.innerText", in: webView))
         #expect(text.contains(kept), "\(name)")
         #expect(text.range(of: #"Slide \d+ of \d+"#, options: .regularExpression) == nil, "\(name)")
+        #expect(!text.contains("Learn more"), "\(name)")
     }
 
     /// Documentation whose page calls itself something else (GitHub says "object"), its paragraphs

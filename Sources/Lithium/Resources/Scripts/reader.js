@@ -48,12 +48,13 @@ const furnitureRoles = new Set(['tablist', 'tab', 'slider', 'progressbar', 'stat
 const counter = /^\s*((slide|item|image|photo|picture|page|step)\s*\d+\s*(of|\/)|\d+\s+of)\s*\d+\s*$/i;
 const teaser = /^\s*(learn|read|see|find out|discover) more\s*$/i;
 // Within a sentence when its nearest sibling that shows something, either way, is text or an inline
-// element with some ("see <em>this</em> <a>learn more</a>"), not a card's paragraph or heading.
+// element with some ("see <em>this</em> <a>learn more</a>"), not a card's paragraph or heading, nor
+// another link or button beside it ("<a>Learn more</a> <a>Buy</a>").
 const inText = (node, step) => {
   while (node && (node.nodeType === Node.COMMENT_NODE || node.nodeType === Node.TEXT_NODE && node.textContent.trim() === '')) node = node[step];
   if (node?.nodeType === Node.TEXT_NODE) return true;
-  return node?.nodeType === Node.ELEMENT_NODE && node.localName !== 'br' && node.textContent.trim() !== ''
-    && getComputedStyle(node).display.startsWith('inline');
+  return node?.nodeType === Node.ELEMENT_NODE && !/^(br|a|button)$/.test(node.localName) && !node.querySelector('a, button')
+    && node.textContent.trim() !== '' && getComputedStyle(node).display === 'inline';
 };
 const isFurniture = (element, computed) => {
   if (furnitureRoles.has(element.getAttribute('role'))) return true;

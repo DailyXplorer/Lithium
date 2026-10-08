@@ -7,11 +7,20 @@ struct Session: Codable, Equatable {
         var title: String
         var customTitle: String?
         var pinID: Pin.ID?
+        /// Nil for the main space (`Space.saved`).
+        var spaceID: Space.ID? = nil
+        /// The tab last shown in its space, another than the one shown at quit: switching back
+        /// brings it back.
+        var lastShown: Bool? = nil
     }
 
     var tabs: [Tab] = []
     var selectedIndex: Int?
     var splits: [Split]?
+    /// Nil until the user makes a second space, then the main one first.
+    var spaces: [Space]? = nil
+    /// The space shown at quit; nil for the main one.
+    var spaceID: Space.ID? = nil
 }
 
 enum SessionStore {

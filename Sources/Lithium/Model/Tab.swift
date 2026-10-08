@@ -58,6 +58,10 @@ final class Tab: NSObject, Identifiable {
         if let privateStore {
             configuration.websiteDataStore = privateStore
             configuration.webExtensionController = nil
+        } else if let spaceStore, url?.scheme != Extensions.scheme {
+            // Likewise a space's own store, popups too (`Privacy.harden` hands them the default
+            // one). An extension's pages keep their extension's.
+            configuration.websiteDataStore = spaceStore
         }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
@@ -257,15 +261,24 @@ final class Tab: NSObject, Identifiable {
         historyStore?.record(url, title: title)
     }
 
-    init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) {
+    /// The space whose sidebar shows the tab (`Space`). Fixed: its pages' cookies live there.
+    let spaceID: Space.ID
+    /// The store of a space that keeps its data apart; a private tab's own wins over it. Asked
+    /// for as a web view is made, so tabs restored asleep make no store.
+    private var spaceStore: WKWebsiteDataStore? {
+        privateStore == nil ? browser?.spaceStore(for: spaceID) : nil
+    }
+
+    init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID) {
         self.browser = browser
         self.configuration = configuration
         self.privateStore = privateStore
+        spaceID = space
         super.init()
     }
 
     /// Cookies and storage the page sees, without making a web view.
-    var dataStore: WKWebsiteDataStore { privateStore ?? configuration.websiteDataStore }
+    var dataStore: WKWebsiteDataStore { privateStore ?? spaceStore ?? configuration.websiteDataStore }
 
     private func attach(_ webView: WKWebView) {
         hasShownPage = false
@@ -1306,21 +1319,22 @@ extension Tab: WKUIDelegate {
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
             if let agentSession {
-                let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore)
+                let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore, space: spaceID)
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
             } else if browser.quickLinks.contains(self) {
-                browser.quickLinks.open(url)
+                browser.quickLinks.open(url, space: spaceID)
             } else {
                 browser.newTab(url: url, privateStore: privateStore, openedFrom: self)
             }
             return nil
         }
         browser.prepare(popup: configuration)
-        // A private tab's popup shares its store, so a sign-in window's cookies reach its opener.
+        // A private tab's popup shares its store, so a sign-in window's cookies reach its opener;
+        // so does a popup in a space with its own store (`newTab` puts it in its opener's space).
         // A link's own window opens its pages in windows of their own, leaving the tab list alone.
-        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
-            ?? (browser.quickLinks.contains(self) ? browser.quickLinks.open(configuration: configuration) : nil)
+        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore, space: spaceID) }
+            ?? (browser.quickLinks.contains(self) ? browser.quickLinks.open(configuration: configuration, space: spaceID) : nil)
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         popup.scriptOpener = self

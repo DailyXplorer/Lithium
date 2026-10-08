@@ -28,6 +28,30 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            spaceContent
+                // A space's favorites and tabs slide in from the side it lies on.
+                .id(browser.currentSpaceID)
+                .transition(.push(from: browser.spaceStepsForward ? .trailing : .leading))
+            if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
+                MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            SpaceBar()
+        }
+        .animation(.snappy(duration: 0.2), value: playingTab?.id)
+        .padding(.top, 2)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+        .background {
+            SpaceSwipeArea(isEnabled: browser.hasSpaces) { offset in
+                withAnimation(.snappy(duration: 0.25)) { browser.switchSpace(by: offset) }
+            }
+        }
+        .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
+    }
+
+    private var spaceContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
             PinGrid()
             Rectangle()
                 .fill(palette.ink.opacity(0.1))
@@ -71,16 +95,7 @@ struct SidebarView: View {
             // The empty space below the tabs too; a row's own menu wins over this one.
             .contentShape(Rectangle())
             .contextMenu { ReopenClosedTabButton() }
-            if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
-                MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
-        .animation(.snappy(duration: 0.2), value: playingTab?.id)
-        .padding(.top, 2)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 10)
-        .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
     }
 
     private var playingTab: Tab? {
@@ -101,7 +116,7 @@ private struct PinGrid: View {
 
     var body: some View {
         Group {
-            if browser.pins.isEmpty {
+            if browser.spacePins.isEmpty {
                 Text("Drag a tab here to pin it")
                     .font(Theme.font(11))
                     .multilineTextAlignment(.center)
@@ -114,7 +129,7 @@ private struct PinGrid: View {
                     )
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(Array(browser.pins.enumerated()), id: \.element.id) { index, pin in
+                    ForEach(Array(browser.spacePins.enumerated()), id: \.element.id) { index, pin in
                         PinTile(pin: pin, index: index)
                     }
                 }
@@ -143,7 +158,7 @@ private extension Browser {
         withAnimation(.snappy(duration: 0.2)) {
             if item.hasPrefix(pinDragPrefix) {
                 if let id = UUID(uuidString: String(item.dropFirst(pinDragPrefix.count))) {
-                    movePin(id: id, to: index ?? pins.count)
+                    movePin(id: id, to: index ?? spacePins.count)
                 }
             } else {
                 pinTab(withID: item, at: index)

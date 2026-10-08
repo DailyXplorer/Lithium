@@ -173,14 +173,16 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             }
         case "site", "clearSiteData":
             guard let host = value as? String, !host.isEmpty else { return (nil, "No site") }
-            let info = SiteInfo(host: host)
-            await info.load()
+            // Spaces that keep their own cookies hold the site's data apart from the default store.
+            let infos = browser.siteDataStores.map { SiteInfo(host: host, store: $0) }
+            for info in infos { await info.load() }
             if action == "clearSiteData" {
-                await info.clear()
+                for info in infos { await info.clear() }
                 // Its open pages would go on without the data they expect; private tabs keep theirs.
-                browser.tabs.filter { !$0.isAsleep && !$0.isEphemeral && SiteInfo.registrable($0.url?.host() ?? "") == info.site }.forEach { browser.navigate($0, .reload) }
+                let site = SiteInfo.registrable(host)
+                browser.tabs.filter { !$0.isAsleep && !$0.isEphemeral && SiteInfo.registrable($0.url?.host() ?? "") == site }.forEach { browser.navigate($0, .reload) }
             }
-            return (["host": host, "cookies": info.cookieCount ?? 0, "hasData": info.hasData], nil)
+            return (["host": host, "cookies": infos.reduce(0) { $0 + ($1.cookieCount ?? 0) }, "hasData": infos.contains(where: \.hasData)], nil)
         case "setTidyTitles":
             browser.tidyTitles.isEnabled = value as? Bool ?? true
             if browser.tidyTitles.isEnabled {

@@ -19,6 +19,17 @@ final class Browser {
             videoPopout.selectionChanged(from: tabs.first { $0.id == oldValue }, to: selectedTab)
         }
     }
+    /// Empty until the user makes a second space (`Space`), then the main one first.
+    private(set) var spaces: [Space] = []
+    /// The space the sidebar shows; the selected tab is in it.
+    private(set) var currentSpaceID = Space.mainID
+    /// The tab each space showed when the user left it.
+    @ObservationIgnored private var spaceSelections: [Space.ID: Tab.ID] = [:]
+    @ObservationIgnored private var spaceStores: [Space.ID: WKWebsiteDataStore] = [:]
+    /// The last switch went to a space further along: the sidebar slides that way.
+    @ObservationIgnored private(set) var spaceStepsForward = true
+    /// Clearing a deleted space's store; awaited in tests.
+    @ObservationIgnored private(set) var storeCleanup: Task<Void, Never>?
     private(set) var addressFocusToken = 0
     /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection, so
     /// the peeked sidebar can slide back on a pick yet stay out while tabs close in a row.
@@ -94,6 +105,7 @@ final class Browser {
     struct ClosedTab {
         let url: URL
         let pinID: Pin.ID?
+        let spaceID: Space.ID
         let customTitle: String?
         /// Its place in the tab list; nil for a favorite's page.
         let index: Int?
@@ -458,13 +470,13 @@ final class Browser {
     /// The page the menu's page commands (Reload, Back, Print…) act on: a link's own window
     /// while it is in front, the selected tab otherwise.
     var commandTab: Tab? { quickLinks.keyTab ?? selectedTab }
-    /// The tab list. Tabs an agent opened sit apart, in the Agent group below it.
-    var regularTabs: [Tab] { tabs.filter(\.isInTabList) }
-    var agentTabs: [Tab] { tabs.filter(\.isInAgentGroup) }
+    /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.
+    var regularTabs: [Tab] { tabList(in: currentSpaceID) }
+    var agentTabs: [Tab] { agentGroup(in: currentSpaceID) }
     /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within: the
-    /// Agent group for its tabs, the tab list for the rest.
+    /// Agent group for its tabs, the tab list for the rest, in the tab's space.
     func peers(of tab: Tab) -> [Tab] {
-        tab.isInAgentGroup ? agentTabs : regularTabs
+        tab.isInAgentGroup ? agentGroup(in: tab.spaceID) : tabList(in: tab.spaceID)
     }
 
     func liveTab(for pin: Pin) -> Tab? { tabs.first { $0.pinID == pin.id } }
@@ -479,10 +491,11 @@ final class Browser {
 
     // MARK: Tabs
 
-    /// `opener` is the tab whose page opened this one (a link, ⌘-click or `window.open`).
+    /// `opener` is the tab whose page opened this one (a link, ⌘-click or `window.open`). The tab
+    /// goes in `space`, else its opener's, else the space shown.
     @discardableResult
-    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil) -> Tab {
-        let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore)
+    func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil, space: Space.ID? = nil) -> Tab {
+        let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore, space: space ?? opener?.spaceID ?? currentSpaceID)
         if let opener { recentTabs.didOpen(tab, from: opener) }
         if let url { tab.load(url) }
         if selecting { select(tab) }
@@ -490,37 +503,38 @@ final class Browser {
     }
 
     /// A link from another app (`onOpenURL`): in a small window of its own when Settings says so,
-    /// leaving the tab list alone; in a new tab otherwise.
+    /// leaving the tab list alone; in a new tab otherwise. Either way in the space shown.
     func openFromOtherApp(_ url: URL) {
         if quickLinks.isEnabled, QuickLinks.takes(url) { quickLinks.open(url) } else { newTab(url: url) }
     }
 
-    /// A page made outside the tab list (a link's own window) joins it at the top, selected.
+    /// A page made outside the tab list (a link's own window) joins its space's at the top, selected.
     func adopt(_ tab: Tab) {
-        tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs))
+        tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs, space: tab.spaceID))
         extensions.didOpen(tab)
         select(tab)
     }
 
-    /// `index` is a place in the tab list, clamped to it. `tabs` also holds favorites' pages, in
-    /// no particular order, so the new tab goes just before the one it pushes down.
-    private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore)
-        tabs.insert(tab, at: Self.position(inTabList: index, of: tabs))
+    /// `index` is a place in the space's tab list, clamped to it. `tabs` also holds favorites'
+    /// pages and other spaces' tabs, so the new tab goes just before the one it pushes down.
+    private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore, space: space)
+        tabs.insert(tab, at: Self.position(inTabList: index, of: tabs, space: space))
         extensions.didOpen(tab)
         return tab
     }
 
-    private static func position(inTabList index: Int, of tabs: [Tab]) -> Int {
-        let list = tabs.filter(\.isInTabList)
+    private static func position(inTabList index: Int, of tabs: [Tab], space: Space.ID) -> Int {
+        let list = tabs.filter { $0.isInTabList && $0.spaceID == space }
         return index <= 0 ? 0 : index >= list.count ? tabs.count : tabs.firstIndex { $0 === list[index] } ?? tabs.count
     }
 
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
     /// stay as they were. Agents open only web pages, which load in Lithium's own configuration.
-    /// With `privateStore` the tab is private (`Tab.privateStore`).
-    func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore)
+    /// With `privateStore` the tab is private (`Tab.privateStore`). In the space shown, unless
+    /// opened from a page of another.
+    func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, space: Space.ID? = nil) -> Tab {
+        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore, space: space ?? currentSpaceID)
         tab.openedByAgent = session
         tabs.append(tab)
         extensions.didOpen(tab)
@@ -535,7 +549,7 @@ final class Browser {
             var reordered = tabs
             reordered.remove(at: from)
             tab.openedByAgent = nil
-            reordered.insert(tab, at: Self.position(inTabList: index ?? .max, of: reordered))
+            reordered.insert(tab, at: Self.position(inTabList: index ?? .max, of: reordered, space: tab.spaceID))
             tabs = reordered
         }
     }
@@ -557,13 +571,17 @@ final class Browser {
     }
 
     func newTabFocusingAddress() {
+        showStartPage()
+        requestAddressFocus()
+    }
+
+    private func showStartPage() {
         find.hide()
         // Left for the address bar: it counts as used until now, as does the other side of its split.
         selectedTab?.markActive()
         shownPartner?.markActive()
         if selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
-        requestAddressFocus()
     }
 
     func open(_ input: String) {
@@ -656,6 +674,8 @@ final class Browser {
             shownPartner?.markActive()
             recentTabs.didShow(tab, after: previous)
         }
+        // A tab of another space (a suggestion, a link's own window moved in) brings its space.
+        if tab.spaceID != currentSpaceID, spaces.contains(where: { $0.id == tab.spaceID }) { enterSpace(tab.spaceID) }
         selectedTabID = tab.id
         tab.markActive()
         // In split view the other side comes on screen too, maybe from another split: its pane
@@ -683,8 +703,8 @@ final class Browser {
         nowPlaying.discard(tab)
         if remembering, let url = tab.url, !tab.isEphemeral {
             // An agent's tab comes back the user's, at the bottom of the list, next to where it was.
-            let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? regularTabs.count : order.firstIndex { $0 === tab }
-            let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle, index: place, history: tab.history)
+            let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? tabList(in: tab.spaceID).count : order.firstIndex { $0 === tab }
+            let closed = ClosedTab(url: url, pinID: tab.pinID, spaceID: tab.spaceID, customTitle: tab.customTitle, index: place, history: tab.history)
             closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
@@ -696,7 +716,7 @@ final class Browser {
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
             // In split view the partner wins: it is already on screen.
-            selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? regularTabs.last?.id : nil)
+            selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
                 : remaining[min(position, remaining.count - 1)].id)
             // The tab shown next may be asleep.
             selectedTab?.markActive()
@@ -783,11 +803,12 @@ final class Browser {
     var canReopenClosedTab: Bool { !closedTabs.isEmpty }
 
     /// Like Chrome: back in its place, with its history. A favorite's page goes back to its
-    /// favorite if that has no page open, or else to the top of the list.
+    /// favorite if that has no page open, or else to the top of the list. In its own space,
+    /// which comes back with it.
     func reopenClosedTab() {
         guard let closed = closedTabs.popLast() else { return }
         let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
-        let tab = insertTab(at: pin == nil ? closed.index ?? 0 : 0, configuration: makeConfiguration(for: closed.url))
+        let tab = insertTab(at: pin == nil ? closed.index ?? 0 : 0, configuration: makeConfiguration(for: closed.url), space: closed.spaceID)
         extensions.moving(tab) { tab.pinID = pin?.id }
         tab.customTitle = closed.customTitle
         tab.load(closed.url, history: closed.history)
@@ -799,10 +820,10 @@ final class Browser {
     /// at the bottom of the list, next to it.
     func duplicate(_ tab: Tab) {
         guard let url = tab.url else { return }
-        let list = regularTabs
+        let list = tabList(in: tab.spaceID)
         let index = tab.isInAgentGroup ? list.count : list.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
-        // A private tab's copy shares its store, and is private too.
-        let copy = insertTab(at: index, configuration: makeConfiguration(for: url), privateStore: tab.privateStore)
+        // A private tab's copy shares its store, and is private too; any copy stays in its space.
+        let copy = insertTab(at: index, configuration: makeConfiguration(for: url), privateStore: tab.privateStore, space: tab.spaceID)
         copy.customTitle = tab.customTitle
         copy.load(url, history: tab.history)
         select(copy)
@@ -840,13 +861,14 @@ final class Browser {
     }
 
     /// Live favorites first (in grid order), then the tab list and the Agent group, which is how
-    /// the sidebar reads top to bottom.
+    /// the sidebar reads top to bottom; space after space. Extensions and agents see every space.
     var navigationOrder: [Tab] {
-        pins.compactMap(liveTab(for:)) + regularTabs + agentTabs
+        spaces.isEmpty ? navigationOrder(in: Space.mainID) : spaces.flatMap { navigationOrder(in: $0.id) }
     }
 
+    /// Next Tab and Previous Tab stay in the space shown, as the sidebar does.
     func selectAdjacentTab(_ offset: Int) {
-        let order = navigationOrder
+        let order = navigationOrder(in: currentSpaceID)
         guard !order.isEmpty else { return }
         // From the start page, forward starts at the first item and backward at the last.
         guard let current = order.firstIndex(where: { $0.id == selectedTabID }) else {
@@ -860,7 +882,7 @@ final class Browser {
     /// long as Control is held, and to the highlighted one when it is let go. Without Control held
     /// (the menu clicked), one step and done.
     func cycleRecentTabs(backward: Bool, holdingControl: Bool = NSEvent.modifierFlags.contains(.control)) {
-        recentTabs.step(backward: backward, among: navigationOrder, current: selectedTab)
+        recentTabs.step(backward: backward, among: navigationOrder(in: currentSpaceID), current: selectedTab)
         if holdingControl {
             recentTabs.watchControl { [weak self] in self?.endTabCycle(commit: $0) }
         } else {
@@ -877,6 +899,7 @@ final class Browser {
     /// sidebar shows them: a split pair is one row, and its number shows the pair.
     func selectItem(at index: Int) {
         let rows = tabListEntries.map(\.tab) + agentTabs
+        let pins = spacePins
         if index < pins.count {
             activate(pins[index])
         } else if index - pins.count < rows.count {
@@ -898,25 +921,33 @@ final class Browser {
             places[tab.id] = session.tabs.count
             // Not the error page's own title: the tab comes back named after its site.
             let title = tab.isShowingError ? "" : tab.title
-            session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID))
+            let lastShown = tab.spaceID != currentSpaceID && spaceSelections[tab.spaceID] == tab.id
+            session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID,
+                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil))
         }
         session.splits = savedSplits(at: places)
+        if !spaces.isEmpty {
+            session.spaces = spaces
+            session.spaceID = Space.saved(currentSpaceID)
+        }
         return session
     }
 
     /// Every tab comes back asleep. The selected one wakes in `windowDidAppear`: a page that
     /// finishes loading before its web view is in a window stays blank.
     private func restore(_ session: Session) {
-        let pinIDs = Set(pins.map(\.id))
+        restoreSpaces(session)
         var selected: Tab?
         var restored: [Int: Tab] = [:]
         for (index, saved) in session.tabs.enumerated() {
             // An extension's own page needs its extension, which loads after the session comes back.
             guard saved.url.scheme != Extensions.scheme else { continue }
-            let tab = Tab(browser: self, configuration: makeConfiguration(for: saved.url))
+            let space = saved.spaceID.flatMap { id in spaces.contains { $0.id == id } ? id : nil } ?? Space.mainID
+            let tab = Tab(browser: self, configuration: makeConfiguration(for: saved.url), space: space)
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
-            tab.pinID = saved.pinID.flatMap { pinIDs.contains($0) ? $0 : nil }
+            tab.pinID = saved.pinID.flatMap { id in pins.contains { $0.id == id && $0.space == space } ? id : nil }
+            if saved.lastShown == true { spaceSelections[space] = tab.id }
             // Asleep, it loads nothing that would tidy its title.
             tidyTitles.update(tab, askingModel: false)
             tabs.append(tab)
@@ -926,8 +957,27 @@ final class Browser {
         }
         restoreSplits(session.splits, tabs: restored)
         if let selected {
+            currentSpaceID = selected.spaceID
             selectedTabID = selected.id
             extensions.didSelect(selected)
+        }
+    }
+
+    /// The main space comes first, whatever the file says. A favorite of a space no longer saved
+    /// (a session file that couldn't be read) goes back to the main space rather than vanish.
+    private func restoreSpaces(_ session: Session) {
+        if let saved = session.spaces, !saved.isEmpty {
+            let main = saved.first { $0.id == Space.mainID } ?? .main
+            spaces = [main] + saved.filter { $0.id != Space.mainID }
+            if let id = session.spaceID, spaces.contains(where: { $0.id == id }) { currentSpaceID = id }
+        }
+        let known = Set(allSpaces.map(\.id))
+        if pins.contains(where: { !known.contains($0.space) }) {
+            pins = pins.map { pin in
+                var pin = pin
+                if !known.contains(pin.space) { pin.spaceID = nil }
+                return pin
+            }
         }
     }
 
@@ -969,24 +1019,128 @@ final class Browser {
         await favicons.clear(keeping: Set(hosts.compactMap { $0.host() }))
     }
 
+    // MARK: Spaces
+
+    /// Every store that holds the user's (non-private) site data: the default one, and those of
+    /// the spaces that keep theirs apart.
+    var siteDataStores: [WKWebsiteDataStore] {
+        [.default()] + spaces.filter(\.separatesData).compactMap { spaceStore(for: $0.id) }
+    }
+
+    /// The store of a space that keeps its data apart, made on first use and kept while the space
+    /// is. Nil for the main space and those sharing its data, whose tabs use the default store.
+    func spaceStore(for id: Space.ID) -> WKWebsiteDataStore? {
+        guard id != Space.mainID, spaces.contains(where: { $0.id == id && $0.separatesData }) else { return nil }
+        if let store = spaceStores[id] { return store }
+        let store = WKWebsiteDataStore(forIdentifier: id)
+        spaceStores[id] = store
+        return store
+    }
+
+    /// Made and shown, empty, with the keyboard in the address bar to go somewhere.
+    func addSpace(_ space: Space) {
+        guard canAddSpace, !allSpaces.contains(where: { $0.id == space.id }) else { return }
+        var space = space
+        space.name = Space.trimmedName(space.name, fallback: "Space \(allSpaces.count + 1)")
+        spaces = allSpaces + [space]
+        switchToSpace(space.id)
+        requestAddressFocus()
+        // A deleted space's folder WebKit still held then goes now.
+        if space.separatesData { storeCleanup = Task { await removeUnusedStores() } }
+    }
+
+    /// Its name, color and icon. Whether it keeps its data apart stays as chosen.
+    func updateSpace(_ space: Space) {
+        guard let index = spaces.firstIndex(where: { $0.id == space.id }) else { return }
+        var updated = space
+        updated.name = Space.trimmedName(space.name, fallback: spaces[index].name)
+        updated.separatesData = spaces[index].separatesData
+        if updated != spaces[index] { spaces[index] = updated }
+    }
+
+    /// Back to the tab last shown in the space, or to the start page. An edit in the address bar
+    /// or a tab's name ends first: its field would be left editing a tab no longer shown.
+    func switchToSpace(_ id: Space.ID) {
+        guard id != currentSpaceID, spaces.contains(where: { $0.id == id }) else { return }
+        if isEditingAddress || renamingTabID != nil { window?.makeFirstResponder(nil) }
+        renamingTabID = nil
+        let order = spaces.map(\.id)
+        spaceStepsForward = (order.firstIndex(of: id) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
+        if let last = spaceSelections[id], let tab = tabs.first(where: { $0.id == last && $0.spaceID == id }) {
+            select(tab)
+        } else {
+            enterSpace(id)
+            showStartPage()
+        }
+    }
+
+    private func enterSpace(_ id: Space.ID) {
+        spaceSelections[currentSpaceID] = selectedTabID
+        currentSpaceID = id
+    }
+
+    /// Its tabs close, kept out of Reopen Closed Tab, and its favorites go; then its store, when
+    /// it has one. The window moves to the space before it first.
+    func deleteSpace(_ id: Space.ID) {
+        guard id != Space.mainID, let index = spaces.firstIndex(where: { $0.id == id }) else { return }
+        let space = spaces[index]
+        if currentSpaceID == id { switchToSpace(spaces[index - 1].id) }
+        tabs.filter { $0.spaceID == id }.reversed().forEach { close($0, remembering: false) }
+        quickLinks.tabs.filter { $0.spaceID == id }.forEach(quickLinks.close)
+        closedTabs.removeAll { $0.spaceID == id }
+        for pin in pins where pin.space == id { pinIcons[pin.id] = nil }
+        pins.removeAll { $0.space == id }
+        spaces.remove(at: index)
+        spaceSelections[id] = nil
+        if space.separatesData { removeStore(of: id) }
+    }
+
+    /// Its cookies, logins and storage go at once, even while WebKit still holds the store; its
+    /// folder goes with any other no space uses once WebKit lets go: it refuses while a web view
+    /// of the store lives. One still held now goes when the next space with its own data is made.
+    private func removeStore(of id: Space.ID) {
+        let store = spaceStores.removeValue(forKey: id) ?? WKWebsiteDataStore(forIdentifier: id)
+        storeCleanup = Task {
+            await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+            await removeUnusedStores()
+        }
+    }
+
+    /// The stores on disk no space keeps its data in.
+    private func removeUnusedStores() async {
+        let kept = Set(spaces.filter(\.separatesData).map(\.id))
+        for id in await WKWebsiteDataStore.allDataStoreIdentifiers where !kept.contains(id) {
+            try? await WKWebsiteDataStore.remove(forIdentifier: id)
+        }
+    }
+
     // MARK: Favorites
 
     func activate(_ pin: Pin) {
         if let tab = liveTab(for: pin) {
             select(tab)
         } else {
-            let tab = newTab(url: pin.url)
+            let tab = newTab(url: pin.url, space: pin.space)
             extensions.moving(tab) { tab.pinID = pin.id }
         }
     }
 
-    /// Without an index the favorite goes at the end of the grid; with one it takes that slot.
-    /// A private tab can't be pinned: a favorite is saved, with its address and icon.
+    /// Where the slot `index` of a space's grid is in `pins`, which holds every space's favorites:
+    /// just before the favorite in that slot, or after the space's last one.
+    private func pinsIndex(forSlot index: Int, in space: Space.ID, of pins: [Pin]) -> Int {
+        guard !spaces.isEmpty else { return min(max(index, 0), pins.count) }
+        let grid = pins.filter { $0.space == space }
+        if index < grid.count { return pins.firstIndex { $0.id == grid[max(index, 0)].id } ?? pins.count }
+        return grid.last.flatMap { last in pins.firstIndex { $0.id == last.id } }.map { $0 + 1 } ?? pins.count
+    }
+
+    /// Without an index the favorite goes at the end of its space's grid; with one it takes that
+    /// slot. A private tab can't be pinned: a favorite is saved, with its address and icon.
     func pin(_ tab: Tab, at index: Int? = nil) {
         guard tab.pinID == nil, !tab.isEphemeral, let url = tab.url else { return }
-        let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
+        let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData, spaceID: Space.saved(tab.spaceID))
         extensions.moving(tab) {
-            pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
+            pins.insert(pin, at: pinsIndex(forSlot: index ?? .max, in: tab.spaceID, of: pins))
             leaveSplit(tab)
             tab.pinID = pin.id
             // The user's from now on: unpinned, it goes to the tab list.
@@ -1002,12 +1156,16 @@ final class Browser {
 
     /// Moves a favorite into the slot at `index`, the others shifting around it, as on a home screen.
     /// Built on a copy so `pins` is saved once, never without the moving favorite.
+    /// `index` is a slot of the favorite's own space's grid.
     func movePin(id: UUID, to index: Int) {
         guard let from = pins.firstIndex(where: { $0.id == id }) else { return }
-        let to = min(max(index, 0), pins.count - 1)
-        guard from != to else { return }
+        let space = pins[from].space
+        let grid = self.pins(in: space)
+        let to = min(max(index, 0), grid.count - 1)
+        guard grid.firstIndex(where: { $0.id == id }) != to else { return }
         var reordered = pins
-        reordered.insert(reordered.remove(at: from), at: to)
+        let moving = reordered.remove(at: from)
+        reordered.insert(moving, at: pinsIndex(forSlot: to, in: space, of: reordered))
         extensions.moving(liveTab(for: pins[from])) { pins = reordered }
     }
 

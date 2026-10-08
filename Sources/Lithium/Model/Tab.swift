@@ -693,8 +693,9 @@ final class Tab: NSObject, Identifiable {
         // A tab going on to an extension's address isn't empty, though nothing is shown yet.
         guard !goToAddressAfterWaking() else { return }
         if inMainFrame { endedUnshown(.download(fileName: fileName)) }
-        // A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
-        if webView.backForwardList.currentItem == nil { browser?.close(self) }
+        // A tab opened just to fetch a file has no page to show once the download starts; like
+        // Safari, close it, without a Reopen Closed Tab entry that would only download it again.
+        if webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false) }
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
@@ -958,7 +959,9 @@ extension Tab: WKNavigationDelegate {
             Task { self.load(action.request) }
             return (.cancel, preferences)
         }
-        setWebstoreBridge(ChromeWebStore.isStore(url))
+        // Before the store's first script asks for it; taken away only once another page commits,
+        // so a load that never shows (Stop, a 204, a download) leaves the store its button.
+        if ChromeWebStore.isStore(url) { setWebstoreBridge(true) }
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
@@ -1059,6 +1062,7 @@ extension Tab: WKNavigationDelegate {
         if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.
         setInternalBridge(Internal.isInternal(webView.url))
+        setWebstoreBridge(ChromeWebStore.isStore(webView.url))
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.
         if !goToAddressAfterWaking() { commits += 1 }
@@ -1087,6 +1091,7 @@ extension Tab: WKNavigationDelegate {
             return
         }
         let reader = PDFReader(url: url)
+        reader.isPrivate = isEphemeral
         // Like a website's links: never Lithium's own pages, local files only from a local PDF
         // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
         let isLocal = url.isFileURL
@@ -1152,9 +1157,11 @@ extension Tab: WKNavigationDelegate {
     }
 
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
-    private static func isDropped(_ error: Error) -> Bool {
+    /// Nor is WebKit's 204, "plug-in will handle load": a direct video or audio link's player took
+    /// the load over, and shows the file.
+    static func isDropped(_ error: Error) -> Bool {
         let error = error as NSError
-        return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && error.code == 102)
+        return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && [102, 204].contains(error.code))
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

@@ -123,14 +123,20 @@ extension AgentHub {
             let (answer, took) = try await run(function, args: args, element: element, ref: ref, in: target, of: webView, isolated: isolated, named: named, timeout: timeout)
             let ms = Int(took / .milliseconds(1))
 
-            // Fields filled while it ran (by the script itself, or the user) are scrubbed.
-            let secrets: [String]
-            if let after = try? await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: .now + AgentHub.frameTimeout) {
-                secrets = after.reports.flatMap(\.0.secrets)
-                Self.callNotes?.secrets = secrets
-            } else {
-                secrets = []
+            // Fields filled while it ran (by the script itself, or the user) are scrubbed. Without
+            // the script's frame's word on them, nothing says what to scrub: a script that keeps
+            // the page busy after it returns, or leaves it, gets no result back.
+            let after: FrameReports<GuardReport>?
+            do {
+                after = try await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: .now + AgentHub.frameTimeout)
+            } catch let error as AgentToolError where ["timeout", "frame_gone"].contains(error.code) {
+                after = nil
             }
+            guard let after, target.info == nil || after.reports.contains(where: { $0.1.document == document }) else {
+                throw AgentToolError(code: "blocked", message: "The script ran, but \(named.id)’s page didn’t answer after it, so Lithium couldn’t check its result for passwords and withheld it.")
+            }
+            let secrets = after.reports.flatMap(\.0.secrets)
+            Self.callNotes?.secrets = secrets
             let hosts = [host, origin?.host].compactMap { $0 }.filter { !$0.isEmpty }
             let cookies = await cookieValues(of: tab, hosts: hosts)
             if let error = answer.error {

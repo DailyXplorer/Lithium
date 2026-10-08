@@ -146,10 +146,13 @@ final class PageWebView: WKWebView {
 /// target language itself: Spanish, for an English page read on a Mac set to English then French.
 /// Lithium's translates into the summary language, else the first preferred language the text
 /// isn't already in. In a text field WebKit's stays, since it can replace the field's text with its
-/// translation; so it does when no language fits, or the script couldn't read the selection.
+/// translation; so it does when no language fits, the script couldn't read the selection, or the
+/// selection is very long.
 @MainActor
 final class PageTranslation: NSObject, WKScriptMessageHandler {
     static let name = "lithiumTranslate"
+    /// Longer selections keep WebKit's Translate.
+    static let maximumLength = 10_000
 
     /// In Lithium's own content world, so a page can't pass other text off as its selection.
     static let script = WKUserScript(source: """
@@ -159,7 +162,10 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
           const node = selection.anchorNode;
           const element = node && node.nodeType !== Node.ELEMENT_NODE ? node.parentElement : node;
           const editable = field?.matches?.('input, textarea') || element?.isContentEditable;
-          webkit.messageHandlers.\(name).postMessage(editable ? '' : String(selection));
+          const text = editable ? '' : String(selection);
+          // A whole page selected isn't copied to the app and scanned there before the menu
+          // shows; WebKit's Translate takes it.
+          webkit.messageHandlers.\(name).postMessage(text.length > \(maximumLength) ? '' : text);
         }, true);
         """, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .defaultClient)
 

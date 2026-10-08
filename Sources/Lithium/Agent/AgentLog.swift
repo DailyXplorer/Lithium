@@ -24,6 +24,8 @@ actor AgentLog {
             try AgentFiles.prepare(folder)
             if !FileManager.default.fileExists(atPath: file.path) {
                 FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600])
+                // A new day: the app may have run since the hub started, so 30 days end here too.
+                prune(now: date)
             }
             let handle = try FileHandle(forWritingTo: file)
             defer { try? handle.close() }

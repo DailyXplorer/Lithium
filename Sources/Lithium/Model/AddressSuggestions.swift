@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 
 enum Suggestion: Hashable, Identifiable {
@@ -35,6 +35,11 @@ final class AddressSuggestions {
     private(set) var selectedIndex = 0
     /// Visited pages arrive a moment after the rest, from a query that runs off the main thread.
     @ObservationIgnored private(set) var historyQuery: Task<Void, Never>?
+    /// Where the pointer was when the rows last changed. A row that comes up under a resting
+    /// pointer counts as hovered, but only a pointer moved since picks what Return opens.
+    @ObservationIgnored private var pointerAtChange: CGPoint?
+    /// Tests replace it, so the real pointer is never read or moved.
+    @ObservationIgnored var pointerLocation: @MainActor () -> CGPoint = { NSEvent.mouseLocation }
 
     private static let perSource = 3
     private static let limit = 8
@@ -69,12 +74,14 @@ final class AddressSuggestions {
 
         items = Array(([first] + openTabs + pinned).prefix(Self.limit))
         selectedIndex = 0
+        pointerAtChange = pointerLocation()
         historyQuery?.cancel()
         historyQuery = Task { [weak self] in
             guard let sites = await history.topSitesInBackground(matching: query, limit: Self.limit),
                   !Task.isCancelled, let self else { return }
             let visited = sites.filter { seen.insert($0.url.absoluteString).inserted }.map { Suggestion.history(title: $0.title, url: $0.url) }
             items = Array((items + visited).prefix(Self.limit))
+            pointerAtChange = pointerLocation()
         }
     }
 
@@ -85,6 +92,16 @@ final class AddressSuggestions {
 
     func select(_ suggestion: Suggestion) {
         selectedIndex = items.firstIndex(of: suggestion) ?? 0
+    }
+
+    /// The pointer over a row: it is selected once the pointer has moved since the rows changed.
+    func hover(_ suggestion: Suggestion) {
+        if let resting = pointerAtChange {
+            guard pointerLocation() != resting else { return }
+            pointerAtChange = nil
+        }
+        guard items.firstIndex(of: suggestion) != selectedIndex else { return }
+        select(suggestion)
     }
 
     func clear() {

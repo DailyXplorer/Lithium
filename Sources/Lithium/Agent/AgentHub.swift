@@ -561,7 +561,7 @@ final class AgentHub {
                 }
             }
             calls[key] = Call(tool: name, session: session.label, task: task)
-            // The server cancels the request when the client's connection fails.
+            // The server cancels the request when the client's connection fails or closes.
             let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             calls[key] = nil
             // The idle timeout counts from the answer, not from the request a long call began with.
@@ -629,11 +629,18 @@ final class AgentHub {
         var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": AgentURLs.redacted(notes.logged(arguments, tool: name)),
             "result": .object(logged),
             "ms": .int(ms),
         ]
-        let tab = tabID.map(loggedTab)
+        // A private tab saves nothing: its calls are logged without their arguments (an address,
+        // a search typed) nor the tab's address and host, marked instead.
+        let isPrivate = tabID.map { tabIDs.isEphemeral($0) } == true || (name == "tab_open" && arguments["ephemeral"] == .bool(true))
+        if isPrivate {
+            entry["ephemeral"] = true
+        } else {
+            entry["params"] = AgentURLs.redacted(notes.logged(arguments, tool: name))
+        }
+        let tab: JSONValue? = tabID.map { isPrivate ? ["id": .string($0)] : loggedTab($0) }
         if let tab { entry["tab"] = tab }
         noteInPanel(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
         await log.append(entry, at: started)
@@ -665,7 +672,7 @@ final class AgentHub {
     /// The id agents know `tab` by, given the first time any agent sees it. Only for open tabs
     /// (listing, opening): a call already holding a tab names it by the `NamedTab` it started with.
     func id(for tab: Tab) -> String {
-        tabIDs.id(for: tab.id)
+        tabIDs.id(for: tab.id, isEphemeral: tab.isEphemeral)
     }
 
     /// The open tab an agent named, or the reason it can't be used.
@@ -780,7 +787,7 @@ final class AgentHub {
     /// `opener`, or the user pressed last in it: the tab is the user's to open.
     func open(_ url: URL, from opener: Tab) async -> Bool {
         guard actingSession(in: opener) != nil, let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
-        guard (try? await checkOpenable(url, in: nil, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
+        guard (try? await checkOpenable(url, in: nil, isPrivate: opener.isEphemeral, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
         let tab = browser.newAgentTab(session: session.label, privateStore: opener.privateStore)
         tab.load(url)
         didOpen(tab, from: opener)

@@ -80,11 +80,13 @@ final class AgentServer: @unchecked Sendable {
         var deadline: DispatchWorkItem?
         /// A request is with `AgentHub`; answers go out in order, so the next one waits.
         var isBusy = false
-        /// Off while a request is with `AgentHub`: what the client sends meanwhile stays in the
-        /// socket instead of growing `buffer` without bound.
+        /// Off while a request is with `AgentHub`, but for a one-byte read that notices the
+        /// client leaving: what the client sends meanwhile stays in the socket instead of
+        /// growing `buffer` without bound.
         var isReceiving = false
         var closesAfterReply = false
-        /// The request with `AgentHub`, cancelled when the connection fails under it.
+        /// The request with `AgentHub`, cancelled when the connection fails or the client closes
+        /// under it.
         var request: Task<Void, Never>?
 
         init(_ connection: NWConnection, serial: Int, port: UInt16) {
@@ -289,14 +291,22 @@ final class AgentServer: @unchecked Sendable {
     }
 
     /// Reads only while no request is with `AgentHub`, so `buffer` never holds more than one
-    /// request (bounded by `processNext`) plus one read.
+    /// request (bounded by `processNext`) plus one read. While one is, and the client sent
+    /// nothing after it, a one-byte read watches for the client going away.
     private func receive(on entry: Connection) {
         entry.isReceiving = true
-        entry.connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self, weak entry] data, _, isComplete, error in
+        entry.connection.receive(minimumIncompleteLength: 1, maximumLength: entry.isBusy ? 1 : 65_536) { [weak self, weak entry] data, _, isComplete, error in
             guard let self, let entry else { return }
             entry.isReceiving = false
             if let data { entry.buffer.append(data) }
             if isComplete || error != nil { entry.inputEnded = true }
+            // A killed client, or one that gave up on the call, closes with nothing after the
+            // request: nobody waits for the answer, so the call (and a banner it shows) ends now.
+            // A client that half-closes behind pipelined requests still gets every answer.
+            if entry.isBusy, entry.inputEnded, entry.buffer.isEmpty {
+                self.close(entry)
+                return
+            }
             // Every whole request sent before the EOF gets its answer, the last one with
             // `Connection: close` (see `respond`); a request cut by the EOF is dropped.
             self.process(entry)
@@ -309,7 +319,7 @@ final class AgentServer: @unchecked Sendable {
     }
 
     private func resumeReceiving(_ entry: Connection) {
-        guard !entry.isBusy, !entry.isReceiving, !entry.inputEnded, connections[ObjectIdentifier(entry)] != nil else { return }
+        guard !entry.isBusy || entry.buffer.isEmpty, !entry.isReceiving, !entry.inputEnded, connections[ObjectIdentifier(entry)] != nil else { return }
         receive(on: entry)
     }
 

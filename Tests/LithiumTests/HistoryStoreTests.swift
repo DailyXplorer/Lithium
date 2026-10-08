@@ -21,7 +21,7 @@ struct HistoryStoreTests {
         #expect(store.visits(matching: "").map(\.title) == ["Swift"])
     }
 
-    @Test func collapsesImmediateRevisitsAndUpdatesTitles() {
+    @Test func collapsesImmediateRevisitsAndUpdatesTitles() async {
         let store = makeStore()
         let url = URL(string: "https://example.com/")!
         store.record(url, title: "")
@@ -29,8 +29,23 @@ struct HistoryStoreTests {
         store.updateTitle("Example Domain", for: url)
         #expect(store.visits(matching: "").map(\.title) == ["Example Domain"])
 
-        store.clear()
+        await store.clear()
         #expect(store.visits(matching: "").isEmpty)
+    }
+
+    /// Clearing a long history deletes and rewrites the whole file: on a connection of its own,
+    /// off the main thread. Both of the store's connections see it done, and visits recorded
+    /// afterwards are kept.
+    @Test func clearsALongHistoryOffTheMainThread() async {
+        let store = makeStore()
+        for index in 0..<2_000 { store.record(URL(string: "https://example.com/page/\(index)")!, title: "Page \(index)") }
+        #expect(store.visits(matching: "", limit: 5_000).count == 2_000)
+
+        await store.clear()
+        #expect(store.visits(matching: "").isEmpty)
+        #expect(await store.visitsInBackground(matching: "")?.isEmpty == true)
+        store.record(URL(string: "https://swift.org/")!, title: "Swift")
+        #expect(store.visits(matching: "").map(\.title) == ["Swift"])
     }
 
     /// A page retitling itself (an unread count) costs one write a moment later, not one per

@@ -178,6 +178,76 @@ extension BrowserTests {
         #expect(try item.destination.map { try Data(contentsOf: $0) } == bytes)
     }
 
+    /// A PDF saved from the viewer goes through a hidden file: a failed write leaves nothing
+    /// under the real name, nor a hidden leftover, and never replaces a file that appeared there.
+    @Test func savingAPDFNeverLeavesAPartialFile() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let bytes = Data("%PDF-1.4 new".utf8)
+
+        let fresh = folder.appending(path: "Fresh.pdf")
+        try Downloads.write(bytes, to: fresh)
+        #expect(try Data(contentsOf: fresh) == bytes)
+
+        let taken = folder.appending(path: "Taken.pdf")
+        let old = Data("%PDF-1.4 old".utf8)
+        try old.write(to: taken)
+        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: taken) }
+        #expect(try Data(contentsOf: taken) == old)
+
+        let missing = folder.appending(path: "Gone/Missing.pdf")
+        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: missing) }
+        #expect(!FileManager.default.fileExists(atPath: missing.path))
+
+        let left = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        #expect(Set(left) == ["Fresh.pdf", "Taken.pdf"], "no hidden partial is left behind")
+    }
+
+    /// Preview's copy of a downloaded PDF would stay on disk: a private tab never makes one.
+    @Test func aPrivateTabsPDFNeverGoesToPreview() async throws {
+        let file = try makePDF(title: "Statement", pages: ["Balance"])
+        let browser = Browser()
+        let remote = URL(string: "data:application/pdf;base64,\(try Data(contentsOf: file).base64EncodedString())")!
+        let tab = browser.newTab(url: remote, privateStore: .nonPersistent())
+        defer { browser.close(tab) }
+        #expect(await waitForPDF(30) { tab.pdf?.pageCount == 1 })
+        let reader = try #require(tab.pdf)
+        #expect(reader.isPrivate)
+        #expect(!reader.canOpenInPreview)
+        let before = ExternalApps.recorded
+        reader.openInPreview()
+        #expect(ExternalApps.recorded == before)
+
+        // A file already on disk leaves nothing new there.
+        let local = browser.newTab(url: file, privateStore: .nonPersistent())
+        defer { browser.close(local) }
+        #expect(await waitForPDF(30) { local.pdf?.pageCount == 1 })
+        #expect(local.pdf?.canOpenInPreview == true)
+    }
+
+    /// Any page can link to `#page=` with `Int.min`, which used to trap subtracting one.
+    @Test func opensAtAPageWhateverTheFragmentSays() async throws {
+        let base = URL(fileURLWithPath: "/tmp/a.pdf")
+        let page = { (fragment: String) in PDFReader.openingPage(of: URL(string: "\(base.absoluteString)#\(fragment)")!) }
+        #expect(page("page=3") == 2)
+        #expect(page("page=1") == 0)
+        #expect(page("page=0") == 0)
+        #expect(page("page=-4") == 0)
+        #expect(page("page=\(Int.min)") == 0)
+        #expect(page("page=\(Int.max)") == Int.max - 1)
+        #expect(page("page=99999999999999999999") == 0)
+        #expect(page("zoom=2") == 0)
+        #expect(PDFReader.openingPage(of: base) == 0)
+
+        let file = try makePDF(title: "Far", pages: ["One", "Two"])
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "\(file.absoluteString)#page=\(Int.min)")!)
+        defer { browser.close(tab) }
+        #expect(await waitForPDF(30) { tab.pdf?.pageCount == 2 })
+        #expect(tab.pdf?.pageIndex == 0)
+    }
+
     @Test func locksAPasswordProtectedPDFUntilUnlocked() async throws {
         let file = try makePDF(title: "Secret", pages: ["Hidden"], password: "open sesame")
         let browser = Browser()
@@ -190,6 +260,29 @@ extension BrowserTests {
         #expect(tab.pdf?.pageCount == 1)
         await browser.find.update(query: "hidden", in: tab.findTarget)
         #expect(browser.find.matchCount == 1)
+    }
+
+    /// Summaries read the PDF's own text and selection: the web view under the viewer has none.
+    @Test func summariesReadThePDFsText() async throws {
+        let file = try makePDF(title: "Quarterly report", pages: ["Revenue grew", "Costs fell"])
+        let reader = PDFReader(url: file)
+        #expect(reader.open(try Data(contentsOf: file)))
+        let content = try #require(await reader.content(limit: SummaryText.maximumLength))
+        #expect(content.title == "Quarterly report")
+        #expect(content.text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) } == ["Revenue grew", "Costs fell"])
+        #expect(!content.isTruncated)
+        #expect(content.selection.isEmpty)
+
+        reader.view.setCurrentSelection(reader.document?.findString("Costs", withOptions: []).first, animate: false)
+        let selected = try #require(await reader.content(limit: 5))
+        #expect(selected.selection == "Costs")
+        #expect(selected.text == "Reven")
+        #expect(selected.isTruncated && !selected.isSelectionTruncated)
+
+        let locked = try makePDF(title: "Secret", pages: ["Hidden"], password: "open sesame")
+        let lockedReader = PDFReader(url: locked)
+        #expect(lockedReader.open(try Data(contentsOf: locked)))
+        #expect(await lockedReader.content(limit: 100) == nil)
     }
 
     /// A text PDF with one outline entry per page, written by hand: PDFKit drops outlines it is given.

@@ -146,11 +146,17 @@ final class PDFReader: NSObject {
         view.document = document
         pageCount = document.pageCount
         outline = document.outlineRoot.map { Self.entries(of: $0, in: document) } ?? []
-        // Links like file.pdf#page=3, as in Chrome and Safari.
-        let fragment = url.fragment() ?? ""
-        openingPage = fragment.hasPrefix("page=") ? (Int(fragment.dropFirst(5)) ?? 1) - 1 : 0
+        openingPage = Self.openingPage(of: url)
         goToOpeningPage()
         pageDidChange()
+    }
+
+    /// Links like file.pdf#page=3, as in Chrome and Safari. Any page can link to `#page=` with
+    /// `Int.min`, which would trap subtracting one: a page below the first is the first.
+    static func openingPage(of url: URL) -> Int {
+        let fragment = url.fragment() ?? ""
+        guard fragment.hasPrefix("page=") else { return 0 }
+        return max(Int(fragment.dropFirst(5)) ?? 1, 1) - 1
     }
 
     private static func entries(of parent: PDFOutline, in document: PDFDocument, id: inout Int) -> [OutlineEntry] {
@@ -308,6 +314,13 @@ final class PDFReader: NSObject {
 
     var isLocalFile: Bool { url.isFileURL }
 
+    /// In a private tab: nothing it received may be left on disk.
+    @ObservationIgnored var isPrivate = false
+
+    /// A downloaded PDF reaches Preview only as a copy on disk, which Lithium can't take back
+    /// once Preview has it (its Recents, its autosave): never for a private tab's.
+    var canOpenInPreview: Bool { document != nil && (isLocalFile || !isPrivate) }
+
     /// Saves the bytes the page received, so it works even where the link has since expired.
     func download() {
         guard let data else { return }
@@ -320,7 +333,7 @@ final class PDFReader: NSObject {
 
     /// Preview signs, annotates and fills in forms; a downloaded PDF goes there as a temporary copy.
     func openInPreview() {
-        guard let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Preview") else { return }
+        guard canOpenInPreview, let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Preview") else { return }
         var file = url
         if !isLocalFile {
             guard let data else { return }
@@ -339,6 +352,17 @@ final class PDFReader: NSObject {
             }
         }
         ExternalApps.open(file, withApplicationAt: preview)
+    }
+
+    /// What a summary reads: the tab's web view holds WebKit's PDF viewer, which has no text to
+    /// give. Read off the main thread by the worker; nil while locked or still loading.
+    func content(limit: Int) async -> PageContent? {
+        guard !isLocked, let worker, let read = await worker.text(limit: limit, password: password) else { return nil }
+        let selection = view.currentSelection?.string ?? ""
+        return PageContent(
+            title: title, text: read.text, selection: String(selection.prefix(limit)),
+            isTruncated: read.isTruncated, isSelectionTruncated: selection.count > limit
+        )
     }
 
     func print() {
@@ -465,6 +489,24 @@ actor PDFWorker {
             await Task.yield()
         }
         return nil
+    }
+
+    /// The document's text, page by page, up to `limit` characters: only as many pages as that takes are read.
+    func text(limit: Int, password: String?) -> (text: String, isTruncated: Bool)? {
+        guard let document = unlocked(password) else { return nil }
+        var text = ""
+        var length = 0
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index)?.string, !page.isEmpty else { continue }
+            if !text.isEmpty {
+                text += "\n"
+                length += 1
+            }
+            text += page
+            length += page.count
+            if length > limit { return (String(text.prefix(limit)), true) }
+        }
+        return (text, false)
     }
 
     func thumbnail(of index: Int, rotation: Int, size: CGSize, password: String?) -> CGImage? {

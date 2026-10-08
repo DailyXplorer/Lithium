@@ -2,8 +2,10 @@
 // since the store's code calls `chrome.webstorePrivate` and `chrome.management` itself. Lithium
 // answers through `WebstoreBridge`, asks before adding anything and downloads from Google.
 (() => {
-  const bridge = window.webkit?.messageHandlers?.lithiumWebstore;
-  if (!bridge || window.top !== window) return;
+  // Looked up on each call: a store page back from the back-forward cache would hold the handler
+  // removed when the tab left it, not the one added on its return.
+  const bridge = () => window.webkit?.messageHandlers?.lithiumWebstore;
+  if (!bridge() || window.top !== window) return;
 
   // Below Chrome 142.0.7430 the store judges the browser by its user agent alone.
   const major = '__CHROME_VERSION__'.split('.')[0];
@@ -32,7 +34,7 @@
   // set while it runs; without one, the call returns a promise. `then` runs after a success.
   const method = (member, then) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;
-    const reply = bridge.postMessage({ member, args: JSON.parse(JSON.stringify(args)) }).then(async (answer) => {
+    const reply = bridge().postMessage({ member, args: JSON.parse(JSON.stringify(args)) }).then(async (answer) => {
       if (!answer.error && then) await then(args);
       return answer;
     });

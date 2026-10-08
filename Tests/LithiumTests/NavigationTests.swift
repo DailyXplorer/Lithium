@@ -396,6 +396,32 @@ struct NavigationTests {
         return answer as? String == "object"
     }
 
+    /// A direct link to an audio file shows WebKit's player, not Lithium's error page: WebKit ends
+    /// the main load with its error 204 once the player takes it over. Silent, so nothing is heard.
+    @Test func aDirectMediaLinkShowsItsPlayer() async throws {
+        #expect(Tab.isDropped(NSError(domain: "WebKitErrorDomain", code: 204)))
+        #expect(!Tab.isDropped(NSError(domain: "WebKitErrorDomain", code: 203)))
+        let samples = 8_000
+        var wav = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { wav.append(contentsOf: $0) } }
+        append(UInt32(36 + samples * 2))
+        wav.append(contentsOf: Data("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(8_000)); append(UInt32(16_000)); append(UInt16(2)); append(UInt16(16))
+        wav.append(contentsOf: Data("data".utf8))
+        append(UInt32(samples * 2))
+        wav.append(Data(count: samples * 2))
+        let (listener, base) = try await LocalHTTP.serve(["/sound.wav": ("Content-Type: audio/wav", wav)])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "sound.wav"))
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.url != nil && !tab.webView.isLoading })
+        try await Task.sleep(for: .seconds(1))
+        #expect(tab.loadError == nil)
+        #expect(tab.webView.title != "Can’t open this page")
+        #expect(tab.url?.path() == "/sound.wav")
+    }
+
     /// A ZIP of `files` at its root, like a store package.
     private static func archive(_ files: [String: String]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")

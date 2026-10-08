@@ -25,6 +25,7 @@ struct SidebarView: View {
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @AppStorage(Preference.miniPlayer) private var showsMiniPlayer = true
+    @State private var deletingFolder: TabFolder?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -68,15 +69,23 @@ struct SidebarView: View {
             .dropDestination(for: String.self) { items, _ in dropTab(items, on: .tabList(0)) }
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    // A tab from the Agent group dropped on a row's upper half goes above it, on
-                    // its lower half below it.
-                    ForEach(browser.tabListEntries) { entry in
-                        let index = entry.index
-                        Group {
-                            if let split = entry.split { SplitTabRow(split: split) } else { TabRow(tab: entry.tab) }
-                        }
-                        .dropDestination(for: String.self) { items, location in
-                            dropTab(items, on: .tabList(location.y < sidebarRowHeight / 2 ? index : index + 1))
+                    // A tab dropped on a row's upper half goes above it, on its lower half below
+                    // it: in that row's folder, or outside folders.
+                    ForEach(browser.tabListRows) { row in
+                        switch row {
+                        case .folder(let folder):
+                            FolderHeader(folder: folder) { askToDelete(folder) }
+                        case .tab(let entry):
+                            let index = entry.index
+                            let folder = entry.tab.folderID
+                            Group {
+                                if let split = entry.split { SplitTabRow(split: split) } else { TabRow(tab: entry.tab) }
+                            }
+                            .padding(.leading, folder == nil ? 0 : folderIndent)
+                            .dropDestination(for: String.self) { items, location in
+                                let place = location.y < sidebarRowHeight / 2 ? index : index + 1
+                                return dropTab(items, on: folder.map { Browser.TabDropTarget.folder($0, place) } ?? .tabList(place))
+                            }
                         }
                     }
                     let agentTabs = browser.agentTabs
@@ -94,12 +103,36 @@ struct SidebarView: View {
             .scrollIndicators(.never)
             // The empty space below the tabs too; a row's own menu wins over this one.
             .contentShape(Rectangle())
-            .contextMenu { ReopenClosedTabButton() }
+            .contextMenu {
+                Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
+                ReopenClosedTabButton()
+            }
+        }
+        .alert(deletingFolder.map { "Delete “\($0.name)”?" } ?? "", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }), presenting: deletingFolder) { folder in
+            // Keeping them comes first, the default: nothing is lost.
+            Button("Keep Tabs") { deleteFolder(folder, closingTabs: false) }
+            Button("Close Tabs", role: .destructive) { deleteFolder(folder, closingTabs: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Its tabs can stay in the tab list or close.")
         }
     }
 
     private var playingTab: Tab? {
         browser.nowPlaying.shownTab(besides: browser.videoPopout.tab)
+    }
+
+    /// An empty folder goes at once; one with tabs asks what becomes of them.
+    private func askToDelete(_ folder: TabFolder) {
+        if browser.tabList(in: folder.space, folder: folder.id).isEmpty {
+            deleteFolder(folder, closingTabs: false)
+        } else {
+            deletingFolder = folder
+        }
+    }
+
+    private func deleteFolder(_ folder: TabFolder, closingTabs: Bool) {
+        withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs) }
     }
 
     private func dropTab(_ items: [String], on target: Browser.TabDropTarget) -> Bool {
@@ -287,6 +320,7 @@ private struct TabRow: View {
             if tab.openedByAgent != nil {
                 Button("Move to Tab List") { withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) } }
             }
+            MoveToFolderMenu(browser: browser, tab: tab)
             Divider()
             Button("Close Tab") { browser.close(tab) }
             Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
@@ -405,6 +439,8 @@ private struct TabNameField: View {
 }
 
 private let sidebarRowHeight: CGFloat = 34
+/// A folder's tabs sit this far in from its header.
+private let folderIndent: CGFloat = 14
 
 struct SidebarRow<Content: View>: View {
     let isSelected: Bool

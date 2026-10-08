@@ -14,6 +14,24 @@ struct NowPlayingTests {
         #expect(PlaybackTime.format(.nan) == "0:00")
     }
 
+    /// A page reports these numbers itself: one past `Int.max` used to trap and crash the app.
+    @Test func formatsAbsurdTimesWithoutCrashing() {
+        #expect(PlaybackTime.format(1e19) == PlaybackTime.format(PlaybackTime.longest))
+        #expect(PlaybackTime.format(.greatestFiniteMagnitude) == PlaybackTime.format(PlaybackTime.longest))
+        #expect(PlaybackTime.format(-1e19) == "0:00")
+        #expect(PlaybackTime.format(.infinity) == "0:00")
+        #expect(PlaybackTime.format(-.infinity) == "0:00")
+
+        let date = Date(timeIntervalSinceReferenceDate: 0)
+        for duration in [1e19, -1e19, .nan, .infinity] {
+            let media = NowPlaying.Media(message: ["paused": false, "duration": duration, "time": 1e19], at: date)
+            #expect(media?.duration == nil, "\(duration) is no real length")
+            #expect(media.map { $0.time <= PlaybackTime.longest } == true)
+            #expect(media.map { $0.elapsed(at: date.addingTimeInterval(1e18)) }.map(PlaybackTime.format) != nil)
+        }
+        #expect(NowPlaying.Media(message: ["duration": 7200, "time": 1e19], at: date)?.time == 7200)
+    }
+
     @Test func readsThePageMessage() throws {
         let date = Date(timeIntervalSinceReferenceDate: 0)
         let media = try #require(NowPlaying.Media(message: [

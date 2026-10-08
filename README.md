@@ -28,7 +28,7 @@ On the first build, `scripts/update-filters.py` downloads the filter lists and c
 - **Fingerprinting protection.** WebKit's own Advanced Fingerprinting Protection (engine-level canvas noise, window-sized `screen`, link decoration filtering), plus Brave-style farbling (`Resources/Scripts/farbling.js`): deterministic noise per site and session on canvas, OffscreenCanvas, WebGL `readPixels`, audio and `hardwareConcurrency`, a reduced voice list, and the same protection for same-origin iframes. Invisible to `toString` checks.
 - **Filter lists update daily** in the background (Settings, Privacy & Security, Update now to force it).
 - **Also.** Tracking parameters stripped from URLs, fraudulent-site warnings, HTTPS upgrades for known hosts, popups blocked unless user-initiated.
-- The shield in the toolbar turns protections off for a single site.
+- Site Protections in the ⋯ menu, the lock in the address bar, or ⇧⌘P turns protections off for a single site.
 
 `Tests/Manual/protections.html` checks blocking and fingerprinting live: open it in Lithium through a `file://` URL.
 

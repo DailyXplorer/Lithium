@@ -192,7 +192,7 @@
 
   <section id="agents" class="page">
     <h2>Agents</h2>
-    <p class="lead">Lets AI agents on this Mac, such as Claude Code, use Lithium. A robot in the toolbar shows while access is on, and Stop Agent ends every session.</p>
+    <p class="lead">Lets AI agents on this Mac, such as Claude Code, use Lithium. A robot in the toolbar shows while an agent is connected, and Stop Agent ends every session.</p>
     <div class="row">
       <div><div class="title">Allow agents</div><div class="hint" id="agent-status"></div></div>
       <label class="switch" for="agent-access"><input type="checkbox" id="agent-access" role="switch"><span></span></label>
@@ -443,7 +443,7 @@
       const button = el('button', { className: 'button', textContent: 'Turn on' });
       button.onclick = () => call('enableProtections', host).then(render);
       return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
-    }) : [el('div', { className: 'empty', textContent: 'No sites. Use the shield in the toolbar.' })]));
+    }) : [el('div', { className: 'empty', textContent: 'No sites. Use Site Protections in the ⋯ menu.' })]));
 
     $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
       el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...KINDS.map(([, label]) => el('th', { textContent: label }))])]),

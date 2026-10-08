@@ -170,6 +170,9 @@ final class AgentHub {
     private(set) var calls: [CallKey: Call] = [:]
 
     var isActing: Bool { !calls.isEmpty }
+    /// When the toolbar shows the indicator, with Stop: an agent that can act is never unseen,
+    /// and access merely on costs no button.
+    var isConnected: Bool { !sessions.isEmpty || isActing }
     private var busySessions: Set<String> { Set(calls.keys.map(\.session)) }
     var url: String? { port.map { "http://127.0.0.1:\($0)/mcp" } }
 

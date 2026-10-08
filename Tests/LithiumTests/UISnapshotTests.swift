@@ -209,6 +209,27 @@ struct UISnapshotTests {
         }
     }
 
+    /// Zen mode's top bar as it peeks over the page, on the start page, solid and translucent.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func zenTopBarSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let browser = Browser()
+        for style in SidebarStyle.allCases {
+            for isDark in [false, true] {
+                let palette = SidebarPalette(style: style, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
+                let bar = ZenTopBar(style: style, colorHex: Theme.defaultSidebarHex)
+                    .foregroundStyle(palette.ink)
+                    .environment(\.sidebarPalette, palette)
+                    .environment(browser)
+                    .font(Theme.font(13))
+                    .frame(width: 1100)
+                    .padding(.bottom, 16)
+                try render(bar, isDark: isDark).write(to: directory.appending(path: "zen-top-bar-\(style.rawValue)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

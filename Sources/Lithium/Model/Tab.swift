@@ -919,7 +919,9 @@ extension Tab: WKNavigationDelegate {
             Task { self.load(action.request) }
             return (.cancel, preferences)
         }
-        setWebstoreBridge(ChromeWebStore.isStore(url))
+        // Before the store's first script asks for it; taken away only once another page commits,
+        // so a load that never shows (Stop, a 204, a download) leaves the store its button.
+        if ChromeWebStore.isStore(url) { setWebstoreBridge(true) }
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
@@ -1019,6 +1021,7 @@ extension Tab: WKNavigationDelegate {
         if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.
         setInternalBridge(Internal.isInternal(webView.url))
+        setWebstoreBridge(ChromeWebStore.isStore(webView.url))
         // The old page is now in the history, one Back away. Only on its way out, it isn't the
         // document an agent's navigation waits for.
         if !goToAddressAfterWaking() { commits += 1 }

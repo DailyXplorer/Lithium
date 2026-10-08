@@ -204,6 +204,18 @@ struct ChromeWebStoreTests {
         #expect(denied == "Not allowed")
     }
 
+    /// The tab takes the bridge away when another page shows and adds a new one when the store
+    /// comes back; a store page restored from the back-forward cache must reach the new one.
+    @Test func storePageReachesTheBridgeAddedAgain() async throws {
+        let extensions = Extensions(folder: .temporaryDirectory.appending(path: "extensions-\(UUID())"), configuration: .nonPersistent())
+        let store = try await page(at: "https://chromewebstore.google.com/", extensions)
+        let controller = store.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: WebstoreBridge.name, contentWorld: .page)
+        controller.addScriptMessageHandler(extensions.webstoreBridge, contentWorld: .page, name: WebstoreBridge.name)
+        let count = try await store.callAsyncJavaScript("return (await chrome.management.getAll()).length", contentWorld: .page) as? Int
+        #expect(count == 0)
+    }
+
     private func page(at address: String, _ extensions: Extensions) async throws -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addUserScript(ChromeWebStore.script)

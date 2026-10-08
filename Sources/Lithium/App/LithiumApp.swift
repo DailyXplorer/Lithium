@@ -190,7 +190,7 @@ struct BrowserCommands: Commands {
     }
 
     private var protectionsEnabled: Bool {
-        browser.privacy.isEnabled(for: browser.selectedTab?.url)
+        browser.privacy.isEnabled(for: browser.selectedTab?.url, privateSession: browser.selectedTab?.privateSession)
     }
 
     private func findStep(forward: Bool) {

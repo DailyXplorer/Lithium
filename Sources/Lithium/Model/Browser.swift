@@ -261,7 +261,7 @@ final class Browser {
 
     /// Reloads the page so its content blockers and scripts match the new setting.
     func setProtections(_ enabled: Bool, for tab: Tab?) {
-        privacy.setEnabled(enabled, for: tab?.url)
+        privacy.setEnabled(enabled, for: tab?.url, privateSession: tab?.privateSession)
         navigate(tab, .reload)
     }
 
@@ -597,11 +597,13 @@ final class Browser {
     }
 
     /// The last open tab of a private store gone, its cookies and storage go at once, rather
-    /// than whenever WebKit frees the store, and so do its permission answers.
+    /// than whenever WebKit frees the store, and so do its permission answers and site settings.
     private func dropPrivateData(of tab: Tab) {
         guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
         permissions.forget(privateSession: ObjectIdentifier(store))
+        privacy.forget(privateSession: ObjectIdentifier(store))
+        PageStyle.forget(privateSession: ObjectIdentifier(store))
     }
 
     func closeSelectedTab() {

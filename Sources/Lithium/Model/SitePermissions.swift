@@ -48,7 +48,7 @@ final class SitePermissions {
     private(set) var decisions: [String: [PermissionKind: PermissionDecision]]
     private(set) var pending: [PermissionRequest] = []
     @ObservationIgnored private var waiting: [PermissionRequest.ID: [CheckedContinuation<Bool, Never>]] = [:]
-    @ObservationIgnored private var privateDecisions: [ObjectIdentifier: [String: [PermissionKind: PermissionDecision]]] = [:]
+    private var privateDecisions: [ObjectIdentifier: [String: [PermissionKind: PermissionDecision]]] = [:]
 
     private static let storageKey = "sitePermissions"
 
@@ -62,12 +62,18 @@ final class SitePermissions {
         }
     }
 
+    /// The answers that count for `host`: a private session's own, or the saved ones.
+    func decisions(for host: String, privateSession: ObjectIdentifier?) -> [PermissionKind: PermissionDecision] {
+        let stored = if let privateSession { privateDecisions[privateSession]?[host] } else { decisions[host] }
+        return stored ?? [:]
+    }
+
     /// Resolves from stored answers when every kind has one; otherwise asks in the tab.
     /// `privateSession` is set for a private tab: only that session's own answers count, as the
     /// normal ones would tell the site who this is.
     func request(_ kinds: [PermissionKind], host: String, tabID: Tab.ID, privateSession: ObjectIdentifier? = nil) async -> Bool {
-        let stored = if let privateSession { privateDecisions[privateSession]?[host] } else { decisions[host] }
-        let known = kinds.map { stored?[$0] }
+        let stored = decisions(for: host, privateSession: privateSession)
+        let known = kinds.map { stored[$0] }
         if known.contains(.deny) { return false }
         if known.allSatisfy({ $0 == .allow }) { return true }
 

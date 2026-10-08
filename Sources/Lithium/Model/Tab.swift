@@ -603,7 +603,7 @@ final class Tab: NSObject, Identifiable {
         guard let privacy = browser?.privacy else { return }
         await privacy.waitUntilReady()
         await browser?.extensions.waitUntilLoaded()
-        let enabled = privacy.isEnabled(for: url)
+        let enabled = privacy.isEnabled(for: url, privateSession: privateSession)
         let controller = webView.configuration.userContentController
         if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
             privacy.applyRuleLists(enabled, to: controller)
@@ -613,7 +613,7 @@ final class Tab: NSObject, Identifiable {
         // on every main-frame navigation, before the new document starts.
         controller.removeAllUserScripts()
         protectedFrameHosts = []
-        PageStyle.scripts(for: url).forEach(controller.addUserScript)
+        PageStyle.scripts(for: url, privateSession: privateSession).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
@@ -631,7 +631,7 @@ final class Tab: NSObject, Identifiable {
     private func addFrameProtections(for url: URL) {
         guard let privacy = browser?.privacy, let page = webView.url, let host = url.host()?.lowercased(),
               protectedFrameHosts.insert(host).inserted,
-              let script = privacy.frameScript(privacy.isEnabled(for: page), for: url, in: page) else { return }
+              let script = privacy.frameScript(privacy.isEnabled(for: page, privateSession: privateSession), for: url, in: page) else { return }
         webView.configuration.userContentController.addUserScript(script)
     }
 
@@ -924,7 +924,7 @@ extension Tab: WKNavigationDelegate {
         // Reload return to an entry the history already has: cancelled for a new load, they would
         // drop the forward list and keep the user from going back past that page.
         if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
-           browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
+           browser?.privacy.isEnabled(for: url, privateSession: privateSession) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             Task { webView.load(URLRequest(url: clean)) }
@@ -932,7 +932,7 @@ extension Tab: WKNavigationDelegate {
         }
 
         await applyProtections(for: url)
-        Privacy.setEngineProtections(browser?.privacy.isEnabled(for: url) ?? true, on: preferences)
+        Privacy.setEngineProtections(browser?.privacy.isEnabled(for: url, privateSession: privateSession) ?? true, on: preferences)
         return (.allow, preferences)
     }
 
@@ -940,7 +940,7 @@ extension Tab: WKNavigationDelegate {
         if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
         if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
-            privacy.addTrustedTypesScript(privacy.isEnabled(for: page), for: response.response, isPrivate: isEphemeral,
+            privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession), for: response.response, isPrivate: isEphemeral,
                                           to: webView.configuration.userContentController)
         }
         let isAttachment = (response.response as? HTTPURLResponse)?

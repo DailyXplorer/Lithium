@@ -9,6 +9,8 @@ import WebKit
 @Observable
 final class Privacy {
     private(set) var disabledHosts: Set<String>
+    /// Protections turned on or off in private tabs, by private session, then host; never saved.
+    private var privateExceptions: [ObjectIdentifier: [String: Bool]] = [:]
     private(set) var ruleCount = 0
     private(set) var filtersUpdated: Date?
     private(set) var isUpdatingFilters = false
@@ -251,14 +253,27 @@ final class Privacy {
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
     }
 
-    func isEnabled(for url: URL?) -> Bool {
+    /// `privateSession` is set for a private tab: its session's own choice wins, then the saved one.
+    func isEnabled(for url: URL?, privateSession: ObjectIdentifier? = nil) -> Bool {
         guard let host = Self.siteHost(url) else { return true }
+        if let privateSession, let enabled = privateExceptions[privateSession]?[host] { return enabled }
         return !disabledHosts.contains(host)
     }
 
-    func setEnabled(_ enabled: Bool, for url: URL?) {
+    /// A private tab's choice stays in memory for its private session only: saved, it would
+    /// record the site it visited.
+    func setEnabled(_ enabled: Bool, for url: URL?, privateSession: ObjectIdentifier? = nil) {
         guard let host = Self.siteHost(url) else { return }
-        setEnabled(enabled, host: host)
+        if let privateSession {
+            privateExceptions[privateSession, default: [:]][host] = enabled
+        } else {
+            setEnabled(enabled, host: host)
+        }
+    }
+
+    /// The private session's last tab closed: its choices go with its cookies.
+    func forget(privateSession: ObjectIdentifier) {
+        privateExceptions[privateSession] = nil
     }
 
     /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,

@@ -40,13 +40,13 @@ enum PageStyle {
         set { UserDefaults.standard.set(newValue, forKey: Preference.websiteFont) }
     }
 
-    static func scripts(for url: URL) -> [WKUserScript] {
-        usesDMSans(url) ? [baseScript, fontScript] : [baseScript]
+    static func scripts(for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
+        usesDMSans(url, privateSession: privateSession) ? [baseScript, fontScript] : [baseScript]
     }
 
-    static func usesDMSans(_ url: URL) -> Bool {
+    static func usesDMSans(_ url: URL, privateSession: ObjectIdentifier? = nil) -> Bool {
         guard let host = url.host()?.lowercased() else { return usesDMSansEverywhere }
-        return choosesDMSans(host) && !keepsSiteFont(host)
+        return choosesDMSans(host) && !keepsSiteFont(host, privateSession: privateSession)
     }
 
     /// Whether the site menu offers "Use this site's font": DM Sans would apply but for it.
@@ -65,18 +65,35 @@ enum PageStyle {
         ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
     }
 
-    static func keepsSiteFont(_ host: String) -> Bool {
-        isLoopback(host) || siteFontDomains.contains(SiteInfo.registrable(host))
+    /// `privateSession` is set for a private tab: its session's own choice wins, then the saved one.
+    static func keepsSiteFont(_ host: String, privateSession: ObjectIdentifier? = nil) -> Bool {
+        if isLoopback(host) { return true }
+        let domain = SiteInfo.registrable(host)
+        if let privateSession, let keeps = privateSiteFonts[privateSession]?[domain] { return keeps }
+        return siteFontDomains.contains(domain)
     }
 
-    static func setKeepsSiteFont(_ keeps: Bool, for host: String) {
+    /// A private tab's choice stays in memory for its private session only: saved, it would
+    /// record the site it visited.
+    static func setKeepsSiteFont(_ keeps: Bool, for host: String, privateSession: ObjectIdentifier? = nil) {
         let domain = SiteInfo.registrable(host)
+        if let privateSession {
+            privateSiteFonts[privateSession, default: [:]][domain] = keeps
+            return
+        }
         var domains = Set(siteFontDomains)
         if keeps { domains.insert(domain) } else { domains.remove(domain) }
         UserDefaults.standard.set(domains.sorted(), forKey: siteFontKey)
     }
 
+    /// The private session's last tab closed: its choices go with its cookies.
+    static func forget(privateSession: ObjectIdentifier) {
+        privateSiteFonts[privateSession] = nil
+    }
+
     private static let siteFontKey = "siteFontDomains"
+    /// Site fonts chosen in private tabs, by private session, then registrable domain; never saved.
+    private static var privateSiteFonts: [ObjectIdentifier: [String: Bool]] = [:]
 
     private static func choosesDMSans(_ host: String) -> Bool {
         usesDMSansEverywhere || host == "search.brave.com" || host.hasSuffix(".search.brave.com")

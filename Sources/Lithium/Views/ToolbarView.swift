@@ -118,7 +118,7 @@ private struct ShieldButton: View {
     @State private var isPresented = false
 
     var body: some View {
-        let enabled = browser.privacy.isEnabled(for: tab?.url)
+        let enabled = browser.privacy.isEnabled(for: tab?.url, privateSession: tab?.privateSession)
         IconButton(
             icon: enabled ? .shield : .shieldOff,
             help: enabled ? "Protections on (⇧⌘P)" : "Protections off (⇧⌘P)",
@@ -142,7 +142,7 @@ private struct ShieldPanel: View {
         ShieldView(
             host: Privacy.siteHost(tab?.url) ?? "",
             isOn: Binding(
-                get: { privacy.isEnabled(for: tab?.url) },
+                get: { privacy.isEnabled(for: tab?.url, privateSession: tab?.privateSession) },
                 set: { browser.setProtections($0, for: tab) }
             ),
             updated: privacy.filtersUpdated,

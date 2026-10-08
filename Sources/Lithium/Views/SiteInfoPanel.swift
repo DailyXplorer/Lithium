@@ -31,14 +31,14 @@ private struct LiveSiteInfo: View {
             certificate: info.certificate,
             cookieCount: info.cookieCount,
             canClear: info.hasData && !info.isClearing,
-            permissions: browser.permissions.decisions[info.host] ?? [:],
+            permissions: browser.permissions.decisions(for: info.host, privateSession: tab.privateSession),
             usesSiteFont: url.flatMap { url in
                 guard PageStyle.offersSiteFont(url) else { return nil }
                 return Binding(
-                    get: { usesSiteFont ?? !PageStyle.usesDMSans(url) },
+                    get: { usesSiteFont ?? !PageStyle.usesDMSans(url, privateSession: tab.privateSession) },
                     set: {
                         usesSiteFont = $0
-                        PageStyle.setKeepsSiteFont($0, for: info.host)
+                        PageStyle.setKeepsSiteFont($0, for: info.host, privateSession: tab.privateSession)
                         browser.navigate(tab, .reload)
                     }
                 )

@@ -269,6 +269,41 @@ struct BrowserTests {
         #expect(await again.value == false, "forgotten with its last tab")
     }
 
+    /// Protections and the site's font changed in a private tab hold for its private session
+    /// only, in memory; the lock panel shows that session's permission answers.
+    @Test func privateTabSiteSettingsStayInTheirSession() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,private")!, selecting: false, privateStore: .nonPersistent())
+        let session = try #require(tab.privateSession)
+        // Asked by the page shown: its commit would cancel a prompt asked before.
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+        let host = "private-\(UUID().uuidString.lowercased()).example"
+        let url = try #require(URL(string: "https://\(host)/"))
+        let privacy = browser.privacy
+
+        privacy.setEnabled(false, for: url, privateSession: session)
+        #expect(!privacy.isEnabled(for: url, privateSession: session))
+        #expect(privacy.isEnabled(for: url), "normal tabs keep protections")
+        #expect(!privacy.disabledHosts.contains(host))
+        #expect(UserDefaults.standard.stringArray(forKey: "disabledProtectionHosts")?.contains(host) != true, "nothing written to disk")
+
+        PageStyle.setKeepsSiteFont(true, for: host, privateSession: session)
+        #expect(PageStyle.keepsSiteFont(host, privateSession: session))
+        #expect(!PageStyle.keepsSiteFont(host))
+        #expect(!PageStyle.siteFontDomains.contains(host), "nothing written to disk")
+
+        let request = Task { await browser.permissions.request([.camera], host: host, tabID: tab.id, privateSession: session) }
+        #expect(await waitUntil(10) { browser.permissions.pending.contains { $0.tabID == tab.id } })
+        browser.permissions.answer(try #require(browser.permissions.pending.first { $0.tabID == tab.id }), allow: true)
+        #expect(await request.value)
+        #expect(browser.permissions.decisions(for: host, privateSession: session) == [.camera: .allow])
+        #expect(browser.permissions.decisions(for: host, privateSession: nil).isEmpty)
+
+        browser.close(tab)
+        #expect(privacy.isEnabled(for: url, privateSession: session), "forgotten with its last tab")
+        #expect(!PageStyle.keepsSiteFont(host, privateSession: session))
+    }
+
     /// Settings' exceptions list turns protections back on by the host it shows, an IPv6 one too.
     @Test func protectionsComeBackOnForAnIPv6Host() throws {
         let privacy = Privacy()

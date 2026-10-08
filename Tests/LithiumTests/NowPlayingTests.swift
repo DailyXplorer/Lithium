@@ -414,6 +414,24 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === second, "it doesn't take the player from another tab")
     }
 
+    /// An iframe saying it came back from the back-forward cache needs WebKit's ear like any
+    /// other iframe: its word alone takes no free player.
+    @Test func aRestoredIframeNeedsWebKitsEar() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        var heard: Bool? = false
+        player.isHeard = { _ in heard }
+        let restored = NowPlaying.Media(message: ["paused": true, "restored": true, "title": "Ad"], at: Date())
+        let ad = NowPlaying.Frame(id: "ad", isSubframe: true)
+
+        player.receive(restored, from: tab, frame: ad)
+        #expect(player.tab == nil)
+        heard = true
+        player.receive(restored, from: tab, frame: ad)
+        #expect(player.tab === tab)
+    }
+
     @Test func aMutedTabDoesNotTakeARestoredPage() {
         let browser = Browser()
         let tab = browser.newTab()

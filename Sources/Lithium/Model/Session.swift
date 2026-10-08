@@ -18,13 +18,14 @@ enum SessionStore {
     /// For tests.
     nonisolated(unsafe) private(set) static var writes = 0
 
-    private static var fileURL: URL {
+    static var fileURL: URL {
         URL.applicationSupportDirectory.appending(path: "Lithium/session.json")
     }
 
-    static func load() -> Session {
-        guard let data = try? Data(contentsOf: fileURL) else { return Session() }
-        return (try? JSONDecoder().decode(Session.self, from: data)) ?? Session()
+    /// Read whole: tabs and splits refer to each other by index. A file that can't be read is
+    /// kept aside before launch writes the new session over it (`StoredFile`).
+    static func load(from url: URL = fileURL) -> Session {
+        StoredFile.read(Session.self, at: url) ?? Session()
     }
 
     static func save(_ session: Session) {

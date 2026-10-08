@@ -130,6 +130,25 @@ struct AgentConfirmationsTests {
         }
     }
 
+    /// Back or Forward with no page to go to (⌘[ and ⌘] reach it from the menu) does nothing, so
+    /// the agent's prompt stays.
+    @Test func backWithNowhereToGoLeavesThePrompt() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            #expect(!tab.canGoBack && !tab.canGoForward)
+            let task = Task { await client.call("navigate", ["tab": .string(id), "url": "file:///tmp/agent-elsewhere.html"]) }
+            #expect(await waitUntil(20) { client.hub.confirmations.front(selected: nil)?.tabID == tab.id })
+            client.browser.navigate(tab, .back)
+            client.browser.navigate(tab, .forward)
+            let asked = try #require(client.hub.confirmations.pending.first)
+            #expect(asked.tabID == tab.id)
+            client.hub.confirmations.answer(asked.id, .deny)
+            let result = await task.value
+            #expect(result.code == "denied_by_user", "\(result.content)")
+        }
+    }
+
     // MARK: Downloads
 
     @Test func downloadsTheAgentStartsAsk() async throws {

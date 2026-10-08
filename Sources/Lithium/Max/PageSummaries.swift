@@ -137,7 +137,12 @@ final class PageSummaries {
 
         let read = if let pdf = tab.pdf { await pdf.content(limit: SummaryText.maximumLength) } else { await PageReader.read(tab.webView) }
         guard let content = read else {
-            show(.page, .failed("Lithium couldn’t read this page."), in: tab, for: page)
+            // A read that fails this once (the page busy) keeps a summary made or on its way.
+            if let current = entries[tab.id]?.page, !current.isFailure, entries[tab.id]?.url == page {
+                entries[tab.id]?.shown = .page
+            } else {
+                show(.page, .failed("Lithium couldn’t read this page."), in: tab, for: page)
+            }
             return
         }
         guard entries[tab.id]?.url == page else { return }

@@ -32,6 +32,9 @@ struct AddressInputTests {
         ("www.bbc.co.uk", "https://www.bbc.co.uk"),
         ("mac-mini.local", "https://mac-mini.local"),
         ("router.lan:8080", "http://router.lan:8080"),
+        ("nas:5000", "http://nas:5000"),
+        ("router:8080/admin", "http://router:8080/admin"),
+        ("psalm23:4", "https://search.brave.com/search?q=psalm23:4"),
     ])
     func resolves(input: String, expected: String) {
         #expect(AddressInput.url(for: input, engine: .brave)?.absoluteString == expected)
@@ -93,6 +96,16 @@ struct FaviconTests {
         let plain = ##"<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><path fill="#10a37f" d="M10 10h160v160H10z"/></svg>"##
         let png = try #require(Favicons.normalized(Data(plain.utf8)))
         #expect(NSImage(data: png)?.size == NSSize(width: 64, height: 64))
+    }
+
+    /// Hosts without an icon are remembered for the session, but only so many of them.
+    @Test func remembersABoundedNumberOfHostsWithoutIcons() async {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "favicons-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder, missingLimit: 2)
+        // Nothing listens on these ports: each fetch fails at once.
+        for port in 1...3 { _ = await favicons.icon(forHost: "127.0.0.1:\(port)") }
+        #expect(favicons.missing == ["127.0.0.1:3"])
     }
 }
 

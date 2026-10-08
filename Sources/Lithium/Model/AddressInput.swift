@@ -80,8 +80,17 @@ enum AddressInput {
                 if url.port != nil { return .address(url) }
                 if let secure = URL(string: "https://" + input) { return .address(secure) }
             }
+            // A local network name with a port ("nas:5000", "router:8080") opens.
+            if let port = url.port, port >= 10, isLocalName(host) { return .address(url) }
         }
         return .search(input)
+    }
+
+    /// One label that starts and ends with a letter: "nas" or "jenkins", not a time ("10:30")
+    /// or a verse ("john3:16").
+    private static func isLocalName(_ host: String) -> Bool {
+        guard let first = host.first, let last = host.last, first.isLetter, last.isLetter else { return false }
+        return host.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 
     static func url(for rawInput: String, engine: SearchEngine = .current) -> URL? {

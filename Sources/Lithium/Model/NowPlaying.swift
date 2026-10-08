@@ -168,10 +168,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// or muted, which makes no sound to stop.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
+        // An iframe's word needs WebKit's ear, back from the back-forward cache too.
+        let isTrusted = !frame.isSubframe || isHeard(tab) != false
         let claims = { (media: Media) in
-            !media.isPaused && media.isAudible && !tab.isMuted && (!frame.isSubframe || self.isHeard(tab) != false)
+            !media.isPaused && media.isAudible && !tab.isMuted && isTrusted
         }
-        if let media, holds || claims(media) || media.isRestored && self.tab == nil && !tab.isMuted {
+        if let media, holds || claims(media) || media.isRestored && self.tab == nil && !tab.isMuted && isTrusted {
             if !holds {
                 expected = nil
                 unpaused = nil

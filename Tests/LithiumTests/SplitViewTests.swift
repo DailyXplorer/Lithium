@@ -261,6 +261,42 @@ struct SplitViewTests {
         #expect(!tab("c", in: browser).isAsleep)
     }
 
+    /// Leaving a split, for another tab or the start page, its other side counts as used until
+    /// then, like the selected side: it doesn't sleep at the next pass for time spent on screen.
+    @Test func theOtherSideCountsAsUsedWhenLeft() async throws {
+        let browser = browser(with: ["a", "b", "c"])
+        browser.select(tab("a", in: browser))
+        browser.openInSplit(tab("c", in: browser))
+        browser.select(tab("a", in: browser))
+        let c = tab("c", in: browser)
+        #expect(browser.shownPartner === c)
+
+        var shown = c.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        browser.select(tab("b", in: browser))
+        #expect(c.lastActive > shown, "to another tab")
+
+        browser.select(tab("a", in: browser))
+        shown = c.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        browser.newTabFocusingAddress()
+        #expect(c.lastActive > shown, "to the start page")
+
+        browser.select(tab("a", in: browser))
+        shown = c.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
+        #expect(c.lastActive > shown, "for another tab dropped beside the selected one")
+
+        browser.select(tab("a", in: browser))
+        let b = tab("b", in: browser)
+        #expect(browser.shownPartner === b)
+        shown = b.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        browser.exitSplit(of: tab("a", in: browser))
+        #expect(b.lastActive > shown, "by Exit Split View")
+    }
+
     /// From one split straight to another, the panes are reused and don't appear again: the new
     /// split's other side wakes as its first is selected.
     @Test func goingToAnotherSplitWakesItsOtherSide() async throws {

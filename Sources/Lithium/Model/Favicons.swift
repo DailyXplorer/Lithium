@@ -11,7 +11,9 @@ final class Favicons {
 
     private var cache: [String: (data: Data, lastUse: Int)] = [:]
     private var uses = 0
-    private var missing: Set<String> = []
+    /// Hosts with no icon, not asked again this session. Emptied past `missingLimit`: the
+    /// history page goes through thousands of hosts.
+    private(set) var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
     private let session: URLSession = {
         // A server that trickles its answer gives up the fetch long before the default week.
@@ -22,15 +24,17 @@ final class Favicons {
     }()
     private let folder: URL
     private let cacheLimit: Int
+    private let missingLimit: Int
     nonisolated private static let side = 64
     /// Icons are a few KB: a larger body is never one, and is not read past this.
     nonisolated static let largestIcon = 512 * 1024
     /// Past this many pixels an image is no icon, and decoding it would cost a lot of memory.
     nonisolated static let largestPixels = 4096 * 4096
 
-    init(folder: URL = .applicationSupportDirectory.appending(path: "Lithium/Favicons"), cacheLimit: Int = 500) {
+    init(folder: URL = .applicationSupportDirectory.appending(path: "Lithium/Favicons"), cacheLimit: Int = 500, missingLimit: Int = 5000) {
         self.folder = folder
         self.cacheLimit = cacheLimit
+        self.missingLimit = missingLimit
     }
 
     private static let collectScript = """
@@ -100,7 +104,12 @@ final class Favicons {
         inFlight[host] = task
         let result = await task.value
         inFlight[host] = nil
-        if let result { store(result, for: host) } else { missing.insert(host) }
+        if let result {
+            store(result, for: host)
+        } else {
+            if missing.count >= missingLimit { missing.removeAll(keepingCapacity: true) }
+            missing.insert(host)
+        }
         return result
     }
 
@@ -119,6 +128,19 @@ final class Favicons {
     private func file(for host: String) -> URL {
         let safe = host.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }
         return folder.appending(path: "\(safe).png")
+    }
+
+    /// Clear History: the icon kept for every host visited would still list them, so they go too,
+    /// but for `hosts` (favorites and open tabs, which show theirs). Files are removed off the main thread.
+    func clear(keeping hosts: Set<String>) async {
+        missing = []
+        cache = cache.filter { hosts.contains($0.key) }
+        let folder = folder
+        let kept = Set(hosts.map { file(for: $0).lastPathComponent })
+        await Task.detached(priority: .userInitiated) {
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            for file in files where !kept.contains(file.lastPathComponent) { try? FileManager.default.removeItem(at: file) }
+        }.value
     }
 
     private func store(_ png: Data, for host: String) {

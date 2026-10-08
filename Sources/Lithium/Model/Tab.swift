@@ -94,6 +94,12 @@ final class Tab: NSObject, Identifiable {
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
+    /// The app sent the tab to an address (`load`), for the next main-frame decision.
+    @ObservationIgnored private var appStartedLoad = false
+    /// The app, a press in the page, Back, Forward or Reload started the main frame's current
+    /// load: a file it turns out to be downloads at once. One the page started on its own asks
+    /// first, as Safari does, so no page fills Downloads without a click.
+    @ObservationIgnored private var loadWasRequested = false
     /// Where an extension sent a tab that slept without its history, loaded once its old page is
     /// shown, or once it is clear it won't be. Stopping the tab drops it.
     @ObservationIgnored private var addressAfterWaking: URL?
@@ -233,6 +239,13 @@ final class Tab: NSObject, Identifiable {
     var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
     /// Where visits are recorded; a private tab records none.
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
+    /// The address of the last visit recorded.
+    @ObservationIgnored private var recordedURL: URL?
+
+    private func recordVisit(_ url: URL, title: String) {
+        recordedURL = url
+        historyStore?.record(url, title: title)
+    }
 
     init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) {
         self.browser = browser
@@ -285,6 +298,7 @@ final class Tab: NSObject, Identifiable {
         unpair()
         // An address the user or the app sends the tab to loads without tracking parameters again.
         strippedURL = nil
+        appStartedLoad = true
         if Internal.isInternal(url) { trustedInternalURL = url }
         if url.isFileURL {
             // The whole folder, so a document's relative images and links to its neighbours load.
@@ -333,7 +347,17 @@ final class Tab: NSObject, Identifiable {
         // left on the tab until it wakes. Waking loads its page, which is the reload.
         if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
-        if let failedURL { load(failedURL) } else { webView.reload() }
+        if let failedURL { load(failedURL) } else { appStartedLoad = webView.reload() != nil }
+    }
+
+    /// Back and Forward asked of the app (the toolbar, an extension), unlike the page's own
+    /// `history.back()`: a file they lead to downloads without asking.
+    func goBack() {
+        appStartedLoad = webView.goBack() != nil
+    }
+
+    func goForward() {
+        appStartedLoad = webView.goForward() != nil
     }
 
     /// What shows the page: the PDF viewer or the web view. Keyboard focus goes back to it.
@@ -431,6 +455,7 @@ final class Tab: NSObject, Identifiable {
         self.url = url
         sleepingState = nil
         isAsleep = false
+        appStartedLoad = true
         webView.interactionState = history
         // A state WebKit could not read leaves an empty page.
         if webView.backForwardList.currentItem == nil { load(url) }
@@ -572,10 +597,10 @@ final class Tab: NSObject, Identifiable {
             webView.observe(\.url) { [weak self] webView, _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep, let url = webView.url, url != self.url else { return }
-                    if url.host() != self.url?.host() { self.favicon = nil; self.faviconData = nil }
                     self.url = url
-                    // Same-document navigations (pushState) never reach didFinish.
-                    if !webView.isLoading { self.historyStore?.record(url, title: self.title) }
+                    // Same-document navigations (pushState) never reach didFinish. A load that
+                    // never shows hands back the address already recorded: no new visit.
+                    if !webView.isLoading, url != self.recordedURL { self.recordVisit(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -878,10 +903,14 @@ extension Tab: WKNavigationDelegate {
                 return (allowed ? .download : .cancel, preferences)
             }
             // A frame's `<a download>` asks first, as its attachments do (see the response policy),
-            // whichever frame it names.
-            if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true { return (.download, preferences) }
-            guard let browser, let host = shownHost, !host.isEmpty else { return (.cancel, preferences) }
-            return (await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession) ? .download : .cancel, preferences)
+            // whichever frame it names; so does the page's own when no press started it.
+            if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true, Self.isPressed(action, in: webView) { return (.download, preferences) }
+            return (await askToDownload() ? .download : .cancel, preferences)
+        }
+        if isMainFrame, action.targetFrame != nil, !Self.isRedirect(action) {
+            // Not every Back or Reload: a page's own `history.go(0)` comes as one too.
+            loadWasRequested = appStartedLoad || Self.isPressed(action, in: webView)
+            appStartedLoad = false
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
@@ -965,6 +994,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
+        // A link or form the user pressed is a new load, not the page bouncing back to its tracked
+        // address: stripped again, even on the stripped address it landed on.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), Self.isPressed(action, in: webView) {
+            strippedURL = nil
+        }
         // A site the user turned protections off for keeps its parameters too. Back, Forward and
         // Reload return to an entry the history already has: cancelled for a new load, they would
         // drop the forward list and keep the user from going back past that page.
@@ -972,6 +1006,8 @@ extension Tab: WKNavigationDelegate {
            browser?.privacy.isEnabled(for: url, privateSession: privateSession) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
+            // The same load, without its parameters: whoever asked for it still did.
+            appStartedLoad = loadWasRequested
             Task { webView.load(URLRequest(url: clean)) }
             return (.cancel, preferences)
         }
@@ -995,11 +1031,16 @@ extension Tab: WKNavigationDelegate {
         if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: response.response.suggestedFilename, size: response.response.expectedContentLength, from: response.response.url) {
             return allowed ? .download : .cancel
         }
-        if response.isForMainFrame { return .download }
+        if response.isForMainFrame, loadWasRequested { return .download }
         // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
-        // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
-        guard let browser, let host = shownHost, !host.isEmpty else { return .cancel }
-        return await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession) ? .download : .cancel
+        // file), or the page sending itself to a file without a click, asks first, as in Safari:
+        // the site the user is on is allowed, or not, once.
+        return await askToDownload() ? .download : .cancel
+    }
+
+    private func askToDownload() async -> Bool {
+        guard let browser, let host = shownHost, !host.isEmpty else { return false }
+        return await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -1071,9 +1112,12 @@ extension Tab: WKNavigationDelegate {
         browser?.appLinks.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
+        // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {
             updateUnread { $0.leaveSite() }
             forgetLiveIcon()
+            favicon = nil
+            faviconData = nil
         }
         shownHost = webView.url?.host()
         let list = webView.backForwardList
@@ -1123,8 +1167,13 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
+        // The find bar's count was the page before's: the new page is searched again.
+        if let browser, browser.find.isVisible, !browser.find.query.isEmpty, browser.selectedTab === self {
+            let find = browser.find
+            Task { await find.update(query: find.query, in: findTarget) }
+        }
         guard failedURL == nil else { return }
-        if let url = webView.url { historyStore?.record(url, title: webView.title ?? "") }
+        if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         faviconLoad?.cancel()
         faviconLoad = Task { await refreshFavicon() }
@@ -1189,7 +1238,7 @@ extension Tab: WKNavigationDelegate {
             showError(Self.crashedAgain, for: url)
         } else {
             lastCrashReload = Date()
-            webView.reload()
+            appStartedLoad = webView.reload() != nil
             // The new process starts from the page's settings; said again in case mute isn't among them.
             if isMuted { applyMute(to: webView) }
         }
@@ -1495,12 +1544,12 @@ extension Tab: WKWebExtensionTab {
 
     func goBack(for context: WKWebExtensionContext) async throws {
         wake()
-        webView.goBack()
+        goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
         wake()
-        webView.goForward()
+        goForward()
     }
 
     /// What an extension or an agent does in a tab counts as using it, so the next sleep pass leaves it be.

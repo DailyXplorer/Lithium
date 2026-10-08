@@ -158,6 +158,29 @@ struct WindowKeysTests {
         #expect(tab.customTitle == "Docs")
     }
 
+    /// A name typed in the peeked sidebar is still there when ⌘B shows the sidebar, whose own
+    /// field takes the rename over.
+    @Test func showingTheSidebarKeepsANameTypedInThePeek() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        browser.toggleSidebar()
+        defer { if !browser.isSidebarVisible { browser.toggleSidebar() } }
+        try await Task.sleep(for: .milliseconds(300))
+        browser.renamingTabID = tab.id
+        let editor = try #require(await nameEditor(in: window))
+        editor.insertText("Docs", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+
+        browser.toggleSidebar()
+        try await Task.sleep(for: .milliseconds(800))
+        if browser.renamingTabID == tab.id {
+            let field = try #require(await nameEditor(in: window))
+            #expect(field.string == "Docs")
+            browser.renamingTabID = nil
+        } else {
+            #expect(tab.customTitle == "Docs")
+        }
+    }
+
     /// A row being renamed that only scrolls out of the sidebar's lazy list keeps its rename.
     @Test func scrollingARenamedRowAwayKeepsTheRename() async throws {
         let (browser, _, window) = try await shownBrowser()
@@ -207,6 +230,24 @@ struct WindowKeysTests {
         #expect(await waitUntil(5) { window.firstResponder === second.contentView }, "\(String(describing: window.firstResponder))")
         #expect(browser.selectedTabID == second.id)
         #expect(first.url == page, "the tab left is untouched")
+    }
+
+    /// ⌘= zooms in like Zoom In's ⌘+; the shifted key, which types "+", is left to the menu.
+    @Test func commandEqualsZoomsIn() throws {
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 24))
+        }
+        #expect(Browser.isZoomInWithoutShift(try key("=", .command)))
+        #expect(!Browser.isZoomInWithoutShift(try key("+", [.command, .shift])))
+        #expect(!Browser.isZoomInWithoutShift(try key("=", [])))
+        #expect(!Browser.isZoomInWithoutShift(try key("=", [.command, .option])))
+
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        browser.zoomSelectedTab(by: PageZoom.step)
+        #expect(tab.webView.pageZoom == 1.1)
     }
 
     /// The whole window, far off screen, showing one loaded tab.

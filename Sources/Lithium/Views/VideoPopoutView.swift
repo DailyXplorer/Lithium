@@ -29,10 +29,11 @@ struct PopoutLayout {
     let container: CGSize
     let aspectRatio: CGFloat
 
-    /// At most three quarters of the page either way, keeping the video's shape.
+    /// At most three quarters of the page either way, keeping the video's shape: narrower than
+    /// `minimumWidth` when a tall video wouldn't fit the page's height otherwise.
     func size(width: CGFloat) -> CGSize {
-        let largest = max(Self.minimumWidth, min(container.width * 0.75, container.height * 0.75 * aspectRatio))
-        let width = min(max(width, Self.minimumWidth), largest)
+        let largest = min(container.width * 0.75, container.height * 0.75 * aspectRatio)
+        let width = min(max(width, min(Self.minimumWidth, largest)), largest)
         return CGSize(width: width, height: width / aspectRatio)
     }
 

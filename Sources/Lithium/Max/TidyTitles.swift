@@ -61,8 +61,10 @@ final class TidyTitles {
         }
     }
 
-    /// Called when a page finishes loading or its title settles.
-    func update(_ tab: Tab) {
+    /// Called when a page finishes loading or its title settles. `askingModel` false (a tab
+    /// restored asleep) applies the rules only: launch doesn't queue a request per tab, and the
+    /// model is asked once the page loads.
+    func update(_ tab: Tab, askingModel: Bool = true) {
         guard isEnabled, let host = tab.url?.host(), tab.url?.scheme?.hasPrefix("http") == true else { return }
         let original = tab.title
         guard !original.isEmpty else { return }
@@ -78,6 +80,7 @@ final class TidyTitles {
             remember(cleaned, for: key)
             return
         }
+        guard askingModel else { return }
         let waiting = WaitingTab(tab: tab, original: original)
         guard pending[key] == nil else {
             pending[key]?.append(waiting)
@@ -101,7 +104,8 @@ final class TidyTitles {
             // live count, a clock) never reaches the model, so a tab has at most one request
             // there, for the title it shows, and other tabs' titles don't wait behind old ones.
             await previous?.value
-            guard pending[key]?.contains(where: { $0.isCurrent }) == true else {
+            // Turned off meanwhile: nothing more for the model.
+            guard isEnabled, pending[key]?.contains(where: { $0.isCurrent }) == true else {
                 pending[key] = nil
                 return
             }

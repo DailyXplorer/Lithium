@@ -117,6 +117,7 @@ extension Browser {
     /// Takes `tab` out of any split, and `partner` out of its own; the split `partner` leaves
     /// lends the new one its orientation and divider.
     private func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) {
+        shownPartner?.markActive()
         var split = split(of: partner) ?? TabSplit(first: partner.id, second: tab.id)
         splits.pairs.removeAll { $0.contains(tab.id) || $0.contains(partner.id) }
         (split.first, split.second) = side == .first ? (tab.id, partner.id) : (partner.id, tab.id)
@@ -124,7 +125,9 @@ extension Browser {
         select(tab)
     }
 
+    /// The side shown until now counts as used as it leaves the screen, like in `select`.
     func exitSplit(of tab: Tab) {
+        shownPartner?.markActive()
         splits.pairs.removeAll { $0.contains(tab.id) }
     }
 

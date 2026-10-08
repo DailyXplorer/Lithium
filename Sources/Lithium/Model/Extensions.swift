@@ -34,6 +34,9 @@ final class Extensions: NSObject {
     /// its files and context across awaits, and overlapping, they left it running twice or
     /// brought a removed one back without its files.
     @ObservationIgnored private var changes: [String: Task<Void, Never>] = [:]
+    /// Why the list couldn't be written last time: an install doesn't report success for an
+    /// extension that would be gone after a relaunch.
+    @ObservationIgnored private var saveError: Error?
     /// The toolbar's extensions button, where their popups open.
     @ObservationIgnored weak var popupAnchor: NSView?
 
@@ -45,7 +48,7 @@ final class Extensions: NSObject {
     ) {
         self.folder = folder
         controller = WKWebExtensionController(configuration: configuration)
-        installed = (try? JSONDecoder().decode([InstalledExtension].self, from: Data(contentsOf: folder.appending(path: "installed.json")))) ?? []
+        installed = StoredFile.readList(InstalledExtension.self, at: folder.appending(path: "installed.json"))
         super.init()
         controller.delegate = self
     }
@@ -107,8 +110,14 @@ final class Extensions: NSObject {
     }
 
     private func save() {
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(installed).write(to: folder.appending(path: "installed.json"), options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try JSONEncoder().encode(installed).write(to: folder.appending(path: "installed.json"), options: .atomic)
+            saveError = nil
+        } catch {
+            saveError = error
+            NSLog("Lithium: failed to save the extension list: %@", error.localizedDescription)
+        }
     }
 
     private func load(_ entry: InstalledExtension) async {
@@ -204,6 +213,7 @@ final class Extensions: NSObject {
 
         let entry = InstalledExtension(id: id, name: webExtension.displayName ?? id, version: webExtension.version ?? "", isEnabled: true)
         if let index = installed.firstIndex(where: { $0.id == id }) { installed[index] = entry } else { installed.append(entry) }
+        if let saveError { throw saveError }
     }
 
     /// Removes the extension and, as Chrome does, the data it stored.

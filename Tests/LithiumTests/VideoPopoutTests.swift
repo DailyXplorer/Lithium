@@ -108,6 +108,22 @@ struct VideoPopoutTests {
         #expect(page.clamped(CGPoint(x: 900, y: -50), size: size) == CGPoint(x: 600, y: 0))
     }
 
+    /// A tall video in a short page (a split, a small window) fits the page's height, narrower
+    /// than usual; a page claiming an extreme shape gets 4:1 at most.
+    @Test func aTallVideoFitsThePage() throws {
+        let short = PopoutLayout(container: CGSize(width: 500, height: 300), aspectRatio: 9 / 16)
+        let size = short.size(width: PopoutLayout.defaultWidth)
+        #expect(size.height <= 300 * 0.75 + 0.001)
+        #expect(abs(size.width / size.height - 9 / 16) < 0.001)
+        #expect(short.origin(of: size, in: .bottomTrailing, inset: CGSize(width: 12, height: 12)).y >= 0)
+
+        let tall = try #require(VideoPopout.playback(from: ["width": 1.0, "height": 4000.0]))
+        #expect(tall.aspectRatio == 0.25)
+        let wide = try #require(VideoPopout.playback(from: ["width": 4000.0, "height": 1.0]))
+        #expect(wide.aspectRatio == 4)
+        #expect(VideoPopout.playback(from: ["width": 1280.0, "height": 720.0])?.aspectRatio == 1280.0 / 720.0)
+    }
+
     /// A muted video, or none playing, stays with its tab.
     @Test func onlyAVideoPlayingWithSoundPopsOut() async throws {
         let (webView, window) = try await playingPage()

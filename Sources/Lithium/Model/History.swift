@@ -22,6 +22,11 @@ final class HistoryStore {
     /// of its own, off the main thread.
     private let search: HistorySearch
     private let fileURL: URL
+    /// Writes made while `clear()` holds the file, run once it is done: the main connection
+    /// would get `SQLITE_BUSY` meanwhile, and waiting for the lock would freeze the window.
+    private var heldWrites: [(sql: String, values: [Any])]?
+    private var runningClears = 0
+    var isClearing: Bool { runningClears > 0 }
 
     nonisolated(unsafe) private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
@@ -176,23 +181,45 @@ final class HistoryStore {
         pendingTitles = [:]
         lastRecorded = nil
         guard db != nil else { return }
+        runningClears += 1
+        if heldWrites == nil { heldWrites = [] }
         let fileURL = fileURL
         await Task.detached(priority: .userInitiated) {
             var db: OpaquePointer?
             defer { sqlite3_close(db) }
             guard sqlite3_open(fileURL.path, &db) == SQLITE_OK else { return }
             sqlite3_busy_timeout(db, 5_000)
-            sqlite3_exec(db, "DELETE FROM visits; VACUUM;", nil, nil, nil)
+            if sqlite3_exec(db, "DELETE FROM visits; VACUUM;", nil, nil, nil) != SQLITE_OK {
+                NSLog("Lithium: couldn’t clear history: %@", String(cString: sqlite3_errmsg(db)))
+            }
         }.value
+        runningClears -= 1
+        guard runningClears == 0 else { return }
+        let held = heldWrites ?? []
+        heldWrites = nil
+        for write in held { run(write.sql, values: write.values) }
     }
 
     private func execute(_ sql: String) {
-        sqlite3_exec(db, sql, nil, nil, nil)
+        if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+            NSLog("Lithium: history database error: %@", String(cString: sqlite3_errmsg(db)))
+        }
     }
 
     private func run(_ sql: String, _ values: Any...) {
+        run(sql, values: values)
+    }
+
+    private func run(_ sql: String, values: [Any]) {
+        if heldWrites != nil {
+            heldWrites?.append((sql, values))
+            return
+        }
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            NSLog("Lithium: couldn’t write history: %@", String(cString: sqlite3_errmsg(db)))
+            return
+        }
         defer { sqlite3_finalize(statement) }
         for (index, value) in values.enumerated() {
             let position = Int32(index + 1)
@@ -203,7 +230,9 @@ final class HistoryStore {
             default: sqlite3_bind_null(statement, position)
             }
         }
-        sqlite3_step(statement)
+        if sqlite3_step(statement) != SQLITE_DONE {
+            NSLog("Lithium: couldn’t write history: %@", String(cString: sqlite3_errmsg(db)))
+        }
     }
 }
 

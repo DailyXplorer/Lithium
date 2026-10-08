@@ -387,6 +387,33 @@ struct AgentBridgeTests {
         #expect(lithium.endpoint == before)
     }
 
+    /// The same Lithium moved to another port and wrote it in the file, and another server holds
+    /// the old one: the bridge sends that server nothing more and follows the file.
+    @Test func sendsNothingToThePortALithiumMovedFrom() async throws {
+        let folder = Self.temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let lithium = try await Lithium(folder: folder)
+        defer { lithium.hub.shutdown() }
+        let moved = lithium.endpoint
+        let impostor = try await Lithium(folder: Self.temporaryFolder())
+        defer { try? FileManager.default.removeItem(at: impostor.folder) }
+        defer { impostor.hub.shutdown() }
+        // The session opens on the port Lithium is about to leave, which the other server holds.
+        try AgentEndpoint(port: try #require(impostor.hub.port), token: impostor.endpoint.token).write(in: folder)
+        let bridge = try Bridge(folder: folder)
+        defer { bridge.close() }
+        bridge.send(Self.initialize)
+        #expect(try await bridge.next()["result"]?["serverInfo"]?["name"] == "lithium")
+        try moved.write(in: folder)
+
+        bridge.send(Self.status(id: 2))
+        let status = try await bridge.next()
+        #expect(status["id"] == 2)
+        #expect(status["result"]?["isError"] == false, "\(status)")
+        #expect(lithium.hub.sessions.map(\.clientName) == ["test-client"])
+        #expect(impostor.hub.recentLog.isEmpty)
+    }
+
     private static func sleeper() throws -> Process {
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sleep")

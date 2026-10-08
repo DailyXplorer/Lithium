@@ -2,9 +2,9 @@
 // Media Session handlers and the sounds it never attaches to the document (Spotify plays a
 // detached Audio) can only be seen from there. Its channel is the page's to see and post to as
 // well, so the app doesn't take an iframe's word alone. It reports what plays when the media
-// changes, never on a timer: for the sidebar's mini player, whose setting only shows or hides
-// it, and for one sound at a time, which pauses the tab heard before. It answers the player's
-// buttons.
+// changes or WebKit starts or stops hearing the page, never on a timer: for the sidebar's mini
+// player, whose setting only shows or hides it, and for one sound at a time, which pauses the
+// tab heard before. It answers the player's buttons.
 (() => {
   const key = Symbol.for('lithium.nowPlaying');
   if (globalThis[key]) return;
@@ -15,6 +15,9 @@
   // Tells this frame's reports from its parent's and its siblings'.
   const frame = Math.random().toString(36).slice(2);
   const send = (media) => post({ frame, media });
+  // A page that wraps its timers (or breaks them) would delay or lose a report.
+  const later = setTimeout.bind(globalThis);
+  const cancel = clearTimeout.bind(globalThis);
   const session = navigator.mediaSession;
   const handlers = {};
   // Set by the page for the media then active: another media has its own.
@@ -26,30 +29,36 @@
   let reported = false;
   let restored = false;
   let timer = 0;
+  // What WebKit hears of a page that never played a media element, as the app tells it ('heard',
+  // then 'silent'): its sound comes from elsewhere (Web Audio), shown with the page's Media
+  // Session, or the tab's title and icon.
+  let sound = null;
+  let hadMedia = false;
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
+  const isRunning = () => active ? isPlaying(active) : !hadMedia && sound === 'heard';
 
   // The page sets the position once in a while; in between it runs while the media plays.
   const positionNow = () => position.time + (position.running ? (performance.now() - position.at) / 1000 * position.rate : 0);
   const anchor = () => {
-    if (position) position = { ...position, time: positionNow(), at: performance.now(), running: isPlaying(active) };
+    if (position) position = { ...position, time: positionNow(), at: performance.now(), running: isRunning() };
   };
 
   const report = () => {
     timer = 0;
-    if (!active) {
+    if (!active && (hadMedia || !sound)) {
       if (reported) send(null);
       reported = false;
       restored = false;
       return;
     }
     const metadata = session?.metadata;
-    const paused = active.paused || active.ended;
+    const paused = active ? active.paused || active.ended : sound === 'silent';
     // A page that sets the position knows it better than its media element (a streamed
     // element's time and duration may span several tracks).
-    const time = position ? positionNow() : active.currentTime;
-    const duration = position ? position.duration : active.duration;
+    const time = position ? positionNow() : active?.currentTime ?? 0;
+    const duration = position ? position.duration : active?.duration;
     // The page can replace what picking and drawing the picture use (Image, the array methods):
     // without it, the player still shows the media.
     let picture = null;
@@ -60,10 +69,10 @@
       artwork: picture,
       paused,
       // Muted while it plays, it keeps its own card but takes no player from another tab.
-      audible: isAudible(active),
+      audible: active ? isAudible(active) : true,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
-      rate: active.playbackRate || 1,
+      rate: active?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
       restored,
@@ -73,7 +82,7 @@
   };
 
   // A burst of media events (a new track fires half a dozen) makes one message.
-  const schedule = () => { timer ||= setTimeout(report, 100); };
+  const schedule = () => { timer ||= later(report, 100); };
 
   // The smallest picture still sharp at the player's size, else the largest there is.
   const artwork = (images) => {
@@ -133,6 +142,7 @@
 
   const changed = (before, media) => {
     active = media;
+    if (media) hadMedia = true;
     if (position && active !== before) {
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
@@ -199,7 +209,7 @@
     proto.setPositionState = function (state) {
       const result = setPositionState.apply(this, arguments);
       position = state && Number.isFinite(state.position)
-        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isPlaying(active), media: active }
+        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isRunning(), media: active }
         : null;
       schedule();
       return result;
@@ -220,10 +230,11 @@
   // Leaving the page takes it out of the player. Coming back from the back-forward cache, where
   // WebKit paused its media, puts it back paused, if no other tab holds the player meanwhile.
   addEventListener('pagehide', () => {
-    clearTimeout(timer);
+    cancel(timer);
     timer = 0;
     if (reported) send(null);
     reported = false;
+    sound = null;
   });
   addEventListener('pageshow', (event) => {
     if (!event.persisted || !(active?.readyState >= HTMLMediaElement.HAVE_METADATA)) return;
@@ -249,6 +260,13 @@
         case 'pause': if (!call('pause')) active?.pause(); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
+        // WebKit started or stopped hearing the page: what plays is reported again, a sound the
+        // script saw no media element make included.
+        case 'heard': case 'silent':
+          if (sound || command === 'heard') sound = command;
+          anchor();
+          schedule();
+          break;
       }
     },
   });

@@ -115,8 +115,13 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored private(set) var settling: Task<Void, Never>?
     /// The tab heard before the one holding the player, paused once WebKit hears the new one too:
     /// a page's word alone silences no other tab. WebKit may hear it only a report later, once
-    /// the media loaded (the script reports at `play`, then at `playing`).
+    /// the media loaded (the script reports at `play`, then at `playing`), or after the last
+    /// report: `hearingChanged` then.
     @ObservationIgnored private weak var unpaused: Tab?
+    /// The last word of an iframe that said it plays before WebKit heard its tab, one per tab.
+    /// WebKit often hears a sound only after its first report (the first play on a site with an
+    /// embedded player), which would otherwise be lost until the page's next media event.
+    @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
 
     static let settle: TimeInterval = 1.5
 
@@ -129,6 +134,11 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     @ObservationIgnored var pause: (Tab) -> Void = { tab in
         guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
         Task { await webView.pauseAllMediaPlayback() }
+    }
+    /// Runs a command of the script in the tab's page, or in one of its frames; replaced in tests.
+    @ObservationIgnored var tell: (Tab, String, WKFrameInfo?) -> Void = { tab, command, frame in
+        guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
+        Task { await NowPlaying.run(command, in: webView, frame: frame) }
     }
     /// The content controllers that have the channel.
     @ObservationIgnored private let channels = NSHashTable<WKUserContentController>.weakObjects()
@@ -168,6 +178,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// or muted, which makes no sound to stop.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: "")) {
         let holds = tab === self.tab && frame.id == self.frame?.id
+        let key = ObjectIdentifier(tab)
+        if unheard[key]?.frame.id == frame.id { unheard[key] = nil }
         // An iframe's word needs WebKit's ear, back from the back-forward cache too.
         let isTrusted = !frame.isSubframe || isHeard(tab) != false
         let claims = { (media: Media) in
@@ -196,12 +208,37 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             self.media = settled(media)
         } else if holds {
             discard(tab)
+        } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
+            // Turned down only for want of WebKit's ear.
+            unheard[key] = (media, frame)
+        }
+    }
+
+    /// WebKit started or stopped hearing the tab (Safari's speaker icon). Heard, the iframe that
+    /// said so first takes the player, and the tab heard before pauses if the page reported too
+    /// early for it. A page is then asked what it plays, whether it holds the player or not: its
+    /// sound may come from no media element (Web Audio). Silent, a sound shown that way shows paused.
+    func hearingChanged(_ tab: Tab) {
+        guard browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
+        guard isHeard(tab) == true else {
+            if tab === self.tab, frame?.isSubframe == false { tell(tab, "silent", nil) }
+            return
+        }
+        if let waiting = unheard.removeValue(forKey: ObjectIdentifier(tab)) {
+            receive(waiting.media, from: tab, frame: waiting.frame)
+        } else if tab === self.tab, let reported, let frame {
+            receive(reported, from: tab, frame: frame)
+            // A sound shown paused when it went silent plays again (Web Audio resumed).
+            if !frame.isSubframe { tell(tab, "heard", nil) }
+        } else {
+            tell(tab, "heard", nil)
         }
     }
 
     /// The tab closed, fell asleep, went to another page, or was muted.
     func discard(_ tab: Tab) {
         if tab === unpaused { unpaused = nil }
+        unheard[ObjectIdentifier(tab)] = nil
         guard tab === self.tab else { return }
         self.tab = nil
         unpaused = nil
@@ -253,18 +290,43 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     private func send(_ command: String) {
-        guard let tab, !tab.isAsleep else { return }
-        let webView = tab.webView
-        let frame = frame?.info
-        Task { await Self.run(command, in: webView, frame: frame) }
+        if let tab { tell(tab, command, frame?.info) }
     }
 
-    /// "play", "pause", "previous" or "next", answered by the script of the frame that plays.
+    /// "play", "pause", "previous" or "next", answered by the script of the frame that plays;
+    /// "heard" or "silent", what WebKit hears of the page.
     static func run(_ command: String, in webView: WKWebView, frame: WKFrameInfo? = nil) async {
         _ = try? await webView.callAsyncJavaScript(
             "globalThis[Symbol.for('lithium.nowPlaying')]?.(command)",
             arguments: ["command": command], in: frame, contentWorld: .page
         )
+    }
+}
+
+/// Calls back when WebKit starts or stops hearing a web view: private `_isPlayingAudio`, which
+/// WebKit announces to key-value observers. Nothing runs while the page's sound doesn't change.
+final class Hearing: NSObject {
+    private static let key = "_isPlayingAudio"
+    private let webView: NSObject
+    private let changed: @MainActor @Sendable () -> Void
+
+    /// Nil from a WebKit without the property.
+    init?(_ webView: WKWebView, changed: @escaping @MainActor @Sendable () -> Void) {
+        guard webView.responds(to: Selector((Self.key))) else { return nil }
+        self.webView = webView
+        self.changed = changed
+        super.init()
+        webView.addObserver(self, forKeyPath: Self.key, options: [], context: nil)
+    }
+
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?,
+                               context: UnsafeMutableRawPointer?) {
+        let changed = changed
+        MainActor.assumeIsolated { changed() }
+    }
+
+    deinit {
+        webView.removeObserver(self, forKeyPath: Self.key)
     }
 }
 

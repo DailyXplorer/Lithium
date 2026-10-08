@@ -17,9 +17,11 @@ cd "$project_dir"
 
 # iCloud-synced folders tag build products with xattrs that break codesign; build outside them.
 # One folder per checkout: shared, another checkout's build between this build and the copy
-# below swapped the binary that ships. A link to the old shared folder is moved; one of your own stays.
-build_dir="$HOME/Library/Caches/Lithium/builds/$(pwd -P | shasum | cut -c1-12)"
-if [ ! -L .build ] || [ "$(readlink .build)" = "$HOME/Library/Caches/Lithium/build" ]; then
+# below swapped the binary that ships. A link to the old shared folder or to another checkout's (a
+# copied checkout keeps the original's) is moved; one of your own stays.
+cache="$HOME/Library/Caches/Lithium"
+build_dir="$cache/builds/$(pwd -P | shasum | cut -c1-12)"
+if [ ! -L .build ] || case $(readlink .build) in "$build_dir") false ;; "$cache/build" | "$cache/builds/"*) true ;; *) false ;; esac; then
   rm -rf .build
   mkdir -p "$build_dir"
   ln -s "$build_dir" .build

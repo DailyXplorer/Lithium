@@ -121,6 +121,11 @@ struct TestScriptTests {
         #expect(manager.fileExists(atPath: first) && manager.fileExists(atPath: second))
         #expect(try build(firstCheckout) == first, "a checkout keeps its folder")
 
+        // A copied checkout keeps the original's link; built, it must move to a folder of its own.
+        let copy = try build(checkout("copy", linkedTo: first))
+        #expect(copy.hasPrefix(builds) && copy != first && copy != second)
+        #expect(try build(firstCheckout) == first, "the original keeps its folder")
+
         let own = folder.appending(path: "own").path
         #expect(try build(checkout("custom", linkedTo: own)) == own)
     }

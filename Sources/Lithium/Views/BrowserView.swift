@@ -12,9 +12,12 @@ struct BrowserView: View {
     @Environment(Browser.self) private var browser
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(Preference.sidebarStyle) private var style = SidebarStyle.solid
-    @AppStorage(Preference.sidebarColor) private var colorHex = Theme.defaultSidebarHex
+    @AppStorage(Preference.sidebarColor) private var settingsColorHex = Theme.defaultSidebarHex
     @State private var tabHover = TabHover()
     @State private var showsZenLights = false
+
+    /// The space shown picks the sidebar's color, as in Arc; Settings' unless it has its own.
+    private var colorHex: String { browser.currentSpace.color ?? settingsColorHex }
 
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)

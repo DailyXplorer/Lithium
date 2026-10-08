@@ -212,6 +212,14 @@ struct BrowserCommands: Commands {
                 Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")))
             }
+            // ⌘1…⌘9 are the sidebar's items; spaces take ⌃1…⌃9, as in Arc.
+            if browser.hasSpaces {
+                Divider()
+                ForEach(Array(browser.spaces.enumerated()), id: \.element.id) { index, space in
+                    Button("Go to \(space.name)") { withAnimation(.snappy(duration: 0.25)) { browser.switchToSpace(at: index) } }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
+                }
+            }
         }
     }
 

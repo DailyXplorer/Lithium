@@ -43,6 +43,48 @@ struct UISnapshotTests {
         }
     }
 
+    /// The space editor, for a new space (with its own cookies) and for one being edited.
+    @Test func spaceEditorSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let work = Space(id: UUID(), name: "Work", color: Space.colors[1], icon: Phosphor.folder.rawValue, separatesData: true)
+        for (name, isNew) in [("new", true), ("edit", false)] {
+            for isDark in [false, true] {
+                let editor = SpaceEditor(space: work, isNew: isNew, save: { _ in }, close: {})
+                try render(editor, isDark: isDark).write(to: directory.appending(path: "space-editor-\(name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    /// The foot of the sidebar with three spaces, the second shown, on its own color.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func spaceBarSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        SessionStore.save(Session())
+        let browser = Browser()
+        var work = browser.newSpaceDraft()
+        work.name = "Work"
+        browser.addSpace(work)
+        browser.addSpace(browser.newSpaceDraft())
+        browser.switchToSpace(work.id)
+        defer {
+            browser.spaces.reversed().forEach { browser.deleteSpace($0.id) }
+            SessionStore.save(Session())
+        }
+        for isDark in [false, true] {
+            let palette = SidebarPalette(style: .solid, colorHex: isDark ? "#2B2D42" : work.color ?? Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
+            let bar = SpaceBar()
+                .environment(browser)
+                .environment(\.sidebarPalette, palette)
+                .foregroundStyle(palette.ink)
+                .frame(width: Layout.sidebarWidth - 20)
+                .padding(10)
+                .background(Color(hex: isDark ? "#2B2D42" : work.color ?? Theme.defaultSidebarHex))
+            try render(bar, isDark: isDark).write(to: directory.appending(path: "space-bar-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// A download Lithium named, the site's name crossed out under it, with Use original name.
     @Test func renamedDownloadSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

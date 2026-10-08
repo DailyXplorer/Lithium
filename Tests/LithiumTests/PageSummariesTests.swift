@@ -195,6 +195,20 @@ struct PageReaderTests {
         #expect(content.isTruncated)
         #expect(content.text.count == SummaryText.maximumLength)
     }
+
+    /// A selection is cut like a page, and says so, for the summary's "covers only its start".
+    @Test func cutsVeryLongSelections() async throws {
+        let paragraph = "<p>" + String(repeating: "a", count: 999) + "</p>"
+        let webView = try await load("<title>Long</title><body>" + String(repeating: paragraph, count: 210) + "</body>")
+        _ = try await webView.evaluateJavaScript("getSelection().selectAllChildren(document.body)")
+        let content = try #require(await PageReader.read(webView))
+        #expect(content.isSelectionTruncated)
+        #expect(content.selection.count == SummaryText.maximumLength)
+
+        _ = try await webView.evaluateJavaScript("getSelection().selectAllChildren(document.querySelector('p'))")
+        let short = try #require(await PageReader.read(webView))
+        #expect(!short.isSelectionTruncated)
+    }
 }
 
 /// Uses the real on-device model; run with LITHIUM_MODEL_TESTS=1 on a Mac with Apple Intelligence.

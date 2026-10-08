@@ -88,6 +88,7 @@ final class Browser {
     private(set) var agent: AgentHub?
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
+    @ObservationIgnored private(set) lazy var colorPicker = PageColorPicker()
     @ObservationIgnored private var eventMonitors: [Any] = []
     /// The window the browser shows in, set as it appears: the Escape monitor only acts there.
     @ObservationIgnored weak var window: NSWindow?

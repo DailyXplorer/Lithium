@@ -557,7 +557,23 @@
   const setGradient = () => call('setStartGradient', { from: $('#start-from').value, to: $('#start-to').value }).then(render);
   $('#start-from').oninput = setGradient;
   $('#start-to').oninput = setGradient;
-  $('#start-image').onclick = () => call('chooseStartImage').then(render);
+  // WebKit's own color popover opens far from the swatch in Lithium's window: the swatches ask
+  // for Lithium's picker, placed by their rect, and take its colors as if picked in place.
+  let picking = null;
+  window.colorPicked = (hex) => {
+    if (!picking) return;
+    picking.value = hex.toLowerCase();
+    picking.dispatchEvent(new Event('input'));
+  };
+  document.querySelectorAll('input[type=color]').forEach((input) => {
+    input.addEventListener('click', (event) => {
+      event.preventDefault();
+      picking = input;
+      const { x, y, width, height } = input.getBoundingClientRect();
+      call('pickColor', { x, y, width, height, color: input.value });
+    });
+  });
+  $('#start-image').onclick =() => call('chooseStartImage').then(render);
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
   $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);

@@ -138,6 +138,17 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             defaults.set(value as? Bool ?? true, forKey: Preference.tabUsage)
         case "setSidebarColor":
             if let hex = Self.hex(value) { defaults.set(hex, forKey: Preference.sidebarColor) }
+        case "pickColor":
+            // Answers at once; each color picked goes to the page's `colorPicked` as it comes.
+            guard let entry = value as? [String: Any], let webView = message.webView, let hex = Self.hex(entry["color"]),
+                  let x = entry["x"] as? Double, let y = entry["y"] as? Double,
+                  let width = entry["width"] as? Double, let height = entry["height"] as? Double else { return (nil, "No swatch") }
+            browser.colorPicker.pick(css: CGRect(x: x, y: y, width: width, height: height), hex: hex, in: webView) { [weak webView] hex in
+                // Not into a page the tab has since left.
+                guard let webView, Internal.isInternal(webView.url) else { return }
+                webView.callAsyncJavaScript("colorPicked(hex)", arguments: ["hex": hex], in: nil, in: .page)
+            }
+            return (nil, nil)
         case "setStartBackground":
             guard let kind = (value as? String).flatMap(StartBackground.init(rawValue:)) else { break }
             if kind == .image, StartImage.current == nil {

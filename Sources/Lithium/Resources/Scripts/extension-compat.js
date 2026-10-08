@@ -2,8 +2,9 @@
 // builds use Chrome APIs WebKit doesn't have yet as soon as they start, without checking for
 // them: 1Password's background stopped at chrome.notifications.onClicked, and nothing answered
 // its content scripts. These are added as Chrome has them for an extension that gets nothing
-// from them: notifications never show, no managed policy, no window opened from a page reported.
-// Only what is missing is added, so WebKit's own APIs win once it has them.
+// from them: notifications never show, no managed policy, no window opened from a page reported,
+// no browser password saving to turn off (Lithium has none), no other extension. Only what is
+// missing is added, so WebKit's own APIs win once it has them.
 
 (() => {
   const event = () => ({ addListener() {}, removeListener() {}, hasListener() { return false; }, hasListeners() { return false; } });
@@ -24,17 +25,74 @@
     }
   };
 
+  // A `types.ChromeSetting` the extension can set, which changes nothing.
+  const setting = (value) => ({
+    get: answer({ value, levelOfControl: 'controllable_by_this_extension' }), set: answer(undefined), clear: answer(undefined), onChange: event(),
+  });
+  // Chrome has these only for an extension that asks for them. Password managers turn the
+  // browser's password saving off (`privacy`) and lock with the Mac's screen (`idle`) as they start.
+  const byPermission = {
+    notifications: () => ({
+      onClicked: event(), onButtonClicked: event(), onClosed: event(), onPermissionLevelChanged: event(), onShowSettings: event(),
+      create: answer(''), update: answer(false), clear: answer(false), getAll: answer({}), getPermissionLevel: answer('denied'),
+    }),
+    privacy: () => ({
+      services: { passwordSavingEnabled: setting(false), autofillAddressEnabled: setting(false), autofillCreditCardEnabled: setting(false) },
+      network: { networkPredictionEnabled: setting(false), webRTCIPHandlingPolicy: setting('default') },
+      websites: { thirdPartyCookiesAllowed: setting(false), hyperlinkAuditingEnabled: setting(false), doNotTrackEnabled: setting(false) },
+    }),
+    // Lithium tells `locked` and `active` through a port (Extensions.listenForIdle), opened once the
+    // extension asks; `idle` (no input for a while) is never told. Without native messaging there
+    // is no port, and the state stays `active`.
+    idle: (api) => {
+      const listeners = new Set();
+      let state = 'active';
+      let connected;
+      const connect = () => connected ??= new Promise((resolve) => {
+        let port;
+        try { port = api.runtime.connectNative('lithium.idle'); } catch { return resolve(); }
+        port.onMessage.addListener((message) => {
+          if (typeof message?.state !== 'string') return;
+          const changed = message.state !== state;
+          state = message.state;
+          resolve();
+          if (changed) for (const listener of [...listeners]) listener(state);
+        });
+        port.onDisconnect.addListener(() => {
+          connected = undefined;
+          resolve();
+        });
+      });
+      return {
+        onStateChanged: {
+          addListener(listener) { listeners.add(listener); connect(); },
+          removeListener(listener) { listeners.delete(listener); },
+          hasListener(listener) { return listeners.has(listener); },
+          hasListeners() { return listeners.size > 0; },
+        },
+        queryState: (...args) => {
+          const result = connect().then(() => state);
+          const callback = args.findLast((arg) => typeof arg === 'function');
+          if (!callback) return result;
+          result.then(callback);
+        },
+        setDetectionInterval() {}, getAutoLockDelay: answer(0),
+      };
+    },
+    management: (api) => {
+      const manifest = api.runtime.getManifest();
+      const self = { id: api.runtime.id, name: manifest.name, shortName: manifest.short_name ?? manifest.name, version: manifest.version, enabled: true, type: 'extension', installType: 'normal', mayDisable: true };
+      return { onInstalled: event(), onUninstalled: event(), onEnabled: event(), onDisabled: event(), getSelf: answer(self), getAll: answer([self]) };
+    },
+  };
+
   for (const api of new Set([globalThis.browser, globalThis.chrome])) {
     if (!api) continue;
-    // Chrome has it only for an extension that asks for it.
-    if (api.runtime?.getManifest?.().permissions?.includes('notifications')) {
-      fill(api, {
-        notifications: {
-          onClicked: event(), onButtonClicked: event(), onClosed: event(), onPermissionLevelChanged: event(), onShowSettings: event(),
-          create: answer(''), update: answer(false), clear: answer(false), getAll: answer({}), getPermissionLevel: answer('denied'),
-        },
-      });
+    const permissions = api.runtime?.getManifest?.().permissions ?? [];
+    for (const [name, make] of Object.entries(byPermission)) {
+      if (permissions.includes(name)) fill(api, { [name]: make(api) });
     }
+    fill(api.runtime, { setUninstallURL: answer(undefined) });
     fill(api.webNavigation, { onCreatedNavigationTarget: event() });
     fill(api.storage, { managed: { get: answer({}), getBytesInUse: answer(0), onChanged: event() } });
   }

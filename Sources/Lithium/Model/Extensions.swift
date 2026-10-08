@@ -46,6 +46,22 @@ final class Extensions: NSObject {
     /// to the front or leaves it.
     @ObservationIgnored private(set) var isFocused = true
     @ObservationIgnored nonisolated(unsafe) private var activeObservers: [any NSObjectProtocol] = []
+    /// Native messaging hosts running for each extension (`NativeMessaging`), stopped with it.
+    @ObservationIgnored private(set) var nativeHosts: [String: [NativeMessaging.Host]] = [:]
+    /// Where hosts are looked up; tests use their own folder.
+    @ObservationIgnored var nativeHostFolders = NativeMessaging.folders
+    /// The ports `chrome.idle` listens on (`extension-compat.js`), for each extension. Password
+    /// managers lock when the Mac's screen does, which only this tells them; the screen is watched
+    /// only while one is open.
+    @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var lockObservers: [any NSObjectProtocol] = []
+    /// Whether the screen is locked now; tests answer for the Mac.
+    @ObservationIgnored var isScreenLocked: () -> Bool = {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// The name `extension-compat.js` connects to for `chrome.idle`, answered by Lithium itself.
+    static let idleHost = "lithium.idle"
 
     static let scheme = "webkit-extension"
 
@@ -62,6 +78,7 @@ final class Extensions: NSObject {
 
     deinit {
         activeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lockObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
     }
 
     func start() {
@@ -174,7 +191,7 @@ final class Extensions: NSObject {
             context.setPermissionStatus(.grantedExplicitly, for: pattern)
         }
         // A load that ended first (at launch, from the settings switch) is replaced, not left running.
-        if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }
+        unload(id)
         try controller.load(context)
         contexts[id] = context
     }
@@ -218,7 +235,7 @@ final class Extensions: NSObject {
             }
         }
 
-        if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }
+        unload(id)
         try? FileManager.default.removeItem(at: files(id))
         try? FileManager.default.removeItem(at: self.archive(id))
         try FileManager.default.moveItem(at: package, to: self.archive(id))
@@ -238,7 +255,7 @@ final class Extensions: NSObject {
     }
 
     private func delete(_ id: String) async {
-        if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
+        unload(id)
         installed.removeAll { $0.id == id }
         try? FileManager.default.removeItem(at: files(id))
         try? FileManager.default.removeItem(at: archive(id))
@@ -265,9 +282,17 @@ final class Extensions: NSObject {
         installed[index].isEnabled = enabled
         if enabled {
             await load(installed[index])
-        } else if let context = contexts.removeValue(forKey: id) {
-            try? controller.unload(context)
+        } else {
+            unload(id)
         }
+    }
+
+    /// Stops extension `id`, and the native hosts it started.
+    private func unload(_ id: String) {
+        if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
+        nativeHosts.removeValue(forKey: id)?.forEach { $0.stop() }
+        idlePorts.removeValue(forKey: id)?.forEach { $0.disconnect() }
+        watchScreenLock()
     }
 
     // MARK: Pages
@@ -431,6 +456,113 @@ extension Extensions: WKWebExtensionControllerDelegate {
     ) async -> (Set<URL>, Date?) {
         let allowed = await confirm(extensionContext, wants: urls.compactMap { $0.host() }.sorted())
         return (allowed ? urls : [], nil)
+    }
+
+    /// `runtime.sendNativeMessage`: as in Chrome, a host runs for one message and its reply.
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        sendMessage message: Any,
+        toApplicationWithIdentifier applicationIdentifier: String?,
+        for extensionContext: WKWebExtensionContext
+    ) async throws -> Any? {
+        /// Made and read on the main actor.
+        struct Reply: @unchecked Sendable { let value: Any? }
+        return try await withCheckedThrowingContinuation { continuation in
+            var waiting: CheckedContinuation<Reply, any Error>? = continuation
+            let finish = { (result: Result<Reply, any Error>) in
+                waiting?.resume(with: result)
+                waiting = nil
+            }
+            var host: NativeMessaging.Host?
+            do {
+                host = try startHost(applicationIdentifier, for: extensionContext.uniqueIdentifier, onMessage: { reply in
+                    finish(.success(Reply(value: reply)))
+                    host?.stop()
+                }, onExit: { finish(.failure($0)) })
+                try host?.send(message)
+            } catch {
+                finish(.failure(error))
+                host?.stop()
+            }
+        }.value
+    }
+
+    /// `runtime.connectNative`: the host runs as long as the port is open.
+    func webExtensionController(
+        _ controller: WKWebExtensionController,
+        connectUsing port: WKWebExtension.MessagePort,
+        for extensionContext: WKWebExtensionContext
+    ) async throws {
+        if port.applicationIdentifier == Self.idleHost { return listenForIdle(on: port, for: extensionContext.uniqueIdentifier) }
+        let host = try startHost(port.applicationIdentifier, for: extensionContext.uniqueIdentifier, onMessage: { message in
+            port.sendMessage(message) { _ in }
+        }, onExit: { error in
+            if !port.isDisconnected { port.disconnect(throwing: error) }
+        })
+        port.messageHandler = { [weak host] message, error in
+            guard error == nil, let message else { return }
+            do { try host?.send(message) } catch { host?.stop() }
+        }
+        port.disconnectHandler = { [weak host] _ in host?.stop() }
+    }
+
+    /// `chrome.idle`: the port gets the state once connected, then `locked` and `active` as the
+    /// screen locks and unlocks, until the extension disconnects or is turned off.
+    private func listenForIdle(on port: WKWebExtension.MessagePort, for id: String) {
+        idlePorts[id, default: []].append(port)
+        port.disconnectHandler = { [weak self, weak port] _ in
+            self?.idlePorts[id]?.removeAll { $0 === port }
+            if self?.idlePorts[id]?.isEmpty == true { self?.idlePorts[id] = nil }
+            self?.watchScreenLock()
+        }
+        // Once WebKit has connected the port, after this call: sent before, the state was lost.
+        DispatchQueue.main.async { [weak self, weak port] in
+            MainActor.assumeIsolated {
+                guard let self, let port else { return }
+                port.sendMessage(["state": self.isScreenLocked() ? "locked" : "active"]) { _ in }
+            }
+        }
+        watchScreenLock()
+    }
+
+    /// Watches the screen while a `chrome.idle` port is open, and only then.
+    private func watchScreenLock() {
+        let center = DistributedNotificationCenter.default()
+        if idlePorts.isEmpty {
+            lockObservers.forEach { center.removeObserver($0) }
+            lockObservers = []
+            return
+        }
+        guard lockObservers.isEmpty else { return }
+        lockObservers = [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)].map { name, locked in
+            center.addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screenLockChanged(locked: locked) }
+            }
+        }
+    }
+
+    func screenLockChanged(locked: Bool) {
+        for port in idlePorts.values.joined() {
+            port.sendMessage(["state": locked ? "locked" : "active"]) { _ in }
+        }
+    }
+
+    /// The host holds the port its messages go to until it ends; the port only points back at it.
+    private func startHost(
+        _ name: String?,
+        for id: String,
+        onMessage: @escaping (Any) -> Void,
+        onExit: @escaping (NativeMessaging.HostError) -> Void
+    ) throws -> NativeMessaging.Host {
+        let host = NativeMessaging.Host(executable: try NativeMessaging.executable(of: name ?? "", for: id, in: nativeHostFolders), extensionID: id)
+        host.onMessage = onMessage
+        host.onExit = { [weak self, unowned host] error in
+            self?.nativeHosts[id]?.removeAll { $0 === host }
+            onExit(error)
+        }
+        try host.start()
+        nativeHosts[id, default: []].append(host)
+        return host
     }
 
     private func confirm(_ context: WKWebExtensionContext, wants access: [String]) async -> Bool {

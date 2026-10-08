@@ -146,6 +146,10 @@ enum NativeMessaging {
             writer.async { try? handle.close() }
             if process.isRunning { process.terminate() }
             onExit(error)
+            // A caller's handler may hold the host (`sendNativeMessage` stops it from its reply): let
+            // go, or the host, its process and its pipes' descriptors stay until Lithium quits.
+            onMessage = { _ in }
+            onExit = { _ in }
         }
     }
 }

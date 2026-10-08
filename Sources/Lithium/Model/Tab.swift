@@ -67,6 +67,7 @@ final class Tab: NSObject, Identifiable {
         webView.translation = browser?.translation
         webView.tab = self
         DeveloperTools.apply(browser?.developerTools ?? false, to: webView)
+        if browser?.energy.isOn == true { BackgroundThrottling.apply(true, to: webView) }
         loadedWebView = webView
         attach(webView)
         return webView
@@ -582,8 +583,14 @@ final class Tab: NSObject, Identifiable {
         guard !isAsleep, url != nil else { return false }
         return !webView.isLoading
             && Date().timeIntervalSince(lastActive) > interval
-            && Date().timeIntervalSince(lastHeard ?? .distantPast) > Self.silenceBeforeSleep
+            && !wasHeardLately
             && !isInCall
+    }
+
+    /// Heard in the last 5 minutes, as last noted: a pause between tracks or while buffering
+    /// isn't silence.
+    var wasHeardLately: Bool {
+        Date().timeIntervalSince(lastHeard ?? .distantPast) <= Self.silenceBeforeSleep
     }
 
     private static let silenceBeforeSleep: TimeInterval = 5 * 60

@@ -76,6 +76,7 @@ final class Browser {
     let splits = TabSplits()
     let recentTabs = RecentTabs()
     let quickLinks = QuickLinks()
+    let energy = EnergySaver()
     let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
@@ -131,12 +132,17 @@ final class Browser {
 
     /// 10 minutes, or 5 while the Mac saves energy (Low Power Mode, or running hot).
     /// `defaults write app.lithium.browser tabIdleSeconds N` overrides both.
-    static var tabIdleInterval: TimeInterval {
+    static var tabIdleInterval: TimeInterval { idleInterval(savingEnergy: isSavingEnergy) }
+    static let shortIdleInterval: TimeInterval = 5 * 60
+
+    private static func idleInterval(savingEnergy: Bool) -> TimeInterval {
         let custom = UserDefaults.standard.double(forKey: "tabIdleSeconds")
         if custom > 0 { return custom }
-        return isSavingEnergy ? shortIdleInterval : 10 * 60
+        return savingEnergy ? shortIdleInterval : 10 * 60
     }
-    static let shortIdleInterval: TimeInterval = 5 * 60
+
+    /// `tabIdleInterval`, short while Lithium's energy saving is on too.
+    var idleInterval: TimeInterval { Self.idleInterval(savingEnergy: energy.isOn || Self.isSavingEnergy) }
 
     private static var isSavingEnergy: Bool {
         let info = ProcessInfo.processInfo
@@ -165,8 +171,10 @@ final class Browser {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(min(60, Self.tabIdleInterval / 2)))
                 self?.sleepTabs()
+                self?.pauseSilentMedia()
             }
         }
+        energy.onChange = { [weak self] in self?.energyChanged() }
         watchMemoryPressure()
         let observer = notifications.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshSleepingPinIcons() }
@@ -235,9 +243,33 @@ final class Browser {
         if memoryLevel.contains(.critical) {
             sleepIdleTabs(idleFor: 0, sparingPopups: false)
         } else if memoryLevel.contains(.warning) {
-            sleepIdleTabs(idleFor: min(Self.tabIdleInterval, Self.shortIdleInterval), sparingPopups: true)
+            sleepIdleTabs(idleFor: min(idleInterval, Self.shortIdleInterval), sparingPopups: true)
         } else {
-            sleepIdleTabs(idleFor: Self.tabIdleInterval, sparingPopups: true)
+            sleepIdleTabs(idleFor: idleInterval, sparingPopups: true)
+        }
+    }
+
+    /// Energy saving turned on or off: the open pages' timers follow, and turning it on applies
+    /// it at once rather than at the next pass.
+    private func energyChanged() {
+        for case let webView? in tabs.map(\.loadedWebView) { BackgroundThrottling.apply(energy.isOn, to: webView) }
+        guard energy.isOn else { return }
+        sleepTabs()
+        pauseSilentMedia()
+    }
+
+    /// While energy saving is on, a background tab's media that makes no sound (a muted autoplay
+    /// video, a looping background) pauses: WebKit keeps decoding a video out of the window. A tab
+    /// shown, in the floating player, playing sound or heard lately (between tracks), muted by the
+    /// user, in a call or used by an agent is left alone, and so is every tab when WebKit can't
+    /// tell sound apart. The page can play it again; the next pass pauses it again.
+    func pauseSilentMedia() {
+        guard energy.isOn else { return }
+        let partner = shownPartner
+        for tab in tabs where !tab.isAsleep && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
+            && nowPlaying.isHeard(tab) == false && !tab.wasHeardLately && !tab.isMuted
+            && !nowPlaying.isInCall(tab) && agent?.holds(tab) != true {
+            nowPlaying.pause(tab)
         }
     }
 

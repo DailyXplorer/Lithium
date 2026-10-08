@@ -131,14 +131,9 @@ final class Tab: NSObject, Identifiable {
     /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
-    /// Lithium's error page stands in for the page, from `showError` (or Back to it) until the next load starts.
+    /// Lithium's error page stands in for the page, from `showError` until the next load starts.
     var isShowingError: Bool { failedURL != nil }
     @ObservationIgnored private var errorNavigation: WKNavigation?
-    /// The error pages of this tab's history: WebKit's cache brings one back on Back or Forward.
-    @ObservationIgnored private var errorHistory: [WKBackForwardListItem: (url: URL?, error: NSError?)] = [:]
-    /// The main frame's last load is Back or Forward: only that brings an error page back. Reload or
-    /// the same address again reuses the error page's entry for the real page.
-    @ObservationIgnored private var isGoingBackOrForward = false
     /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
     /// another page commits.
     private(set) var loadError: NSError?
@@ -523,7 +518,6 @@ final class Tab: NSObject, Identifiable {
         tearDown()
         pdf = nil
         pdfHistory = [:]
-        errorHistory = [:]
         hasInternalBridge = false
         hasWebstoreBridge = false
         forgetLiveIcon()
@@ -824,7 +818,6 @@ extension Tab: WKNavigationDelegate {
     ) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         guard let url = action.request.url else { return (.cancel, preferences) }
         let isMainFrame = action.targetFrame?.isMainFrame ?? true
-        if action.targetFrame?.isMainFrame == true { isGoingBackOrForward = action.navigationType == .backForward }
         // Only the first decision after an extension sent a sleeping tab on can be its old page's
         // load, started first; whatever it is, the next ones (the new address's redirects, a
         // Reload after a download) go through.
@@ -1012,16 +1005,7 @@ extension Tab: WKNavigationDelegate {
         awaitCommit(false)
         // A new document: its script tells again, a page back from the cache too.
         hasUnsavedInput = false
-        let list = webView.backForwardList
-        if navigation === errorNavigation {
-            if let item = list.currentItem { errorHistory[item] = (failedURL, loadError) }
-        } else if isGoingBackOrForward, httpStatus == nil, let item = list.currentItem, let page = errorHistory[item] {
-            // Lithium's error page back from the cache, not the address loaded again: still not the page.
-            (failedURL, loadError) = page
-        } else {
-            loadError = nil
-            if let item = list.currentItem { errorHistory[item] = nil }
-        }
+        if navigation !== errorNavigation { loadError = nil }
         // Another page showing ends the redirect a stripped address guards against: a later link
         // to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }
@@ -1040,9 +1024,9 @@ extension Tab: WKNavigationDelegate {
             forgetLiveIcon()
         }
         shownHost = webView.url?.host()
+        let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }
-        errorHistory = errorHistory.filter { live.contains($0.key) }
         let previous = pdf
         defer { if let previous, previous !== pdf { previous.putAway() } }
         guard PDFReader.isShowingPDF(webView), let url = webView.url else {

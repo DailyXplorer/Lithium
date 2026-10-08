@@ -309,22 +309,35 @@ struct BrowserTests {
         browser.saveNow()
         #expect(browser.history.visits(matching: host).map(\.title) == ["Fine"])
         #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "Fine")
-
-        // Back to the error page, which WebKit's cache keeps: still the tab's title only.
-        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
-        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
-        tab.webView.loadHTMLString("<title>Next</title>", baseURL: URL(string: "https://next-\(UUID().uuidString.lowercased()).example/"))
-        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
-        tab.webView.goBack()
-        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
-        #expect(tab.isShowingError)
-        browser.saveNow()
-        #expect(browser.history.visits(matching: host).map(\.title) == ["Fine"])
-        #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "")
     }
 
-    /// Reload on the error page loads the address into the error page's own history entry: the
-    /// real page shown there, then left and come back to with Back, is the page, not the error.
+    /// Lithium's error page gets no history entry of its own (`loadHTMLString`): Back from the
+    /// next page goes to the page before the error, and that page is the page, not the error.
+    @Test func pageBeforeTheErrorIsNotTheErrorOnBack() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Home</title>"),
+            "/next": ("Content-Type: text/html", "<title>Next</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        tab.load(URL(string: "http://127.0.0.1:1/")!)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.isShowingError)
+
+        tab.load(base.appending(path: "next"))
+        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.url == base)
+        #expect(!tab.isShowingError)
+        #expect(tab.loadError == nil)
+    }
+
+    /// Reload on the error page loads the address as a page of its own: that page, then left and
+    /// come back to with Back, is the page, not the error.
     @Test func pageReloadedOverTheErrorPageIsNotTheErrorOnBack() async throws {
         let (listener, base) = try await LocalHTTP.serve([
             "/": ("Content-Type: text/html", "<title>Back up</title>"),

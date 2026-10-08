@@ -821,6 +821,8 @@ final class Browser {
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { pinIDs.contains($0) ? $0 : nil }
+            // Asleep, it loads nothing that would tidy its title.
+            tidyTitles.update(tab, askingModel: false)
             tabs.append(tab)
             extensions.didOpen(tab)
             restored[index] = tab

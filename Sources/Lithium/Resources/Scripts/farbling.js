@@ -25,7 +25,8 @@
   // the noise itself (a `Math.floor` that returned a huge gap once left every pixel clean).
   const apply = Reflect.apply;
   const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
-  const { imul, floor, ceil, max, min } = Math;
+  const { imul, floor, ceil, max, min, trunc } = Math;
+  const BigIntCtor = BigInt, { asIntN } = BigInt, NumberCtor = Number, { isFinite } = Number;
   const WeakMapCtor = WeakMap, WeakSetCtor = WeakSet;
   const weakMapGet = WeakMap.prototype.get;
   const weakMapSet = WeakMap.prototype.set;
@@ -221,12 +222,16 @@
   const GL_PIXEL_PACK_BUFFER_BINDING = 0x88ED, GL_FRAMEBUFFER = 0x8D40, GL_READ_FRAMEBUFFER = 0x8CA8, GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
   const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA, GL_PIXEL_PACK_BUFFER = 0x88EB, GL_BUFFER_SIZE = 0x8764;
   // The arguments are converted here, once, as the native call would (see `readImage`): a format
-  // given as '6408' read the same to it, and skipped the noise.
+  // given as '6408' read the same to it, and skipped the noise. The offsets too, a GLuint and a
+  // GLintptr: NaN or Infinity read at 0 natively, and once skipped the noise here.
   const readPixelsArguments = (args, webgl2) => {
     if (args.length < 7) return;
     for (let i = 0; i < 6; i++) args[i] = i < 4 ? args[i] | 0 : args[i] >>> 0;
-    if (args[6] && typeof args[6] === 'object') { if (args.length > 7) args[7] = +args[7]; }
-    else if (webgl2 && args[6] != null) args[6] = +args[6];
+    if (args[6] && typeof args[6] === 'object') { if (args.length > 7) args[7] = args[7] >>> 0; }
+    else if (webgl2 && args[6] != null) {
+      const offset = +args[6];
+      args[6] = NumberCtor(apply(asIntN, BigIntCtor, [64, BigIntCtor(isFinite(offset) ? trunc(offset) : 0)]));
+    }
   };
   const readPixelsNoise = (gl, webgl2, self, args) => {
     const pixels = args[6], width = args[2], height = args[3];
@@ -255,8 +260,10 @@
     if (!(start >= 0) || start + (height - 1) * stride + width * 4 > length) return;
     const left = max(0, -args[0]), bottom = max(0, -args[1]);
     if (right <= left || top <= bottom) return;
-    // Past the limit, a share of the pixels, so the cost stays the same.
-    const step = ceil(width * height / MAX_PIXELS), x = args[0] + left, y = args[1] + bottom, columns = right - left, rows = top - bottom;
+    // Past the limit, a share of the pixels, so the cost stays the same. Counted on what the read
+    // covers of the canvas, not the size asked for: a huge read of a small canvas noises it all.
+    const x = args[0] + left, y = args[1] + bottom, columns = right - left, rows = top - bottom;
+    const step = ceil(columns * rows / MAX_PIXELS);
     start += bottom * stride + left * 4;
     if (!packed) { noisePixels(pixels, x, y, columns, rows, start, stride, step); return; }
     // Pixels read into a pack buffer are read back and written over with the same noise: noising
@@ -274,13 +281,14 @@
   // read off a silent buffer is that of silence only, so it can't be taken off another; noising
   // twice changes nothing (`getChannelData` noises the buffer itself, which `copyFromChannel` then
   // reads); and a window copied from the middle gets what the whole buffer has there. `samples`
-  // holds the buffer's samples from `offset` on, of `total`; past the limit one sample in `step`
-  // is noised, which bounds the cost of a long recording and still moves any sum over its samples.
+  // holds the buffer's samples from `offset` on, of `total`. Every sample, however long the
+  // buffer: noising one in a few left the others exact, at places the page could predict. The cost
+  // follows what the page has rendered or copied, and `getChannelData` noises a buffer once.
   const sampleFloat = new Float32Array(1), sampleBits = new Uint32Array(sampleFloat.buffer);
   const noiseSamples = (samples, offset, total) => {
     if (read(typedKind, samples) !== 'Float32Array') return;
-    const count = min(read(typedLength, samples), total - offset), step = max(1, ceil(total / MAX_SAMPLES));
-    for (let i = (step - offset % step) % step; i < count; i += step) {
+    const count = min(read(typedLength, samples), total - offset);
+    for (let i = 0; i < count; i++) {
       const spot = fmix(imul((offset + i) ^ seedWords[2], 0x9e3779b1) ^ seedWords[0]), shift = spot >>> 31;
       sampleFloat[0] = samples[i];
       const pair = floor((sampleBits[0] + shift) / 2), low = 2 * pair - shift;

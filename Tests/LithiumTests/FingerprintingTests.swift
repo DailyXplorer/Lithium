@@ -467,6 +467,55 @@ struct FingerprintingTests {
         #expect(try #require(protected["largeNoisy"]) > 0)
     }
 
+    /// A read far larger than the canvas noises every pixel it covers, not one in a few at spots the
+    /// page can predict; offsets that WebKit reads as 0 (NaN, Infinity, 2^32) get the noise a read
+    /// at 0 does, into a pack buffer or an array.
+    @Test func readPixelsOversizedReadsAndOddOffsetsAreNoised() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 300; gl.canvas.height = 150; gl.viewport(0, 0, 300, 150);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const count = (pixels, width, odd) => {
+                let noisy = 0;
+                for (let y = 0; y < 150; y++) for (let x = 0; x < 300; x++) {
+                  if (odd && !((x + y) & 1)) continue;
+                  for (let c = 0; c < 4; c++) if (pixels[(y * width + x) * 4 + c] !== clean[c]) { noisy++; break; }
+                }
+                return noisy;
+              };
+              const huge = new Uint8Array(1000 * 1000 * 4); gl.readPixels(0, 0, 1000, 1000, gl.RGBA, gl.UNSIGNED_BYTE, huge);
+              const result = { oversizedOdd: count(huge, 1000, true) };
+              const size = 300 * 150 * 4, buffer = gl.createBuffer();
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+              for (const [name, offset] of [['packNaN', NaN], ['packInfinity', Infinity]]) {
+                gl.bufferSubData(gl.PIXEL_PACK_BUFFER, 0, new Uint8Array(size));
+                gl.readPixels(0, 0, 300, 150, gl.RGBA, gl.UNSIGNED_BYTE, offset);
+                const packed = new Uint8Array(size); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, packed);
+                result[name] = count(packed, 300, false);
+              }
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              for (const [name, offset] of [['arrayInfinity', Infinity], ['arrayWrapped', 2 ** 32]]) {
+                const pixels = new Uint8Array(size); gl.readPixels(0, 0, 300, 150, gl.RGBA, gl.UNSIGNED_BYTE, pixels, offset);
+                result[name] = count(pixels, 300, false);
+              }
+              result.error = gl.getError();
+              return JSON.stringify(result);
+            })()
+            """
+        let names = ["oversizedOdd", "packNaN", "packInfinity", "arrayInfinity", "arrayWrapped"]
+        let bare: [String: Int] = try await run(probe, farbling: nil)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare == Dictionary(uniqueKeysWithValues: (names + ["error"]).map { ($0, 0) }))
+        #expect(protected["error"] == 0)
+        for name in names {
+            #expect(try #require(protected[name]) > 0, "\(name)")
+        }
+    }
+
     /// Canvas noise follows the pixel's spot in the canvas, not where the read starts: a 1×1 read,
     /// an offset window or one with a negative size hands back what the full read has there.
     @Test func smallReadsGetTheNoiseOfTheFullRead() async throws {
@@ -1262,8 +1311,9 @@ struct FingerprintingTests {
 
     /// Sample noise depends on each sample's value: what a silent buffer shows can't be taken off
     /// another buffer's samples, as it once could, leaving them exact. A window copied from the
-    /// middle gets the whole buffer's noise there, and nothing past what it copied; a buffer past
-    /// the limit is still noised, and so are the analyser's time-domain and byte reads.
+    /// middle gets the whole buffer's noise there, and nothing past what it copied; a long buffer is
+    /// noised on every sample, not on a share at known places, and so are the analyser's
+    /// time-domain and byte reads.
     @Test func audioNoiseCantBeMeasuredAndRemoved() async throws {
         // Stand for an analyser's output, without audio hardware.
         let analyser = """
@@ -1297,28 +1347,32 @@ struct FingerprintingTests {
               const again = new Float32Array(length); buffer.copyFromChannel(again, 0);
               let twice = 0; for (let i = 0; i < length; i++) if (again[i] !== full[i]) twice++;
               const long = make(600000).getChannelData(0);
-              let longNoisy = 0; for (let i = 0; i < long.length; i++) if (long[i] !== wave(i)) longNoisy++;
+              // Odd samples too: they once came back exact past the limit, the same on every site.
+              let longNoisy = 0, longOdd = 0;
+              for (let i = 0; i < long.length; i++) if (long[i] !== wave(i)) { longNoisy++; if (i & 1) longOdd++; }
               const node = new OfflineAudioContext(1, 128, 44100).createAnalyser();
               const moved = (values, clean) => values.filter((value) => value !== clean).length;
               const times = new Float32Array(node.fftSize); node.getFloatTimeDomainData(times);
               const timeBytes = new Uint8Array(node.fftSize); node.getByteTimeDomainData(timeBytes);
               const frequencyBytes = new Uint8Array(node.frequencyBinCount); node.getByteFrequencyData(frequencyBytes);
               const byteSpread = Math.max(...timeBytes.map((value) => Math.abs(value - 128)), ...frequencyBytes.map((value) => Math.abs(value - 100)));
-              return JSON.stringify({ noisy, removed, windowOff, past, twice, longNoisy, times: moved(times, 0.25),
+              return JSON.stringify({ noisy, removed, windowOff, past, twice, longNoisy, longOdd, times: moved(times, 0.25),
                 timeBytes: moved(timeBytes, 128), frequencyBytes: moved(frequencyBytes, 100), byteSpread });
             })()
             """
         let bare: [String: Int] = try await run(probe, farbling: nil, before: analyser)
         let protected: [String: Int] = try await run(probe, farbling: Self.farbling(), before: analyser)
 
-        #expect(bare == ["noisy": 0, "removed": 4096, "windowOff": 0, "past": 0, "twice": 0, "longNoisy": 0,
+        #expect(bare == ["noisy": 0, "removed": 4096, "windowOff": 0, "past": 0, "twice": 0, "longNoisy": 0, "longOdd": 0,
                          "times": 0, "timeBytes": 0, "frequencyBytes": 0, "byteSpread": 0])
         #expect(try #require(protected["noisy"]) > 4096 / 4)
         #expect(try #require(protected["removed"]) < 4096 * 3 / 4)
         #expect(protected["windowOff"] == 0)
         #expect(protected["past"] == 0)
         #expect(protected["twice"] == 0)
-        #expect(try #require(protected["longNoisy"]) > 0)
+        // About half the samples move, wherever they are.
+        #expect(try #require(protected["longNoisy"]) > 600000 / 4)
+        #expect(try #require(protected["longOdd"]) > 600000 / 8)
         for name in ["times", "timeBytes", "frequencyBytes"] {
             #expect(try #require(protected[name]) > 0, "\(name)")
         }

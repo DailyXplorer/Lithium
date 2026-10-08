@@ -7,6 +7,7 @@ enum Suggestion: Hashable, Identifiable {
     case openTab(Tab.ID, title: String, url: URL)
     case pin(Pin.ID, title: String, url: URL)
     case history(title: String, url: URL)
+    case action(BarAction)
 
     var id: String {
         switch self {
@@ -15,19 +16,21 @@ enum Suggestion: Hashable, Identifiable {
         case .openTab(let id, _, _): "tab:\(id)"
         case .pin(let id, _, _): "pin:\(id)"
         case .history(_, let url): "history:\(url.absoluteString)"
+        case .action(let action): "action:\(action)"
         }
     }
 
     var url: URL? {
         switch self {
-        case .search: nil
+        case .search, .action: nil
         case .address(let url), .openTab(_, _, let url), .pin(_, _, let url), .history(_, let url): url
         }
     }
 }
 
 /// What the address bar proposes while typing. The first row is always what Return does
-/// with the raw text (search or go to the address); the rest come from open tabs, pins and history.
+/// with the raw text (search or go to the address); the rest come from open tabs, pins and history,
+/// after at most `BarAction.shownLimit` actions the text clearly names.
 @MainActor
 @Observable
 final class AddressSuggestions {
@@ -48,12 +51,17 @@ final class AddressSuggestions {
 
     var selected: Suggestion? { items.indices.contains(selectedIndex) ? items[selectedIndex] : nil }
 
-    func update(query rawQuery: String, tabs: [Tab], pins: [Pin], history: HistoryStore) {
+    /// `actions` are those that can run now (`Browser.barActions(for:)`); typed words that name
+    /// one whole, without a typo ("settings", "copy link"), have Return run it.
+    func update(query rawQuery: String, tabs: [Tab], pins: [Pin], history: HistoryStore, actions: [BarAction] = []) {
         let query = rawQuery.trimmingCharacters(in: .whitespaces)
         let first: Suggestion
+        var named: [(action: BarAction, match: BarAction.Match)] = []
         switch AddressInput.target(for: query) {
         case .address(let url): first = .address(url)
-        case .search: first = .search(query)
+        case .search:
+            first = .search(query)
+            named = BarAction.matches(query, among: actions)
         case nil:
             clear()
             return
@@ -74,8 +82,10 @@ final class AddressSuggestions {
             return .pin(pin.id, title: pin.title, url: pin.url)
         }.prefix(Self.perSource)
 
-        items = Array(([first] + openTabs + pinned).prefix(Self.limit))
-        selectedIndex = 0
+        // Just below the typed text, within the usual length: the rows after keep their order.
+        let commands = named.map { Suggestion.action($0.action) }
+        items = Array(([first] + commands + openTabs + pinned).prefix(Self.limit))
+        selectedIndex = named.first.map { $0.match.isWhole && !$0.match.hasTypo } == true ? 1 : 0
         pointerAtChange = pointerLocation()
         historyQuery?.cancel()
         historyQuery = Task { [weak self] in

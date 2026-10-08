@@ -85,6 +85,33 @@ struct UISnapshotTests {
         }
     }
 
+    /// Three space buttons, the second current, on light, saturated, very dark, near-black and
+    /// translucent sidebars.
+    @Test func spaceButtonSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let icons: [Phosphor] = [.globe, .folder, .code]
+        let spaces = icons.map { Space(id: UUID(), name: $0.rawValue, color: nil, icon: $0.rawValue, separatesData: false) }
+        let backdrops = [("light", SidebarStyle.solid, Theme.defaultSidebarHex), ("red", .solid, "#C0392B"), ("very-dark", .solid, "#1E1E24"),
+                         ("near-black", .solid, "#0A0A14"), ("translucent-light", .translucent, "#E7E5EA"), ("translucent-dark", .translucent, "#2C2B30")]
+        for (name, style, hex) in backdrops {
+            let isDark = name.hasSuffix("dark") || name == "near-black"
+            let palette = SidebarPalette(style: style, colorHex: hex, scheme: isDark ? .dark : .light)
+            let bar = HStack(spacing: 2) {
+                ForEach(Array(spaces.enumerated()), id: \.element.id) { index, space in
+                    SpaceButton(space: space, number: index + 1, isCurrent: index == 1) {}
+                }
+                Spacer(minLength: 0)
+            }
+            .environment(\.sidebarPalette, palette)
+            .foregroundStyle(palette.ink)
+            .frame(width: Layout.sidebarWidth - 20)
+            .padding(10)
+            .background(Color(hex: hex))
+            try render(bar, isDark: isDark).write(to: directory.appending(path: "space-buttons-\(name).png"))
+        }
+    }
+
     /// A download Lithium named, the site's name crossed out under it, with Use original name.
     @Test func renamedDownloadSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

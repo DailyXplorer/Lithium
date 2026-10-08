@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 import WebKit
 @testable import Lithium
@@ -445,5 +446,40 @@ struct SpaceSwipeTests {
         #expect(nudge.handle(phase: .changed, momentumPhase: [], dx: -30, dy: 0, inverted: true) == .pass)
         #expect(nudge.handle(phase: .ended, momentumPhase: [], dx: 0, dy: 0, inverted: true) == .pass)
         #expect(nudge.handle(phase: [], momentumPhase: .changed, dx: -30, dy: 0, inverted: true) == .pass)
+    }
+}
+
+/// The space buttons at the foot of the sidebar, on every kind of sidebar the palette handles.
+@MainActor
+struct SpaceButtonTests {
+    /// Light, saturated, very dark, near-black (lifted) and translucent sidebars.
+    static let backdrops: [(style: SidebarStyle, hex: String, scheme: ColorScheme)] = [
+        (.solid, Theme.defaultSidebarHex, .light), (.solid, "#C0392B", .light), (.solid, "#1E1E24", .dark),
+        (.solid, "#0A0A14", .dark), (.translucent, "#E7E5EA", .light), (.translucent, "#2C2B30", .dark),
+    ]
+
+    /// The current space sits on the current tab row's resting surface, not the darker selected
+    /// favorite; the others have none, a hovered one less than the current one, and the current
+    /// one stands a visible step off the sidebar.
+    @Test(arguments: 0..<6)
+    func currentSpaceTakesTheSelectedTabRowsSurface(_ index: Int) {
+        let backdrop = Self.backdrops[index]
+        let palette = SidebarPalette(style: backdrop.style, colorHex: backdrop.hex, scheme: backdrop.scheme)
+        let current = rgba(SpaceButton.fill(palette, isCurrent: true, isHovered: false))
+        #expect(current == rgba(palette.rowFill(isSelected: true, isHovered: false)))
+        #expect(current == rgba(palette.tile))
+        #expect(current != rgba(palette.selection))
+        #expect(rgba(SpaceButton.fill(palette, isCurrent: true, isHovered: true)) == current)
+        #expect(rgba(SpaceButton.fill(palette, isCurrent: false, isHovered: false)).a == 0)
+        #expect(rgba(SpaceButton.fill(palette, isCurrent: false, isHovered: true)).a < current.a)
+
+        let sidebar = rgba(Color(hex: backdrop.hex))
+        let step = max(abs(current.r - sidebar.r), abs(current.g - sidebar.g), abs(current.b - sidebar.b)) * current.a
+        #expect(step >= 5.0 / 255, "\(backdrop.hex): the current space is lost on the sidebar")
+    }
+
+    private func rgba(_ color: Color) -> (r: Double, g: Double, b: Double, a: Double) {
+        let c = NSColor(color).usingColorSpace(.sRGB)!
+        return (c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent)
     }
 }

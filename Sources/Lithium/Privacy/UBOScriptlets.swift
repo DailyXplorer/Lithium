@@ -40,17 +40,47 @@ struct UBOScriptlets: Decodable, Sendable {
         context.evaluateScript(argumentParser + Self.argumentsScript)
         guard let parse = context.objectForKeyedSubscript("lithiumScriptletArguments") else { return [] }
 
-        return filters.compactMap { filter in
+        var rules: [String] = []
+        var scriptlets: [(sites: Substring, content: String)] = []
+        // Sites of uBO's bare `site#@#+js()`, which turns off every scriptlet there.
+        var noScriptlets: [Substring] = []
+        for filter in filters {
             let isException = filter.contains("#@#+js(")
-            guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), filter.hasSuffix(")") else { return nil }
+            guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), filter.hasSuffix(")") else { continue }
+            let sites = filter[..<marker.lowerBound]
             let body = String(filter[marker.upperBound..<filter.index(before: filter.endIndex)])
+            if isException, body.trimmingCharacters(in: .whitespaces).isEmpty {
+                noScriptlets += sites.isEmpty ? [""] : sites.split(separator: ",")
+                continue
+            }
             guard let arguments = parse.call(withArguments: [body])?.toArray() as? [String],
-                  let token = arguments.first, let name = resourceName(token) else { return nil }
+                  let token = arguments.first, let name = resourceName(token) else { continue }
             let quoted = ([Self.prefix + name.dropLast(3)] + arguments.dropFirst()).map { argument in
                 "\"" + argument.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
             }
-            return String(filter[..<marker.lowerBound]) + (isException ? "#@%#" : "#%#") + "//scriptlet(\(quoted.joined(separator: ", ")))"
+            let content = "//scriptlet(\(quoted.joined(separator: ", ")))"
+            rules.append(String(sites) + (isException ? "#@%#" : "#%#") + content)
+            if !isException { scriptlets.append((sites, content)) }
         }
+
+        // AdGuard's engine applies an exception only to the rules with exactly its content, and
+        // has no "every scriptlet" form, so the site gets one for each scriptlet that runs there.
+        var seen: Set<String> = []
+        for site in noScriptlets {
+            for scriptlet in scriptlets where Self.runs(on: scriptlet.sites, site: site) {
+                let exception = String(site) + "#@%#" + scriptlet.content
+                if seen.insert(exception).inserted { rules.append(exception) }
+            }
+        }
+        return rules
+    }
+
+    /// Whether a filter for `sites` can run on `site` or its subdomains: a generic one does, and so
+    /// does one for the site, one of its subdomains or a parent domain. An empty `site` is every site.
+    private static func runs(on sites: Substring, site: Substring) -> Bool {
+        let permitted = sites.split(separator: ",").filter { !$0.hasPrefix("~") }
+        guard !permitted.isEmpty, !site.isEmpty else { return true }
+        return permitted.contains { $0 == site || $0.hasSuffix("." + site) || site.hasSuffix("." + $0) }
     }
 
     /// One private scope holding every scriptlet the page needs and their helpers, then the calls,

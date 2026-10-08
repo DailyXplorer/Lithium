@@ -160,6 +160,51 @@ struct FilterUpdateTests {
         #expect(try read("ads.json") == rules)
     }
 
+    /// After an upgrade the bundled set can be newer than the downloaded one: a failing list then
+    /// keeps the bundled copy, not the older download.
+    @Test func aFailingListKeepsTheNewerCopy() async throws {
+        let bundled = FileManager.default.temporaryDirectory.appending(path: "bundled-filters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: destination); try? FileManager.default.removeItem(at: bundled) }
+        let updater = updater(["ads": ["steady", "flaky"]], bundledFilters: bundled)
+        StubLists.serve("||steady.example^", at: url("steady"))
+        StubLists.serve("||downloaded-flaky.example^", at: url("flaky"))
+        try await updater.update(into: destination)
+
+        func write(_ updated: String, to folder: URL) throws {
+            let manifest = Manifest(updated: updated, groups: [:], advancedRules: nil)
+            try JSONEncoder().encode(manifest).write(to: folder.appending(path: "manifest.json"))
+        }
+        try write("2025-01-01T00:00:00Z", to: destination)
+        try FileManager.default.createDirectory(at: bundled.appending(path: "lists"), withIntermediateDirectories: true)
+        try "||bundled-flaky.example^".write(to: bundled.appending(path: "lists/flaky.txt"), atomically: false, encoding: .utf8)
+        try write(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60)), to: bundled)
+
+        StubLists.serve(nil, at: url("flaky"))
+        try await updater.update(into: destination)
+        let rules = try read("ads.json")
+        #expect(rules.contains("bundled-flaky") && !rules.contains("downloaded-flaky"))
+    }
+
+    /// A set dated in the future (built with the clock set ahead) neither outranks the sets built
+    /// after it nor stops the automatic updates.
+    @MainActor
+    @Test func aSetDatedInTheFutureIsUpdated() throws {
+        let now = Date()
+        let folder = FileManager.default.temporaryDirectory.appending(path: "dated-filters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (future, past) = (folder.appending(path: "future"), folder.appending(path: "past"))
+        for (set, date) in [(future, now.addingTimeInterval(30 * 24 * 60 * 60)), (past, now.addingTimeInterval(-60))] {
+            try FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
+            let manifest = Manifest(updated: ISO8601DateFormatter().string(from: date), groups: [:], advancedRules: nil)
+            try JSONEncoder().encode(manifest).write(to: set.appending(path: "manifest.json"))
+        }
+        #expect(FilterUpdater.newestFirst([future, past], now: now) == [past, future])
+
+        let ahead = now.addingTimeInterval(60 * 60)
+        #expect(Privacy.needsUpdate(updated: ahead, matchesSources: true, complete: true, notBefore: .distantPast, now: now))
+        #expect(!Privacy.needsUpdate(updated: ahead, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
+    }
+
     /// A 200 answer that isn't a filter list (empty, an HTML page, a handful of lines) counts as
     /// failed and keeps the last good copy, so the next update retries it soon.
     @Test func aBodyThatIsNotAListKeepsTheLastGoodCopy() async throws {
@@ -271,6 +316,62 @@ struct FilterUpdateTests {
         python.waitUntilExit()
         #expect(python.terminationStatus == 0)
         #expect(printed == "empty failed\nfew failed\ngood 12\nhtml failed\nportal failed\n")
+    }
+
+    /// scripts/update-filters.py clones and builds the converter again when its clone is of
+    /// another tag, so the bundled set is never built with an older converter than the app's.
+    @Test func updateScriptRebuildsAConverterOfAnotherTag() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // git and swift stand-ins: a clone checks out CONVERTER_TAG, a build makes the binary.
+        let check = """
+            import importlib.util, pathlib, subprocess, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            tools = pathlib.Path(sys.argv[2])
+            script.TOOLS = tools
+            script.CONVERTER_BIN = tools / "SafariConverterLib/.build/release/ConverterTool"
+            repo = tools / "SafariConverterLib"
+            tag = [""]
+            calls = []
+            def run(command, **options):
+                if command[:2] == ["git", "-C"]:
+                    return subprocess.CompletedProcess(command, 0 if tag[0] else 128, stdout=tag[0] + "\\n", stderr="")
+                calls.append(command[1])
+                if command[1] == "clone":
+                    pathlib.Path(command[-1]).mkdir(parents=True)
+                    tag[0] = script.CONVERTER_TAG
+                else:
+                    script.CONVERTER_BIN.parent.mkdir(parents=True, exist_ok=True)
+                    script.CONVERTER_BIN.touch()
+                return subprocess.CompletedProcess(command, 0)
+            script.subprocess.run = run
+            def step(name):
+                calls.clear()
+                script.ensure_converter()
+                print(name, " ".join(calls) or "nothing")
+            step("fresh")
+            step("built")
+            tag[0] = "v0.0.1"
+            (repo / "old").touch()
+            step("raised")
+            print("old clone left", (repo / "old").exists())
+            script.CONVERTER_BIN.unlink()
+            step("unbuilt")
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.appending(path: "tools").path]
+        let output = Pipe()
+        python.standardOutput = output
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == "fresh clone build\nbuilt nothing\nraised clone build\nold clone left False\nunbuilt build\n")
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import PublicSuffixList
 
 enum SearchEngine: String, CaseIterable, Identifiable {
     case brave, duckDuckGo, google, kagi, ecosia, startpage
@@ -69,11 +70,13 @@ enum AddressInput {
         }
 
         if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host() {
-            if host == "localhost" || isIPAddress(host) || url.port != nil {
+            if host == "localhost" || isIPAddress(host) {
                 return .address(url)
             }
-            if looksLikeDomain(host), let secure = URL(string: "https://" + input) {
-                return .address(secure)
+            // A port alone doesn't make an address: "10:30" and "john3:16" are searches.
+            if looksLikeDomain(host) {
+                if url.port != nil { return .address(url) }
+                if let secure = URL(string: "https://" + input) { return .address(secure) }
             }
         }
         return .search(input)
@@ -87,10 +90,18 @@ enum AddressInput {
         }
     }
 
+    /// Names that aren't public suffixes but are used on local networks ("mac-mini.local", "router.lan").
+    private static let localSuffixes: Set<String> = ["local", "localhost", "internal", "lan", "home", "test"]
+
+    /// A host ending in a real suffix, so "node.js" and "config.json" stay searches. The suffix list
+    /// answers with the bare last label, not marked ICANN, for a suffix it doesn't know.
     private static func looksLikeDomain(_ host: String) -> Bool {
+        let host = host.lowercased()
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.count >= 2, labels.allSatisfy({ !$0.isEmpty }), let tld = labels.last else { return false }
-        return tld.count >= 2 && tld.allSatisfy(\.isLetter)
+        if localSuffixes.contains(String(tld)) { return true }
+        guard let (suffix, icann) = PublicSuffixList.parsePublicSuffix(host) else { return false }
+        return icann || suffix.contains(".")
     }
 
     /// Dotted IPv4, or IPv6 typed in brackets (`[::1]`), which Foundation may hand back without them.

@@ -37,9 +37,10 @@ struct FilterUpdater: Sendable {
     /// so a failed or interrupted update never leaves a half-written set behind.
     /// A list that fails to download (a dead server, an error page, an empty or HTML body)
     /// doesn't hold back the others:
-    /// it keeps the last good copy the folder (or else the bundled set) holds for it, and is named
-    /// in the manifest's `failedLists`. When every list fails, or a failing one has no copy at all,
-    /// nothing is written and the error thrown, so the current set keeps that list's rules.
+    /// it keeps the last good copy the newer of the folder and the bundled set holds for it (after
+    /// an upgrade, the bundled one), and is named in the manifest's `failedLists`. When every list
+    /// fails, or a failing one has no copy at all, nothing is written and the error thrown, so the
+    /// current set keeps that list's rules.
     func update(into destination: URL) async throws {
         var downloaded: [String: [String]] = [:]
         var failed: [String] = []
@@ -58,7 +59,7 @@ struct FilterUpdater: Sendable {
                 NSLog("Lithium: filter list %@ failed to download: %@", name, error.localizedDescription)
                 failed.append(name)
                 lastError = error
-                let copy = [destination, bundledFilters].compactMap { $0 }.lazy
+                let copy = Self.newestFirst([destination, bundledFilters].compactMap { $0 }).lazy
                     .compactMap { try? String(contentsOf: Self.copy(of: name, in: $0), encoding: .utf8) }.first
                 guard let copy else { throw error }
                 downloaded[name] = copy.split(separator: "\n").map(String.init)
@@ -130,6 +131,13 @@ struct FilterUpdater: Sendable {
     /// Where a filter folder keeps a list as last downloaded, for when it next fails.
     private static func copy(of list: String, in folder: URL) -> URL {
         folder.appending(path: "lists/\(list).txt")
+    }
+
+    /// Filter folders, the one with the newest manifest first, as the app picks the set it loads;
+    /// in the order given when their dates are equal.
+    static func newestFirst(_ folders: [URL], now: Date = Date()) -> [URL] {
+        let dates = folders.map { Manifest.read(in: $0)?.comparableDate(now: now) ?? .distantPast }
+        return folders.indices.sorted { dates[$0] != dates[$1] ? dates[$0] > dates[$1] : $0 < $1 }.map { folders[$0] }
     }
 
     private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
@@ -239,4 +247,16 @@ struct Manifest: Codable {
     var failedLists: [String]? = nil
 
     var date: Date? { ISO8601DateFormatter().date(from: updated) }
+
+    /// For choosing the newest set. A set dated in the future (built with the clock set ahead)
+    /// counts as the oldest: taken as built now, it would still outrank every set built after it.
+    func comparableDate(now: Date = Date()) -> Date {
+        guard let date, date <= now else { return .distantPast }
+        return date
+    }
+
+    static func read(in folder: URL) -> Manifest? {
+        guard let data = try? Data(contentsOf: folder.appending(path: "manifest.json")) else { return nil }
+        return try? JSONDecoder().decode(Manifest.self, from: data)
+    }
 }

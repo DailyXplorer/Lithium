@@ -395,7 +395,7 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Wait for one condition: load, url, ref in a state, text or textGone (in the page and its same-origin frames), networkIdle or time.",
+        description: "Wait for load, url, ref in a state, text or textGone (same-origin frames too), networkIdle or time.",
         inputSchema: schema([
             "tab": AgentParam.tab,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],

@@ -126,7 +126,10 @@ struct ActionTarget {
     }
 
     var element: Guardrails.Element {
-        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, passwordFilled: report.passwordFilled == true, inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
+        // A file input shows as a button but is a field's own control: it sets files, which
+        // `upload_files` asks about, and sends nothing.
+        let fileInput = report.tag == "input" && report.type == "file"
+        return Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, passwordFilled: report.passwordFilled == true && !fileInput, inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
     }
 
     var counts: [String: Int] { report.counts ?? [:] }

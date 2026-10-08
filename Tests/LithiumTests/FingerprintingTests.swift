@@ -316,6 +316,70 @@ struct FingerprintingTests {
         #expect(protected["sum"] == AnyHashable(64 * 64 * 20))
     }
 
+    /// `readPixels` noise follows the arguments as the native call converts them and the rows as
+    /// the pack settings lay them out, and stays off a read that wrote nothing.
+    @Test func readPixelsNoiseFollowsThePackedLayout() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 64; gl.canvas.height = 64; gl.viewport(0, 0, 64, 64);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const result = {};
+              // Counts the read bytes off the clean color, and the bytes around them (filled with 7) changed.
+              const layout = (name, pixels, first, stride, rows, width) => {
+                let noisy = 0, outside = 0;
+                for (let i = 0; i < pixels.length; i++) {
+                  const at = i - first, row = Math.floor(at / stride), column = at - row * stride;
+                  if (at >= 0 && row < rows && column < width * 4) { if (pixels[i] !== clean[column % 4]) noisy++; }
+                  else if (pixels[i] !== 7) outside++;
+                }
+                result[name + 'Noisy'] = noisy; result[name + 'Outside'] = outside;
+              };
+              const strings = new Uint8Array(64 * 64 * 4).fill(7);
+              gl.readPixels('0', '0', '64', '64', String(gl.RGBA), String(gl.UNSIGNED_BYTE), strings);
+              layout('strings', strings, 0, 256, 64, 64);
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 80); gl.pixelStorei(gl.PACK_SKIP_ROWS, 2); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 8);
+              const skipped = new Uint8Array(31 * 320 + 32 + 256).fill(7);
+              gl.readPixels(0, 0, 64, 30, gl.RGBA, gl.UNSIGNED_BYTE, skipped);
+              layout('skipped', skipped, 2 * 320 + 32, 320, 30, 64);
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 0); gl.pixelStorei(gl.PACK_SKIP_ROWS, 0); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 0);
+              gl.pixelStorei(gl.PACK_ALIGNMENT, 8);
+              const aligned = new Uint8Array(32 * 136 + 132).fill(7);
+              gl.readPixels(0, 0, 33, 33, gl.RGBA, gl.UNSIGNED_BYTE, aligned);
+              layout('aligned', aligned, 0, 136, 33, 33);
+              gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
+              // Reads that write nothing: through a bound pack buffer, from an incomplete framebuffer, on a lost context.
+              const unwritten = new Uint8Array(64 * 64 * 4).fill(7), errors = [];
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, gl.createBuffer());
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4, gl.STREAM_READ);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+              gl.getExtension('WEBGL_lose_context').loseContext();
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              result.unwritten = unwritten.filter((value) => value !== 7).length;
+              result.errors = errors.join();
+              return JSON.stringify(result);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        for name in ["strings", "skipped", "aligned"] {
+            #expect(bare["\(name)Noisy"] == AnyHashable(0), "\(name)")
+            #expect(bare["\(name)Outside"] == AnyHashable(0), "\(name)")
+            #expect(try #require(protected["\(name)Noisy"] as? Int) > 0, "\(name)")
+            #expect(protected["\(name)Outside"] == AnyHashable(0), "\(name)")
+        }
+        #expect(bare["unwritten"] == AnyHashable(0))
+        #expect(protected["unwritten"] == AnyHashable(0))
+        #expect(bare["errors"] == AnyHashable("1282,1286,37442"))
+        #expect(protected["errors"] == bare["errors"])
+    }
+
     /// Canvas noise follows the pixel's spot in the canvas, not where the read starts: a 1×1 read,
     /// an offset window or one with a negative size hands back what the full read has there.
     @Test func smallReadsGetTheNoiseOfTheFullRead() async throws {
@@ -601,6 +665,50 @@ struct FingerprintingTests {
         #expect(protected["page"] != bare["page"])
         #expect(protected["frame"] == protected["page"])
         #expect(protected["native"] == AnyHashable(true))
+    }
+
+    /// Frames deep in the page's markup, and one the parser moves along with its parent (misnested
+    /// `<a>`), are protected too: the observer searches only the outermost elements of a batch.
+    @Test func framesNestedInThePageMarkupAreProtected() async throws {
+        let html = """
+            <body><div><section><div><p><span><iframe></iframe></span></p></div></section></div>
+            <a>link<div><iframe></iframe>text</a>more</div><script>
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const result = { page: hash(window), count: frames.length };
+              for (let i = 0; i < frames.length; i++) result['frame' + i] = hash(frames[i]);
+              window.result = JSON.stringify(result);
+            </script></body>
+            """
+        let bare: [String: AnyHashable] = try await run("window.result", farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run("window.result", farbling: Self.farbling(), html: html)
+
+        #expect(bare["count"] == AnyHashable(2))
+        #expect(bare["frame0"] == bare["page"] && bare["frame1"] == bare["page"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["frame0"] == protected["page"])
+        #expect(protected["frame1"] == protected["page"])
+    }
+
+    /// A frame that reloads with Trusted Types, or several frames of one address, add their script
+    /// once: copies piled up until the next main-frame navigation.
+    @Test func trustedTypesScriptIsAddedOncePerAddress() throws {
+        let privacy = Privacy()
+        let controller = WKUserContentController()
+        let response = { (address: String) in
+            HTTPURLResponse(url: URL(string: address)!, statusCode: 200, httpVersion: nil,
+                            headerFields: ["Content-Security-Policy": "require-trusted-types-for 'script'"])!
+        }
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame"), to: controller)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again"), to: controller)
+        #expect(controller.userScripts.count == 1)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/other"), to: controller)
+        privacy.addTrustedTypesScript(false, for: response("https://example.com/off"), to: controller)
+        #expect(controller.userScripts.count == 2)
     }
 
     /// A blank frame fires `load` while it is inserted, before the observer or the insertion hooks

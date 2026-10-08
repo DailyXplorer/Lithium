@@ -882,9 +882,9 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
         if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
-        if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url,
-           let script = privacy.trustedTypesScript(privacy.isEnabled(for: page), for: response.response, isPrivate: isEphemeral) {
-            webView.configuration.userContentController.addUserScript(script)
+        if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
+            privacy.addTrustedTypesScript(privacy.isEnabled(for: page), for: response.response, isPrivate: isEphemeral,
+                                          to: webView.configuration.userContentController)
         }
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true

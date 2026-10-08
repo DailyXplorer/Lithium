@@ -637,7 +637,7 @@ struct CapturePreview: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.directoryURL = .downloadsDirectory
-        panel.nameFieldStringValue = "Lithium \(Date.now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted))).png"
+        panel.nameFieldStringValue = Self.fileName(for: .now)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             // The panel may have agreed to replace a file: it stays whole if the write fails.
@@ -646,6 +646,12 @@ struct CapturePreview: View {
         } catch {
             NSAlert(error: error).runModal()
         }
+    }
+
+    /// The local date and time, as the clock shows it: the ISO 8601 style's own default is UTC.
+    static func fileName(for date: Date, timeZone: TimeZone = .current) -> String {
+        let style = Date.ISO8601FormatStyle(timeZone: timeZone).year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted)
+        return "Lithium \(date.formatted(style)).png"
     }
 
     private static func png(_ image: CGImage) -> Data? {

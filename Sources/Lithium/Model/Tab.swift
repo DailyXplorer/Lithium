@@ -655,8 +655,9 @@ final class Tab: NSObject, Identifiable {
         // A tab going on to an extension's address isn't empty, though nothing is shown yet.
         guard !goToAddressAfterWaking() else { return }
         if inMainFrame { endedUnshown(.download(fileName: fileName)) }
-        // A tab opened just to fetch a file has no page to show once the download starts; like Safari, close it.
-        if webView.backForwardList.currentItem == nil { browser?.close(self) }
+        // A tab opened just to fetch a file has no page to show once the download starts; like
+        // Safari, close it, without a Reopen Closed Tab entry that would only download it again.
+        if webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false) }
     }
 
     private func endedUnshown(_ load: UnshownLoad) {

@@ -294,6 +294,27 @@ struct UISnapshotTests {
         }
     }
 
+    /// The address bar's list with two actions under the typed text, the first one selected.
+    @Test func barActionSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let rows: [Suggestion] = [.search("exit"), .action(.exitSplitView), .action(.exitZenMode),
+                                  .history(title: "Exit polls", url: URL(string: "https://news.example/exit-polls")!)]
+        let list = VStack(spacing: 2) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                SuggestionRow(suggestion: row, isSelected: index == 1)
+            }
+        }
+        .padding(6)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .font(Theme.font(13))
+        .frame(width: 460)
+        .padding(12)
+        for isDark in [false, true] {
+            try render(list, isDark: isDark).write(to: directory.appending(path: "bar-actions-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// The bar of a link's own window, on a secure page and on one that isn't.
     @Test func quickLinkBarSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

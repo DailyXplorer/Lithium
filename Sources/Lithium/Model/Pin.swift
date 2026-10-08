@@ -8,6 +8,10 @@ struct Pin: Codable, Identifiable, Equatable {
     /// The icon the page last declared, fetched again each day while the tab sleeps (a
     /// calendar's icon shows the date). Missing from favorites saved before it existed.
     var iconURL: URL? = nil
+    /// The space whose grid shows it; nil for the main space (`Space.saved`).
+    var spaceID: Space.ID? = nil
+
+    var space: Space.ID { spaceID ?? Space.mainID }
 }
 
 enum PinStore {

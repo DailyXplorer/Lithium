@@ -367,7 +367,7 @@ extension AgentHub {
     func cookieValues(of tab: Tab, hosts: [String]) async -> [String] {
         let sites = Set(hosts.map(SiteInfo.registrable))
         guard !sites.isEmpty else { return [] }
-        let store = (tab.isAsleep ? nil : tab.loadedWebView)?.configuration.websiteDataStore ?? .default()
+        let store = (tab.isAsleep ? nil : tab.loadedWebView)?.configuration.websiteDataStore ?? tab.dataStore
         let cookies = await store.httpCookieStore.allCookies()
         return cookies.filter { sites.contains(SiteInfo.registrable(String($0.domain.trimmingPrefix(".")))) }.map(\.value)
     }

@@ -53,6 +53,7 @@ enum Phosphor: String {
     case robot
     case robotFill = "robot-fill"
     case privateTab = "eye-slash"
+    case paintBrush = "paint-brush"
     case hand
     case code
 

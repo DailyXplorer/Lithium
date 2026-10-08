@@ -30,10 +30,11 @@ final class QuickLinks {
 
     /// Also where a link's page opens a page of its own (a `target=_blank` link, a sign-in popup,
     /// with WebKit's `configuration`): in the main window it would land behind this one, unseen.
+    /// In the space shown, as a link from another app opens, or in its opener's.
     @discardableResult
-    func open(_ url: URL? = nil, configuration: WKWebViewConfiguration? = nil) -> Tab? {
+    func open(_ url: URL? = nil, configuration: WKWebViewConfiguration? = nil, space: Space.ID? = nil) -> Tab? {
         guard let browser else { return nil }
-        let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url))
+        let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url), space: space ?? browser.currentSpaceID)
         if let url { tab.load(url) }
         tabs.append(tab)
         windows[tab.id] = showWindow(tab, browser)

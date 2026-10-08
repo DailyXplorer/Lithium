@@ -204,11 +204,13 @@ final class PDFReader: NSObject {
     }
 
     /// A name for the file alone: the URL's last segment comes percent-decoded, so an encoded "/" in
-    /// it would otherwise lead the saved file out of its folder.
+    /// it would otherwise lead the saved file out of its folder. A long title is cut short to
+    /// what a file name can hold, its extension kept.
     var filename: String {
         let name = url.lastPathComponent
         let chosen = name.lowercased().hasSuffix(".pdf") ? name : title + ".pdf"
-        return chosen.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let safe = chosen.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        return Downloads.fileName(String(safe.dropLast(4)), String(safe.suffix(4)))
     }
 
     // MARK: Navigation and zoom
@@ -340,7 +342,7 @@ final class PDFReader: NSObject {
     /// Saves the bytes the page received, so it works even where the link has since expired.
     func download() {
         guard let data else { return }
-        Downloads.shared.save(data, suggestedFilename: filename)
+        Downloads.shared.save(data, suggestedFilename: filename, from: url)
     }
 
     func showInFinder() {
@@ -353,17 +355,22 @@ final class PDFReader: NSObject {
         var file = url
         if !isLocalFile {
             guard let data else { return }
-            // Named by address and size, so opening the same PDF again reuses its copy.
-            let key = Data("\(url.absoluteString) \(data.count)".utf8)
-            let digest = SHA256.hash(data: key).prefix(8).map { String(format: "%02x", $0) }.joined()
+            // Named by address and content, so opening the same PDF again reuses its copy, and a
+            // document regenerated at the same address (even at the same size) gets a new one.
+            var hash = SHA256()
+            hash.update(data: Data(url.absoluteString.utf8))
+            hash.update(data: data)
+            let digest = hash.finalize().prefix(8).map { String(format: "%02x", $0) }.joined()
             let folder = FileManager.default.temporaryDirectory.appending(path: "Lithium PDFs/\(digest)")
             file = folder.appending(path: filename)
             if !FileManager.default.fileExists(atPath: file.path) {
                 do {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    try data.write(to: file)
+                    // Whole or not at all, and quarantined: Preview can save it anywhere.
+                    try Downloads.write(data, to: file, from: url)
                 } catch {
-                    return
+                    // Another open of the same PDF may have just written it.
+                    guard FileManager.default.fileExists(atPath: file.path) else { return }
                 }
             }
         }

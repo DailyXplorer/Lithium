@@ -468,8 +468,8 @@ struct FingerprintingTests {
     }
 
     /// A read far larger than the canvas noises every pixel it covers, not one in a few at spots the
-    /// page can predict; offsets that WebKit reads as 0 (NaN, Infinity, 2^32) get the noise a read
-    /// at 0 does, into a pack buffer or an array.
+    /// page can predict; offsets that WebKit reads as 0 (NaN, Infinity, 2^32, an object that isn't
+    /// an array view) get the noise a read at 0 does, into a pack buffer or an array.
     @Test func readPixelsOversizedReadsAndOddOffsetsAreNoised() async throws {
         let probe = """
             (() => {
@@ -490,7 +490,7 @@ struct FingerprintingTests {
               const size = 300 * 150 * 4, buffer = gl.createBuffer();
               gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
               gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
-              for (const [name, offset] of [['packNaN', NaN], ['packInfinity', Infinity]]) {
+              for (const [name, offset] of [['packNaN', NaN], ['packInfinity', Infinity], ['packArray', []], ['packObject', {}]]) {
                 gl.bufferSubData(gl.PIXEL_PACK_BUFFER, 0, new Uint8Array(size));
                 gl.readPixels(0, 0, 300, 150, gl.RGBA, gl.UNSIGNED_BYTE, offset);
                 const packed = new Uint8Array(size); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, packed);
@@ -505,7 +505,7 @@ struct FingerprintingTests {
               return JSON.stringify(result);
             })()
             """
-        let names = ["oversizedOdd", "packNaN", "packInfinity", "arrayInfinity", "arrayWrapped"]
+        let names = ["oversizedOdd", "packNaN", "packInfinity", "packArray", "packObject", "arrayInfinity", "arrayWrapped"]
         let bare: [String: Int] = try await run(probe, farbling: nil)
         let protected: [String: Int] = try await run(probe, farbling: Self.farbling())
 

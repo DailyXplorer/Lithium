@@ -37,7 +37,7 @@
   // They work on objects of any same-origin realm, so these serve the frames and popups too.
   const member = (proto, name) => (proto && getOwnPropertyDescriptor(proto, name)) || {};
   const read = (getter, self) => { try { return apply(getter, self, []); } catch (_) { return 0; } };
-  const Uint8ArrayCtor = Uint8Array;
+  const Uint8ArrayCtor = Uint8Array, { isView } = ArrayBuffer;
   const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
   const typedLength = member(typedArray, 'length').get;
   const typedKind = member(typedArray, Symbol.toStringTag).get;
@@ -223,11 +223,12 @@
   const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA, GL_PIXEL_PACK_BUFFER = 0x88EB, GL_BUFFER_SIZE = 0x8764;
   // The arguments are converted here, once, as the native call would (see `readImage`): a format
   // given as '6408' read the same to it, and skipped the noise. The offsets too, a GLuint and a
-  // GLintptr: NaN or Infinity read at 0 natively, and once skipped the noise here.
+  // GLintptr: NaN or Infinity read at 0 natively, and once skipped the noise here. To WebGL2 an
+  // object that isn't a typed array or DataView ([], {}, an ArrayBuffer) is an offset too.
   const readPixelsArguments = (args, webgl2) => {
     if (args.length < 7) return;
     for (let i = 0; i < 6; i++) args[i] = i < 4 ? args[i] | 0 : args[i] >>> 0;
-    if (args[6] && typeof args[6] === 'object') { if (args.length > 7) args[7] = args[7] >>> 0; }
+    if (args[6] && typeof args[6] === 'object' && (!webgl2 || isView(args[6]))) { if (args.length > 7) args[7] = args[7] >>> 0; }
     else if (webgl2 && args[6] != null) {
       const offset = +args[6];
       args[6] = NumberCtor(apply(asIntN, BigIntCtor, [64, BigIntCtor(isFinite(offset) ? trunc(offset) : 0)]));

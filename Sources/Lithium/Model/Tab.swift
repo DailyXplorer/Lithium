@@ -651,9 +651,11 @@ final class Tab: NSObject, Identifiable {
             return protectionRequests == requests + started && protectedURL == stale && !webView.isLoading
         }
         Task {
+            // A load asked twice to restore (a dropped load also ends unshown) restores once: the
+            // second sees the first's request. Otherwise each would see the other's and both give up.
+            guard untouched(0) else { return }
             guard let shown else {
                 // Lithium's page, which had none.
-                guard untouched(0) else { return }
                 webView.configuration.userContentController.removeAllUserScripts()
                 browser?.agent?.removeConsole(from: webView.configuration.userContentController)
                 protectedURL = nil

@@ -12,7 +12,8 @@
 (() => {
   'use strict';
   // Keyed hashes of the top page's site under a key of the launch (see Privacy.farbling): every
-  // frame of a page shares them, and nothing leads from them to the key or another site's.
+  // frame of a page gets them (frames of another origin mix theirs in, below), and nothing leads
+  // from them to the key or another site's.
   const SEED = '__LITHIUM_SEED__';
   // Names the marker below: one per launch key, not per site, so the copies of a popup and of
   // the cross-site frame that opened it still find each other. A page never sees it.
@@ -21,10 +22,10 @@
   const MAX_SAMPLES = 500000;
   // Taken once: the page shares this world and could replace any of them before a frame or
   // popup it opens is protected (a `call` that always returns true once skipped them), or skew
-  // the noise itself (a `Math.floor` that returns a huge gap leaves every pixel clean).
+  // the noise itself (a `Math.floor` that returned a huge gap once left every pixel clean).
   const apply = Reflect.apply;
   const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
-  const { imul, floor, log, max, min } = Math;
+  const { imul, floor, max, min } = Math;
   const WeakMapCtor = WeakMap, WeakSetCtor = WeakSet;
   const weakMapGet = WeakMap.prototype.get;
   const weakMapSet = WeakMap.prototype.set;
@@ -55,6 +56,8 @@
   const offscreenContext = globalThis.OffscreenCanvasRenderingContext2D && OffscreenCanvasRenderingContext2D.prototype;
   const offscreenDrawImage = member(offscreenContext, 'drawImage').value;
   const offscreenPutImageData = member(offscreenContext, 'putImageData').value;
+  const glGetParameter = member(globalThis.WebGLRenderingContext && WebGLRenderingContext.prototype, 'getParameter').value;
+  const gl2GetParameter = member(globalThis.WebGL2RenderingContext && WebGL2RenderingContext.prototype, 'getParameter').value;
   // And the members the voice filter reads: an `Array` `filter` that keeps everything or a voice
   // `default` that is always true once handed back every installed voice.
   const ourNavigator = navigator;
@@ -96,9 +99,29 @@
   const FRAME_TAG = /frame/i;
   const TRUSTED_TYPES_META = 'head meta[http-equiv="content-security-policy" i][content*="require-trusted-types-for" i]';
 
-  // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
-  // noisy pixels, unlike the 32 bits it once had. The first outputs are dropped to spread the salt.
+  // murmur3's finalizer: a cheap 32-bit mix in which every input bit moves every output bit.
+  const fmix = (h) => {
+    h = imul(h ^ (h >>> 16), 0x85ebca6b);
+    h = imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return h ^ (h >>> 16);
+  };
+
   const seedWords = [0, 8, 16, 24].map((at) => parseInt(SEED.slice(at, at + 8), 16) | 0);
+  // A frame of another origin than the top page's mixes that origin in: a tracker framed on a site
+  // farbles apart from the site's own pages, not only from one site to the next. Blank and srcdoc
+  // frames have their creator's origin, and its noise. Read from `ancestorOrigins`, as touching a
+  // cross-origin `top` would log an error in every such frame.
+  try {
+    const ancestors = location.ancestorOrigins, origin = location.origin;
+    if (ancestors && ancestors.length && ancestors[ancestors.length - 1] !== origin) {
+      let frame = 0x811c9dc5;
+      for (let i = 0; i < origin.length; i++) frame = imul(frame ^ origin.charCodeAt(i), 0x01000193);
+      for (let i = 0; i < 4; i++) seedWords[i] = fmix(seedWords[i] ^ frame ^ i);
+    }
+  } catch (_) {}
+
+  // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
+  // noisy samples, unlike the 32 bits it once had. The first outputs are dropped to spread the salt.
   const prng = (salt) => {
     let a = seedWords[0], b = seedWords[1], c = seedWords[2], d = seedWords[3] ^ salt;
     const next = () => {
@@ -113,78 +136,71 @@
     return next;
   };
 
-  // A hash of the image read, so where the noise goes changes with the image: a blank canvas
-  // shows a page nothing of where it lands in another. Four bytes at a time where they line up.
-  const Uint32ArrayCtor = Uint32Array;
-  const typedBuffer = member(typedArray, 'buffer').get;
-  const typedOffset = member(typedArray, 'byteOffset').get;
-  const hashBytes = (data, length) => {
-    let hash = length ^ 0x811c9dc5, done = 0;
-    try {
-      const count = length >> 2;
-      const words = new Uint32ArrayCtor(apply(typedBuffer, data, []), apply(typedOffset, data, []), count);
-      for (let i = 0; i < count; i++) hash = imul(hash ^ words[i], 0x01000193);
-      done = count << 2;
-    } catch (_) {}
-    for (let i = done; i < length; i++) hash = imul(hash ^ data[i], 0x01000193);
-    return hash;
+  // RGBA bytes of `width` × `height` pixels from `start` in `data`, the first at (`left`, `top`) in
+  // the canvas. Each pixel is decided on its own, from its spot in the canvas and its color, never
+  // from where the read starts: a 1×1 read gets the noise a full one has there, so reading small
+  // windows and comparing them shows nothing.
+  // One color of the pixel (picked by spot) moves within a pair of values, 2k - o and 2k + 1 - o
+  // with `o` picked by spot too, and the pixel is decided on its other colors and that pair, not
+  // the exact value: one pixel in ten is set to a value of its pair, which moves it half the time.
+  // Both values of a noisy pair come back as the same one, so the page can't tell which it drew;
+  // and noising a noised pixel changes nothing, so pixels the page puts back and reads again (an
+  // editor's canvas, a data URL drawn back) keep the values they were given, and never drift
+  // further than one. Clearing low bits doesn't undo it: for half the spots the pair straddles them.
+  const noisePixels = (data, left, top, width, height, start) => {
+    const kind = apply(typedKind, data, []);
+    if (kind !== 'Uint8ClampedArray' && kind !== 'Uint8Array') return;
+    for (let row = 0, at = start; row < height; row++) {
+      const rowKey = fmix((top + row) ^ seedWords[1]) ^ seedWords[3];
+      for (let column = 0; column < width; column++, at += 4) {
+        const spot = fmix(imul((left + column) ^ seedWords[0], 0x9e3779b1) ^ rowKey);
+        const channel = (spot >>> 1) % 3, shift = spot >>> 31;
+        const value = data[at + channel], pair = (value + shift) >> 1, low = 2 * pair - shift;
+        // 0 and 255 have no pair when `o` is 1.
+        if (low < 0 || low > 254) continue;
+        // The pixel with that color replaced by its pair.
+        const color = (data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24) ^ ((value ^ pair) << (channel << 3));
+        const decision = fmix(color ^ spot ^ seedWords[2]);
+        if ((decision & 0xffff) < 6554) data[at + channel] = low + ((decision >>> 16) & 1);
+      }
+    }
   };
 
-  // One pixel in twenty moves a color by one, up or down: unlike setting a low bit, nothing
-  // as simple as clearing one undoes it. The gaps between them are drawn directly (geometric
-  // distribution), so past the hash the cost follows the noisy pixels. A window gets this once
-  // (the marker below), so the noise needn't hold when applied twice.
-  // Pixels this handed out and the page reads back (put back, or drawn from a data URL) are
-  // left as they are: noised afresh at other spots each round trip, an editor's canvas would
-  // drift into visible grain. The hashes of the last few results are kept for exact round trips,
-  // and the last result of each context and region for those that change part of the image first
-  // (a fill, a brush dab): the pixels the page left alone aren't noised again. Either way the page
-  // only gets back values it was already given.
-  const LOG_CLEAN = log(0.95);
-  const NOISED = 64;
-  const noised = new Int32Array(NOISED);
-  let noisedCount = 0;
-  const Uint8ArrayCtor = Uint8Array;
-  const lastResults = new WeakMapCtor();
-  // `owner` and `region` (a string, or null when unknown) say where the pixels were read.
-  const noisePixels = (data, owner, region) => {
-    const length = apply(typedLength, data, []);
-    const hash = hashBytes(data, length);
-    let bytes = null, last = null;
-    try {
-      bytes = new Uint8ArrayCtor(apply(typedBuffer, data, []), apply(typedOffset, data, []), length);
-      if (region !== null) last = apply(weakMapGet, lastResults, [owner]) || null;
-    } catch (_) {}
-    const before = last !== null && last.region === region && last.length === length ? last.bytes : null;
-    let fresh = true;
-    for (let i = 0; i < noisedCount && i < NOISED; i++) if (noised[i] === hash) fresh = false;
-    if (fresh) {
-      const next = prng(hash);
-      const gap = () => floor(log(1 - next()) / LOG_CLEAN);
-      const pixels = length >> 2;
-      for (let pixel = gap(); pixel < pixels; pixel += 1 + gap()) {
-        const at = (pixel << 2) + floor(next() * 3);
-        const value = data[at], step = next() < 0.5 ? 1 : -1;
-        const start = pixel << 2;
-        if (before !== null && bytes[start] === before[start] && bytes[start + 1] === before[start + 1] &&
-            bytes[start + 2] === before[start + 2] && bytes[start + 3] === before[start + 3]) continue;
-        data[at] = value + step;
-        // At either end of the range the write clamps or wraps: go the other way.
-        if (data[at] !== value + step) data[at] = value - step;
-      }
-      noised[noisedCount++ % NOISED] = hashBytes(data, length);
+  // `getImageData` and its noise. The read's spot is converted here, once, as the native call
+  // would: a value converting differently each time could otherwise move the noise.
+  const readImage = (target, self, args) => {
+    if (args.length >= 4) for (let i = 0; i < 4; i++) args[i] = +args[i];
+    const image = apply(target, self, args);
+    const width = apply(imageWidth, image, []), height = apply(imageHeight, image, []);
+    if (width * height <= MAX_PIXELS) {
+      // A negative width or height reads that far back from the spot given.
+      noisePixels(apply(imageData, image, []), (args[0] | 0) + min(args[2] | 0, 0), (args[1] | 0) + min(args[3] | 0, 0), width, height, 0);
     }
-    try {
-      if (bytes !== null && region !== null) {
-        apply(weakMapSet, lastResults, [owner, { __proto__: null, region, length, bytes: new Uint8ArrayCtor(bytes) }]);
-      }
-    } catch (_) {}
+    return image;
   };
-  // Where a read comes from, when the page passed plain numbers: anything else could convert
-  // differently each time it is asked.
-  const regionOf = (args) => {
-    for (let i = 0; i < 4; i++) if (typeof args[i] !== 'number') return null;
-    return args[0] + ',' + args[1] + ',' + args[2] + ',' + args[3];
+
+  // WebGL `readPixels` gets the same noise, on what it wrote only: RGBA bytes packed tightly from
+  // `start` (WebGL2's offset into the array). Integer formats (RGBA_INTEGER) and floats are left
+  // exact, and so are reads of up to 16 pixels: those are most likely GPU picking, which reads an
+  // object's id back from its color, where a step of one picks another object. A page could read
+  // a scene that way pixel by pixel, unnoised: the price of not breaking picking. The canvas's
+  // `toDataURL` and `toBlob` are still noised.
+  const GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
+  const GL_PACK_ROW_LENGTH = 0x0D02, GL_PACK_SKIP_ROWS = 0x0D03, GL_PACK_SKIP_PIXELS = 0x0D04, GL_PACK_ALIGNMENT = 0x0D05;
+  const readPixelsNoise = (getParameter, webgl2, self, args) => {
+    const pixels = args[6], start = args[7] === undefined ? 0 : args[7];
+    if (args[4] !== GL_RGBA || args[5] !== GL_UNSIGNED_BYTE || !pixels || typeof start !== 'number') return;
+    for (let i = 0; i < 4; i++) if (typeof args[i] !== 'number') return;
+    const width = args[2] | 0, height = args[3] | 0;
+    if (width <= 0 || height <= 0 || width * height <= 16 || width * height > MAX_PIXELS) return;
+    if (start < 0 || start + width * height * 4 > read(typedLength, pixels)) return;
+    try {
+      // An alignment of 8 pads rows of an odd width; WebGL2 can also skip rows and pixels.
+      if (apply(getParameter, self, [GL_PACK_ALIGNMENT]) === 8 && (width & 1)) return;
+      if (webgl2 && (apply(getParameter, self, [GL_PACK_ROW_LENGTH]) || apply(getParameter, self, [GL_PACK_SKIP_ROWS]) ||
+                     apply(getParameter, self, [GL_PACK_SKIP_PIXELS]))) return;
+    } catch (_) { return; }
+    noisePixels(pixels, args[0] | 0, args[1] | 0, width, height, start | 0);
   };
 
   const noiseSamples = (samples) => {
@@ -301,11 +317,7 @@
     };
 
     try {
-      const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
-        const image = apply(target, self, args);
-        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []), self, regionOf(args));
-        return image;
-      });
+      const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', readImage);
       const farbledCopy = (canvas) => {
         // Anything but a canvas reads as empty and goes on to the native call, which throws as usual.
         const width = read(canvasWidth.get, canvas), height = read(canvasHeight.get, canvas);
@@ -316,7 +328,7 @@
         const context = apply(getContext, copy, ['2d']);
         apply(drawImage, context, [canvas, 0, 0]);
         const image = apply(getImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []), canvas, width + ',' + height);
+        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0);
         apply(putImageData, context, [image, 0, 0]);
         return copy;
       };
@@ -325,11 +337,7 @@
     } catch (_) {}
 
     try {
-      const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', (target, self, args) => {
-        const image = apply(target, self, args);
-        if (apply(imageWidth, image, []) * apply(imageHeight, image, []) <= MAX_PIXELS) noisePixels(apply(imageData, image, []), self, regionOf(args));
-        return image;
-      });
+      const offscreenGetImageData = patch(win.OffscreenCanvasRenderingContext2D.prototype, 'getImageData', readImage);
       patch(win.OffscreenCanvas.prototype, 'convertToBlob', (target, self, args) => {
         const width = read(offscreenWidth, self), height = read(offscreenHeight, self);
         if (!width || !height || width * height > MAX_PIXELS) return apply(target, self, args);
@@ -337,7 +345,7 @@
         const context = apply(offscreenGetContext, copy, ['2d']);
         apply(offscreenDrawImage, context, [self, 0, 0]);
         const image = apply(offscreenGetImageData, context, [0, 0, width, height]);
-        noisePixels(apply(imageData, image, []), self, width + ',' + height);
+        noisePixels(apply(imageData, image, []), 0, 0, width, height, 0);
         apply(offscreenPutImageData, context, [image, 0, 0]);
         return apply(target, copy, args);
       });
@@ -346,13 +354,12 @@
     try {
       // Indexed loops here and below: the page may have replaced the array iterator by now.
       const contexts = [win.WebGLRenderingContext, win.WebGL2RenderingContext];
+      const getParameters = [glGetParameter, gl2GetParameter];
       for (let i = 0; i < contexts.length; i++) {
+        const getParameter = getParameters[i], webgl2 = i === 1;
         patch(contexts[i] && contexts[i].prototype, 'readPixels', (target, self, args) => {
           const result = apply(target, self, args);
-          const pixels = args[6];
-          const kind = pixels ? apply(typedKind, pixels, []) : undefined;
-          // Byte targets only (Int8Array: WebGL2 integer reads); a step of one means nothing to floats.
-          if ((kind === 'Uint8Array' || kind === 'Uint8ClampedArray' || kind === 'Int8Array') &&apply(typedLength, pixels, []) <= MAX_PIXELS * 4) noisePixels(pixels, self, regionOf(args));
+          readPixelsNoise(getParameter, webgl2, self, args);
           return result;
         });
       }

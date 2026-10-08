@@ -140,6 +140,9 @@ struct PageOverridesTests {
     }
 
     @Test func contextMenuOfAFieldOffersForcePasteAfterPaste() async throws {
+        let appURL = Passwords.appURL
+        Passwords.appURL = { nil }
+        defer { Passwords.appURL = appURL }
         try await withPage { webView, clipboard in
             #expect(try menu(withPaste: false, in: webView).items.map(\.title) == ["Copy"])
             let editable = try menu(withPaste: true, in: webView)

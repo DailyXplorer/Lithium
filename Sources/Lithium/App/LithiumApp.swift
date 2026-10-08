@@ -96,7 +96,7 @@ struct BrowserCommands: Commands {
         CommandGroup(after: .textEditing) {
             Divider()
             // ⌘F toggles the bar; closing it hands the keyboard back to the page.
-            Button(browser.find.isVisible ? "Hide Find Bar" : "Find…") { browser.toggleFind() }
+            Button(browser.findBarIsInFront ? "Hide Find Bar" : "Find…") { browser.toggleFind() }
                 .keyboardShortcut("f")
             Button("Find Next") { Task { await browser.findStep(forward: true) } }
                 .keyboardShortcut("g")
@@ -106,7 +106,7 @@ struct BrowserCommands: Commands {
                 .disabled(browser.commandTab == nil)
             Button("Use Selection for Find") {
                 guard let tab = browser.commandTab else { return }
-                Task { await browser.find.useSelection(in: tab.findTarget) }
+                Task { await browser.find.useSelection(in: tab.findTarget, inLink: browser.quickLinks.keyTab) }
             }
             .keyboardShortcut("e")
             .disabled(browser.commandTab == nil)

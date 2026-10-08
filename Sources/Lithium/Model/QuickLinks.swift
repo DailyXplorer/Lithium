@@ -87,6 +87,8 @@ final class QuickLinks {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return false }
         tabs.remove(at: index)
         if keyTab === tab { keyTab = nil }
+        // Its find bar goes with it, rather than staying open for no window.
+        if browser?.find.linkTab === tab { browser?.find.hide() }
         windows.removeValue(forKey: tab.id)?.close()
         return true
     }

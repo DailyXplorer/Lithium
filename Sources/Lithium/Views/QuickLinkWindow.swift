@@ -101,7 +101,7 @@ struct QuickLinkView: View {
                         PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                     }
                 }
-                // While this window is in front (`Browser.showsFindBar`), as in the main window.
+                // When find was opened in this window (`Browser.showsFindBar`), as in the main window.
                 .overlay(alignment: .topTrailing) {
                     if browser.showsFindBar(over: tab) {
                         FindBar(tab: tab)

@@ -27,6 +27,9 @@ final class FindInPage {
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
     private(set) var focusToken = 0
+    /// The link's page (`QuickLinks`) the bar was opened over, nil for the main window's. The bar
+    /// stays in that window when another comes to the front (`Browser.showsFindBar`).
+    private(set) var linkTab: Tab?
     /// Whether the bar takes the keyboard when it appears: only Find… asks for it. Find Next and
     /// Use Selection for Find leave the keyboard where it is, such as a form field in the page.
     @ObservationIgnored private(set) var focusesField = true
@@ -37,7 +40,8 @@ final class FindInPage {
     /// Only the newest search sets the count: an older one may finish later, even for the same text.
     @ObservationIgnored private var search = 0
 
-    func show(focusingField: Bool = true) {
+    func show(focusingField: Bool = true, inLink linkTab: Tab? = nil) {
+        self.linkTab = linkTab
         isVisible = true
         focusesField = focusingField
         if focusingField { focusToken &+= 1 }
@@ -45,6 +49,7 @@ final class FindInPage {
 
     func hide() {
         isVisible = false
+        linkTab = nil
         // A search still running must not show a match once the bar is closed.
         search += 1
         target?.clearMatches()
@@ -94,9 +99,9 @@ final class FindInPage {
         return forward ? currentMatch % matchCount + 1 : (currentMatch + matchCount - 2) % matchCount + 1
     }
 
-    func useSelection(in target: FindTarget) async {
+    func useSelection(in target: FindTarget, inLink linkTab: Tab? = nil) async {
         guard let text = await target.selectedText(), !text.isEmpty else { return }
-        show(focusingField: false)
+        show(focusingField: false, inLink: linkTab)
         await update(query: text, in: target)
     }
 }

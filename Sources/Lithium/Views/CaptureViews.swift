@@ -640,7 +640,8 @@ struct CapturePreview: View {
         panel.nameFieldStringValue = "Lithium \(Date.now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted))).png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try png.write(to: url)
+            // The panel may have agreed to replace a file: it stays whole if the write fails.
+            try png.write(to: url, options: .atomic)
             browser.capture.finish()
         } catch {
             NSAlert(error: error).runModal()

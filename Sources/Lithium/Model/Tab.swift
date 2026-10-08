@@ -1046,6 +1046,7 @@ extension Tab: WKNavigationDelegate {
             return
         }
         let reader = PDFReader(url: url)
+        reader.isPrivate = isEphemeral
         // Like a website's links: never Lithium's own pages, local files only from a local PDF
         // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
         let isLocal = url.isFileURL

@@ -10,9 +10,10 @@ const likely = /article|content|story|post|entry|main|body|text/i;
 // page's blurbs add up too.
 const kind = document.querySelector('meta[property="og:type"]')?.content.trim().toLowerCase();
 const enough = kind && !kind.startsWith('article') ? 40 : 20;
-// A lone paragraph under a heading of its own, as on a landing page's cards, counts half.
+// A lone paragraph under a heading of its own, as on a landing page's cards, counts half. Lone in
+// its box, not between its siblings: an article's paragraphs, cut by code or figures, share theirs.
 const isBlurb = (node) => node.localName === 'p' && node.parentElement?.querySelector(':scope > :is(h2, h3, h4, h5, h6)')
-  && node.previousElementSibling?.localName !== 'p' && node.nextElementSibling?.localName !== 'p';
+  && !node.parentElement.querySelector(':scope > p ~ p');
 let score = 0;
 const isEnough = (node) => {
   const length = node.textContent.trim().length;

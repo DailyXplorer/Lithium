@@ -225,7 +225,9 @@ struct ReaderModeTests {
         let webView = try await expectWholeArticle("reader-carousel", paragraphs: 6, without: [
             "Slide 1 of 3", "coating line, where", "Cylindrical cells", "Opens a glossary", "4 of 12",
         ])
-        #expect(try await value("document.body.innerText", in: webView)?.contains("1/2 part binder to 3 of 4 parts") == true)
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        #expect(text.contains("1/2 part binder to 3 of 4 parts"))
+        #expect(text.contains("Step 2 of 3") && text.contains("learn more about the plant"))
     }
 
     /// A product's landing page isn't offered the reader, while an article whose page calls itself
@@ -236,10 +238,22 @@ struct ReaderModeTests {
         #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
         let text = try #require(try await value("document.body.innerText", in: webView))
         #expect(text.contains("It thinks through problems"))
-        #expect(!text.contains("Slide 1 of") && !text.contains("See what it can build"))
+        #expect(!text.contains("Slide 1 of") && !text.contains("See what it can build") && !text.contains("Learn more"))
 
         let website = ReaderPages.article.replacingOccurrences(of: "<title>", with: "<meta property=\"og:type\" content=\"website\"><title>")
         #expect(await ReaderMode.check(try await load(website)) == .article)
+    }
+
+    /// Documentation whose page calls itself something else (GitHub says "object"), its paragraphs
+    /// under one heading cut by code: none of them is a card's blurb, so the button is offered.
+    @Test func offersTheReaderOnDocsCutByCode() async throws {
+        let sentence = "This guide explains how the build cache works, when it is safe to share between machines, and what to clear when a build goes wrong after an upgrade. "
+        let blocks = (1...4).map { "<p>\(String(repeating: sentence, count: 3))</p><pre>swift build --cache-path .cache/\($0)</pre>" }
+        let page = """
+            <!doctype html><html><head><meta property="og:type" content="object"><title>Build cache</title></head><body>
+            <main><h1>Build cache</h1><h2>Usage</h2>\(blocks.joined())</main></body></html>
+            """
+        #expect(await ReaderMode.check(try await load(page)) == .article)
     }
 
     /// With DM Sans on websites (the default), the page's font script leaves the reader's font

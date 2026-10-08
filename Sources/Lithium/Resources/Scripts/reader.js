@@ -41,17 +41,22 @@ const isClutter = (element) => {
 };
 // Page furniture Readability keeps when it reads like a sentence: carousels and their slides,
 // tabs, sliders, what the page reads out to screen readers ("Slide 1 of 5") or shows them alone
-// (a box clipped to a pixel), and counters in a box of their own: not "1/2" in a recipe, nor "3 of
-// 4" in a sentence or a table.
+// (a box clipped to a pixel), counters in a box of their own: not "1/2" in a recipe, nor "3 of 4"
+// in a sentence, a table or a tutorial's heading ("Step 2 of 5"); and "Learn more" links on their
+// own, not within a sentence.
 const furnitureRoles = new Set(['tablist', 'tab', 'slider', 'progressbar', 'status', 'timer', 'marquee', 'toolbar', 'menubar', 'menu']);
 const counter = /^\s*((slide|item|image|photo|picture|page|step)\s*\d+\s*(of|\/)|\d+\s+of)\s*\d+\s*$/i;
+const teaser = /^\s*(learn|read|see|find out|discover) more\s*$/i;
+const inText = (node) => node?.nodeType === Node.TEXT_NODE && node.textContent.trim() !== '';
 const isFurniture = (element, computed) => {
   if (furnitureRoles.has(element.getAttribute('role'))) return true;
+  if (element.localName === 'a' && teaser.test(element.textContent)
+    && !inText(element.previousSibling) && !inText(element.nextSibling)) return true;
   if (/carousel|slide/i.test(element.getAttribute('aria-roledescription') ?? '')) return true;
   const live = element.getAttribute('aria-live');
   if (live && live !== 'off' && element.textContent.length < 200) return true;
   if (computed.position === 'absolute' && computed.overflow === 'hidden' && element.offsetWidth <= 1 && element.offsetHeight <= 1) return true;
-  return computed.display !== 'inline' && element.localName !== 'td' && element.localName !== 'th'
+  return computed.display !== 'inline' && !/^(td|th|h[1-6])$/.test(element.localName)
     && element.childElementCount < 4 && element.textContent.length < 40 && counter.test(element.textContent);
 };
 const copy = document.cloneNode(true);

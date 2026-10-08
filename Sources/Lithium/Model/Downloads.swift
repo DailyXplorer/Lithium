@@ -138,7 +138,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         // Off the main thread: a large file on a slow disk would freeze the window.
         Task {
             let written = await Task.detached {
-                Result { try data.write(to: destination, options: .withoutOverwriting) }
+                Result { try Self.write(data, to: destination) }
             }.value
             reserved.remove(destination)
             switch written {
@@ -148,6 +148,20 @@ final class Downloads: NSObject, WKDownloadDelegate {
             case .failure(let error):
                 item.finish(.failed(error.localizedDescription))
             }
+        }
+    }
+
+    /// Into a hidden file beside the destination, moved into place once complete: a disk that
+    /// fills up or a crash midway never leaves a truncated file under the real name. The move
+    /// never replaces a file that appeared there meanwhile.
+    nonisolated static func write(_ data: Data, to destination: URL) throws {
+        let partial = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
+        do {
+            try data.write(to: partial, options: .withoutOverwriting)
+            try FileManager.default.moveItem(at: partial, to: destination)
+        } catch {
+            try? FileManager.default.removeItem(at: partial)
+            throw error
         }
     }
 

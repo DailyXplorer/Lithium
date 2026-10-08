@@ -164,7 +164,7 @@ private struct MoreMenu: View {
                 .disabled(reader.pageCount == 0)
             Divider()
             Button("Open in Preview") { reader.openInPreview() }
-                .disabled(reader.document == nil)
+                .disabled(!reader.canOpenInPreview)
         } label: {
             Icon(.more, size: 18)
                 .frame(width: 28, height: 28)

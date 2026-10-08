@@ -241,6 +241,25 @@ struct AgentEvaluateTests {
         }
     }
 
+    /// A script that fills a password, then keeps the page busy past the after-run read, leaves
+    /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed.
+    @Test func aResultLithiumCantCheckIsWithheld() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "signin"))
+            let busy = await evaluate(client, id, """
+                () => {
+                  const pw = document.querySelector('#pw');
+                  pw.value = ['\(Self.password)'].join('');
+                  setTimeout(() => { const end = Date.now() + 3000; while (Date.now() < end) {} });
+                  return pw.value;
+                }
+                """)
+            #expect(busy.code == "blocked", "\(busy.content)")
+            #expect(busy.message.contains("withheld"), "\(busy.content)")
+            #expect(!String(decoding: busy.content.encoded(), as: UTF8.self).contains(Self.password))
+        }
+    }
+
     @Test func cardAndCookieValuesNeverComeBack() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "account"))

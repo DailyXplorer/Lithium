@@ -18,8 +18,12 @@
       return '[unreadable]';
     }
   };
+  // Cut here, as the page decides their size: the whole message would cross to Lithium first.
   addEventListener('error', (event) => {
-    post({ level: 'error', kind: 'exception', text: String(event.message), source: event.filename || undefined, line: event.lineno || undefined, column: event.colno || undefined });
+    post({
+      level: 'error', kind: 'exception', text: String(event.message).slice(0, 4096), source: event.filename ? String(event.filename).slice(0, 2048) : undefined,
+      line: event.lineno || undefined, column: event.colno || undefined,
+    });
   });
   addEventListener('unhandledrejection', (event) => {
     post({ level: 'error', kind: 'rejection', text: describe(event.reason).slice(0, 4096) });

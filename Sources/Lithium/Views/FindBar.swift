@@ -27,7 +27,11 @@ struct FindBar: View {
                 .padding(.trailing, 4)
             FindButton(icon: .caretUp, help: "Previous (⇧⌘G)") { step(forward: false) }
             FindButton(icon: .caretDown, help: "Next (⌘G)") { step(forward: true) }
-            FindButton(icon: .close, help: "Done (Esc)") { find.hide() }
+            FindButton(icon: .close, help: "Done (Esc)") {
+                let hadKeyboard = isFocused
+                find.hide()
+                browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
+            }
         }
         .font(Theme.font(13))
         // On the page's background, not the sidebar color the window's ink is chosen for.

@@ -108,6 +108,79 @@ struct WindowKeysTests {
         #expect(!browser.tabs.contains { $0 === video }, "the tab closes")
     }
 
+    /// Closing the find bar with Escape, or ending a tab's rename with Return or Escape, gives the
+    /// keyboard back to the page instead of leaving it on the window, where keys beep.
+    @Test func closingTheFindBarOrARenameGivesThePageTheKeyboard() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+
+        browser.find.show()
+        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        #expect(browser.dismissOverlay())
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+
+        browser.renamingTabID = tab.id
+        let editor = try #require(await nameEditor(in: window))
+        editor.insertText("Notes", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        editor.insertNewline(nil)
+        #expect(await waitUntil(5) { browser.renamingTabID == nil })
+        #expect(tab.customTitle == "Notes")
+        #expect(await waitUntil(5) { window.firstResponder === tab.contentView }, "\(String(describing: window.firstResponder))")
+
+        browser.renamingTabID = tab.id
+        _ = try #require(await nameEditor(in: window))
+        #expect(browser.dismissOverlay())
+        #expect(tab.customTitle == "Notes", "Escape keeps the old name")
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+
+        // Each field takes the keyboard again the next time, as the user starts it.
+        try await Task.sleep(for: .milliseconds(200))
+        browser.renamingTabID = tab.id
+        #expect(await nameEditor(in: window) != nil)
+        #expect(browser.dismissOverlay())
+        browser.find.show()
+        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        #expect(browser.dismissOverlay())
+    }
+
+    /// Hiding the sidebar (⌘B) during a rename ends it with the name typed, so it doesn't go on
+    /// holding Escape, the agent's input and the sidebar's peek.
+    @Test func hidingTheSidebarEndsARename() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        browser.renamingTabID = tab.id
+        let editor = try #require(await nameEditor(in: window))
+        editor.insertText("Docs", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+
+        browser.toggleSidebar()
+        defer { browser.toggleSidebar() }
+        #expect(await waitUntil(5) { browser.renamingTabID == nil })
+        #expect(tab.customTitle == "Docs")
+    }
+
+    /// The whole window, far off screen, showing one loaded tab.
+    private func shownBrowser() async throws -> (Browser, Lithium.Tab, NSWindow) {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.orderFrontRegardless()
+        #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil && tab.webView.window === window })
+        try await Task.sleep(for: .milliseconds(300))
+        return (browser, tab, window)
+    }
+
+    /// The tab name field's editor, once it has the keyboard.
+    private func nameEditor(in window: NSWindow) async -> NSTextView? {
+        func editor() -> NSTextView? {
+            (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor && !($0.delegate is URLTextField) ? $0 : nil }
+        }
+        _ = await waitUntil(5) { editor() != nil }
+        return editor()
+    }
+
     /// The window can't be key off screen, so the key goes straight to the shortcuts.
     private func press(_ characters: String, keyCode: UInt16, in view: NSView, _ window: NSWindow) -> Bool {
         view.performKeyEquivalent(with: NSEvent.keyEvent(

@@ -332,10 +332,15 @@ final class Browser {
         }
         if renamingTabID != nil {
             renamingTabID = nil
+            // The name field, when a field has it: Escape comes here only for find's or that one.
+            let nameHadKeyboard = (selectedTab?.contentView.window?.firstResponder as? NSTextView)?.isFieldEditor == true
+            returnKeyboardToPage(fieldHadKeyboard: nameHadKeyboard && !find.isFieldFocused)
             return true
         }
         if find.isVisible {
+            let hadKeyboard = find.isFieldFocused
             find.hide()
+            returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
             return true
         }
         // Opened with ⇧⌘S, the popover never takes the keyboard, so Escape reaches the window.
@@ -357,6 +362,14 @@ final class Browser {
             return true
         }
         return false
+    }
+
+    /// Hands the keyboard back to the page shown once a field of Lithium's own closes (the find
+    /// bar, a tab's name), as ⌘F does: the field leaving would leave it on the window, where keys
+    /// beep. Unless that field had it, a field still editing (the address bar) keeps it.
+    func returnKeyboardToPage(fieldHadKeyboard: Bool) {
+        guard let page = selectedTab?.contentView, let window = page.window else { return }
+        if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
 
     func toggleSidebar() {

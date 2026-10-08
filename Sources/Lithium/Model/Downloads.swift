@@ -16,6 +16,8 @@ final class DownloadItem: Identifiable {
     let started = Date()
     private(set) var filename: String
     private(set) var destination: URL?
+    /// The name the site gave a file Lithium renamed, until the user goes back to it.
+    private(set) var originalFilename: String?
     private(set) var state = State.downloading
     private(set) var completedBytes: Int64 = 0
     private(set) var totalBytes: Int64 = -1
@@ -41,7 +43,7 @@ final class DownloadItem: Identifiable {
     }
 
     /// A file Lithium already holds, written at once.
-    fileprivate init(filename: String, size: Int) {
+    init(filename: String, size: Int) {
         self.filename = filename
         asksWhere = false
         completedBytes = Int64(size)
@@ -55,12 +57,13 @@ final class DownloadItem: Identifiable {
         totalBytes > 0 ? min(1, Double(completedBytes) / Double(totalBytes)) : nil
     }
 
-    fileprivate func setDestination(_ url: URL) {
+    func setDestination(_ url: URL, renamedFrom original: String? = nil) {
         destination = url
         filename = url.lastPathComponent
+        originalFilename = original
     }
 
-    fileprivate func finish(_ state: State) {
+    func finish(_ state: State) {
         self.state = state
         observation = nil
         if state == .finished, totalBytes <= 0 { totalBytes = completedBytes }
@@ -72,6 +75,13 @@ final class DownloadItem: Identifiable {
             list?.didCancel(download)
         }
         finish(.cancelled)
+    }
+
+    /// Only a finished file can go back to its name: WebKit is still writing the other.
+    var canUseOriginalName: Bool { originalFilename != nil && state == .finished }
+
+    func useOriginalName() {
+        list?.useOriginalName(self)
     }
 }
 
@@ -99,6 +109,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Asks where to save, starting from the name and folder given; nil when the user cancels.
     /// Tests replace it, so no panel shows.
     @ObservationIgnored var chooseDestination: @MainActor (URL, NSWindow?) async -> URL? = Downloads.savePanel(suggesting:in:)
+    /// Names downloads whose file name says nothing, when turned on in Max.
+    @ObservationIgnored let tidy = TidyDownloads()
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
@@ -122,19 +134,32 @@ final class Downloads: NSObject, WKDownloadDelegate {
         // for this one's file when it finishes.
         partials[ObjectIdentifier(download)] = nil
         items.insert(item, at: 0)
+        tidy.prepare()
     }
 
     func clearFinished() {
         items.removeAll { $0.state != .downloading }
     }
 
-    /// Bytes Lithium already has (a PDF it shows), saved like a download, from `source`.
-    func save(_ data: Data, suggestedFilename: String, from source: URL?) {
-        let destination = destination(for: suggestedFilename)
-        reserved.insert(destination)
-        let item = DownloadItem(filename: destination.lastPathComponent, size: data.count)
-        item.setDestination(destination)
+    /// Bytes Lithium already has (a PDF it shows), saved like a download, from `source`. `title`
+    /// (the PDF's own) names a file whose name says nothing, when that is on.
+    func save(_ data: Data, suggestedFilename: String, from source: URL?, title: String? = nil) {
+        let item = DownloadItem(filename: suggestedFilename, size: data.count)
+        item.list = self
         items.insert(item, at: 0)
+        guard tidy.applies(to: suggestedFilename) else {
+            return place(data, item, as: suggestedFilename, from: source)
+        }
+        Task {
+            let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: source, file: source))
+            place(data, item, as: tidied ?? suggestedFilename, from: source, renamedFrom: tidied.map { _ in suggestedFilename })
+        }
+    }
+
+    private func place(_ data: Data, _ item: DownloadItem, as filename: String, from source: URL?, renamedFrom original: String? = nil) {
+        let destination = destination(for: filename)
+        reserved.insert(destination)
+        item.setDestination(destination, renamedFrom: original)
         // Off the main thread: a large file on a slow disk would freeze the window.
         Task {
             let written = await Task.detached {
@@ -197,7 +222,21 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
         let id = ObjectIdentifier(download)
-        var destination = destination(for: suggestedFilename)
+        var filename = suggestedFilename
+        var original: String?
+        // A download that asks where to save is named by the user in the panel.
+        if byDownload[id]?.asksWhere == false, tidy.applies(to: suggestedFilename) {
+            let webView = download.webView
+            // The page shown, not one still loading: a link that turned into this download.
+            let source = DownloadSource(filename: suggestedFilename, title: webView?.title, page: webView?.backForwardList.currentItem?.url, file: response.url)
+            if let tidied = await tidy.name(for: source) {
+                // Cancelled from the list while it was named.
+                guard byDownload[id]?.state == .downloading else { return nil }
+                filename = tidied
+                original = suggestedFilename
+            }
+        }
+        var destination = destination(for: filename)
         if byDownload[id]?.asksWhere == true {
             // Cancelled from the list before WebKit asked.
             guard byDownload[id]?.state == .downloading else { return nil }
@@ -223,13 +262,26 @@ final class Downloads: NSObject, WKDownloadDelegate {
                 return partial
             }
         }
-        take(destination, for: id)
+        take(destination, for: id, renamedFrom: original)
         return destination
     }
 
-    private func take(_ destination: URL, for id: ObjectIdentifier) {
-        byDownload[id]?.setDestination(destination)
+    private func take(_ destination: URL, for id: ObjectIdentifier, renamedFrom original: String? = nil) {
+        byDownload[id]?.setDestination(destination, renamedFrom: original)
         destinations[id] = destination
+    }
+
+    /// Gives a renamed download the name the site gave it back, numbered if that is taken now.
+    /// Only while the file is where Lithium put it: one the user has moved or renamed is theirs.
+    fileprivate func useOriginalName(_ item: DownloadItem) {
+        guard item.canUseOriginalName, let original = item.originalFilename, let current = item.destination else { return }
+        guard FileManager.default.fileExists(atPath: current.path) else {
+            item.setDestination(current)
+            return
+        }
+        let target = destination(for: original, in: current.deletingLastPathComponent())
+        guard (try? FileManager.default.moveItem(at: current, to: target)) != nil else { return }
+        item.setDestination(target)
     }
 
     private static func savePanel(suggesting destination: URL, in window: NSWindow?) async -> URL? {

@@ -93,7 +93,7 @@ private struct DownloadsList: View {
     }
 }
 
-private struct DownloadRow: View {
+struct DownloadRow: View {
     let item: DownloadItem
     @State private var isHovered = false
 
@@ -106,6 +106,15 @@ private struct DownloadRow: View {
                 Text(item.filename)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                // The site's name, crossed out, for a file Lithium named.
+                if let original = item.originalFilename {
+                    Text(original)
+                        .strikethrough()
+                        .font(Theme.font(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if item.state == .downloading {
                     ProgressView(value: item.fraction ?? 0)
                         .progressViewStyle(.linear)
@@ -120,6 +129,9 @@ private struct DownloadRow: View {
             if item.state == .downloading {
                 if item.canCancel { RowButton(icon: .close, help: "Cancel") { item.cancel() } }
             } else if item.state == .finished, let destination = item.destination {
+                if item.canUseOriginalName {
+                    RowButton(icon: .undo, help: "Use original name") { item.useOriginalName() }
+                }
                 RowButton(icon: .search, help: "Show in Finder") {
                     ExternalApps.reveal(destination)
                 }

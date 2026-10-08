@@ -197,10 +197,14 @@ final class PDFReader: NSObject {
 
     /// The document's own title, or its file name, as Chrome shows it.
     var title: String {
-        let metadata = document?.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
-        if let metadata = metadata?.trimmingCharacters(in: .whitespacesAndNewlines), !metadata.isEmpty { return metadata }
+        if let metadataTitle { return metadataTitle }
         let name = url.lastPathComponent
         return name.isEmpty || name == "/" ? (url.host() ?? "PDF") : name
+    }
+
+    private var metadataTitle: String? {
+        let metadata = (document?.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return metadata?.isEmpty == false ? metadata : nil
     }
 
     /// A name for the file alone: the URL's last segment comes percent-decoded, so an encoded "/" in
@@ -339,10 +343,11 @@ final class PDFReader: NSObject {
     /// once Preview has it (its Recents, its autosave): never for a private tab's.
     var canOpenInPreview: Bool { document != nil && (isLocalFile || !isPrivate) }
 
-    /// Saves the bytes the page received, so it works even where the link has since expired.
+    /// Saves the bytes the page received, so it works even where the link has since expired. The
+    /// document's own title can name a file called "document(3).pdf".
     func download() {
         guard let data else { return }
-        Downloads.shared.save(data, suggestedFilename: filename, from: url)
+        Downloads.shared.save(data, suggestedFilename: filename, from: url, title: metadataTitle)
     }
 
     func showInFinder() {

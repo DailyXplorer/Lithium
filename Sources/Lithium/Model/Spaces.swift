@@ -14,7 +14,7 @@ struct Space: Codable, Identifiable, Equatable {
     var name: String
     /// The sidebar's color while the space is shown; nil follows Settings › Appearance.
     var color: String?
-    /// A `Phosphor` name, one of `icons`.
+    /// A bundled Phosphor icon's name (`SpaceIconCatalog`) or an emoji.
     var icon: String
     /// Cookies, logins and site storage of its own (`WKWebsiteDataStore(forIdentifier:)`, the
     /// space's id). Chosen when the space is made: data can't move between stores afterwards.
@@ -27,11 +27,15 @@ struct Space: Codable, Identifiable, Equatable {
 
     /// Those of Settings › Appearance, so a space's sidebar looks like one the user could pick.
     static let colors = ["#D5DAF5", "#E6DDF6", "#F6DDE4", "#F7E7D4", "#DDEFE3", "#D8ECF3", "#E4E4E7", "#2B2D42"]
-    static let icons: [Phosphor] = [.globe, .folder, .code, .sparkle, .paintBrush, .puzzle, .highlighter, .robot, .hand, .lock]
+    /// New spaces' icons, in turn; the icon picker suggests the first ones.
+    static let icons = ["globe-simple", "briefcase", "house", "code", "graduation-cap", "music-notes", "airplane-tilt", "game-controller", "wallet"]
     /// One per ⌃1…⌃9.
     static let limit = 9
 
-    var phosphor: Phosphor { Phosphor(rawValue: icon) ?? .globe }
+    /// Phosphor names are ASCII; anything else is an emoji.
+    static func isEmoji(_ icon: String) -> Bool {
+        !icon.unicodeScalars.allSatisfy(\.isASCII)
+    }
 
     /// What a saved tab or favorite records: nothing for the main space, so files written
     /// without spaces stay as they were.
@@ -138,7 +142,7 @@ extension Browser {
             id: UUID(),
             name: "Space \(all.count + 1)",
             color: Space.colors.first { !colors.contains($0) } ?? Space.colors[0],
-            icon: (Space.icons.first { !icons.contains($0.rawValue) } ?? .globe).rawValue
+            icon: Space.icons.first { !icons.contains($0) } ?? Space.main.icon
         )
     }
 

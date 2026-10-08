@@ -56,6 +56,22 @@ struct UISnapshotTests {
         }
     }
 
+    /// The space editor's icon picker, on Icons and on Emoji, with its catalog built.
+    @Test func spaceIconPickerSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let catalog = SpaceIconCatalog.load()
+        for (name, icon) in [("icons", "code"), ("emoji", "🎮")] {
+            for isDark in [false, true] {
+                let picker = SpaceIconPicker(icon: .constant(icon), catalog: catalog)
+                    .font(Theme.font(13))
+                    .padding(14)
+                    .frame(width: 252)
+                try render(picker, isDark: isDark).write(to: directory.appending(path: "space-icon-picker-\(name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// The foot of the sidebar with three spaces, the second shown, on its own color.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
     func spaceBarSnapshots() throws {

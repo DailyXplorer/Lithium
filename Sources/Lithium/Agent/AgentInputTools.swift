@@ -352,6 +352,8 @@ extension AgentHub {
                 var keys = target.counts["keyup"] ?? 0
                 var inserted = target.counts["beforeinput"] ?? 0
                 var last = "keyup"
+                // A key that loads another page (Enter in a field that navigates) ends the wait for the rest.
+                let since = LoadProgress(of: ctx.named.tab, ctx.state)
                 if target.report.focused != true {
                     try input.move(to: target.point)
                     try input.click(at: target.point, button: .left, count: 1, modifiers: [])
@@ -403,6 +405,11 @@ extension AgentHub {
                 if !pending.isEmpty {
                     try await hub.insert(&pending, input, ctx, into, keys: keys, inserted: &inserted)
                     last = "beforeinput"
+                } else {
+                    // Every key in this field before the call ends: a page that handles each
+                    // one slowly (a field capping its length as it grows) would otherwise get
+                    // the rest in the next field an action clicks.
+                    try await hub.keysHandled(ctx, into, keys: keys, since: since)
                 }
                 if submit {
                     try input.key(NativeKey.named["Enter"]!)
@@ -1216,11 +1223,26 @@ extension AgentHub {
     func insert(_ pending: inout String, _ input: NativeInput, _ ctx: ActionContext, _ target: ActionTarget, keys: Int, inserted: inout Int) async throws {
         guard !pending.isEmpty else { return }
         // Its document gone, the text would go to whatever has focus in the next one.
-        let counts = try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false, document: target.report.token, gone: Self.frameGone(target.ref))
+        let counts = try await keysHandled(ctx, target, keys: keys, gone: Self.frameGone(target.ref))
         try input.insert(pending)
         inserted = max(inserted, counts["beforeinput"] ?? 0) + 1
         pending = ""
         try await settle(ctx, target.frame, Settle(type: "beforeinput", count: inserted), timeout: 1000, frame: false, document: target.report.token, gone: Self.frameGone(target.ref))
+    }
+
+    /// Waits until the page has seen `keys` key presses in `target`'s frame, for as long as it
+    /// keeps counting more: WebKit hands a busy page its queued keys one at a time, and a click
+    /// overtakes them, so keys still queued when the action ends would go into whatever field
+    /// the next action clicks. A page that stops counting them is waited for a second only.
+    /// Returns the frame's counts.
+    @discardableResult
+    func keysHandled(_ ctx: ActionContext, _ target: ActionTarget, keys: Int, since: LoadProgress? = nil, gone: AgentToolError? = nil) async throws -> [String: Int] {
+        var seen = -1
+        while true {
+            let counts = try await settle(ctx, target.frame, Settle(type: "keyup", count: keys), timeout: 1000, frame: false, since: since, document: target.report.token, gone: gone)
+            guard let handled = counts["keyup"], handled < keys, handled > seen else { return counts }
+            seen = handled
+        }
     }
 
     /// The size of the page area the user sees, which background pages are laid out at.

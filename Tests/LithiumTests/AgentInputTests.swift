@@ -360,6 +360,138 @@ struct AgentInputTests {
             \(logger)
             """),
         "/done": (html, "<title>Done</title>"),
+        // Custom listboxes as Radix's Select builds them, one under another past the fold. Each
+        // opens on a mouse's pointerdown (its default prevented, so focus stays on the trigger)
+        // or on ArrowDown, Enter or Space; ignores the pointerup of the press that opened it
+        // unless the pointer moved; takes an option on its pointerup or Enter; closes on a
+        // pointerdown outside, Escape, or the window's blur or resize; keeps the pointer from
+        // everything else while open; and goes once its closing animation ends. Space takes the
+        // focused option, as Radix's does. Above them, a field that takes 200 characters on a
+        // page slow over every key; below, a combobox typed into, whose list opens on input.
+        // `log` says why each one opened and closed.
+        "/pickers": (html, """
+            <title>Pickers</title>
+            <style>
+              body { margin: 0; font: 16px sans-serif }
+              .row { height: 260px; padding: 20px 40px 0 }
+              [role=combobox] { width: 200px; height: 32px }
+              [role=listbox] { position: absolute; width: 200px; background: white; border: 1px solid; pointer-events: auto }
+              [role=listbox][data-state=closed] { animation: out 80ms forwards }
+              @keyframes out { to { opacity: 0 } }
+              [role=option] { height: 28px; line-height: 28px; padding-left: 8px }
+            </style>
+            <div class="row"><textarea aria-label="Pitch" id="pitch" maxlength="200"></textarea></div>
+            <div class="row"><button role="combobox" aria-label="Country" aria-expanded="false">Choose</button></div>
+            <div class="row"><button role="combobox" aria-label="Industry" aria-expanded="false">Choose</button></div>
+            <div class="row"><button role="combobox" aria-label="Month" aria-expanded="false">Choose</button></div>
+            <div class="row"><button role="combobox" aria-label="Year" aria-expanded="false">Choose</button></div>
+            <div class="row"><button role="combobox" aria-label="Round" aria-expanded="false">Choose</button></div>
+            <div class="row"><input role="combobox" aria-label="Spend" id="spend" aria-expanded="false"></div>
+            <script>
+              pitch.addEventListener('keydown', () => { const end = Date.now() + 10; while (Date.now() < end) {} });
+              spend.addEventListener('input', () => {
+                if (spend.getAttribute('aria-expanded') === 'true') return;
+                const list = document.createElement('div');
+                list.setAttribute('role', 'listbox');
+                const box = spend.getBoundingClientRect();
+                list.style.left = box.left + scrollX + 'px';
+                list.style.top = box.bottom + scrollY + 'px';
+                for (const label of ['1%', '10%', '25%']) {
+                  const option = document.createElement('div');
+                  option.setAttribute('role', 'option');
+                  option.textContent = label;
+                  option.addEventListener('pointerup', () => {
+                    spend.value = label;
+                    spend.setAttribute('aria-expanded', 'false');
+                    list.remove();
+                    log.push('closed Spend: chose');
+                  });
+                  list.append(option);
+                }
+                document.body.append(list);
+                spend.setAttribute('aria-expanded', 'true');
+                log.push('opened Spend');
+              });
+              window.log = [];
+              for (const type of ['blur', 'resize', 'visibilitychange', 'pointercancel']) addEventListener(type, () => log.push(type), true);
+              const choices = { Country: ['France', 'Spain', 'Italy'], Industry: ['Health', 'Finance', 'Retail'], Month: ['January', 'February', 'March'], Year: ['2020', '2021', '2022'], Round: ['Seed', 'Series A', 'Series B'] };
+              let open = null;
+              for (const trigger of document.querySelectorAll('[role=combobox]')) {
+                const name = trigger.getAttribute('aria-label');
+                const show = (pressed) => {
+                  if (open) return;
+                  const list = document.createElement('div');
+                  list.setAttribute('role', 'listbox');
+                  list.dataset.state = 'open';
+                  const box = trigger.getBoundingClientRect();
+                  list.style.left = box.left + scrollX + 'px';
+                  list.style.top = box.bottom + scrollY + 'px';
+                  const hide = (why) => {
+                    if (open !== list) return;
+                    open = null;
+                    log.push('closed ' + name + ': ' + why);
+                    removeEventListener('blur', onBlur);
+                    removeEventListener('resize', onResize);
+                    document.removeEventListener('pointermove', move);
+                    document.removeEventListener('pointerup', up, true);
+                    document.removeEventListener('pointerdown', outside);
+                    document.removeEventListener('keydown', escape);
+                    trigger.setAttribute('aria-expanded', 'false');
+                    list.dataset.state = 'closed';
+                    list.addEventListener('animationend', () => { list.remove(); document.body.style.pointerEvents = ''; }, { once: true });
+                    trigger.focus();
+                  };
+                  for (const label of choices[name]) {
+                    const option = document.createElement('div');
+                    option.setAttribute('role', 'option');
+                    option.tabIndex = -1;
+                    option.textContent = label;
+                    const choose = () => { trigger.textContent = label; hide('chose'); };
+                    option.addEventListener('pointerup', (event) => { if (!event.defaultPrevented) choose(); });
+                    option.addEventListener('keydown', (event) => {
+                      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
+                      if (event.key === 'ArrowDown') { event.preventDefault(); option.nextElementSibling?.focus(); }
+                    });
+                    list.append(option);
+                  }
+                  let moved = 0;
+                  const move = (event) => { moved = Math.max(moved, Math.abs(event.pageX - pressed.pageX), Math.abs(event.pageY - pressed.pageY)); };
+                  const up = (event) => {
+                    if (moved <= 10) event.preventDefault(); else if (!list.contains(event.target)) hide('pointerup outside');
+                    document.removeEventListener('pointermove', move);
+                  };
+                  const outside = (event) => { if (!list.contains(event.target)) hide('pointerdown outside'); };
+                  const escape = (event) => { if (event.key === 'Escape') hide('Escape'); };
+                  const onBlur = () => hide('window blur');
+                  const onResize = () => hide('window resize');
+                  open = list;
+                  document.body.append(list);
+                  document.body.style.pointerEvents = 'none';
+                  trigger.setAttribute('aria-expanded', 'true');
+                  log.push('opened ' + name);
+                  addEventListener('blur', onBlur);
+                  addEventListener('resize', onResize);
+                  document.addEventListener('keydown', escape);
+                  if (pressed) {
+                    document.addEventListener('pointermove', move);
+                    document.addEventListener('pointerup', up, { capture: true, once: true });
+                  }
+                  setTimeout(() => { if (open === list) document.addEventListener('pointerdown', outside); }, 0);
+                  list.firstElementChild.focus({ preventScroll: true });
+                };
+                trigger.addEventListener('pointerdown', (event) => {
+                  if (event.button !== 0 || event.ctrlKey || event.pointerType !== 'mouse') return;
+                  show(event);
+                  event.preventDefault();
+                });
+                trigger.addEventListener('keydown', (event) => {
+                  if (![' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(event.key)) return;
+                  show(null);
+                  event.preventDefault();
+                });
+              }
+            </script>
+            """),
         "/busy-pad": (html, """
             <title>Busy pad</title><style>body { margin: 0 } #pad { position: absolute; left: 0; top: 0; width: 400px; height: 200px }</style>
             <div id="pad" role="button" aria-label="Pad"></div>
@@ -608,6 +740,70 @@ struct AgentInputTests {
             // The press's own move, at 20, reaches only a page in the window in front.
             let xs = try JSONDecoder().decode([Int].self, from: Data((try await page(tab, "return JSON.stringify(xs)") as? String ?? "").utf8))
             #expect(Array(xs.drop { $0 == 20 }) == (1...10).map { 20 + 20 * $0 }, "\(xs)")
+        }
+    }
+
+    /// Custom listboxes open one after another to the agent's clicks, keys and typing, those past
+    /// the fold too, and one stays open while its tab leaves the stage between two actions. A
+    /// value longer than the field above them takes, on a page slow over every key, leaves no
+    /// key queued: one would reach the listbox the next click opens, and a space take an option.
+    @Test func customListboxesKeepOpeningOneAfterAnother() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "pickers"))
+            let long = String(repeating: "abcd fghij", count: 26)
+            let filled = await client.call("fill_form", ["tab": .string(id), "fields": [["ref": .string(try await ref(client, id, "textbox", "Pitch")), "type": "textbox", "value": .string(long)]]])
+            #expect(!filled.isError, "\(filled.content)")
+            let expanded = { (name: String) in try await self.page(tab, "return document.querySelector('[aria-label=\"\(name)\"]').getAttribute('aria-expanded')") as? String }
+            // What the trigger shows once the list has gone, and the pointer is the page's again.
+            let shown = { (name: String) in try await self.page(tab, "return document.querySelector('[aria-label=\"\(name)\"]').textContent + '|' + document.body.style.pointerEvents + '|' + document.querySelectorAll('[role=listbox]').length") as? String }
+            let click = { (role: String, name: String) in
+                let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try await self.ref(client, id, role, name))])
+                #expect(!clicked.isError, "\(name): \(clicked.content)")
+            }
+
+            for (name, option) in [("Country", "Spain"), ("Industry", "Retail"), ("Month", "February")] {
+                try await click("combobox", name)
+                var events = try await log(tab)
+                #expect(try await expanded(name) == "true", "\(name): \(events)")
+                try await click("option", option)
+                let chosen = await eventually { try await shown(name) == "\(option)||0" }
+                events = try await log(tab)
+                #expect(chosen, "\(name): \(events)")
+            }
+
+            // By keys: focus, ArrowDown opens and moves through the options, Enter takes one.
+            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(try await ref(client, id, "combobox", "Year"))])).isError)
+            for keys in ["ArrowDown", "ArrowDown", "Enter"] {
+                let pressed = await client.call("press", ["tab": .string(id), "keys": .string(keys)])
+                #expect(!pressed.isError, "\(keys): \(pressed.content)")
+            }
+            let typed = await eventually { try await shown("Year") == "2021||0" }
+            var events = try await log(tab)
+            #expect(typed, "\(events)")
+
+            // Open while the stage lets its tab go, as when an agent takes long to answer.
+            client.hub.stage.releaseDelay = .milliseconds(50)
+            try await click("combobox", "Round")
+            #expect(await waitUntil(5) { tab.webView.window == nil })
+            events = try await log(tab)
+            #expect(try await expanded("Round") == "true", "\(events)")
+            try await click("option", "Series A")
+            let late = await eventually { try await shown("Round") == "Series A||0" }
+            events = try await log(tab)
+            #expect(late, "\(events)")
+
+            // Typed into, it opens on input.
+            let typedIn = await client.call("type", ["tab": .string(id), "ref": .string(try await ref(client, id, "combobox", "Spend")), "text": "1"])
+            #expect(!typedIn.isError, "\(typedIn.content)")
+            events = try await log(tab)
+            #expect(try await expanded("Spend") == "true", "\(events)")
+            try await click("option", "10%")
+            #expect(try await page(tab, "return spend.value") as? String == "10%")
+
+            // Each opened once, and closed once on its choice.
+            events = try await log(tab).filter { $0.hasPrefix("opened ") || $0.hasPrefix("closed ") }
+            #expect(events == ["Country", "Industry", "Month", "Year", "Round", "Spend"].flatMap { ["opened \($0)", "closed \($0): chose"] }, "\(events)")
+            #expect(try await page(tab, "return pitch.value") as? String == String(long.prefix(200)))
         }
     }
 

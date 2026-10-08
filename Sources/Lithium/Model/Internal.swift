@@ -272,7 +272,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "jsonl") ?? .json]
         panel.directoryURL = .downloadsDirectory
-        panel.nameFieldStringValue = "Lithium agent log \(Date.now.formatted(.iso8601.year().month().day())).jsonl"
+        panel.nameFieldStringValue = AgentLog.exportName(for: .now)
         let response = if let window { await panel.beginSheetModal(for: window) } else { panel.runModal() }
         guard response == .OK, let url = panel.url else { return false }
         do {

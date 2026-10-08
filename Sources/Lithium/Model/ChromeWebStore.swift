@@ -312,8 +312,13 @@ enum ChromeWebStore {
 final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "lithiumWebstore"
     private unowned let extensions: Extensions
-    /// Extensions the user agreed to add, with the access they were shown, waiting for the store's `completeInstall`.
-    private var approved: [String: ChromeWebStore.Access] = [:]
+    /// Extensions the user agreed to add, with the access they were shown, waiting for the store's
+    /// `completeInstall`. The store calls it right away: an approval it leaves unused (it failed,
+    /// the tab moved on) lapses, so it can't add the extension much later without asking again.
+    private var approved: [String: (access: ChromeWebStore.Access, date: Date)] = [:]
+    static let approvalLifetime: TimeInterval = 60
+    /// Tests move it forward.
+    var now: () -> Date = Date.init
 
     init(extensions: Extensions) {
         self.extensions = extensions
@@ -407,16 +412,16 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
         guard await present(alert, in: window) == .alertFirstButtonReturn else {
             return Reply(value: "user_cancelled", error: "User cancelled install")
         }
-        approved[id] = ChromeWebStore.Access(manifest: manifest)
+        approved[id] = (ChromeWebStore.Access(manifest: manifest), now())
         return Reply(value: "")
     }
 
     private func completeInstall(_ id: String?, window: NSWindow?) async -> Reply {
-        guard let id, let access = approved.removeValue(forKey: id) else {
+        guard let id, let approval = approved.removeValue(forKey: id), now().timeIntervalSince(approval.date) < Self.approvalLifetime else {
             return Reply(error: "\(id ?? "") does not match a previous call to beginInstallWithManifest3")
         }
         do {
-            try await extensions.install(id: id, approved: access)
+            try await extensions.install(id: id, approved: approval.access)
             return Reply()
         } catch {
             let alert = NSAlert()
@@ -440,6 +445,7 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
             return Reply(error: "The user did not accept the uninstall.")
         }
         await extensions.remove(id: entry.id)
+        approved[entry.id] = nil
         return Reply()
     }
 

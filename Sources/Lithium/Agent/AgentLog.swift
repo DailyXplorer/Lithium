@@ -90,6 +90,12 @@ actor AgentLog {
         return String(format: "%04d-%02d-%02d.jsonl", day.year ?? 0, day.month ?? 0, day.day ?? 0)
     }
 
+    /// What an exported log is offered as: the same local day as the day files (ISO 8601's own
+    /// default is UTC, a day behind or ahead around midnight).
+    static func exportName(for date: Date, timeZone: TimeZone = .current) -> String {
+        "Lithium agent log \(fileName(for: date, timeZone: timeZone))"
+    }
+
     /// Gregorian, in the user's time zone.
     static var dayCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)

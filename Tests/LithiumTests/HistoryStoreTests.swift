@@ -113,4 +113,34 @@ struct HistoryStoreTests {
         #expect(await page?.map(\.url.absoluteString) == ["https://webkit.org/"])
         #expect(await addressBar?.map(\.url.absoluteString) == ["https://swift.org/"])
     }
+
+    /// `%`, `_` and `\` are searched for as typed, not as LIKE wildcards, in the History page and
+    /// the address bar alike.
+    @Test func searchesWildcardCharactersLiterally() async {
+        let store = makeStore()
+        store.record(URL(string: "https://files.example/my_file")!, title: "My file")
+        store.record(URL(string: "https://files.example/myXfile")!, title: "50% off")
+        store.record(URL(string: "https://files.example/back")!, title: #"C:\Temp"#)
+
+        #expect(store.visits(matching: "my_file").map(\.title) == ["My file"])
+        #expect(store.visits(matching: "_").map(\.title) == ["My file"])
+        #expect(store.visits(matching: "50%").map(\.title) == ["50% off"])
+        #expect(store.visits(matching: #"C:\"#).map(\.title) == [#"C:\Temp"#])
+        #expect(await store.visitsInBackground(matching: "%")?.map(\.title) == ["50% off"])
+        #expect(await store.topSitesInBackground(matching: "my_", limit: 5)?.map(\.url.absoluteString) == ["https://files.example/my_file"])
+        #expect(store.topSites(matching: "files.example/my_", limit: 5).map(\.url.absoluteString) == ["https://files.example/my_file"])
+    }
+
+    /// Case is folded beyond ASCII, as the open tabs' suggestions do: "éclair" finds "Éclair".
+    @Test func foldsTheCaseOfAccentedLetters() async {
+        let store = makeStore()
+        store.record(URL(string: "https://bakery.example/")!, title: "Éclair au café")
+        store.record(URL(string: "https://news.example/")!, title: "ΑΘΗΝΑ")
+
+        #expect(store.visits(matching: "éclair").map(\.title) == ["Éclair au café"])
+        #expect(store.visits(matching: "CAFÉ").map(\.title) == ["Éclair au café"])
+        #expect(await store.visitsInBackground(matching: "αθηνα")?.map(\.title) == ["ΑΘΗΝΑ"])
+        #expect(await store.topSitesInBackground(matching: "éclair", limit: 5)?.map(\.url.absoluteString) == ["https://bakery.example/"])
+        #expect(store.visits(matching: "eclair").isEmpty, "accents still count, as in the open tabs' search")
+    }
 }

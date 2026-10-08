@@ -15,6 +15,8 @@ final class Favicons {
     /// history page goes through thousands of hosts.
     private(set) var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
+    /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
+    private var generation = 0
     private let session: URLSession = {
         // A server that trickles its answer gives up the fetch long before the default week.
         let configuration = URLSessionConfiguration.ephemeral
@@ -89,6 +91,7 @@ final class Favicons {
         guard !missing.contains(host), let site = URL(string: "https://\(host)/") else { return nil }
         if let running = inFlight[host] { return await running.value }
 
+        let generation = generation
         let session = session
         let task = Task<Data?, Never> {
             for path in ["/apple-touch-icon.png", "/favicon.ico", "/favicon.png"] {
@@ -103,6 +106,8 @@ final class Favicons {
         }
         inFlight[host] = task
         let result = await task.value
+        // History was cleared meanwhile: `clear` already emptied `inFlight`, and the host is gone from the list.
+        guard generation == self.generation else { return nil }
         inFlight[host] = nil
         if let result {
             store(result, for: host)
@@ -133,6 +138,9 @@ final class Favicons {
     /// Clear History: the icon kept for every host visited would still list them, so they go too,
     /// but for `hosts` (favorites and open tabs, which show theirs). Files are removed off the main thread.
     func clear(keeping hosts: Set<String>) async {
+        generation += 1
+        for task in inFlight.values { task.cancel() }
+        inFlight = [:]
         missing = []
         cache = cache.filter { hosts.contains($0.key) }
         let folder = folder
@@ -153,6 +161,7 @@ final class Favicons {
     func favicon(for webView: WKWebView) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
+        let generation = generation
 
         let links = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [[String]] ?? []
         var candidates = links.compactMap { link -> Candidate? in
@@ -168,7 +177,7 @@ final class Favicons {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
             guard let png = await Self.fetch(candidate.url, with: session) else { continue }
-            store(png, for: host)
+            if generation == self.generation { store(png, for: host) }
             return png
         }
 
@@ -184,7 +193,7 @@ final class Favicons {
                   let encoded = dataURL.split(separator: ",").last,
                   let data = Data(base64Encoded: String(encoded)),
                   let png = await Self.normalizedInBackground(data) else { continue }
-            store(png, for: host)
+            if generation == self.generation { store(png, for: host) }
             return png
         }
         return nil
@@ -193,8 +202,9 @@ final class Favicons {
     /// The icon a page declares, fetched afresh past the cache: a calendar's changes with the
     /// date, at a new address or the same one. Stored for the host only when its pixels changed.
     func refresh(host: String, from url: URL) async -> Data? {
+        let generation = generation
         guard Self.isFetchable(url), let png = await Self.fetch(url, with: session) else { return nil }
-        if cachedData(host: host) != png { store(png, for: host) }
+        if generation == self.generation, cachedData(host: host) != png { store(png, for: host) }
         return png
     }
 

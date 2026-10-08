@@ -402,6 +402,7 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
             return Reply(value: "unsupported_extension_type", error: "Lithium adds extensions, not themes or apps.")
         }
         let name = details?["localizedName"] as? String ?? manifest["name"] as? String ?? id
+        if id == Passwords.iCloudExtensionID { return await offerPasswords(window: window) }
         let warnings = ChromeWebStore.warnings(for: manifest)
         let alert = NSAlert()
         alert.messageText = "Add “\(name)”?"
@@ -414,6 +415,18 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         approved[id] = (ChromeWebStore.Access(manifest: manifest), now())
         return Reply(value: "")
+    }
+
+    /// iCloud Passwords would add, then fail at every sign-in: its helper app only answers the
+    /// browsers Apple lists. The Passwords app it stands for opens instead, if the user wants.
+    private func offerPasswords(window: NSWindow?) async -> Reply {
+        let alert = NSAlert()
+        alert.messageText = "iCloud Passwords can’t work in Lithium"
+        alert.informativeText = "Apple lets it reach your passwords only in browsers it approves. You can copy them from the Passwords app."
+        alert.addButton(withTitle: Passwords.menuTitle)
+        alert.addButton(withTitle: "Cancel")
+        if await present(alert, in: window) == .alertFirstButtonReturn { Passwords.open() }
+        return Reply(value: "user_cancelled", error: "User cancelled install")
     }
 
     private func completeInstall(_ id: String?, window: NSWindow?) async -> Reply {

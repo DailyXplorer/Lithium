@@ -138,6 +138,19 @@
     <div class="rows" id="extension-list"></div>
   </section>
 
+  <section id="passwords" class="page">
+    <h2>Passwords</h2>
+    <p class="lead">Your passwords and passkeys stay in Apple’s Passwords app. Lithium can’t fill or save them yet, so copy them from there.</p>
+    <button class="button accent cta" id="open-passwords">Open Passwords</button>
+    <h3>Signing in</h3>
+    <div class="row"><div><div class="title">From a sign-in field</div><div class="hint">Right-click the field and choose Open Passwords.</div></div></div>
+    <div class="row"><div><div class="title">With a password manager</div><div class="hint">Extensions such as 1Password fill and save passwords. Add one in Extensions.</div></div></div>
+    <details>
+      <summary>Details</summary>
+      <p>Apple lets only the browsers it approves fill and save passwords from the Passwords app, through its iCloud Passwords extension. Passkeys need Apple’s approval too.</p>
+    </details>
+  </section>
+
   <section id="max" class="page">
     <h2>Max</h2>
     <p class="lead">Runs on this Mac with Apple Intelligence. Your browsing stays private.</p>
@@ -499,6 +512,7 @@
   };
   $('#update').onclick = () => call('updateFilters').then(render);
   $('#web-store').onclick = () => call('openWebStore');
+  $('#open-passwords').onclick = () => call('openPasswords');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);

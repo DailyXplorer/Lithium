@@ -280,6 +280,95 @@ struct SplitViewTests {
         #expect(browser.videoPopout.tab === a)
     }
 
+    /// The peeked sidebar lies over the left side: a right-click on its rows (the pair's among
+    /// them) leaves the focus alone, or the sidebar would slide away under the menu (#105).
+    /// A click on the page beside it still moves the focus.
+    @Test func aClickOnThePeekedSidebarOverTheOtherSideKeepsTheFocus() throws {
+        let browser = browser(with: ["a", "b"])
+        let a = tab("a", in: browser), b = tab("b", in: browser)
+        browser.select(a)
+        browser.openInSplit(b)
+        #expect(browser.shownPartner === a)
+
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.contentView = nil }
+        let content = NSView(frame: window.contentLayoutRect)
+        window.contentView = content
+        a.webView.frame = NSRect(x: 0, y: 0, width: 396, height: 400)
+        b.webView.frame = NSRect(x: 404, y: 0, width: 396, height: 400)
+        content.addSubview(a.webView)
+        content.addSubview(b.webView)
+        let sidebar = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 400))
+        content.addSubview(sidebar)
+
+        func click(_ type: NSEvent.EventType, atX x: CGFloat) throws {
+            let event = try #require(NSEvent.mouseEvent(
+                with: type, location: NSPoint(x: x, y: 200), modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            browser.noteClick(event)
+        }
+        let picks = browser.tabPickToken
+        try click(.rightMouseDown, atX: 100)
+        try click(.leftMouseDown, atX: 100)
+        #expect(browser.selectedTab === b)
+        #expect(browser.tabPickToken == picks, "the peeked sidebar slides away on a pick")
+
+        try click(.leftMouseDown, atX: 300)
+        #expect(browser.selectedTab === a)
+    }
+
+    /// The other side shows a PDF: a click on its viewer's own controls (the toolbar here), not
+    /// only on its pages, focuses that side.
+    @Test func aClickOnTheOtherSidesPDFToolbarFocusesIt() throws {
+        let browser = browser(with: ["a", "b"])
+        let a = tab("a", in: browser), b = tab("b", in: browser)
+        browser.select(a)
+        browser.openInSplit(b)
+        #expect(browser.shownPartner === a)
+
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { window.contentView = nil }
+        let content = NSView(frame: window.contentLayoutRect)
+        window.contentView = content
+        a.webView.frame = NSRect(x: 0, y: 0, width: 396, height: 400)
+        b.webView.frame = NSRect(x: 404, y: 0, width: 396, height: 400)
+        content.addSubview(a.webView)
+        content.addSubview(b.webView)
+        let reader = PDFReader(url: URL(string: "https://example.com/report.pdf")!)
+        let viewer = SplitPDFReader.Host(rootView: PDFReaderView(reader: reader, takesKeyboard: false))
+        viewer.tabID = a.id
+        viewer.frame = a.webView.frame
+        content.addSubview(viewer)
+        content.layoutSubtreeIfNeeded()
+
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: NSPoint(x: 200, y: 380), modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let hit = try #require(content.hitTest(NSPoint(x: 200, y: 380)))
+        #expect(!hit.isDescendant(of: a.webView), "the viewer lies over the page")
+        browser.noteClick(event)
+        #expect(browser.selectedTab === a)
+    }
+
+    /// In Zen mode the page reaches under the window's title bar: a split side's PDF viewer, in
+    /// its own hosting view, ignores that inset like the rest of the window, so its toolbar stays
+    /// at its top instead of under a blank strip.
+    @Test func aSplitPDFViewerIgnoresTheTitleBarInset() {
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titlebarAppearsTransparent = true
+        defer { window.contentView = nil }
+        let content = NSView(frame: NSRect(origin: .zero, size: window.frame.size))
+        window.contentView = content
+        let reader = PDFReader(url: URL(string: "https://example.com/report.pdf")!)
+        let viewer = SplitPDFReader.Host(rootView: PDFReaderView(reader: reader, takesKeyboard: false))
+        viewer.frame = NSRect(x: 8, y: 0, width: 784, height: content.bounds.height - 8)
+        content.addSubview(viewer)
+        content.layoutSubtreeIfNeeded()
+
+        #expect(viewer.safeAreaInsets.top > 0, "the viewer lies under the title bar")
+        #expect(viewer.safeAreaRegions.isEmpty)
+    }
+
     /// Both sides are on screen: low memory puts other tabs to sleep, never the one beside the
     /// selected tab.
     @Test func theOtherSideNeverSleeps() async throws {

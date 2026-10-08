@@ -53,6 +53,35 @@ struct NavigationTests {
         #expect(tab.webView.url == page)
     }
 
+    /// Turning a site's protections off, or back on from Settings, reloads every open tab of that
+    /// site so their blockers match the shield; tabs of other sites are left alone.
+    @Test func protectionsChangeReloadsEveryTabOfTheSite() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/a": ("Content-Type: text/html", Data("<title>A</title>".utf8)),
+            "/b": ("Content-Type: text/html", Data("<title>B</title>".utf8)),
+            "/c": ("Content-Type: text/html", Data("<title>C</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let other = try #require(URL(string: "http://localhost:\(base.port ?? 0)/c"))
+        let browser = Browser()
+        let a = browser.newTab(url: base.appending(path: "a"))
+        let b = browser.newTab(url: base.appending(path: "b"), selecting: false)
+        let c = browser.newTab(url: other, selecting: false)
+        #expect(await waitUntil(30) { a.webView.title == "A" && b.webView.title == "B" && c.webView.title == "C" })
+        let host = try #require(Privacy.siteHost(base))
+        defer { browser.privacy.setEnabled(true, host: host) }
+
+        browser.setProtections(false, for: a)
+        #expect(await waitUntil(15) { requests["/a"] == 2 && requests["/b"] == 2 })
+        #expect(!browser.privacy.isEnabled(for: b.url))
+
+        browser.setProtections(true, host: host)
+        #expect(await waitUntil(15) { requests["/a"] == 3 && requests["/b"] == 3 })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests["/c"] == 1)
+    }
+
     /// A server that sends the address back with its tracking parameters gets them: the tab
     /// strips them once, not in an endless loop of loads.
     @Test func aServerAddingTheParametersBackIsNotLoopedOn() async throws {

@@ -336,7 +336,6 @@ struct SplitViewTests {
         content.addSubview(b.webView)
         let reader = PDFReader(url: URL(string: "https://example.com/report.pdf")!)
         let viewer = SplitPDFReader.Host(rootView: PDFReaderView(reader: reader, takesKeyboard: false))
-        viewer.sizingOptions = []
         viewer.tabID = a.id
         viewer.frame = a.webView.frame
         content.addSubview(viewer)
@@ -349,6 +348,25 @@ struct SplitViewTests {
         #expect(!hit.isDescendant(of: a.webView), "the viewer lies over the page")
         browser.noteClick(event)
         #expect(browser.selectedTab === a)
+    }
+
+    /// In Zen mode the page reaches under the window's title bar: a split side's PDF viewer, in
+    /// its own hosting view, ignores that inset like the rest of the window, so its toolbar stays
+    /// at its top instead of under a blank strip.
+    @Test func aSplitPDFViewerIgnoresTheTitleBarInset() {
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titlebarAppearsTransparent = true
+        defer { window.contentView = nil }
+        let content = NSView(frame: NSRect(origin: .zero, size: window.frame.size))
+        window.contentView = content
+        let reader = PDFReader(url: URL(string: "https://example.com/report.pdf")!)
+        let viewer = SplitPDFReader.Host(rootView: PDFReaderView(reader: reader, takesKeyboard: false))
+        viewer.frame = NSRect(x: 8, y: 0, width: 784, height: content.bounds.height - 8)
+        content.addSubview(viewer)
+        content.layoutSubtreeIfNeeded()
+
+        #expect(viewer.safeAreaInsets.top > 0, "the viewer lies under the title bar")
+        #expect(viewer.safeAreaRegions.isEmpty)
     }
 
     /// Both sides are on screen: low memory puts other tabs to sleep, never the one beside the

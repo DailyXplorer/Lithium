@@ -165,8 +165,6 @@ struct SplitPDFReader: NSViewRepresentable {
 
     func makeNSView(context: Context) -> Host {
         let host = Host(rootView: PDFReaderView(reader: reader, takesKeyboard: takesKeyboard))
-        // Fills the side, whatever the viewer's own size.
-        host.sizingOptions = []
         host.tabID = tabID
         return host
     }
@@ -178,6 +176,18 @@ struct SplitPDFReader: NSViewRepresentable {
 
     final class Host: NSHostingView<PDFReaderView> {
         var tabID: Tab.ID?
+
+        required init(rootView: PDFReaderView) {
+            super.init(rootView: rootView)
+            // Fills the side, whatever the viewer's own size.
+            sizingOptions = []
+            // The window's content runs under its title bar, which the page reaches in Zen mode:
+            // like the rest of the window (`BrowserView` ignores the safe area), the viewer keeps
+            // its toolbar at its top rather than below a blank strip.
+            safeAreaRegions = []
+        }
+
+        required init?(coder: NSCoder) { nil }
     }
 }
 

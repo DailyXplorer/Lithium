@@ -62,7 +62,8 @@ struct UISnapshotTests {
         let sections: [(name: String, hash: String, script: String?)] = [
             ("appearance", "appearance", nil), ("search", "search", nil), ("privacy", "privacy", nil),
             ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
-            ("extensions", "extensions", nil), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
+            ("extensions", "extensions", nil),
+            ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
         ]
         for section in sections {

@@ -13,6 +13,7 @@ const NAV = [
   ['search', 'magnifying-glass', 'Search'],
   ['privacy', 'shield-check', 'Privacy & security'],
   ['extensions', 'puzzle-piece', 'Extensions'],
+  ['passwords', 'lock-simple', 'Passwords'],
   ['max', 'sparkle', 'Max'],
   ['agents', 'robot', 'Agents'],
   ['permissions', 'video-camera', 'Site permissions'],

@@ -234,6 +234,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             if let id = value as? String { browser.extensions.openOptions(id: id) }
         case "openWebStore":
             browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/category/extensions")!)
+        case "openPasswords":
+            Passwords.open()
         case "clearHistory":
             await browser.history.clear()
             await browser.clearIcons()

@@ -80,6 +80,7 @@ final class PageWebView: WKWebView {
         super.willOpenMenu(menu, with: event)
         translation?.adjust(menu, in: self, at: convert(event.locationInWindow, from: nil))
         PageOverrides.addForcePaste(to: menu, in: self)
+        Passwords.addOpenPasswords(to: menu)
         menuSelection = ""
     }
 

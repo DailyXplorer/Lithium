@@ -79,6 +79,10 @@ The puzzle-piece button in the toolbar lists the extensions with their badges an
 
 `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension` adds SponsorBlock from the real store, through its button and Lithium's dialog, and watches it skip a sponsor on YouTube.
 
+## Passwords
+
+Lithium keeps no passwords of its own and can't fill or save those in Apple's Passwords app: Safari does it through WebKit hooks only Safari has, and other browsers through Apple's iCloud Passwords extension, whose helper app macOS 15.5 and later start only for the browsers Apple lists by team ID. Passkeys for any site take the `com.apple.developer.web-browser.public-key-credential` entitlement, which Apple grants to a developer team; Lithium's local signature has none. So Lithium hands off to the app (`Model/Passwords.swift`): Open Passwords in an editable field's menu, after Force Paste, and in Settings › Passwords. Adding iCloud Passwords from the store says why it can't work and offers the app instead. Password manager extensions such as 1Password fill and save as they do in Chrome.
+
 ## Connecting agents (lithium-mcp)
 
 With Settings › Agents › Allow agents on, MCP clients on this Mac can use Lithium (`docs/design/agent-mcp.md`). Clients that start a command connect through `lithium-mcp`, a small bridge inside the app (`Sources/LithiumMCP`, Foundation only):

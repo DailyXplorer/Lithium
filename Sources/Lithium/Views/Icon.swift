@@ -56,6 +56,8 @@ enum Phosphor: String {
     case paintBrush = "paint-brush"
     case hand
     case code
+    case reader = "article"
+    case readerStyle = "sliders-horizontal"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

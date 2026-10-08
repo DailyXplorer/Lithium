@@ -179,6 +179,13 @@
     cancelAnimationFrame(frame);
     clearTimeout(timer);
     lastFlush = performance.now();
+    // The reader (reader.js, in this content world too) shows its own document in its own font;
+    // the page's, with its scan, comes back when the reader is left.
+    if (window.__lithiumReader) {
+      changed.clear();
+      pending.clear();
+      return;
+    }
     if (changed.size) {
       const elements = [...changed];
       changed.clear();

@@ -68,6 +68,8 @@ enum Preference {
     static let agentPort = "agentPort"
     static let developerTools = "developerTools"
     static let quickLinks = "quickLinkWindow"
+    static let readerButton = "readerButton"
+    static let readerStyle = "readerStyle"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

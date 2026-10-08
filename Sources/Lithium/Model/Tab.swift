@@ -124,7 +124,13 @@ final class Tab: NSObject, Identifiable {
     private(set) var title = ""
     private(set) var url: URL? {
         didSet {
-            if PageSummaries.page(of: oldValue) != PageSummaries.page(of: url) { browser?.summaries.discard(self) }
+            if PageSummaries.page(of: oldValue) != PageSummaries.page(of: url) {
+                browser?.summaries.discard(self)
+                // The reader's article was the old address's: a page moving on by itself
+                // (pushState) shows its own content again.
+                if isReading { leaveReader() }
+                readerPageMovedOn()
+            }
         }
     }
     private(set) var favicon: NSImage?
@@ -144,6 +150,17 @@ final class Tab: NSObject, Identifiable {
     /// The PDFs of this tab's history. WebKit brings such a page back from its cache without
     /// its bytes; the kept reader also comes back where it was left.
     @ObservationIgnored private var pdfHistory: [WKBackForwardListItem: PDFReader] = [:]
+    /// The page shown looks like an article: the address bar offers the reader (`ReaderMode`).
+    private(set) var isReaderAvailable = false
+    /// The reader shows the page's article in place of the page.
+    private(set) var isReading = false
+    /// The page shown was asked whether it is an article.
+    @ObservationIgnored private var readerChecked = false
+    /// The reader was used in this web view: a page back from the cache may still show it, so
+    /// pages are asked even with the button off.
+    @ObservationIgnored private var hasRead = false
+    /// The one check of an address the page moved to by itself (`readerPageMovedOn`).
+    @ObservationIgnored private var readerRecheck: Task<Void, Never>?
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
@@ -408,6 +425,75 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
+    var canRead: Bool { !isAsleep && pdf == nil && !isShowingError && ReaderMode.handles(url) }
+
+    /// Shows the page's article in the reader, or the page again. False when it has no article.
+    @discardableResult
+    func toggleReader() async -> Bool {
+        guard canRead, let webView = loadedWebView else { return false }
+        if isReading {
+            leaveReader()
+            return true
+        }
+        let marks = commits
+        hasRead = true
+        let shown = await ReaderMode.enter(webView, style: .saved)
+        guard webView === loadedWebView, commits == marks else { return false }
+        isReading = shown
+        if shown { isReaderAvailable = ReaderMode.showsButton }
+        return shown
+    }
+
+    private func leaveReader() {
+        isReading = false
+        guard let webView = loadedWebView else { return }
+        Task { await ReaderMode.exit(webView) }
+    }
+
+    /// Whether the page looks like an article, for the address bar's button: asked once per page,
+    /// only once it is on screen, and not at all with the button off, unless the reader was used.
+    func checkReader() {
+        guard !readerChecked, canRead, ReaderMode.showsButton || hasRead, let webView = loadedWebView else { return }
+        readerChecked = true
+        let marks = commits
+        Task {
+            let state = await ReaderMode.check(webView)
+            guard webView === loadedWebView, commits == marks else { return }
+            let available = state == .reading || state == .article && ReaderMode.showsButton
+            if isReaderAvailable != available { isReaderAvailable = available }
+            if isReading != (state == .reading) { isReading = state == .reading }
+        }
+    }
+
+    /// Turned off, the button goes from pages not in the reader; turned on, pages are asked again.
+    func readerButtonChanged() {
+        guard !isReading else { return }
+        isReaderAvailable = false
+        readerChecked = false
+    }
+
+    /// A page moving on by itself (pushState) neither commits nor finishes: its new address is
+    /// asked once, a moment later, when its content has likely come in. A load is asked at its end.
+    private func readerPageMovedOn() {
+        readerChecked = false
+        if isReaderAvailable { isReaderAvailable = false }
+        guard ReaderMode.showsButton || hasRead, let webView = loadedWebView, !webView.isLoading else { return }
+        let marks = commits
+        readerRecheck?.cancel()
+        readerRecheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !Task.isCancelled, commits == marks, !webView.isLoading, browser?.isOnScreen(self) == true else { return }
+            checkReader()
+        }
+    }
+
+    /// A new document, or none: neither an article known nor the reader shown.
+    private func resetReader() {
+        readerChecked = false
+        if isReaderAvailable { isReaderAvailable = false }
+        if isReading { isReading = false }
+    }
+
     private func openPDF(from webView: WKWebView, reader: PDFReader) async {
         let data = await PDFReader.mainResourceData(of: webView)
         guard pdf === reader else { return }
@@ -438,6 +524,8 @@ final class Tab: NSObject, Identifiable {
     func markActive() {
         noteSound()
         lastActive = Date()
+        // One loading is asked once it has finished.
+        if !isLoading { checkReader() }
         wakeIfAsleep()
     }
 
@@ -575,6 +663,8 @@ final class Tab: NSObject, Identifiable {
         tearDown()
         pdf = nil
         pdfHistory = [:]
+        resetReader()
+        hasRead = false
         hasInternalBridge = false
         hasWebstoreBridge = false
         isAsleep = true
@@ -1134,6 +1224,7 @@ extension Tab: WKNavigationDelegate {
         awaitCommit(false)
         // A new document: its script tells again, a page back from the cache too.
         hasUnsavedInput = false
+        resetReader()
         if navigation !== errorNavigation { loadError = nil }
         // Another page showing ends the redirect a stripped address guards against: a later link
         // to the same tracked address (after Back, say) is stripped again.
@@ -1210,6 +1301,7 @@ extension Tab: WKNavigationDelegate {
             Task { await find.update(query: find.query, in: findTarget) }
         }
         guard failedURL == nil else { return }
+        if browser?.isOnScreen(self) == true { checkReader() }
         if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         faviconLoad?.cancel()

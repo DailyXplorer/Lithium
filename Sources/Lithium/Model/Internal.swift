@@ -149,6 +149,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             _ = await StartImage.choose()
         case "setWebsiteFont":
             browser.changePageFont { PageStyle.usesDMSansEverywhere = value as? Bool ?? true }
+        case "setReaderButton":
+            browser.setReaderButton(value as? Bool ?? true)
         case "setSiteFont":
             // Typed in by the user: a bare domain, or anything with one in it.
             guard let entry = value as? [String: Any], let text = (entry["site"] as? String)?.trimmingCharacters(in: .whitespaces),
@@ -312,6 +314,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "miniPlayer": NowPlaying.isEnabled,
                 "tabUsage": defaults.object(forKey: Preference.tabUsage) as? Bool ?? true,
                 "websiteFont": PageStyle.usesDMSansEverywhere,
+                "readerButton": ReaderMode.showsButton,
                 "siteFontDomains": PageStyle.siteFontDomains,
                 "startPage": [
                     "background": defaults.string(forKey: Preference.startBackground) ?? StartBackground.lithium.rawValue,

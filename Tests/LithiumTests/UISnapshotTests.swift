@@ -387,7 +387,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let state: [String: Any] = [
         "appearance": [
             "sidebarStyle": "solid", "sidebarColor": "#D5DAF5", "defaultColor": "#D5DAF5", "sidebarReveal": "normal",
-            "miniPlayer": true, "tabUsage": true, "websiteFont": true,
+            "miniPlayer": true, "tabUsage": true, "websiteFont": true, "readerButton": true,
             "startPage": ["background": "gradient", "color": "#2B2D42", "gradientFrom": "#1F3A5F", "gradientTo": "#3D2C4E", "hasImage": false] as [String: Any],
         ] as [String: Any],
         "search": [

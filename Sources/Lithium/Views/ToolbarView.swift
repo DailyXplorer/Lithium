@@ -64,6 +64,9 @@ private struct AddressBar: View {
                 onDarkBackground: palette.isDark,
                 browser: browser
             )
+            if !isEditing, let tab, ReaderButtons.isShown(for: tab) {
+                ReaderButtons(tab: tab)
+            }
             if !isEditing, let tab, ZoomPill.isShown(for: tab, isPresented: showsZoom) {
                 ZoomPill(tab: tab, isPresented: $showsZoom)
             }

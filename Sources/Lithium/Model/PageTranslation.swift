@@ -123,6 +123,11 @@ final class PageWebView: WKWebView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Esc leaves the reader, as in Safari: its article has no field the key could be meant for.
+        if event.keyCode == 53, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty, let tab, tab.isReading {
+            Task { await tab.toggleReader() }
+            return
+        }
         // Only Enter, of the user's keys, takes a load back from the agent: Space activates
         // only a focused control, which the view can't tell before the page acts on it.
         if noteUser(event, pressing: true), [36, 76].contains(event.keyCode) || event.characters == "\r" { tab?.noteUserActivation() }

@@ -317,6 +317,62 @@ struct FilterUpdateTests {
         #expect(python.terminationStatus == 0)
         #expect(printed == "empty failed\nfew failed\ngood 12\nhtml failed\nportal failed\n")
     }
+
+    /// scripts/update-filters.py clones and builds the converter again when its clone is of
+    /// another tag, so the bundled set is never built with an older converter than the app's.
+    @Test func updateScriptRebuildsAConverterOfAnotherTag() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // git and swift stand-ins: a clone checks out CONVERTER_TAG, a build makes the binary.
+        let check = """
+            import importlib.util, pathlib, subprocess, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            tools = pathlib.Path(sys.argv[2])
+            script.TOOLS = tools
+            script.CONVERTER_BIN = tools / "SafariConverterLib/.build/release/ConverterTool"
+            repo = tools / "SafariConverterLib"
+            tag = [""]
+            calls = []
+            def run(command, **options):
+                if command[:2] == ["git", "-C"]:
+                    return subprocess.CompletedProcess(command, 0 if tag[0] else 128, stdout=tag[0] + "\\n", stderr="")
+                calls.append(command[1])
+                if command[1] == "clone":
+                    pathlib.Path(command[-1]).mkdir(parents=True)
+                    tag[0] = script.CONVERTER_TAG
+                else:
+                    script.CONVERTER_BIN.parent.mkdir(parents=True, exist_ok=True)
+                    script.CONVERTER_BIN.touch()
+                return subprocess.CompletedProcess(command, 0)
+            script.subprocess.run = run
+            def step(name):
+                calls.clear()
+                script.ensure_converter()
+                print(name, " ".join(calls) or "nothing")
+            step("fresh")
+            step("built")
+            tag[0] = "v0.0.1"
+            (repo / "old").touch()
+            step("raised")
+            print("old clone left", (repo / "old").exists())
+            script.CONVERTER_BIN.unlink()
+            step("unbuilt")
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.appending(path: "tools").path]
+        let output = Pipe()
+        python.standardOutput = output
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == "fresh clone build\nbuilt nothing\nraised clone build\nold clone left False\nunbuilt build\n")
+    }
 }
 
 /// Answers with the body served at a URL, or a 404 when there is none.

@@ -86,12 +86,22 @@ def expand(url: str, seen: set[str]) -> list[str]:
     return lines
 
 
+def converter_tag(repo: Path) -> str:
+    result = subprocess.run(["git", "-C", str(repo), "describe", "--tags", "--exact-match"], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def ensure_converter() -> None:
-    if CONVERTER_BIN.exists():
+    """The converter at CONVERTER_TAG. A clone of another tag (CONVERTER_TAG raised with
+    Package.swift's version) is cloned and built again: the bundled set would otherwise be
+    built with the old converter while the app's updater uses the new one."""
+    repo = TOOLS / "SafariConverterLib"
+    current = repo.exists() and converter_tag(repo) == CONVERTER_TAG
+    if current and CONVERTER_BIN.exists():
         return
     TOOLS.mkdir(exist_ok=True)
-    repo = TOOLS / "SafariConverterLib"
-    if not repo.exists():
+    if not current:
+        shutil.rmtree(repo, ignore_errors=True)
         subprocess.run(["git", "clone", "--depth", "1", "--branch", CONVERTER_TAG, CONVERTER_REPO, str(repo)], check=True)
     subprocess.run(["swift", "build", "-c", "release", "--product", "ConverterTool"], cwd=repo, check=True)
 

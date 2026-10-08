@@ -114,6 +114,10 @@ final class Privacy {
               const modes = { __proto__: null, ...\(json) }, href = location.href, at = href.indexOf('#');
               const mode = modes[at < 0 ? href : href.slice(0, at)];
               if (!mode) return;
+              // A window its page kept goes through the copy that protected it (see farbling.js):
+              // a `CustomEvent` the page left there would read the marker.
+              const adopter = window.__lithiumAdopt;
+              if (typeof adopter === 'function') return adopter(document, mode);
               dispatchEvent(new CustomEvent('m\(farblingValue("mark", key: key))', { cancelable: true, detail: { __proto__: null, trustedTypes: mode } }));
             })();
             """

@@ -1285,6 +1285,60 @@ struct FingerprintingTests {
         #expect(protected["marked"] == AnyHashable(true))
     }
 
+    /// A frame's initial blank window, which the page reaches before the frame's page loads, is
+    /// kept, with what the page put in it, when that page is of the same origin: the copy of the
+    /// script for that page, and the Trusted Types flag, call nothing the page left there (its
+    /// `CustomEvent` once read the marker), and the frames in the new page's markup are still
+    /// protected. Whoever has the marker gets no native function through it.
+    @Test func aKeptWindowLeaksNothingToThePage() async throws {
+        let mark = Privacy.farbling("__LITHIUM_MARK__", key: SymmetricKey(data: Data("test-key".utf8)), site: "example.com")
+        let probe = """
+            const hash = (win) => {
+              const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+              const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+              let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+              return (h >>> 0).toString(16);
+            };
+            // This same page, its address set first: a frame inserted without one loads its blank
+            // page at once, and that window isn't kept.
+            const frame = document.createElement('iframe');
+            frame.src = location.href;
+            const loaded = new Promise((done) => { frame.onload = done; setTimeout(done, 3000); });
+            document.body.appendChild(frame);
+            const child = frame.contentWindow;
+            let calls = 0;
+            const spy = (owner, name) => {
+              const real = owner[name];
+              owner[name] = function (...args) { calls++; return new.target ? Reflect.construct(real, args) : Reflect.apply(real, this, args); };
+              return owner[name];
+            };
+            const fake = spy(child, 'CustomEvent');
+            spy(child.EventTarget.prototype, 'dispatchEvent');
+            spy(child.Reflect, 'apply');
+            await loaded;
+            const reused = frame.contentWindow.CustomEvent === fake, asked = calls;
+            const box = {};
+            dispatchEvent(new CustomEvent('\(mark)', { cancelable: true, detail: box }));
+            const shared = box.disguises;
+            return JSON.stringify({ reused, asked, page: hash(window), nested: hash(frame.contentWindow.frames[0]),
+              natives: !!shared && typeof shared.get === 'function',
+              source: !!shared && /\\[native code\\]/.test(shared.source(HTMLCanvasElement.prototype.toDataURL)) });
+            """
+        // Served with a Trusted Types policy, so its flag runs in the kept window too.
+        let html = "<body><iframe></iframe></body>"
+        let headers = ["Content-Security-Policy-Report-Only": "require-trusted-types-for 'script'"]
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil, html: html, headers: headers, awaiting: true)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: html, headers: headers, awaiting: true)
+
+        #expect(bare["reused"] == AnyHashable(true), "the frame keeps its window")
+        #expect(protected["reused"] == AnyHashable(true), "the frame keeps its window")
+        #expect(protected["asked"] == AnyHashable(0))
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["nested"] == protected["page"])
+        #expect(protected["natives"] == AnyHashable(false))
+        #expect(protected["source"] == AnyHashable(true))
+    }
+
     /// Frequency data is in decibels, where an offset as small as the samples' rounds away in
     /// float32; the noise is relative there, so it shows.
     @Test func frequencyNoiseSurvivesFloat32Rounding() async throws {

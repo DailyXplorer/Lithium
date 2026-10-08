@@ -132,7 +132,8 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(second) })
         for _ in 0..<200 {
             browser.select(second)
-            guard await waitUntil(5, { loaded(second) }) else { continue }
+            // Not skipped: a selected tab that never loads is what this test is for.
+            guard await waitUntil(5, { loaded(second) }) else { Issue.record("the selected tab didn't load"); break }
             browser.select(first)
             try await Task.sleep(for: .microseconds(Int.random(in: 1_500...3_500)))
             browser.select(second)

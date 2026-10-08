@@ -576,11 +576,17 @@ final class Browser {
     /// favorite's page selects the top of the list. A tab the user went to straight from the one
     /// that opened it, and left for no other, goes back to its opener instead.
     func close(_ tab: Tab) {
+        close(tab, remembering: true)
+    }
+
+    /// `remembering` false keeps the tab out of Reopen Closed Tab: a tab that closed itself once
+    /// its address became a download would only start the download again.
+    func close(_ tab: Tab, remembering: Bool) {
         let order = peers(of: tab)
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
         videoPopout.discard(tab)
         nowPlaying.discard(tab)
-        if let url = tab.url, !tab.isEphemeral {
+        if remembering, let url = tab.url, !tab.isEphemeral {
             // An agent's tab comes back the user's, at the bottom of the list, next to where it was.
             let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? regularTabs.count : order.firstIndex { $0 === tab }
             let closed = ClosedTab(url: url, pinID: tab.pinID, customTitle: tab.customTitle, index: place, history: tab.history)

@@ -208,6 +208,26 @@ struct BrowserTests {
         #expect(browser.permissions.pending.isEmpty, "the page itself downloads without asking")
     }
 
+    /// A tab opened only to download a file closes itself, and Reopen Closed Tab skips it:
+    /// reopened, it would only download the file again and hide the tabs closed before it.
+    @Test func aTabClosedByItsDownloadIsntReopened() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/file": ("Content-Type: application/octet-stream", "Lithium")])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let page = URL(string: "data:text/html,closed")!
+        browser.close(browser.newTab(url: page))
+        let before = Downloads.shared.items.count
+        let downloading = browser.newTab(url: base.appending(path: "file"))
+        #expect(await waitUntil(30) { Downloads.shared.items.count == before + 1 && !browser.tabs.contains { $0 === downloading } })
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(30) { item.state != .downloading })
+        if let file = item.destination { try? FileManager.default.removeItem(at: file) }
+
+        browser.reopenClosedTab()
+        #expect(browser.selectedTab?.url == page)
+        if let reopened = browser.selectedTab { browser.close(reopened) }
+    }
+
     /// A frame's `<a download>` asks too, like its attachments: it isn't the page the user is on.
     @Test func aFramesDownloadLinkAsksFirst() async throws {
         let (listener, base) = try await LocalHTTP.serve([

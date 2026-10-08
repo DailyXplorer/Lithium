@@ -16,7 +16,9 @@ struct SuggestionList: View {
             ForEach(Array(suggestions.items.enumerated()), id: \.element.id) { index, suggestion in
                 SuggestionRow(suggestion: suggestion, isSelected: index == suggestions.selectedIndex)
                     .contentShape(Rectangle())
-                    .onHover { if $0 { suggestions.select(suggestion) } }
+                    // Every move, not only on entering: a row that came up under the pointer is
+                    // picked once the pointer moves within it.
+                    .onContinuousHover { if case .active = $0 { suggestions.hover(suggestion) } }
                     .onTapGesture { browser.accept(suggestion) }
             }
         }

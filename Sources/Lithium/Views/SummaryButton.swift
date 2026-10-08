@@ -105,7 +105,7 @@ private struct SummaryBody: View {
                 }
             }
             if summary.isPartial {
-                Text("This page is long, so the summary covers only its start.")
+                Text("This \(summary.source == .page ? "page" : "selection") is long, so the summary covers only its start.")
                     .font(Theme.font(11))
                     .foregroundStyle(.secondary)
             }

@@ -32,7 +32,7 @@ final class PageSummaries {
     struct Summary: Equatable {
         let source: SummarySource
         let content: SummaryContent
-        /// Made from the beginning of a page longer than `SummaryText.maximumLength`.
+        /// Made from the beginning of a page, or selection, longer than `SummaryText.maximumLength`.
         let isPartial: Bool
     }
 
@@ -135,7 +135,8 @@ final class PageSummaries {
         }
         entries[tab.id]?.shown = nil
 
-        guard let content = await PageReader.read(tab.webView) else {
+        let read = if let pdf = tab.pdf { await pdf.content(limit: SummaryText.maximumLength) } else { await PageReader.read(tab.webView) }
+        guard let content = read else {
             show(.page, .failed("Lithium couldn’t read this page."), in: tab, for: page)
             return
         }
@@ -147,7 +148,7 @@ final class PageSummaries {
         if words >= SummaryText.minimumSelectionWords {
             entries[tab.id]?.shown = .selection
             if let current = entries[tab.id]?.selection, current.text == selection, !current.state.isFailure { return }
-            start(.selection, text: selection, isPartial: false, title: content.title, in: tab, for: page)
+            start(.selection, text: selection, isPartial: content.isSelectionTruncated, title: content.title, in: tab, for: page)
         } else {
             entries[tab.id]?.shown = .page
             if let current = entries[tab.id]?.page, !current.isFailure { return }

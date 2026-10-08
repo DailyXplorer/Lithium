@@ -86,8 +86,11 @@ private struct VideoPopoutPlayer: View {
     @AppStorage(Preference.videoPopoutWidth) private var storedWidth = Double(PopoutLayout.defaultWidth)
     @AppStorage(Preference.videoPopoutInsetX) private var insetX = Double(PopoutLayout.inset)
     @AppStorage(Preference.videoPopoutInsetY) private var insetY = Double(PopoutLayout.inset)
-    @State private var dragOffset: CGSize = .zero
+    /// Gesture state resets when a drag ends and also when it is cancelled (⌘-Tab away
+    /// mid-drag), which skips `onEnded`: the player goes back where it was.
+    @GestureState private var dragOffset: CGSize = .zero
     @State private var resizeStart: CGFloat?
+    @GestureState private var isResizing = false
     @State private var isHovered = false
 
     var body: some View {
@@ -113,6 +116,8 @@ private struct VideoPopoutPlayer: View {
         .onTapGesture(count: 2) { popout.returnToTab() }
         .gesture(move(size: size, origin: origin, layout: layout))
         .overlay { resizeHandles(layout: layout, size: size) }
+        // A cancelled resize keeps the size reached, but the next one starts from the player's size.
+        .onChange(of: isResizing) { if !isResizing { resizeStart = nil } }
         // Cast by a shape behind the player: a shadow on the web view's own layers made a
         // playing video flash black whenever the pointer moved (see `ContentCard`).
         .background {
@@ -129,14 +134,13 @@ private struct VideoPopoutPlayer: View {
     /// player, which moves under the pointer: measured there, it fed back on itself and shook.
     private func move(size: CGSize, origin: CGPoint, layout: PopoutLayout) -> some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
-            .onChanged { dragOffset = $0.translation }
+            .updating($dragOffset) { value, offset, _ in offset = value.translation }
             .onEnded { value in
                 let dropped = layout.clamped(CGPoint(x: origin.x + value.translation.width, y: origin.y + value.translation.height), size: size)
                 let placement = layout.placement(of: dropped, size: size)
                 corner = placement.corner
                 insetX = placement.inset.width
                 insetY = placement.inset.height
-                dragOffset = .zero
             }
     }
 
@@ -189,6 +193,7 @@ private struct VideoPopoutPlayer: View {
     /// Pulling away from the tucked corner grows the player; along both axes, the larger pull wins.
     private func resize(layout: PopoutLayout, size: CGSize, axis: Axis?) -> some Gesture {
         DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($isResizing) { _, resizing, _ in resizing = true }
             .onChanged { value in
                 let start = resizeStart ?? size.width
                 resizeStart = start
@@ -311,7 +316,8 @@ private struct Scrubber: View {
     let popout: VideoPopout
     let time: Double
     let duration: Double
-    @State private var scrubbing: Double?
+    /// Resets when a drag is cancelled too, which skips `onEnded`: the bar follows the video again.
+    @GestureState private var scrubbing: Double?
     @State private var isHovered = false
 
     var body: some View {
@@ -331,12 +337,11 @@ private struct Scrubber: View {
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
-                        .onChanged { value in
+                        .updating($scrubbing) { value, scrubbing, _ in
                             scrubbing = min(max(value.location.x / proxy.size.width, 0), 1) * duration
                         }
-                        .onEnded { _ in
-                            if let scrubbing { popout.seek(to: scrubbing) }
-                            scrubbing = nil
+                        .onEnded { value in
+                            popout.seek(to: min(max(value.location.x / proxy.size.width, 0), 1) * duration)
                         }
                 )
                 .animation(.easeOut(duration: 0.12), value: height)

@@ -45,6 +45,32 @@ struct AddressSuggestionsTests {
         #expect(suggestions.items.map(\.id) == ["search:git", "history:https://github.com/"])
     }
 
+    /// Rows that come up under a resting pointer (history arriving late) don't change what Return
+    /// opens; once the pointer moves, the row under it does.
+    @Test func hoverPicksARowOnlyOnceThePointerMoves() async throws {
+        let store = history([("https://swift.org/", "Swift", 1)])
+        let suggestions = AddressSuggestions()
+        var pointer = CGPoint(x: 100, y: 100)
+        suggestions.pointerLocation = { pointer }
+        suggestions.update(query: "swift", tabs: [], pins: [], history: store)
+        await suggestions.historyQuery?.value
+        let row = try #require(suggestions.items.last)
+        #expect(row.id == "history:https://swift.org/")
+
+        suggestions.hover(row)
+        #expect(suggestions.selectedIndex == 0)
+        pointer.y += 3
+        suggestions.hover(row)
+        #expect(suggestions.selected == row)
+
+        // Typing again brings new rows under the pointer, which hasn't moved since.
+        suggestions.update(query: "swift.org", tabs: [], pins: [], history: store)
+        await suggestions.historyQuery?.value
+        let again = try #require(suggestions.items.last)
+        suggestions.hover(again)
+        #expect(suggestions.selectedIndex == 0)
+    }
+
     @Test func domainsBecomeAnAddressAndArrowsWrap() {
         let suggestions = AddressSuggestions()
         suggestions.update(query: "swift.org", tabs: [], pins: [], history: history([]))

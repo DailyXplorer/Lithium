@@ -189,4 +189,21 @@ struct FaviconCacheTests {
         for host in hosts { try FileManager.default.removeItem(at: folder.appending(path: "\(host).png")) }
         #expect(hosts.filter { favicons.cachedData(host: $0) != nil } == ["8.example", "9.example"])
     }
+
+    /// Clear History takes the icons kept for the hosts visited, on disk and in memory, but for
+    /// those still shown (favorites, open tabs).
+    @Test func clearingForgetsTheHostsVisited() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "lithium-favicons-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder)
+        let hosts = ["visited.example", "pinned.example"]
+        for host in hosts { try Data(host.utf8).write(to: folder.appending(path: "\(host).png")) }
+        for host in hosts { _ = favicons.cachedData(host: host) }
+
+        await favicons.clear(keeping: ["pinned.example"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["pinned.example.png"])
+        #expect(favicons.cachedData(host: "visited.example") == nil)
+        #expect(favicons.cachedData(host: "pinned.example") == Data("pinned.example".utf8))
+    }
 }

@@ -155,7 +155,11 @@ struct QRCodeView: View {
         panel.nameFieldStringValue = QRCode.fileName(for: url)
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
-            try? png.write(to: destination, options: .atomic)
+            do {
+                try png.write(to: destination, options: .atomic)
+            } catch {
+                NSAlert(error: error).runModal()
+            }
         }
     }
 }

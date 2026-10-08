@@ -11,13 +11,14 @@ struct Pin: Codable, Identifiable, Equatable {
 }
 
 enum PinStore {
-    private static var fileURL: URL {
+    static var fileURL: URL {
         URL.applicationSupportDirectory.appending(path: "Lithium/pins.json")
     }
 
-    static func load() -> [Pin] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([Pin].self, from: data)) ?? []
+    /// A favorite that can't be read doesn't take the others with it, and the file is kept aside
+    /// before the next change writes over it (`StoredFile`).
+    static func load(from url: URL = fileURL) -> [Pin] {
+        StoredFile.readList(Pin.self, at: url)
     }
 
     static func save(_ pins: [Pin]) {

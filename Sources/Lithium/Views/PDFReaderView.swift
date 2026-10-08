@@ -109,7 +109,7 @@ private struct PageField: View {
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
                 .focused($isFocused)
                 .onSubmit {
-                    if let number = Int(text.trimmingCharacters(in: .whitespaces)) { reader.goToPage(number - 1) }
+                    if let number = Int(text.trimmingCharacters(in: .whitespaces)) { reader.goToPage(PDFReader.pageIndex(ofNumber: number)) }
                     text = "\(reader.pageIndex + 1)"
                     reader.view.window?.makeFirstResponder(reader.view)
                 }

@@ -187,6 +187,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 browser.tidyTitles.prepare()
                 browser.tabs.forEach { browser.tidyTitles.update($0) }
             }
+        case "setTidyDownloads":
+            Downloads.shared.tidy.isEnabled = value as? Bool ?? false
         case "setSummaries":
             browser.summaries.isEnabled = value as? Bool ?? true
         case "setSummaryLanguage":
@@ -340,6 +342,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             },
             "max": [
                 "tidyTitles": browser.tidyTitles.isEnabled,
+                "tidyDownloads": Downloads.shared.tidy.isEnabled,
                 "summaries": browser.summaries.isEnabled,
                 "summaryLanguage": browser.summaries.language ?? "",
                 "summarySystemLanguage": browser.summaries.languageChoices.system,

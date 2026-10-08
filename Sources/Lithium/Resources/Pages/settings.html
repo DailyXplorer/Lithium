@@ -162,6 +162,10 @@
       <label class="switch" for="tidy-titles"><input type="checkbox" id="tidy-titles" role="switch"><span></span></label>
     </div>
     <div class="row">
+      <div><div class="title">Tidy downloads</div><div class="hint">Gives files with vague names, like document(3).pdf, a clear name. Undo in Downloads.</div></div>
+      <label class="switch" for="tidy-downloads"><input type="checkbox" id="tidy-downloads" role="switch"><span></span></label>
+    </div>
+    <div class="row">
       <div><div class="title">Summarize pages</div><div class="hint">Adds a toolbar button that sums up the page or selected text.</div></div>
       <label class="switch" for="summaries"><input type="checkbox" id="summaries" role="switch"><span></span></label>
     </div>
@@ -429,6 +433,7 @@
 
     const { max } = state;
     $('#tidy-titles').checked = max.tidyTitles;
+    $('#tidy-downloads').checked = max.tidyDownloads;
     $('#summaries').checked = max.summaries;
     $('#summary-language-row').hidden = !max.summaries || max.summaryLanguages.length === 0;
     $('#summary-language').replaceChildren(
@@ -514,7 +519,8 @@
   $('#web-store').onclick = () => call('openWebStore');
   $('#open-passwords').onclick = () => call('openPasswords');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
-  $('#summaries').onchange = (event) => call('setSummaries', event.target.checked).then(render);
+  $('#tidy-downloads').onchange = (event) => call('setTidyDownloads', event.target.checked).then(render);
+  $('#summaries').onchange =(event) => call('setSummaries', event.target.checked).then(render);
   $('#summary-language').onchange = (event) => call('setSummaryLanguage', event.target.value).then(render);
   $('#agent-access').onchange = (event) => call('setAgentAccess', event.target.checked).then(render);
   $('#agent-allow').onclick = () => call('allowAgents').then(render);

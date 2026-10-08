@@ -43,6 +43,19 @@ struct UISnapshotTests {
         }
     }
 
+    /// A download Lithium named, the site's name crossed out under it, with Use original name.
+    @Test func renamedDownloadSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let item = DownloadItem(filename: "document(3).pdf", size: 48_213)
+        item.setDestination(URL(filePath: "/tmp/Invoice October 2026.pdf"), renamedFrom: "document(3).pdf")
+        item.finish(.finished)
+        for isDark in [false, true] {
+            let row = DownloadRow(item: item).font(Theme.font(13)).frame(width: 324).padding(8)
+            try render(row, isDark: isDark).write(to: directory.appending(path: "download-renamed-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     @Test func settingsSnapshots() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let configuration = WKWebViewConfiguration()
@@ -283,7 +296,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         ] as [String: Any],
         "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],
         "max": [
-            "tidyTitles": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
+            "tidyTitles": true, "tidyDownloads": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
             "summaryLanguages": [["code": "en", "name": "English"], ["code": "fr", "name": "French"]],
             "modelAvailable": false,
             "modelMessage": "Turn on Apple Intelligence in System Settings. Basic tidying still works.",

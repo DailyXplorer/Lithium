@@ -736,8 +736,9 @@ extension AgentHub {
                 let outcome = try await watch(named, until: deadline) { () -> (met: Bool, unread: Int)? in
                     try self.checkPageShown(named, before: event)
                     if let result = pending.result {
-                        // A document between pages fails at once: ask the next one.
-                        guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data) else { return (false, 0) }
+                        // A document between pages fails at once, and one WebKit caches as it
+                        // leaves answers `gone`: ask the next one.
+                        guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data), wait.gone != true else { return (false, 0) }
                         return wait.met == true ? (true, wait.unread ?? 0) : nil
                     }
                     return tab.commits != commits ? (false, 0) : nil

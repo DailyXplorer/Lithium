@@ -931,11 +931,14 @@
     const fields = [...form.elements];
     return { id: idOf(form), cards: fields.some((field) => isField(field) && isCard(field)), password: fields.some((field) => isPassword(field) && field.value !== '') };
   };
-  // A password field that isn't empty in the target's document or shadow root, whoever filled
-  // it: a sign-in sent by a script from a plain button, a link, or Enter in a field outside any
-  // form sends it as a form's submit would (design section 7.3).
-  const passwordFilled = (element) => [...new Set([document, element.getRootNode()])].some((root) => (
-    [...root.querySelectorAll('input')].some((field) => isPassword(field) && field.value !== '')));
+  // A password field that isn't empty in the target's document, in any of its open shadow roots
+  // (a design system's field and button are often in two components), whoever filled it: a
+  // sign-in sent by a script from a plain button, a link, or Enter in a field outside any form
+  // sends it as a form's submit would (design section 7.3).
+  const passwordFilled = (element) => [...new Set([document, element.getRootNode()])].some((root) => {
+    for (const field of allElements(root)) if (isPassword(field) && field.value !== '') return true;
+    return false;
+  });
   // Whether the document is a payment page (design section 7.3): card fields and wallet buttons
   // anywhere in it, and the frames it holds by address.
   const walletSelector = 'apple-pay-button, gpay-button, .gpay-button, button, [role=button], input[type=button], input[type=submit]';

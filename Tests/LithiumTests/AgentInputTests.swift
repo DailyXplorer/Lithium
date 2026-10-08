@@ -308,10 +308,16 @@ struct AgentInputTests {
             </script>
             """),
         "/script-login": (html, """
-            <title>Script sign-in</title><style>body { margin: 0 } input, button { position: absolute; left: 40px; width: 160px }</style>
-            <input id="who" aria-label="Who" style="top: 40px"><input type="password" id="secret" aria-label="Secret" style="top: 100px">
-            <button type="button" id="go" style="top: 160px" onclick="location = '/done'">Sign in</button>
-            <script>document.getElementById('who').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });</script>
+            <title>Script sign-in</title><style>body { margin: 0 } input, button, #next { position: absolute; left: 40px; width: 160px; height: 30px }</style>
+            <input id="who" aria-label="Who" style="top: 40px"><secret-field></secret-field>
+            <button type="button" id="go" style="top: 160px" onclick="location = '/done'"><span style="display: block">Sign in</span></button>
+            <div id="next" style="top: 220px; cursor: pointer" onclick="location = '/done'">Continue</div>
+            <script>
+              document.getElementById('who').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });
+              // The password in one component's shadow root, the buttons outside it.
+              document.querySelector('secret-field').attachShadow({ mode: 'open' }).innerHTML =
+                '<input type="password" aria-label="Secret" style="position: absolute; left: 40px; top: 100px; width: 160px">';
+            </script>
             \(logger)
             """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
@@ -1351,15 +1357,19 @@ struct AgentInputTests {
 
     /// A sign-in a script sends, with no form: once the password is filled (by the user or a
     /// password manager), its plain button, a right click on it, and Enter in a field ask as a
-    /// form's submit does, and nothing denied reaches the page.
+    /// form's submit does, and nothing denied reaches the page: also with the password in a
+    /// component's shadow root, a div that only has a click listener, and a click by point,
+    /// which lands on the label inside the button.
     @Test func aSignInWithoutAFormAsksOnceItsPasswordIsFilled() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "script-login"))
             let button = try await ref(client, id, "button", "Sign in")
+            let next = try await ref(client, id, "clickable", "Continue")
             let who = try await ref(client, id, "textbox", "Who")
-            _ = try await page(tab, "document.getElementById('secret').value = 'filled'")
+            _ = try await page(tab, "document.querySelector('secret-field').shadowRoot.querySelector('input').value = 'filled'")
             for (tool, arguments) in [
                 ("click", ["tab": .string(id), "ref": .string(button)]), ("click", ["tab": .string(id), "ref": .string(button), "button": "right"]),
+                ("click", ["tab": .string(id), "ref": .string(next)]), ("click", ["tab": .string(id), "x": 120, "y": 175]),
                 ("type", ["tab": .string(id), "ref": .string(who), "text": "me", "submit": true]),
             ] as [(String, JSONValue)] {
                 let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)

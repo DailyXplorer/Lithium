@@ -974,6 +974,23 @@ struct AgentServerTests {
         #expect(files == [AgentLog.fileName(for: recent)])
     }
 
+    /// Day files an earlier version named in a Buddhist year sort after every Gregorian one:
+    /// pruning drops them instead of keeping them, as the newest, forever.
+    @Test func prunesDayFilesNamedAfterTomorrow() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-log-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let log = AgentLog(folder: folder)
+        let now = Date()
+        await log.append(["tool": "a"], at: now)
+        let tomorrow = AgentLog.fileName(for: AgentLog.dayCalendar.date(byAdding: .day, value: 1, to: now)!)
+        for name in ["2569-10-01.jsonl", tomorrow] {
+            FileManager.default.createFile(atPath: folder.appending(path: name).path, contents: Data("{}\n".utf8))
+        }
+        await log.prune(now: now)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(files == [AgentLog.fileName(for: now), tomorrow].sorted())
+    }
+
     private func permissions(_ url: URL) throws -> Int {
         try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int ?? -1
     }

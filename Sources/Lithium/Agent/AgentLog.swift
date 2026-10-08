@@ -64,12 +64,16 @@ actor AgentLog {
         ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".jsonl") }.sorted()
     }
 
-    /// Deletes day files older than the retention period.
+    /// Deletes day files older than the retention period, and those named after tomorrow: files
+    /// an earlier version named in a Buddhist year (2569) would otherwise sort as the newest and
+    /// never go.
     func prune(now: Date = Date()) {
-        guard let cutoff = Self.dayCalendar.date(byAdding: .day, value: -Self.retentionDays, to: now) else { return }
+        guard let cutoff = Self.dayCalendar.date(byAdding: .day, value: -Self.retentionDays, to: now),
+              let tomorrow = Self.dayCalendar.date(byAdding: .day, value: 1, to: now) else { return }
         let oldest = Self.fileName(for: cutoff)
+        let newest = Self.fileName(for: tomorrow)
         let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        for name in files where name.hasSuffix(".jsonl") && name < oldest {
+        for name in files where name.hasSuffix(".jsonl") && (name < oldest || name > newest) {
             try? FileManager.default.removeItem(at: folder.appending(path: name))
         }
     }

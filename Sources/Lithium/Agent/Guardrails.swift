@@ -99,8 +99,10 @@ enum Guardrails {
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
-            // A script can send the filled password from any of them, form or not.
-            if element.passwordFilled, ["button", "link", "clickable"].contains(element.role) { return .password }
+            // A script can send the filled password from any click, form or not, and the target's
+            // own role often hides it: a span inside a button, a div that only has a click
+            // listener. Only a field's own controls are left out.
+            if element.passwordFilled, !Self.fieldRoles.contains(element.role) { return .password }
         }
         return form?.filledPassword == true ? .password : nil
     }
@@ -116,6 +118,11 @@ enum Guardrails {
     private static let actionable: Set<String> = [
         "link", "button", "textbox", "searchbox", "checkbox", "radio", "combobox", "listbox", "option", "slider",
         "spinbutton", "switch", "tab", "menuitem", "clickable", "shadow-closed", "frame",
+    ]
+
+    /// Controls a click sets rather than sends: clicking them beside a filled password is free.
+    private static let fieldRoles: Set<String> = [
+        "textbox", "searchbox", "checkbox", "radio", "switch", "combobox", "listbox", "option", "slider", "spinbutton",
     ]
 
     static let paymentPaths: Set<String> = ["checkout", "payment", "paiement", "pay", "kasse", "zahlung", "pago", "pagamento", "billing", "place-order"]

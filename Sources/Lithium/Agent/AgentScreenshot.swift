@@ -206,14 +206,13 @@ enum AgentScreenshot {
         return (output, scale, painted)
     }
 
-    /// The part of a PDF's first page in `area` (points from the page's top left; the whole page
-    /// when nil) as an image, `scale` pixels per point, white behind, cut at `maxHeight` pixels.
+    /// The part of a page's PDF in `area` (points from the page's top left; the whole page when
+    /// nil) as an image, `scale` pixels per point, white behind, cut at `maxHeight` pixels.
     /// Only that part is drawn: an element far down a long page needs no bitmap of all above it.
     /// Returns the part drawn, in points, and whether it was cut.
     nonisolated static func rasterize(_ data: Data, area: CGRect? = nil, scale: Double) -> (image: CGImage, area: CGRect, cut: Bool)? {
-        guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), let page = document.page(at: 1) else { return nil }
-        let box = page.getBoxRect(.mediaBox)
-        let rect = (area ?? CGRect(origin: .zero, size: box.size)).intersection(CGRect(origin: .zero, size: box.size))
+        guard let pdf = PagePDF(data) else { return nil }
+        let rect = (area ?? CGRect(origin: .zero, size: pdf.size)).intersection(CGRect(origin: .zero, size: pdf.size))
         guard !rect.isNull, !rect.isEmpty else { return nil }
         let width = max(1, Int((rect.width * scale).rounded()))
         let full = Int((rect.height * scale).rounded())
@@ -222,11 +221,11 @@ enum AgentScreenshot {
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.setFillColor(.white)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        // PDF space runs bottom up: the area's top goes to the image's top, also when the image is cut short.
+        // The area's top goes to the image's top, also when the image is cut short.
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: scale, y: scale)
-        context.translateBy(x: -box.minX - rect.minX, y: -(box.minY + box.height - rect.minY))
-        context.drawPDFPage(page)
+        context.translateBy(x: -rect.minX, y: rect.minY)
+        pdf.draw(in: context, from: rect.minY, to: rect.minY + Double(height) / scale)
         guard let image = context.makeImage() else { return nil }
         return (image, rect, full > height)
     }
@@ -253,20 +252,56 @@ enum AgentScreenshot {
         let cut: Bool
     }
 
+    /// The size of the page a WebKit PDF holds, all its PDF pages together.
     nonisolated static func pdfPageSize(_ data: Data) -> CGSize? {
-        guard let provider = CGDataProvider(data: data as CFData), let page = CGPDFDocument(provider)?.page(at: 1) else { return nil }
-        return page.getBoxRect(.mediaBox).size
+        PagePDF(data)?.size
     }
 
-    /// The first page of a PDF as pixels, `scale` per point, with `masks` (in points from the
-    /// page's top left) painted over: a page with masked regions goes out as pixels, since text
-    /// drawn under a mask would still be in the PDF. Cut into pages of up to `slice` points, so
-    /// a page of any length keeps its proportions and its end within a bitmap's size. Callers run
-    /// it off the main thread and refuse pages longer than `maxPDFLength`; a very wide page is
-    /// drawn at fewer pixels per point.
+    /// A page as WebKit makes it into a PDF: a long page comes cut into several PDF pages (of
+    /// about 14,400 points), so the page is all of them, one under the other.
+    private struct PagePDF {
+        let document: CGPDFDocument
+        let pages: [(page: CGPDFPage, box: CGRect, top: Double)]
+        let size: CGSize
+
+        init?(_ data: Data) {
+            guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), document.numberOfPages > 0 else { return nil }
+            var pages: [(page: CGPDFPage, box: CGRect, top: Double)] = []
+            var top = 0.0
+            for index in 1...document.numberOfPages {
+                guard let page = document.page(at: index) else { continue }
+                let box = page.getBoxRect(.mediaBox)
+                pages.append((page, box, top))
+                top += box.height
+            }
+            guard let first = pages.first else { return nil }
+            self.document = document
+            self.pages = pages
+            size = CGSize(width: first.box.width, height: top)
+        }
+
+        /// Draws the PDF pages showing the page from `top` to `bottom` (points down from its top)
+        /// into `context`, whose space is points, y up, with the page's top left at the origin.
+        func draw(in context: CGContext, from top: Double, to bottom: Double) {
+            for (page, box, offset) in pages where offset < bottom && offset + box.height > top {
+                context.saveGState()
+                context.translateBy(x: -box.minX, y: -(box.maxY + offset))
+                context.clip(to: box)
+                context.drawPDFPage(page)
+                context.restoreGState()
+            }
+        }
+    }
+
+    /// A page's PDF as pixels, `scale` per point, with `masks` (in points from the page's top
+    /// left) painted over: a page with masked regions goes out as pixels, since text drawn under
+    /// a mask would still be in the PDF. Cut into pages of up to `slice` points, so a page of any
+    /// length keeps its proportions and its end within a bitmap's size. Callers run it off the
+    /// main thread and refuse pages longer than `maxPDFLength`; a very wide page is drawn at
+    /// fewer pixels per point.
     nonisolated static func maskedPDF(_ data: Data, masks: [CGRect], scale: Double = 2, slice: Double = 2048) -> (data: Data, pages: Int)? {
-        guard let provider = CGDataProvider(data: data as CFData), let page = CGPDFDocument(provider)?.page(at: 1) else { return nil }
-        let box = page.getBoxRect(.mediaBox)
+        guard let page = PagePDF(data) else { return nil }
+        let box = CGRect(origin: .zero, size: page.size)
         let scale = min(scale, maxPDFPixelWidth / max(1, box.width))
         let output = NSMutableData()
         var mediaBox = CGRect(x: 0, y: 0, width: box.width, height: min(box.height, slice))
@@ -282,11 +317,11 @@ enum AgentScreenshot {
             bitmap.fill(CGRect(x: 0, y: 0, width: bitmap.width, height: bitmap.height))
             // PDF space runs bottom up: the slice's bottom edge goes to the bitmap's.
             bitmap.scaleBy(x: scale, y: scale)
-            bitmap.translateBy(x: -box.minX, y: -(box.minY + box.height - top - height))
-            bitmap.drawPDFPage(page)
+            bitmap.translateBy(x: 0, y: top + height)
+            page.draw(in: bitmap, from: top, to: top + height)
             bitmap.setFillColor(maskColor)
             for mask in masks {
-                bitmap.fill(CGRect(x: box.minX + mask.minX, y: box.minY + box.height - mask.maxY, width: mask.width, height: mask.height))
+                bitmap.fill(CGRect(x: mask.minX, y: -mask.maxY, width: mask.width, height: mask.height))
             }
             guard let image = bitmap.makeImage() else { return nil }
             var bounds = CGRect(x: 0, y: 0, width: box.width, height: height)

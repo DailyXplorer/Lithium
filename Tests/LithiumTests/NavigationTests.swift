@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WebKit
@@ -145,6 +146,27 @@ struct NavigationTests {
         #expect(requests["/a?utm_source=test"] == 0)
     }
 
+    /// Landed on a stripped address, a link there to the same address with other tracking
+    /// parameters is stripped too: only the stripped load's own bounce is let through.
+    @Test func aTrackedLinkToTheStrippedAddressIsStripped() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/a": ("Content-Type: text/html", Data(#"<title>Article</title><a id="again" href="/a?fbclid=test">Again</a>"#.utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let page = try #require(URL(string: "a?utm_source=test", relativeTo: base)?.absoluteURL)
+        let browser = Browser()
+        let tab = browser.newTab(url: page)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Article" && !tab.webView.isLoading })
+        #expect(requests["/a"] == 1)
+
+        _ = try await tab.webView.evaluateJavaScript("document.getElementById('again').click(); 0")
+        #expect(await waitUntil(30) { requests["/a"] == 2 && !tab.webView.isLoading })
+        #expect(requests["/a?fbclid=test"] == 0)
+        #expect(requests["/a?utm_source=test"] == 0)
+    }
+
     /// Back, Forward and Reload return to a history entry with tracking parameters (put there by
     /// the page's own `replaceState`, as analytics scripts do) as it is: stripping them would
     /// load a new page in its place and wipe the forward history.
@@ -251,6 +273,66 @@ struct NavigationTests {
         #expect(controller.userScripts.contains { $0.source == shown })
         #expect(!controller.userScripts.contains { $0.source == farbling(other) })
         #expect(tab.webView.url == base)
+    }
+
+    /// A load of another site that never shows a page (a 204 here) leaves the page its icon, and
+    /// its address coming back is no second visit.
+    @Test func aLoadThatNeverShowsKeepsTheIconAndAddsNoVisit() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data("<title>Shown</title>".utf8)),
+            "/empty": ("HTTP/1.1 204 No Content\r\nContent-Type: text/plain", Data()),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Shown" && !tab.webView.isLoading })
+        let icon = try #require(NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            NSColor.red.setFill()
+            rect.fill()
+            return true
+        }.tiffRepresentation)
+        tab.showFavicon(icon)
+        // Another visit in between, so the history's own one-minute merge can't hide a second one.
+        browser.history.record(URL(string: "https://elsewhere.example/")!, title: "")
+
+        let other = try #require(URL(string: "http://localhost:\(base.port ?? 0)/empty"))
+        _ = try await tab.webView.evaluateJavaScript("location.href = '\(other.absoluteString)'; 0")
+        #expect(await waitUntil(15) { requests["/empty"] == 1 && !tab.webView.isLoading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(tab.webView.url == base)
+        #expect(tab.favicon != nil)
+        #expect(browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").count == 1)
+    }
+
+    /// Once the tab goes to another page, the open find bar counts that page's matches, not the
+    /// last page's.
+    @Test func findCountsTheNewPageAfterANavigation() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/many": ("Content-Type: text/html", Data("<title>Many</title><p>lithium lithium lithium</p>".utf8)),
+            "/one": ("Content-Type: text/html", Data("<title>One</title><p>lithium</p>".utf8)),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "many"))
+        defer {
+            browser.find.hide()
+            browser.close(tab)
+        }
+        // Counted in the page's rendered text: drawn in a window far off screen.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil) }
+        window.contentView = tab.webView
+        window.orderFrontRegardless()
+        #expect(await waitUntil(30) { tab.webView.title == "Many" && !tab.webView.isLoading })
+        browser.find.show(focusingField: false)
+        await browser.find.update(query: "lithium", in: tab.findTarget)
+        #expect(browser.find.matchCount == 3)
+
+        tab.load(base.appending(path: "one"))
+        #expect(await waitUntil(15) { tab.webView.title == "One" && browser.find.matchCount == 1 })
     }
 
     /// Closing the selected tab tells extensions (`chrome.tabs.onActivated`) which tab took over.

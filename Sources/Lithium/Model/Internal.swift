@@ -185,7 +185,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.tidyTitles.isEnabled = value as? Bool ?? true
             if browser.tidyTitles.isEnabled {
                 browser.tidyTitles.prepare()
-                browser.tabs.forEach(browser.tidyTitles.update)
+                browser.tabs.forEach { browser.tidyTitles.update($0) }
             }
         case "setSummaries":
             browser.summaries.isEnabled = value as? Bool ?? true

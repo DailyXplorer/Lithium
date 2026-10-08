@@ -359,9 +359,10 @@ private struct TabNameField: View {
             .focused($isFocused)
             .onSubmit { commit() }
             .onAppear {
-                name = tab.displayTitle
+                name = browser.renameDraft ?? tab.displayTitle
                 claimFocus($isFocused)
             }
+            .onChange(of: name) { browser.renameDraft = name }
             .onChange(of: isFocused) { _, focused in
                 // Clicking elsewhere keeps the new name, like renaming in Finder.
                 if !focused, browser.renamingTabID == tab.id { commit() }

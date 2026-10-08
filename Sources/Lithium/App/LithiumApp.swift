@@ -77,6 +77,7 @@ struct BrowserCommands: Commands {
         CommandGroup(replacing: .printItem) {
             Button("Print…") { browser.selectedTab?.print() }
                 .keyboardShortcut("p")
+                .disabled(browser.selectedTab == nil)
         }
         CommandGroup(after: .pasteboard) {
             // The focused page's, through the responder chain: nothing happens in the address bar.
@@ -98,13 +99,16 @@ struct BrowserCommands: Commands {
             .keyboardShortcut("f")
             Button("Find Next") { findStep(forward: true) }
                 .keyboardShortcut("g")
+                .disabled(browser.selectedTab == nil)
             Button("Find Previous") { findStep(forward: false) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(browser.selectedTab == nil)
             Button("Use Selection for Find") {
                 guard let tab = browser.selectedTab else { return }
                 Task { await browser.find.useSelection(in: tab.findTarget) }
             }
             .keyboardShortcut("e")
+            .disabled(browser.selectedTab == nil)
         }
         CommandGroup(before: .sidebar) {
             Button(browser.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
@@ -113,6 +117,7 @@ struct BrowserCommands: Commands {
             .keyboardShortcut("b")
             Button("Reload Page") { browser.navigate(browser.selectedTab, .reload) }
                 .keyboardShortcut("r")
+                .disabled(browser.selectedTab == nil)
             Divider()
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
                 if let tab = browser.selectedTab { browser.summaries.togglePanel(for: tab) }
@@ -130,15 +135,19 @@ struct BrowserCommands: Commands {
             .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(browser.videoPopout.tab == nil && !browser.videoPopout.canShowSelected)
             Divider()
-            Button("Zoom In") { zoom(by: 0.1) }
+            // ⌘= zooms in too (`Browser.isZoomInWithoutShift`).
+            Button("Zoom In") { browser.zoomSelectedTab(by: PageZoom.step) }
                 .keyboardShortcut("+")
-            Button("Zoom Out") { zoom(by: -0.1) }
+                .disabled(browser.selectedTab == nil)
+            Button("Zoom Out") { browser.zoomSelectedTab(by: -PageZoom.step) }
                 .keyboardShortcut("-")
+                .disabled(browser.selectedTab == nil)
             Button("Actual Size") {
                 guard let tab = browser.selectedTab else { return }
                 if let pdf = tab.pdf { pdf.setScale(1) } else { tab.webView.pageZoom = 1 }
             }
                 .keyboardShortcut("0")
+                .disabled(browser.selectedTab == nil)
             Divider()
             Menu("Developer") {
                 Button("Show Web Inspector") { showDeveloperTools(.inspector) }
@@ -155,8 +164,10 @@ struct BrowserCommands: Commands {
             Divider()
             Button("Back") { browser.navigate(browser.selectedTab, .back) }
                 .keyboardShortcut("[")
+                .disabled(browser.selectedTab?.canGoBack != true)
             Button("Forward") { browser.navigate(browser.selectedTab, .forward) }
                 .keyboardShortcut("]")
+                .disabled(browser.selectedTab?.canGoForward != true)
         }
         CommandMenu("Tabs") {
             Button("Next Tab") { browser.selectAdjacentTab(1) }
@@ -168,10 +179,13 @@ struct BrowserCommands: Commands {
             Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Divider()
+            // As in the sidebar and the toolbar: a private tab is never pinned.
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
+                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true)
             Button("Copy Link") { browser.copyLink(of: browser.selectedTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(browser.selectedTab?.url == nil)
             Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(browser.selectedTab?.url == nil)
@@ -204,13 +218,4 @@ struct BrowserCommands: Commands {
         DeveloperTools.show(panel, in: tab.webView)
     }
 
-    private func zoom(by delta: Double) {
-        guard let tab = browser.selectedTab else { return }
-        if let pdf = tab.pdf {
-            if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
-            return
-        }
-        let webView = tab.webView
-        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
-    }
 }

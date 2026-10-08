@@ -26,7 +26,12 @@ final class Browser {
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
-    var renamingTabID: Tab.ID?
+    var renamingTabID: Tab.ID? {
+        didSet { if renamingTabID != oldValue { renameDraft = nil } }
+    }
+    /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
+    /// sidebar's field for the sidebar's own.
+    @ObservationIgnored var renameDraft: String?
     /// Settings › Advanced › Developer tools, on unless turned off. Pages already open follow at once.
     var developerTools = UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool ?? true {
         didSet {
@@ -294,6 +299,13 @@ final class Browser {
         guard eventMonitors.isEmpty else { return }
         // Escape is caught before any text field sees it, since a focused field editor swallows it.
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if Self.isZoomInWithoutShift(event), let self {
+                return MainActor.assumeIsolated {
+                    guard !NativeInput.isAgents(event), event.window === self.window, self.selectedTab != nil else { return false }
+                    self.zoomSelectedTab(by: PageZoom.step)
+                    return true
+                } ? nil : event
+            }
             // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }
             return MainActor.assumeIsolated {
@@ -310,6 +322,22 @@ final class Browser {
             return event
         }
         eventMonitors = [escape, click].compactMap { $0 }
+    }
+
+    /// ⌘=, Zoom In as most people press it: the menu's "+" takes Shift on most layouts.
+    nonisolated static func isZoomInWithoutShift(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers == "=" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+    }
+
+    /// Zoom In and Zoom Out: the PDF viewer's own steps, or the page's zoom.
+    func zoomSelectedTab(by delta: Double) {
+        guard let tab = selectedTab else { return }
+        if let pdf = tab.pdf {
+            if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
+            return
+        }
+        let webView = tab.webView
+        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
     }
 
     /// Ends text editing when a click lands outside the field being edited. The click then goes
@@ -471,8 +499,9 @@ final class Browser {
 
     func newTabFocusingAddress() {
         find.hide()
-        // Left for the address bar: it counts as used until now.
+        // Left for the address bar: it counts as used until now, as does the other side of its split.
         selectedTab?.markActive()
+        shownPartner?.markActive()
         if selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
         requestAddressFocus()
@@ -506,6 +535,9 @@ final class Browser {
     /// waiting on that tab. What Lithium or an extension does on its own doesn't come here.
     func navigate(_ tab: Tab?, _ step: Step) {
         guard let tab else { return }
+        // Back or Forward with nowhere to go does nothing: an agent waiting on the tab goes on.
+        if case .back = step, !tab.canGoBack { return }
+        if case .forward = step, !tab.canGoForward { return }
         agent?.userNavigated(tab)
         tab.dialogOwner?.answerDialog(in: tab)
         tab.answerHiddenDialog()
@@ -560,6 +592,8 @@ final class Browser {
             if picked { tabPickToken &+= 1 }
             find.hide()
             previous?.markActive()
+            // Leaving the screen too, and no view says so: its idle time starts now.
+            shownPartner?.markActive()
             recentTabs.didShow(tab, after: previous)
         }
         selectedTabID = tab.id
@@ -818,6 +852,8 @@ final class Browser {
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { pinIDs.contains($0) ? $0 : nil }
+            // Asleep, it loads nothing that would tidy its title.
+            tidyTitles.update(tab, askingModel: false)
             tabs.append(tab)
             extensions.didOpen(tab)
             restored[index] = tab

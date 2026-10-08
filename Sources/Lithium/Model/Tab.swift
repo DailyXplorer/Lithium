@@ -239,6 +239,13 @@ final class Tab: NSObject, Identifiable {
     var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
     /// Where visits are recorded; a private tab records none.
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
+    /// The address of the last visit recorded.
+    @ObservationIgnored private var recordedURL: URL?
+
+    private func recordVisit(_ url: URL, title: String) {
+        recordedURL = url
+        historyStore?.record(url, title: title)
+    }
 
     init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil) {
         self.browser = browser
@@ -590,10 +597,10 @@ final class Tab: NSObject, Identifiable {
             webView.observe(\.url) { [weak self] webView, _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep, let url = webView.url, url != self.url else { return }
-                    if url.host() != self.url?.host() { self.favicon = nil; self.faviconData = nil }
                     self.url = url
-                    // Same-document navigations (pushState) never reach didFinish.
-                    if !webView.isLoading { self.historyStore?.record(url, title: self.title) }
+                    // Same-document navigations (pushState) never reach didFinish. A load that
+                    // never shows hands back the address already recorded: no new visit.
+                    if !webView.isLoading, url != self.recordedURL { self.recordVisit(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -987,6 +994,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
+        // A link or form the user pressed is a new load, not the page bouncing back to its tracked
+        // address: stripped again, even on the stripped address it landed on.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), Self.isPressed(action, in: webView) {
+            strippedURL = nil
+        }
         // A site the user turned protections off for keeps its parameters too. Back, Forward and
         // Reload return to an entry the history already has: cancelled for a new load, they would
         // drop the forward list and keep the user from going back past that page.
@@ -1100,9 +1112,12 @@ extension Tab: WKNavigationDelegate {
         browser?.appLinks.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
+        // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {
             updateUnread { $0.leaveSite() }
             forgetLiveIcon()
+            favicon = nil
+            faviconData = nil
         }
         shownHost = webView.url?.host()
         let list = webView.backForwardList
@@ -1150,8 +1165,13 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
+        // The find bar's count was the page before's: the new page is searched again.
+        if let browser, browser.find.isVisible, !browser.find.query.isEmpty, browser.selectedTab === self {
+            let find = browser.find
+            Task { await find.update(query: find.query, in: findTarget) }
+        }
         guard failedURL == nil else { return }
-        if let url = webView.url { historyStore?.record(url, title: webView.title ?? "") }
+        if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
         faviconLoad?.cancel()
         faviconLoad = Task { await refreshFavicon() }

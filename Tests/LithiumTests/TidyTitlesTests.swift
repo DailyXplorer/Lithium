@@ -160,6 +160,51 @@ struct TidyTitlesTabsTests {
         #expect(await waitUntil(10) { tab.tidyTitle == "Live match" })
     }
 
+    /// Tabs restored asleep at launch show their tidy titles at once, from the rules alone.
+    @Test func restoredTabsGetTidyTitles() throws {
+        let wasEnabled = UserDefaults.standard.object(forKey: TidyTitles.preferenceKey)
+        UserDefaults.standard.set(true, forKey: TidyTitles.preferenceKey)
+        defer { UserDefaults.standard.set(wasEnabled, forKey: TidyTitles.preferenceKey) }
+        let url = URL(string: "https://github.com/login")!
+        SessionStore.save(Session(tabs: [.init(url: url, title: "Sign in to GitHub · GitHub", customTitle: nil, pinID: nil)], selectedIndex: nil))
+        defer { SessionStore.save(Session()) }
+        let browser = Browser()
+        let tab = try #require(browser.tabs.first { $0.url == url })
+        #expect(tab.isAsleep)
+        #expect(tab.displayTitle == "Sign in to GitHub")
+    }
+
+    /// Turned off, the feature sends the model none of the titles still waiting their turn.
+    @Test func turnedOffItAsksTheModelNothingMore() async throws {
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            while !model.answers { try? await Task.sleep(for: .milliseconds(20)) }
+            return .title("Short")
+        }
+        defer { model.answers = true }
+        let tabs = [
+            ("https://one.example/", "Swift concurrency explained with many practical examples for beginners"),
+            ("https://two.example/", "Live match commentary and every score update from the stadium tonight"),
+        ].map { address, title in
+            let tab = Lithium.Tab(browser: browser, configuration: WKWebViewConfiguration())
+            tab.restore(url: URL(string: address)!, title: title)
+            return tab
+        }
+        tabs.forEach { titles.update($0) }
+        #expect(await waitUntil(10) { model.asked.count == 1 })
+
+        titles.isEnabled = false
+        model.answers = true
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(model.asked.count == 1)
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

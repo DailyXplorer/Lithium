@@ -965,6 +965,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
+        // A link or form the user pressed is a new load, not the page bouncing back to its tracked
+        // address: stripped again, even on the stripped address it landed on.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), Self.isPressed(action, in: webView) {
+            strippedURL = nil
+        }
         // A site the user turned protections off for keeps its parameters too. Back, Forward and
         // Reload return to an entry the history already has: cancelled for a new load, they would
         // drop the forward list and keep the user from going back past that page.

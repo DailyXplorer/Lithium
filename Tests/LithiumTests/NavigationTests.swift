@@ -145,6 +145,27 @@ struct NavigationTests {
         #expect(requests["/a?utm_source=test"] == 0)
     }
 
+    /// Landed on a stripped address, a link there to the same address with other tracking
+    /// parameters is stripped too: only the stripped load's own bounce is let through.
+    @Test func aTrackedLinkToTheStrippedAddressIsStripped() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/a": ("Content-Type: text/html", Data(#"<title>Article</title><a id="again" href="/a?fbclid=test">Again</a>"#.utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let page = try #require(URL(string: "a?utm_source=test", relativeTo: base)?.absoluteURL)
+        let browser = Browser()
+        let tab = browser.newTab(url: page)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Article" && !tab.webView.isLoading })
+        #expect(requests["/a"] == 1)
+
+        _ = try await tab.webView.evaluateJavaScript("document.getElementById('again').click(); 0")
+        #expect(await waitUntil(30) { requests["/a"] == 2 && !tab.webView.isLoading })
+        #expect(requests["/a?fbclid=test"] == 0)
+        #expect(requests["/a?utm_source=test"] == 0)
+    }
+
     /// Back, Forward and Reload return to a history entry with tracking parameters (put there by
     /// the page's own `replaceState`, as analytics scripts do) as it is: stripping them would
     /// load a new page in its place and wipe the forward history.

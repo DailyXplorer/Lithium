@@ -296,6 +296,12 @@ struct AgentInputTests {
             </form>
             <script>document.getElementById('notes').addEventListener('focus', () => document.getElementById('title').focus());</script>
             """),
+        "/notes-login": (html, """
+            <title>Notes sign-in</title><style>body { margin: 0 } textarea, input { position: absolute; left: 40px; width: 160px }</style>
+            <textarea id="notes" aria-label="Notes" style="top: 40px"></textarea><input type="password" id="secret" aria-label="Secret" style="top: 120px">
+            <script>document.getElementById('notes').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });</script>
+            \(logger)
+            """),
         "/later": (html, """
             <title>Later</title><style>body { margin: 0 } input { position: absolute; left: 40px; width: 160px }</style>
             <form action="/done">
@@ -1648,6 +1654,25 @@ struct AgentInputTests {
             let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
             #expect(!logged.contains("hunter2decoy"), "\(logged)")
             #expect(entries.allSatisfy { $0["params"]?["text"] == "[redacted]" }, "\(entries)")
+        }
+    }
+
+    /// Each "\n" is a real Enter key, which a page's own listener may take to send a filled
+    /// password: in a multi-line field, `type` and `fill_form` ask as `press Enter` there does.
+    @Test func newlinesBesideAFilledPasswordAsk() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "notes-login"))
+            let notes = try await ref(client, id, "textbox", "Notes")
+            _ = try await page(tab, "document.getElementById('secret').value = 'filled'")
+            for (tool, arguments) in [
+                ("type", ["tab": .string(id), "ref": .string(notes), "text": "a\nb"]),
+                ("fill_form", ["tab": .string(id), "fields": [["ref": .string(notes), "type": "textbox", "value": "a\nb"]]]),
+            ] as [(String, JSONValue)] {
+                let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)
+                #expect(denied.code == "denied_by_user", "\(tool): \(denied.content)")
+            }
+            #expect(try await log(tab, ["keydown"]).isEmpty)
+            #expect(tab.url?.path() == "/notes-login")
         }
     }
 

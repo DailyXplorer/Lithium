@@ -242,8 +242,10 @@ actor Bridge {
 
     private func post(_ body: Data?, to endpoint: Endpoint, session: String?, method: String = "POST", timeout: TimeInterval? = nil) async -> Outcome {
         // The token only goes to the Lithium that wrote it: once that one quits, anyone may hold
-        // its port. A refusal reads the file again, which starts Lithium if needed.
-        guard endpoint.isRunning(as: lithium), let url = URL(string: endpoint.url) else { return .refused }
+        // its port, and so may anyone once that one moves to another port (the file then names
+        // the new one). A refusal reads the file again, which starts Lithium if needed.
+        guard endpoint.isRunning(as: lithium), (try? Endpoint.read(file))?.url == endpoint.url,
+              let url = URL(string: endpoint.url) else { return .refused }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body

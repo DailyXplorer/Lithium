@@ -77,6 +77,10 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var sleepingState: Any?
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
+    /// The tab whose page made this one's web view (any `window.open` or target=_blank, a plain
+    /// tab included): WebKit links the two pages, `window.opener` one way and the handle
+    /// `window.open` returned the other, until either web view goes. `evaluate` runs in neither.
+    @ObservationIgnored weak var scriptOpener: Tab?
     /// The hub whose dialog the page waits on: it still answers it once agent access is off.
     @ObservationIgnored var dialogOwner: AgentHub?
     /// The page's dialog waiting for the tab to be shown (`present`): resumed with true when it
@@ -544,6 +548,8 @@ final class Tab: NSObject, Identifiable {
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
         unpair()
+        scriptOpener = nil
+        browser?.tabs.forEach { if $0.scriptOpener === self { $0.scriptOpener = nil } }
         // The next web view asks afresh, even if this one's question never gets an answer.
         isAskingPlayback = false
         tearDown()
@@ -1282,6 +1288,7 @@ extension Tab: WKUIDelegate {
         let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore) }
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
+        popup.scriptOpener = self
         // A popup window gives a size or a position, as sign-in and payment windows do. A link
         // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
         // window.open with no features at all, which can't be told apart from one.

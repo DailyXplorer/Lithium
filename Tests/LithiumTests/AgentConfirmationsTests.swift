@@ -246,6 +246,23 @@ struct AgentConfirmationsTests {
         }
     }
 
+    /// A private batch that fails before its tab exists (here a step that isn't a tool) is still
+    /// logged without its address.
+    @Test func aPrivateBatchThatFailsEarlyIsLoggedWithoutItsAddress() async throws {
+        try await withAgent { client, base in
+            let url = base.appending(path: "account/123").absoluteString
+            let failed = await client.call("batch", ["url": .string(url), "ephemeral": true, "steps": [["tool": "nope"]]])
+            #expect(failed.isError, "\(failed.content)")
+
+            let entry = try #require(await client.hub.log.entries(limit: 1).first)
+            #expect(entry["tool"] == "batch")
+            #expect(entry["ephemeral"] == true)
+            #expect(entry["params"] == nil)
+            let text = String(decoding: entry.encoded(), as: UTF8.self)
+            #expect(!text.contains("127.0.0.1") && !text.contains("account"), "\(text)")
+        }
+    }
+
     /// Two alike downloads during one action of the agent (a double click on a download link)
     /// each ask and are each logged: the Allow the first got never answers the second.
     @Test func eachDownloadDuringAnActionAsks() async throws {

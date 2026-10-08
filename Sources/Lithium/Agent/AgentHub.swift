@@ -633,8 +633,9 @@ final class AgentHub {
             "ms": .int(ms),
         ]
         // A private tab saves nothing: its calls are logged without their arguments (an address,
-        // a search typed) nor the tab's address and host, marked instead.
-        let isPrivate = tabID.map { tabIDs.isEphemeral($0) } == true || (name == "tab_open" && arguments["ephemeral"] == .bool(true))
+        // a search typed) nor the tab's address and host, marked instead. A call that opens a private
+        // tab is private even when it fails before that tab exists.
+        let isPrivate = tabID.map { tabIDs.isEphemeral($0) } == true || (["tab_open", "batch"].contains(name) && arguments["ephemeral"] == .bool(true))
         if isPrivate {
             entry["ephemeral"] = true
         } else {

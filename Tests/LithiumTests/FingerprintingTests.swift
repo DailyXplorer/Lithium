@@ -644,6 +644,9 @@ struct FingerprintingTests {
         let pages: [String: (html: String, headers: [String: String]?, expected: [String: Bool])] = [
             "rejected": (csp + "<body><p id=\"kept\">kept</p></body>", nil, ["kept": true, "written": false, "threw": true]),
             "rejectedByHeader": ("<body><p id=\"kept\">kept</p></body>", header, ["kept": true, "written": false, "threw": true]),
+            // The policy stays once its markup is gone.
+            "rejectedAfterTheMetaIsRemoved": (csp + "<body><p id=\"kept\">kept</p><script>document.querySelector('meta').remove()</script></body>",
+                                              nil, ["kept": true, "written": false, "threw": true]),
             "defaultPolicy": (csp + "<body><p id=\"kept\">kept</p><script>trustedTypes.createPolicy('default', { createHTML: (s) => s })</script></body>",
                               nil, ["kept": false, "written": true, "threw": false]),
         ]
@@ -658,6 +661,32 @@ struct FingerprintingTests {
                 let result: [String: Bool] = try await run(probe, farbling: source, html: page.html, headers: page.headers, awaiting: true)
                 #expect(result == page.expected, "\(name), farbling: \(source != nil)")
             }
+        }
+    }
+
+    /// Blank and `srcdoc` frames and popups have no response: they take the Trusted Types of the
+    /// page that made them, and a write those reject leaves them as it does the page.
+    @Test func writeRejectedByInheritedTrustedTypesLeavesTheDocument() async throws {
+        let probe = """
+            const policy = trustedTypes.createPolicy('test', { createHTML: (s) => s });
+            const kept = (doc) => { const p = doc.createElement('p'); p.id = 'kept'; doc.body.append(p); return doc; };
+            const blank = document.body.appendChild(document.createElement('iframe'));
+            const srcdoc = document.createElement('iframe');
+            srcdoc.srcdoc = policy.createHTML('<body></body>');
+            await new Promise((resolve) => { srcdoc.onload = resolve; document.body.append(srcdoc); });
+            const targets = { blank: kept(blank.contentDocument), srcdoc: kept(srcdoc.contentDocument), popup: kept(open().document) };
+            const results = {};
+            for (const [name, doc] of Object.entries(targets)) {
+              let threw = false;
+              try { doc.write('<p>written</p><iframe></iframe>'); } catch (error) { threw = error.name === 'TypeError'; }
+              results[name] = threw && doc.getElementById('kept') !== null && doc.readyState === 'complete';
+            }
+            return JSON.stringify(results);
+            """
+        let headers = ["Content-Security-Policy": "require-trusted-types-for 'script'"]
+        for source in [nil, try Self.farbling()] {
+            let result: [String: Bool] = try await run(probe, farbling: source, headers: headers, awaiting: true)
+            #expect(result == ["blank": true, "srcdoc": true, "popup": true], "farbling: \(source != nil)")
         }
     }
 

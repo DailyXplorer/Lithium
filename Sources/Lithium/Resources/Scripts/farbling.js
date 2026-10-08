@@ -92,8 +92,11 @@
   const createHTML = trustedTypesFactory && member(TrustedTypePolicy.prototype, 'createHTML').value;
   const readyState = member(Document.prototype, 'readyState').get;
   const currentScript = member(Document.prototype, 'currentScript').get;
+  const documentURL = member(Document.prototype, 'URL').get;
   const regExpExec = RegExp.prototype.exec;
   const FRAME_TAG = /frame/i;
+  // Documents with no response of their own, which take their creator's policies.
+  const NO_RESPONSE = /^(about|blob|data):/i;
   const TRUSTED_TYPES_META = 'head meta[http-equiv="content-security-policy" i][content*="require-trusted-types-for" i]';
 
   // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
@@ -215,12 +218,14 @@
   // frame (a blank one keeps its realm when its page loads), so each copy asks before protecting.
   // An event listener can't be listed or forged, unlike the window property this once was.
   // The same event, sent by the script Privacy adds for a response that asks for Trusted Types,
-  // tells the window's realm whether its policy enforces them or only reports.
-  const trustedTypesModes = new WeakMapCtor();
+  // tells the window's realm whether its policy enforces them or only reports. Shared like the
+  // disguises, so a frame's copy finds its parent's.
+  let trustedTypesModes = new WeakMapCtor();
   const answer = (event) => {
     apply(preventDefault, event, []);
     const box = read(eventDetail, event);
     if (box && !hasOwn(box, 'disguises')) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
+    if (box && !hasOwn(box, 'modes')) defineProperty(box, 'modes', { __proto__: null, value: trustedTypesModes });
     if (box && hasOwn(box, 'trustedTypes')) {
       const realm = sameOrigin(read(eventTarget, event));
       if (realm) apply(weakMapSet, trustedTypesModes, [realm, box.trustedTypes]);
@@ -237,7 +242,7 @@
     const others = [parent, top, opener];
     for (let i = 0; i < others.length; i++) {
       const box = others[i] && others[i] !== window && sameOrigin(others[i]) ? ask(others[i]) : null;
-      if (box && box.disguises) { disguises = box.disguises; break; }
+      if (box && box.disguises) { disguises = box.disguises; trustedTypesModes = box.modes || trustedTypesModes; break; }
     }
   } catch (_) {}
 
@@ -531,6 +536,27 @@
         if (args.length > 2) { try { protect(result); } catch (_) {} } else remark(self);
         return result;
       });
+      // Whether Trusted Types apply to a document: from its response's headers (see
+      // Privacy.trustedTypes), or a policy in its markup, which still applies once removed and so
+      // is kept. A blank or `srcdoc` frame or a popup has no response and its creator's policies.
+      const trustedTypesMode = (doc) => {
+        for (let depth = 0; doc && depth < 32; depth++) {
+          const view = read(documentView, doc);
+          const realm = view ? sameOrigin(view) : null;
+          let mode = (realm && apply(weakMapGet, trustedTypesModes, [realm])) || apply(weakMapGet, trustedTypesModes, [doc]);
+          try {
+            if (mode !== 'enforce' && read(nodeCount, apply(queryAll[9], doc, [TRUSTED_TYPES_META]))) {
+              mode = 'enforce';
+              apply(weakMapSet, trustedTypesModes, [doc, mode]);
+            }
+          } catch (_) {}
+          if (mode || !realm || !apply(regExpExec, NO_RESPONSE, [`${read(documentURL, doc)}`])) return mode;
+          let creator = null;
+          try { creator = view.parent !== view ? view.parent : view.opener; } catch (_) {}
+          try { doc = creator && sameOrigin(creator) ? creator.document : null; } catch (_) { doc = null; }
+        }
+        return undefined;
+      };
       const nativeWrite = member(documentProto, 'write').value;
       const writes = ['write', 'writeln'];
       for (let i = 0; i < writes.length; i++) {
@@ -562,10 +588,7 @@
           let open = mayHoldFrame(joined);
           if (open && plain && isTrustedHTML && !(read(readyState, self) === 'loading' && read(currentScript, self))) {
             const view = read(documentView, self);
-            const realm = view ? sameOrigin(view) : null;
-            // From the response's headers (see Privacy.trustedTypes), or a policy in the markup.
-            let mode = realm ? apply(weakMapGet, trustedTypesModes, [realm]) : undefined;
-            try { if (mode !== 'enforce' && read(nodeCount, apply(queryAll[9], self, [TRUSTED_TYPES_META]))) mode = 'enforce'; } catch (_) {}
+            const mode = trustedTypesMode(self);
             const policy = mode && view ? read(defaultPolicy, read(windowTrustedTypes, view)) : null;
             if (policy) {
               // Called as the browser would call it, with this sink: its answer then goes in
@@ -637,6 +660,13 @@
             for (let k = 0; k < total; k++) protectFrame(found[k]);
           }
         }
+      }
+      // A Trusted Types policy in the markup still applies once a script removes it: kept while
+      // it's there for the write hook (see trustedTypesMode).
+      if (isTrustedHTML && records.length && !apply(weakMapGet, trustedTypesModes, [document])) {
+        try {
+          if (read(nodeCount, apply(queryAll[9], document, [TRUSTED_TYPES_META]))) apply(weakMapSet, trustedTypesModes, [document, 'enforce']);
+        } catch (_) {}
       }
     };
     const observer = new MutationObserverCtor(parsed);

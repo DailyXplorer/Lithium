@@ -40,6 +40,8 @@ struct PinnedIcons {
 
     private static let red = png(.systemRed)
     private static let blue = png(.systemBlue)
+    /// The site's icon with its unread count drawn in.
+    private static let badged = png(.systemGreen)
 
     private static func favicons() -> Favicons {
         Favicons(folder: FileManager.default.temporaryDirectory.appending(path: "pinned-icons-\(UUID().uuidString)"))
@@ -59,6 +61,7 @@ struct PinnedIcons {
             "/": ("Content-Type: text/html", Data(page.utf8)),
             "/red.png": ("Content-Type: image/png", red),
             "/blue.png": ("Content-Type: image/png", blue),
+            "/badged.png": ("Content-Type: image/png", badged),
         ]
         return try await LocalHTTP.serve(routes, requested: { requests?.record($0) })
     }
@@ -305,6 +308,117 @@ struct PinnedIcons {
         _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = 'data:image/png;base64,\(Self.blue.base64EncodedString())'; 0")
         #expect(await waitUntil(30) { tab.faviconData == blue && pin()?.favicon == blue })
         #expect(pin()?.iconURL == nil)
+    }
+
+    /// A page that draws its count into its icon too (Discord, Gmail): while the tile shows the
+    /// count, the badged icon is neither fetched nor shown, so the count shows once, Lithium's.
+    /// Once read, the page's next icon is followed again.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func aBadgedIconDoesNotShowTheCountTwice() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Chat</title><link rel="icon" href="/red.png">"#, requests: requests)
+        defer { server.cancel() }
+        let favicons = Self.favicons()
+        let browser = Browser(favicons: favicons, notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let red = try #require(Favicons.normalized(Self.red))
+        let blue = try #require(Favicons.normalized(Self.blue))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { tab.faviconData == red && pin()?.iconURL == base.appending(path: "red.png") })
+
+        // As Discord does: the count goes in the title and the icon at once.
+        _ = try await tab.webView.evaluateJavaScript("document.title = '(3) Chat'; document.querySelector('link[rel=icon]').href = '/badged.png'; 0")
+        #expect(await waitUntil(10) { tab.unread.shown == .count(3) })
+        // Past the time a fetch would take.
+        try await Task.sleep(for: .seconds(1))
+        #expect(requests["/badged.png"] == 0)
+        #expect(tab.faviconData == red)
+        #expect(pin()?.favicon == red)
+        #expect(pin()?.iconURL == base.appending(path: "red.png"))
+        #expect(favicons.cachedData(host: try #require(base.host())) == red)
+        #expect(browser.icon(for: try #require(pin())) === tab.favicon)
+
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Chat'; document.querySelector('link[rel=icon]').href = '/red.png'; 0")
+        #expect(await waitUntil(10) { tab.unread.shown == nil })
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = '/blue.png'; 0")
+        #expect(await waitUntil(30) { tab.faviconData == blue && pin()?.favicon == blue })
+        #expect(requests["/badged.png"] == 0)
+    }
+
+    /// The badged icon named just before the count came in, still on its way then: it is not
+    /// shown, saved with the favorite or kept as the site's icon.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func aBadgedIconNamedBeforeTheCountIsDropped() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Chat</title><link rel="icon" href="/red.png">"#)
+        defer { server.cancel() }
+        let requests = Requests()
+        let (slow, slowBase) = try await LocalHTTP.serve(["/badged.png": ("Content-Type: image/png", Self.badged)], delay: 1, requested: { requests.record($0) })
+        defer { slow.cancel() }
+        let favicons = Self.favicons()
+        let browser = Browser(favicons: favicons, notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let red = try #require(Favicons.normalized(Self.red))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { tab.faviconData == red && pin()?.iconURL == base.appending(path: "red.png") })
+        // Past `Tab.iconInterval`, so the next icon is fetched at once.
+        try await Task.sleep(for: Tab.iconInterval)
+
+        let badged = slowBase.appending(path: "badged.png").absoluteString
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = '\(badged)'; 0")
+        #expect(await waitUntil(10) { requests["/badged.png"] == 1 })
+        _ = try await tab.webView.evaluateJavaScript("document.title = '(3) Chat'; 0")
+        #expect(await waitUntil(10) { tab.unread.shown == .count(3) })
+
+        // Past the slow answer, and the time to draw it.
+        try await Task.sleep(for: .seconds(2))
+        #expect(tab.faviconData == red)
+        #expect(pin()?.favicon == red)
+        #expect(pin()?.iconURL == base.appending(path: "red.png"))
+        #expect(favicons.cachedData(host: try #require(base.host())) == red)
+    }
+
+    /// A site first opened while it shows a count, its icon not cached yet: its touch icon, which
+    /// no site draws a count into, comes first, in a favorite and in a tab alike.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil), arguments: [true, false])
+    func aSiteOpenedWithACountGetsItsTouchIcon(pinned: Bool) async throws {
+        let requests = Requests()
+        let page = #"<!doctype html><title>(3) Chat</title><link rel="icon" href="/badged.png"><link rel="apple-touch-icon" href="/red.png">"#
+        let (server, base) = try await Self.serveIcons(page: page, requests: requests)
+        defer { server.cancel() }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        if pinned { browser.pin(tab) }
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let red = try #require(Favicons.normalized(Self.red))
+        #expect(await waitUntil(30) { tab.faviconData == red })
+        if pinned {
+            #expect(tab.unread.shown == .count(3))
+            #expect(await waitUntil(5) { browser.pins.first { $0.id == tab.pinID }?.favicon == red })
+        }
+        #expect(requests["/badged.png"] == 0)
+    }
+
+    /// The touch icon comes first only while the page counts something, in its title or through
+    /// `setAppBadge`; otherwise the icon closest to the tile's size does, as before.
+    @Test(arguments: [("(3) Chat", false), ("Chat", true), ("Chat", false)])
+    func theTouchIconComesFirstWhileThePageCounts(title: String, counting: Bool) async throws {
+        let page = #"<!doctype html><title>\#(title)</title><link rel="icon" href="/badged.png"><link rel="apple-touch-icon" href="/red.png">"#
+        let (server, base) = try await Self.serveIcons(page: page)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let found = await Self.favicons().favicon(for: webView, counting: counting)
+        let clean = title != "Chat" || counting
+        #expect(found == Favicons.normalized(clean ? Self.red : Self.badged))
     }
 
     /// Clear History while an icon is still on its way: the late answer doesn't put the cleared

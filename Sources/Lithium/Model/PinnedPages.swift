@@ -20,7 +20,9 @@ final class PinnedPages: NSObject, WKScriptMessageHandler {
         case badge(Int?)
         case clearBadge
         case notification
-        case icon(URL)
+        /// With the page's title as it named the icon: WebKit may report a new title only after
+        /// this, and a count that came with the icon must be known before the icon is fetched.
+        case icon(URL, title: String?)
 
         /// Badges above this read "99+" anyway.
         static let largestCount = 1_000_000
@@ -51,7 +53,7 @@ final class PinnedPages: NSObject, WKScriptMessageHandler {
             case "icon":
                 guard let href = body["href"] as? String, href.utf8.count <= Self.longestIcon,
                       let url = URL(string: href), Favicons.isFetchable(url) else { return nil }
-                self = .icon(url)
+                self = .icon(url, title: body["title"] as? String)
             default:
                 return nil
             }

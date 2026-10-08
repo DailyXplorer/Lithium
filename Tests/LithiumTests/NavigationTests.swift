@@ -474,13 +474,13 @@ struct NavigationTests {
 
     /// The press on a link is used up by the load it starts: the page it opens can't `click()`
     /// another app's link (nor start a download) on it, however soon after the press it runs. So
-    /// too in a frame, whose own load nothing else checks the press for.
-    @Test(arguments: [false, true]) func aPressDoesNotCarryOverToTheNextPage(inFrame: Bool) async throws {
+    /// too in a frame, whose own load nothing else checks the press for, whether the link or the
+    /// click's script (`location.href`) starts it.
+    @Test(arguments: [(false, false), (true, false), (true, true)]) func aPressDoesNotCarryOverToTheNextPage(inFrame: Bool, scripted: Bool) async throws {
         let html = "Content-Type: text/html"
         let link = #"""
             <style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
-            <a href="/next">Next</a>
-            """#
+            """# + (scripted ? ##"<a href="#" onclick="location.href = '/next'; return false">Next</a>"## : #"<a href="/next">Next</a>"#)
         let (listener, base) = try await LocalHTTP.serve([
             "/": (html, "<title>First</title>" + (inFrame ? #"<style>body { margin: 0 } iframe { border: 0; width: 400px; height: 300px }</style><iframe src="/link"></iframe>"# : link)),
             "/link": (html, link),

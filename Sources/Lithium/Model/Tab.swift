@@ -901,8 +901,11 @@ extension Tab: WKNavigationDelegate {
             if url == superseded { return (.cancel, preferences) }
         }
         // A link or form's own load uses the press up whether or not a check below asks for it
-        // (a frame's, a new tab's): the page it opens can't use it again.
-        if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action) { _ = pressed }
+        // (a frame's, a new tab's): the page it opens can't use it again. So does a frame's load
+        // that a click's script started (the main frame's uses it up below); not the other loads
+        // of frames, an ad's say, which would take it from the page.
+        if [.linkActivated, .formSubmitted].contains(action.navigationType) || !isMainFrame && action.navigationType == .other && Self.isUserInitiated(action),
+           !Self.isRedirect(action) { _ = pressed }
         // A server's redirect keeps the type of the click that started its load, whoever pressed since.
         if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), (webView as? PageWebView)?.agentPressedLast != true {
             browser?.agent?.userStartedLoad(in: self)
@@ -1210,7 +1213,7 @@ extension Tab: WKNavigationDelegate {
     /// up; a redirect of the page's own load keeps whatever started that load.
     private func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
         let page = webView as? PageWebView
-        if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true {
+        if Self.isUserInitiated(action) {
             page?.usePress()
             return true
         }
@@ -1218,6 +1221,11 @@ extension Tab: WKNavigationDelegate {
         guard page?.pressedRecently == true else { return false }
         page?.usePress()
         return true
+    }
+
+    /// WebKit's user gesture (private `WKNavigationAction._isUserInitiated`); false without it.
+    private static func isUserInitiated(_ action: WKNavigationAction) -> Bool {
+        action.responds(to: NSSelectorFromString("_isUserInitiated")) && action.value(forKey: "_isUserInitiated") as? Bool == true
     }
 
     /// Another app's address, from a click in this tab's page or PDF: asked first (`AppLinks`).

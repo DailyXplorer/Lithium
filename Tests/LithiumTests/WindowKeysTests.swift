@@ -118,6 +118,9 @@ struct WindowKeysTests {
         #expect(await waitUntil(5) { browser.find.isFieldFocused })
         #expect(browser.dismissOverlay())
         #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+        // The bar clears its field's flag as it leaves, which its slide-out can delay under load;
+        // until then an Escape in the name field reads as the find field's and keeps the keyboard.
+        #expect(await waitUntil(5) { !browser.find.isFieldFocused })
 
         browser.renamingTabID = tab.id
         let editor = try #require(await nameEditor(in: window))

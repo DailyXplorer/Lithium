@@ -323,6 +323,34 @@ struct BrowserTests {
         #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "")
     }
 
+    /// Reload on the error page loads the address into the error page's own history entry: the
+    /// real page shown there, then left and come back to with Back, is the page, not the error.
+    @Test func pageReloadedOverTheErrorPageIsNotTheErrorOnBack() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Back up</title>"),
+            "/next": ("Content-Type: text/html", "<title>Next</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "about:blank")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost, userInfo: [NSURLErrorFailingURLErrorKey: base])
+        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        tab.reload()
+        #expect(await waitUntil(10) { tab.title == "Back up" && tab.loadedWebView?.isLoading == false })
+        #expect(!tab.isShowingError)
+
+        tab.load(base.appending(path: "next"))
+        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.url == base && tab.loadedWebView?.isLoading == false })
+        #expect(!tab.isShowingError)
+        #expect(tab.title == "Back up")
+    }
+
     /// Private tabs (an agent's ephemeral tab, its popups and copies) are kept from extensions,
     /// as Chrome keeps incognito from extensions not allowed there: no tab list, no active tab,
     /// and no extension running in their pages.

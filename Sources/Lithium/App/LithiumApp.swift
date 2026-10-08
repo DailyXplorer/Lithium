@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct BrowserCommands: Commands {
     let browser: Browser
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
@@ -66,6 +67,13 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("t")
             Button("Open Location…") { browser.requestAddressFocus() }
                 .keyboardShortcut("l")
+            Button("Move to Main Window") {
+                guard let tab = browser.quickLinks.keyTab else { return }
+                browser.quickLinks.moveToMainWindow(tab)
+                openWindow(id: "browser")
+            }
+            .keyboardShortcut("o")
+            .disabled(browser.quickLinks.keyTab == nil)
         }
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") { browser.closeTabOrWindow() }
@@ -75,9 +83,9 @@ struct BrowserCommands: Commands {
                 .disabled(!browser.canReopenClosedTab)
         }
         CommandGroup(replacing: .printItem) {
-            Button("Print…") { browser.selectedTab?.print() }
+            Button("Print…") { browser.commandTab?.print() }
                 .keyboardShortcut("p")
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
         }
         CommandGroup(after: .pasteboard) {
             // The focused page's, through the responder chain: nothing happens in the address bar.
@@ -115,9 +123,9 @@ struct BrowserCommands: Commands {
                 withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
             }
             .keyboardShortcut("b")
-            Button("Reload Page") { browser.navigate(browser.selectedTab, .reload) }
+            Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             Divider()
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
                 if let tab = browser.selectedTab { browser.summaries.togglePanel(for: tab) }
@@ -138,16 +146,16 @@ struct BrowserCommands: Commands {
             // ⌘= zooms in too (`Browser.isZoomInWithoutShift`).
             Button("Zoom In") { browser.zoomSelectedTab(by: PageZoom.step) }
                 .keyboardShortcut("+")
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             Button("Zoom Out") { browser.zoomSelectedTab(by: -PageZoom.step) }
                 .keyboardShortcut("-")
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             Button("Actual Size") {
-                guard let tab = browser.selectedTab else { return }
+                guard let tab = browser.commandTab else { return }
                 if let pdf = tab.pdf { pdf.setScale(1) } else { tab.webView.pageZoom = 1 }
             }
                 .keyboardShortcut("0")
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             Divider()
             Menu("Developer") {
                 Button("Show Web Inspector") { showDeveloperTools(.inspector) }
@@ -162,12 +170,12 @@ struct BrowserCommands: Commands {
             Button("Show All History") { browser.openHistory() }
                 .keyboardShortcut("y")
             Divider()
-            Button("Back") { browser.navigate(browser.selectedTab, .back) }
+            Button("Back") { browser.navigate(browser.commandTab, .back) }
                 .keyboardShortcut("[")
-                .disabled(browser.selectedTab?.canGoBack != true)
-            Button("Forward") { browser.navigate(browser.selectedTab, .forward) }
+                .disabled(browser.commandTab?.canGoBack != true)
+            Button("Forward") { browser.navigate(browser.commandTab, .forward) }
                 .keyboardShortcut("]")
-                .disabled(browser.selectedTab?.canGoForward != true)
+                .disabled(browser.commandTab?.canGoForward != true)
         }
         CommandMenu("Tabs") {
             Button("Next Tab") { browser.selectAdjacentTab(1) }
@@ -183,9 +191,9 @@ struct BrowserCommands: Commands {
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
                 .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true)
-            Button("Copy Link") { browser.copyLink(of: browser.selectedTab) }
+            Button("Copy Link") { browser.copyLink(of: browser.commandTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(browser.selectedTab?.url == nil)
+                .disabled(browser.commandTab?.url == nil)
             Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(browser.selectedTab?.url == nil)

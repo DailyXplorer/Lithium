@@ -233,6 +233,10 @@
   <section id="advanced" class="page">
     <h2>Advanced</h2>
     <div class="row">
+      <div><div class="title">Open links from other apps in a small window</div><div class="hint">Keeps your tabs as they are. Press ⌘O to move the page to the main window.</div></div>
+      <label class="switch" for="quick-links"><input type="checkbox" id="quick-links" role="switch"><span></span></label>
+    </div>
+    <div class="row">
       <div><div class="title">Developer tools</div><div class="hint">Adds Inspect Element to the page menu, and Web Inspector to View › Developer.</div></div>
       <label class="switch" for="developer-tools"><input type="checkbox" id="developer-tools" role="switch"><span></span></label>
     </div>
@@ -463,6 +467,7 @@
     }) : [el('div', { className: 'empty', textContent: 'No extensions yet.' })]));
 
     $('#developer-tools').checked = state.advanced.developerTools;
+    $('#quick-links').checked = state.advanced.quickLinks;
 
     $('#version').textContent = `Version ${about.version}`;
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
@@ -503,6 +508,7 @@
   $('#agent-bodies').onchange = (event) => call('setAgentCaptureBodies', event.target.checked).then(render);
   $('#agent-scripts').onchange = (event) => call('setAgentRunScripts', event.target.checked).then(render);
   $('#developer-tools').onchange = (event) => call('setDeveloperTools', event.target.checked).then(render);
+  $('#quick-links').onchange = (event) => call('setQuickLinks', event.target.checked).then(render);
   document.querySelectorAll('[data-copy]').forEach((button) => {
     button.onclick = () => call('copyAgentSetup', $('#' + button.dataset.copy).textContent).then(() => {
       button.textContent = 'Copied';

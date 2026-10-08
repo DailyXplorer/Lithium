@@ -66,6 +66,7 @@ enum Preference {
     static let agentRunScripts = "agentRunScripts"
     static let agentPort = "agentPort"
     static let developerTools = "developerTools"
+    static let quickLinks = "quickLinkWindow"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

@@ -70,9 +70,9 @@ extension Browser {
         return tabs.first { $0.id == id }
     }
 
-    /// The selected tab, and its partner in split view.
+    /// The selected tab, and its partner in split view; a link in its own window too.
     func isOnScreen(_ tab: Tab) -> Bool {
-        tab.id == selectedTabID || shownPartner === tab
+        tab.id == selectedTabID || shownPartner === tab || quickLinks.contains(tab)
     }
 
     /// The pair shows once, where its first tab in the list is.

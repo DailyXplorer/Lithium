@@ -72,7 +72,7 @@ struct BrowserView: View {
         .sheet(item: Binding(get: { browser.capture.shot }, set: { if $0 == nil { browser.capture.finish() } })) { shot in
             CapturePreview(shot: shot).environment(browser)
         }
-        .onOpenURL { browser.newTab(url: $0) }
+        .onOpenURL { browser.openFromOtherApp($0) }
         .onAppear { browser.windowDidAppear() }
     }
 }

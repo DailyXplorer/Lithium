@@ -130,7 +130,7 @@ private struct SplitPane: View {
                 PageContainer(view: tab.webView)
                     .overlay {
                         if let pdf = tab.pdf {
-                            PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
+                            PDFReaderView(reader: pdf, takesKeyboard: browser.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
                         }
                     }
                     .overlay {

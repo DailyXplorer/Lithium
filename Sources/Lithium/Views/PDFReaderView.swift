@@ -5,6 +5,8 @@ import SwiftUI
 /// on the side, and the document.
 struct PDFReaderView: View {
     let reader: PDFReader
+    /// False on the split side the keyboard isn't on: its password prompt waits for it.
+    var takesKeyboard = true
     @AppStorage(Preference.pdfSidebar) private var showsSidebar = true
     @State private var showsOutline = false
 
@@ -21,7 +23,7 @@ struct PDFReaderView: View {
                 ZStack {
                     PageContainer(view: reader.view)
                     if reader.isLocked {
-                        PasswordPrompt(reader: reader)
+                        PasswordPrompt(reader: reader, takesKeyboard: takesKeyboard)
                     }
                 }
             }
@@ -351,6 +353,7 @@ private struct OutlineRow: View {
 
 private struct PasswordPrompt: View {
     let reader: PDFReader
+    let takesKeyboard: Bool
     @State private var password = ""
     @State private var isWrong = false
     @FocusState private var isFocused: Bool
@@ -378,6 +381,8 @@ private struct PasswordPrompt: View {
                 .fill(Color(nsColor: .textBackgroundColor))
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         )
-        .onAppear { claimFocus($isFocused) }
+        // The document locks only once loaded, maybe while the user types on the other split side.
+        .onAppear { if takesKeyboard { claimFocus($isFocused) } }
+        .onChange(of: takesKeyboard) { if takesKeyboard { claimFocus($isFocused) } }
     }
 }

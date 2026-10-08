@@ -98,6 +98,9 @@ enum Guardrails {
             if element.field == "password", action == .type { return .password }
         case .press(let enter):
             if element.field == "payment" { return .payment }
+            // Beside a filled password, Enter on a button is a press too (`ActionTarget.guarded`):
+            // a wallet or commit control still asks for the payment a click on it would.
+            if enter, element.wallet || isCommitControl(role: element.role, name: element.name) && (page.isPaymentPage || hasAmount(element.name)) { return .payment }
             if enter, element.field == "password" || element.passwordFilled { return .password }
         case .activate:
             if element.wallet { return .payment }

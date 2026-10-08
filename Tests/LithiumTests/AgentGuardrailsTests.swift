@@ -156,6 +156,13 @@ struct AgentGuardrailsTests {
             #expect(try asks(key("Space"), on: control) == nil, "Space: \(why) beside a filled password")
             for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .password, "\(combo): \(why) beside a filled password") }
         }
+        // A payment still wins over the password: Enter on a Pay or wallet button beside it.
+        let pay = target(TargetReport(token: "d", role: "button", name: "Pay €42.00", tag: "button", passwordFilled: true))
+        let wallet = target(TargetReport(token: "d", role: "shadow-closed", name: "apple-pay-button", wallet: true, passwordFilled: true))
+        for (control, why) in [(pay, "a commit control"), (wallet, "an Apple Pay button")] {
+            #expect(asks(.click, on: control) == .payment, "click: \(why) beside a filled password")
+            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .payment, "\(combo): \(why) beside a filled password") }
+        }
     }
 
     /// The mark is the confirmation the element's usual action meets: typing into a field,

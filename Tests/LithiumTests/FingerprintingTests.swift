@@ -185,6 +185,22 @@ struct FingerprintingTests {
         #expect(script("https://www.example.co.uk/") == script("https://shop.example.co.uk/"))
     }
 
+    /// A top-level `blob:` page farbles as its creator's site: every site's blob pages once shared
+    /// the seed of "", which linked them. An opaque creator's gets a seed of its own each time.
+    @Test func blobPagesTakeTheirCreatorsSite() {
+        let site = { (address: String) in Privacy.farblingSite(URL(string: address)!) }
+        #expect(site("blob:https://www.example.co.uk/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c") == "example.co.uk")
+        #expect(site("BLOB:http://10.0.0.1:8080/6f1c0a52") == "10.0.0.1")
+        let opaque = site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c")
+        #expect(!opaque.isEmpty)
+        #expect(opaque != site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c"))
+
+        let privacy = Privacy()
+        let script = { (address: String) in privacy.scripts(true, for: URL(string: address)!).first?.source }
+        #expect(script("blob:https://alice.example/1") == script("https://alice.example/"))
+        #expect(script("blob:https://alice.example/1") != script("blob:https://bob.example/1"))
+    }
+
     /// Private tabs farble with keys of their own: the same site's canvas reads differently there.
     @Test func privateTabsGetTheirOwnKeys() async throws {
         let privacy = Privacy()

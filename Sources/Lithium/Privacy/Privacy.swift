@@ -120,7 +120,13 @@ final class Privacy {
 
     /// The site farbling is keyed on: the registrable domain from the public suffix list (so
     /// `alice.github.io` and `bob.github.io` differ), or the address itself for an IP host.
+    /// A blob's address has no host but holds its creator's origin, whose site it takes; one of an
+    /// opaque origin ("blob:null/…") gets a site of its own, not the "" that every site's would share.
     nonisolated static func farblingSite(_ url: URL) -> String {
+        if url.scheme?.lowercased() == "blob" {
+            let site = URL(string: String(url.absoluteString.dropFirst(5))).map(farblingSite) ?? ""
+            return site.isEmpty ? UUID().uuidString : site
+        }
         guard let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")), !host.isEmpty else { return "" }
         var address = in6_addr()
         if host.contains(":") ? inet_pton(AF_INET6, host, &address) == 1 : inet_pton(AF_INET, host, &address) == 1 { return host }

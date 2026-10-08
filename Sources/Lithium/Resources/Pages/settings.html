@@ -254,6 +254,10 @@
   <section id="advanced" class="page">
     <h2>Advanced</h2>
     <div class="row">
+      <div><div class="title">Energy saving</div><div class="hint">Background tabs sleep after 5 minutes and their silent videos pause. On battery also follows Low Power Mode.</div></div>
+      <div class="segmented" id="energy-saving"><button data-value="always">Always</button><button data-value="onBattery">On battery</button><button data-value="off">Off</button></div>
+    </div>
+    <div class="row">
       <div><div class="title">Open links from other apps in a small window</div><div class="hint">Keeps your tabs as they are. Press ⌘O to move the page to the main window.</div></div>
       <label class="switch" for="quick-links"><input type="checkbox" id="quick-links" role="switch"><span></span></label>
     </div>
@@ -491,6 +495,7 @@
 
     $('#developer-tools').checked = state.advanced.developerTools;
     $('#quick-links').checked = state.advanced.quickLinks;
+    document.querySelectorAll('#energy-saving button').forEach((b) => b.classList.toggle('on', b.dataset.value === state.advanced.energySaving));
 
     $('#version').textContent = `Version ${about.version}`;
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
@@ -535,6 +540,9 @@
   $('#agent-scripts').onchange = (event) => call('setAgentRunScripts', event.target.checked).then(render);
   $('#developer-tools').onchange = (event) => call('setDeveloperTools', event.target.checked).then(render);
   $('#quick-links').onchange = (event) => call('setQuickLinks', event.target.checked).then(render);
+  document.querySelectorAll('#energy-saving button').forEach((button) => {
+    button.onclick = () => call('setEnergySaving', button.dataset.value).then(render);
+  });
   document.querySelectorAll('[data-copy]').forEach((button) => {
     button.onclick = () => call('copyAgentSetup', $('#' + button.dataset.copy).textContent).then(() => {
       button.textContent = 'Copied';

@@ -315,6 +315,18 @@ struct UISnapshotTests {
         }
     }
 
+    /// The energy saving indicator's panel, on battery and always on.
+    @Test func energyPanelSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        for mode in [EnergySaving.onBattery, .always] {
+            for isDark in [false, true] {
+                let png = try render(EnergyPanel(mode: mode, openSettings: {}), isDark: isDark)
+                try png.write(to: directory.appending(path: "energy-panel-\(mode.rawValue)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// The bar of a link's own window, on a secure page and on one that isn't.
     @Test func quickLinkBarSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -409,7 +421,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         ] as [String: Any],
         "agents": ["enabled": true, "stopped": false, "status": "On. 1 agent connected.", "url": "http://127.0.0.1:52817/mcp", "captureBodies": false, "runScripts": true,
                    "bridge": "/Applications/Lithium.app/Contents/MacOS/lithium-mcp"] as [String: Any],
-        "advanced": ["developerTools": true, "quickLinks": true],
+        "advanced": ["developerTools": true, "quickLinks": true, "energySaving": "onBattery"] as [String: Any],
         "extensions": [["id": "abc", "name": "1Password", "version": "8.11.4", "enabled": true, "hasOptions": true, "icon": "lithium://pages/app-icon"] as [String: Any]],
         "about": ["version": "1.0", "safari": "26.0", "macOS": "Version 26.0 (Build 25A354)"],
     ]

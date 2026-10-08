@@ -70,6 +70,7 @@ enum Preference {
     static let quickLinks = "quickLinkWindow"
     static let readerButton = "readerButton"
     static let readerStyle = "readerStyle"
+    static let energySaving = "energySaving"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

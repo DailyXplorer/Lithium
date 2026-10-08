@@ -29,6 +29,9 @@ struct ToolbarView: View {
             if let agent = browser.agent {
                 AgentButton(agent: agent)
             }
+            if browser.energy.isOn {
+                EnergyButton()
+            }
             ExtensionsButton(tab: tab)
             DownloadsButton()
             SummaryButton(tab: tab)

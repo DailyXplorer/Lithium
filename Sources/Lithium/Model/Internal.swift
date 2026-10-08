@@ -215,6 +215,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.developerTools = value as? Bool ?? true
         case "setQuickLinks":
             browser.quickLinks.isEnabled = value as? Bool ?? false
+        case "setEnergySaving":
+            if let mode = (value as? String).flatMap(EnergySaving.init(rawValue:)) { browser.energy.mode = mode }
         case "copyAgentSetup":
             guard let text = value as? String else { return (nil, "No text") }
             NSPasteboard.general.clearContents()
@@ -365,7 +367,10 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 // Beside Lithium's own executable: Contents/MacOS in the app, the build folder in development.
                 "bridge": Bundle.main.executableURL?.deletingLastPathComponent().appending(path: "lithium-mcp").path ?? "",
             ] as [String: Any],
-            "advanced": ["developerTools": browser.developerTools, "quickLinks": browser.quickLinks.isEnabled],
+            "advanced": [
+                "developerTools": browser.developerTools, "quickLinks": browser.quickLinks.isEnabled,
+                "energySaving": browser.energy.mode.rawValue,
+            ] as [String: Any],
             "extensions": browser.extensions.installed.map { entry in
                 let context = browser.extensions.contexts[entry.id]
                 return [

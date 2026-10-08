@@ -365,8 +365,10 @@ struct AgentInputTests {
         // or on ArrowDown, Enter or Space; ignores the pointerup of the press that opened it
         // unless the pointer moved; takes an option on its pointerup or Enter; closes on a
         // pointerdown outside, Escape, or the window's blur or resize; keeps the pointer from
-        // everything else while open; and goes once its closing animation ends. `log` says why
-        // each one closed.
+        // everything else while open; and goes once its closing animation ends. Space takes the
+        // focused option, as Radix's does. Above them, a field that takes 200 characters on a
+        // page slow over every key; below, a combobox typed into, whose list opens on input.
+        // `log` says why each one opened and closed.
         "/pickers": (html, """
             <title>Pickers</title>
             <style>
@@ -378,12 +380,38 @@ struct AgentInputTests {
               @keyframes out { to { opacity: 0 } }
               [role=option] { height: 28px; line-height: 28px; padding-left: 8px }
             </style>
+            <div class="row"><textarea aria-label="Pitch" id="pitch" maxlength="200"></textarea></div>
             <div class="row"><button role="combobox" aria-label="Country" aria-expanded="false">Choose</button></div>
             <div class="row"><button role="combobox" aria-label="Industry" aria-expanded="false">Choose</button></div>
             <div class="row"><button role="combobox" aria-label="Month" aria-expanded="false">Choose</button></div>
             <div class="row"><button role="combobox" aria-label="Year" aria-expanded="false">Choose</button></div>
             <div class="row"><button role="combobox" aria-label="Round" aria-expanded="false">Choose</button></div>
+            <div class="row"><input role="combobox" aria-label="Spend" id="spend" aria-expanded="false"></div>
             <script>
+              pitch.addEventListener('keydown', () => { const end = Date.now() + 10; while (Date.now() < end) {} });
+              spend.addEventListener('input', () => {
+                if (spend.getAttribute('aria-expanded') === 'true') return;
+                const list = document.createElement('div');
+                list.setAttribute('role', 'listbox');
+                const box = spend.getBoundingClientRect();
+                list.style.left = box.left + scrollX + 'px';
+                list.style.top = box.bottom + scrollY + 'px';
+                for (const label of ['1%', '10%', '25%']) {
+                  const option = document.createElement('div');
+                  option.setAttribute('role', 'option');
+                  option.textContent = label;
+                  option.addEventListener('pointerup', () => {
+                    spend.value = label;
+                    spend.setAttribute('aria-expanded', 'false');
+                    list.remove();
+                    log.push('closed Spend: chose');
+                  });
+                  list.append(option);
+                }
+                document.body.append(list);
+                spend.setAttribute('aria-expanded', 'true');
+                log.push('opened Spend');
+              });
               window.log = [];
               for (const type of ['blur', 'resize', 'visibilitychange', 'pointercancel']) addEventListener(type, () => log.push(type), true);
               const choices = { Country: ['France', 'Spain', 'Italy'], Industry: ['Health', 'Finance', 'Retail'], Month: ['January', 'February', 'March'], Year: ['2020', '2021', '2022'], Round: ['Seed', 'Series A', 'Series B'] };
@@ -421,7 +449,7 @@ struct AgentInputTests {
                     const choose = () => { trigger.textContent = label; hide('chose'); };
                     option.addEventListener('pointerup', (event) => { if (!event.defaultPrevented) choose(); });
                     option.addEventListener('keydown', (event) => {
-                      if (event.key === 'Enter') { event.preventDefault(); choose(); }
+                      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
                       if (event.key === 'ArrowDown') { event.preventDefault(); option.nextElementSibling?.focus(); }
                     });
                     list.append(option);
@@ -715,11 +743,16 @@ struct AgentInputTests {
         }
     }
 
-    /// Custom listboxes open one after another to the agent's clicks and keys, those past the
-    /// fold too, and one stays open while its tab leaves the stage between two actions.
+    /// Custom listboxes open one after another to the agent's clicks, keys and typing, those past
+    /// the fold too, and one stays open while its tab leaves the stage between two actions. A
+    /// value longer than the field above them takes, on a page slow over every key, leaves no
+    /// key queued: one would reach the listbox the next click opens, and a space take an option.
     @Test func customListboxesKeepOpeningOneAfterAnother() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "pickers"))
+            let long = String(repeating: "abcd fghij", count: 26)
+            let filled = await client.call("fill_form", ["tab": .string(id), "fields": [["ref": .string(try await ref(client, id, "textbox", "Pitch")), "type": "textbox", "value": .string(long)]]])
+            #expect(!filled.isError, "\(filled.content)")
             let expanded = { (name: String) in try await self.page(tab, "return document.querySelector('[aria-label=\"\(name)\"]').getAttribute('aria-expanded')") as? String }
             // What the trigger shows once the list has gone, and the pointer is the page's again.
             let shown = { (name: String) in try await self.page(tab, "return document.querySelector('[aria-label=\"\(name)\"]').textContent + '|' + document.body.style.pointerEvents + '|' + document.querySelectorAll('[role=listbox]').length") as? String }
@@ -758,7 +791,19 @@ struct AgentInputTests {
             let late = await eventually { try await shown("Round") == "Series A||0" }
             events = try await log(tab)
             #expect(late, "\(events)")
-            #expect(!events.contains { $0.hasPrefix("closed ") && !$0.hasSuffix(": chose") }, "\(events)")
+
+            // Typed into, it opens on input.
+            let typedIn = await client.call("type", ["tab": .string(id), "ref": .string(try await ref(client, id, "combobox", "Spend")), "text": "1"])
+            #expect(!typedIn.isError, "\(typedIn.content)")
+            events = try await log(tab)
+            #expect(try await expanded("Spend") == "true", "\(events)")
+            try await click("option", "10%")
+            #expect(try await page(tab, "return spend.value") as? String == "10%")
+
+            // Each opened once, and closed once on its choice.
+            events = try await log(tab).filter { $0.hasPrefix("opened ") || $0.hasPrefix("closed ") }
+            #expect(events == ["Country", "Industry", "Month", "Year", "Round", "Spend"].flatMap { ["opened \($0)", "closed \($0): chose"] }, "\(events)")
+            #expect(try await page(tab, "return pitch.value") as? String == String(long.prefix(200)))
         }
     }
 

@@ -54,7 +54,7 @@ struct AgentParityTests {
             <textarea aria-label="Team" id="team"></textarea>
             <script>pitch.addEventListener('keydown', () => { const end = Date.now() + 10; while (Date.now() < end) {} });</script>
             """),
-        "/vanish": (html,"<title>Vanish</title><p id='note'>Saving…</p><script>setTimeout(() => note.remove(), 300)</script>"),
+        "/vanish": (html, "<title>Vanish</title><p id='note'>Saving…</p><script>setTimeout(() => note.remove(), 300)</script>"),
         "/wide": (html, "<title>Wide</title><style>body { margin: 0 } button { position: absolute; left: 1450px; top: 900px }</style><button onclick=\"document.title = 'clicked ' + innerWidth\">Far</button>"),
     ]
 

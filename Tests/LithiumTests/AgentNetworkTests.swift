@@ -402,6 +402,27 @@ struct AgentNetworkTests {
         }
     }
 
+    /// An error event's message and file name are the page's to size: `agent-errors.js` cuts them
+    /// before they cross to Lithium, as it does a rejection's reason. In a bare web view, whose
+    /// handler sees what the page posts before Lithium cuts anything.
+    @Test func errorEventsAreCutBeforeTheyLeaveThePage() async throws {
+        let recorder = ErrorRecorder()
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(recorder, contentWorld: PageProbe.world, name: PageProbe.messageName)
+        configuration.userContentController.addUserScript(WKUserScript(source: AgentConsoleHandler.errorsSource, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: PageProbe.world))
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 200, height: 200), configuration: configuration)
+        webView.loadHTMLString("<title>Plain</title>", baseURL: URL(string: "https://a.example/"))
+        #expect(await waitUntil(10) { webView.title == "Plain" && !webView.isLoading })
+        _ = try await webView.callAsyncJavaScript(
+            "dispatchEvent(new ErrorEvent('error', { message: 'x'.repeat(1 << 20), filename: 'https://a.example/' + 'y'.repeat(1 << 20) }))",
+            contentWorld: .page
+        )
+        #expect(await waitUntil(10) { !recorder.errors.isEmpty })
+        let error = try #require(recorder.errors.first)
+        #expect((error["text"] as? String)?.count == 4096)
+        #expect((error["source"] as? String)?.count == 2048)
+    }
+
     /// A tab agents use, sent to one of Lithium's own pages: the page finds no console handler,
     /// its console stays its own, and nothing it logs is kept.
     @Test func lithiumsOwnPagesStayOutOfTheConsole() async throws {
@@ -536,5 +557,15 @@ struct AgentNetworkTests {
             #expect((await client.call("wait_for", ["tab": .string(id), "networkIdle": 300])).code == "unsupported")
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "plain").absoluteString), "wait": "networkidle"])).code == "unsupported")
         }
+    }
+}
+
+/// The errors `agent-errors.js` posts, as the page sent them.
+@MainActor
+private final class ErrorRecorder: NSObject, WKScriptMessageHandler {
+    private(set) var errors: [[String: Any]] = []
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let error = (message.body as? [String: Any])?["console"] as? [String: Any] { errors.append(error) }
     }
 }

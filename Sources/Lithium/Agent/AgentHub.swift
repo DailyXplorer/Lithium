@@ -561,7 +561,7 @@ final class AgentHub {
                 }
             }
             calls[key] = Call(tool: name, session: session.label, task: task)
-            // The server cancels the request when the client's connection fails.
+            // The server cancels the request when the client's connection fails or closes.
             let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             calls[key] = nil
             // The idle timeout counts from the answer, not from the request a long call began with.

@@ -224,6 +224,14 @@ struct AgentReadTests {
               root.innerHTML = '<input type="password" id="inner" value="shadow-secret">';
             </script>
             """),
+        "/masked": (Self.html, """
+            <title>Masked</title>
+            <form>
+              <label>PIN <input type="tel" name="pin" id="pin" value="masked-pin-secret" style="-webkit-text-security: disc"></label>
+              <label>Note <input id="note" value="plain note"></label>
+              <div style="-webkit-text-security: disc"><label><input type="checkbox" checked> Remember</label></div>
+            </form>
+            """),
         "/frames": (Self.html, """
             <title>Frames</title><style>body { margin: 0 } iframe { position: absolute; border: 3px solid black; padding: 5px; width: 300px; height: 200px }</style>
             <button id="top">Top</button>
@@ -549,6 +557,56 @@ struct AgentReadTests {
             #expect(fields.allSatisfy { $0["value"] == "[redacted]" && $0["guard"] == "password" })
             let forms = await client.call("forms", ["tab": .string(tab)])
             for secret in Self.secrets { #expect(!text(json.content).contains(secret) && !text(forms.content).contains(secret)) }
+        }
+    }
+
+    /// A text field the page masks itself (`-webkit-text-security`, a PIN) is a password field:
+    /// redacted and guarded, and still once a "show" toggle unmasks it. A checkbox that only
+    /// inherits the style stays a checkbox.
+    @Test func aFieldThePageMasksIsAPasswordField() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/masked")
+            let json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            let pin = try #require(node(json, role: "textbox", name: "PIN"), "\(text(json.content))")
+            #expect(pin["value"] == "[redacted]")
+            #expect(pin["filled"] == true)
+            #expect(pin["guard"] == "password")
+            #expect(node(json, role: "textbox", name: "Note")?["value"] == "plain note")
+            let remember = try #require(node(json, role: "checkbox", name: "Remember"))
+            #expect(remember["guard"] == nil)
+            #expect(remember["state"] == ["checked"])
+
+            _ = try await client.tab(tab)?.webView.evaluateJavaScript("document.getElementById('pin').style.webkitTextSecurity = 'none'; 0")
+            let shown = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(node(shown, role: "textbox", name: "PIN")?["guard"] == "password", "\(text(shown.content))")
+            let forms = await client.call("forms", ["tab": .string(tab)])
+            #expect(!forms.isError, "\(forms.message)")
+            for content in [text(json.content), text(shown.content), text(forms.content)] {
+                #expect(!content.contains("masked-pin-secret"))
+            }
+        }
+    }
+
+    /// A call still waiting in a page WebKit parks in its back/forward cache answers as the page
+    /// leaves, instead of holding its reply, and the tab's web view, until the cache drops it.
+    @Test func aCallWaitingInACachedPageAnswersAsItLeaves() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            #expect(!(await client.call("snapshot", ["tab": .string(tab)])).isError)
+            let webView = try #require(client.tab(tab)?.webView)
+            let pending = client.hub.start(webView, .main, "wait", ["text": "never on this page", "present": true, "timeoutMs": 30_000, "key": 1_000_000])
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(pending.result == nil)
+
+            let moved = await client.call("navigate", ["tab": .string(tab), "url": .string(base.absoluteString + "help")])
+            #expect(!moved.isError, "\(moved.message)")
+            #expect(await waitUntil(5) { pending.result != nil })
+            // An answer, not WebKit failing the call: the page went into the cache, not away.
+            let answer = try #require(try pending.result?.get())
+            #expect(try PageProbe.decode(WaitReport.self, from: answer).gone == true)
+            let back = await client.call("go_back", ["tab": .string(tab), "wait": "load"])
+            #expect(!back.isError, "\(back.message)")
+            #expect(client.tab(tab)?.title == "One")
         }
     }
 

@@ -1193,8 +1193,9 @@ extension AgentHub {
             }
         } while done == nil && ContinuousClock.now < ctx.deadline
         if done == nil { throw timedOut(ctx.named, after: ctx.timeout, "its page didn’t handle the agent’s input: a script may be keeping it busy") }
-        if let gone, probing != nil, done == false || (try? pending.result?.get()) == nil { throw gone }
+        // No report: the frame failed, or answered `gone` as WebKit cached its page.
         let report = (try? pending.result?.get()).flatMap { try? PageProbe.decode(SettleReport.self, from: $0) }
+        if let gone, probing != nil, done == false || report == nil { throw gone }
         if let unseen = settle.unseen, report?.seen == false {
             throw AgentToolError(code: "unsupported", message: unseen)
         }

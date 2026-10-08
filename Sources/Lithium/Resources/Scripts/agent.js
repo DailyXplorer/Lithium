@@ -202,7 +202,17 @@
       return true;
     }
     if (autocomplete(element).some((token) => ['current-password', 'new-password', 'one-time-code'].includes(token))) return true;
-    return /passw|pwd/i.test(`${element.getAttribute('name') || ''} ${element.id}`);
+    if (/passw|pwd/i.test(`${element.getAttribute('name') || ''} ${element.id}`)) return true;
+    // A field the page draws as discs itself (a PIN, a password in a text field) holds a secret
+    // too, and stays one when a "show" toggle turns the masking off. The style is inherited, so
+    // only fields one types in count.
+    if (!textTypes.has(element.type)) return false;
+    const security = getComputedStyle(element).webkitTextSecurity;
+    if (security && security !== 'none') {
+      frame.passwords.add(element);
+      return true;
+    }
+    return false;
   };
   const isCard = (element) => isField(element)
     && (autocomplete(element).some((token) => token.startsWith('cc-') || token === 'transaction-amount') || cardWords.test(fieldWords(element)));
@@ -1332,12 +1342,30 @@
   };
 
   const operations = { snapshot, masks, readText, links, forms, find, info, wait, cancelWait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
+  // A document WebKit parks in its back/forward cache runs no timer and no frame callback, so a
+  // call still pending in it (a wait, a settle) would hold Lithium's reply, and the tab's web
+  // view with it, until WebKit drops the page, even after the tab closed. It answers as gone.
+  const parked = new Set();
+  addEventListener('pagehide', (event) => {
+    if (!event.persisted) return;
+    for (const leave of [...parked]) leave();
+    // Nobody waits for them any more: no checks after Back brings the page back.
+    for (const done of [...waits.values()]) done(false);
+  });
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.
       if (args.token && args.token !== frame.token) return JSON.stringify({ token: frame.token, gone: true });
-      // A lone surrogate the page wrote itself comes back replaced, not in an answer Swift refuses.
-      return JSON.stringify(await operations[operation](args), (key, value) => (typeof value === 'string' && !value.isWellFormed() ? value.toWellFormed() : value));
+      let leave;
+      const left = new Promise((resolve) => { leave = () => resolve({ token: frame.token, gone: true }); });
+      parked.add(leave);
+      try {
+        const answer = await Promise.race([operations[operation](args), left]);
+        // A lone surrogate the page wrote itself comes back replaced, not in an answer Swift refuses.
+        return JSON.stringify(answer, (key, value) => (typeof value === 'string' && !value.isWellFormed() ? value.toWellFormed() : value));
+      } finally {
+        parked.delete(leave);
+      }
     },
   };
 })();

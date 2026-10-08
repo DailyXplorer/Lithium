@@ -146,6 +146,16 @@ struct AgentGuardrailsTests {
         for test in fields {
             #expect(try asks(key(test.combo), on: test.target) == test.expected, "\(test.combo): \(test.why)")
         }
+        // A sign-in a script sends, no form: a click on a field's own control beside the filled
+        // password is free, Enter on it is not.
+        let beside = { (role: String, type: String?) in
+            target(TargetReport(token: "d", role: role, name: "Attachment", tag: "input", type: type, passwordFilled: true))
+        }
+        for (control, why) in [(beside("button", "file"), "a file input"), (beside("checkbox", "checkbox"), "a checkbox"), (beside("radio", "radio"), "a radio")] {
+            #expect(asks(.click, on: control) == nil, "click: \(why) beside a filled password")
+            #expect(try asks(key("Space"), on: control) == nil, "Space: \(why) beside a filled password")
+            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .password, "\(combo): \(why) beside a filled password") }
+        }
     }
 
     /// The mark is the confirmation the element's usual action meets: typing into a field,

@@ -46,6 +46,9 @@ enum Guardrails {
         /// A password field that isn't empty is in its document, whoever filled it: a sign-in
         /// may send it without a form, from a plain button or link or on Enter.
         var passwordFilled = false
+        /// A file input: it shows as a button, but a click on it only opens the file chooser,
+        /// which `upload_files` asks about. Enter on it may still send the password.
+        var setsFiles = false
         /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
         /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
@@ -101,8 +104,9 @@ enum Guardrails {
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
             // A script can send the filled password from any click, form or not, and the target's
             // own role often hides it: a span inside a button, a div that only has a click
-            // listener. Only a field's own controls are left out.
-            if element.passwordFilled, !Self.fieldRoles.contains(element.role) { return .password }
+            // listener. Only a field's own controls are left out, and only from a click: Enter on
+            // them beside a filled password is a `.press` (`ActionTarget.guarded`).
+            if element.passwordFilled, !element.setsFiles, !Self.fieldRoles.contains(element.role) { return .password }
         }
         return form?.filledPassword == true ? .password : nil
     }

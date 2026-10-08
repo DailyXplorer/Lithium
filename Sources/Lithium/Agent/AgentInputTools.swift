@@ -126,10 +126,7 @@ struct ActionTarget {
     }
 
     var element: Guardrails.Element {
-        // A file input shows as a button but is a field's own control: it sets files, which
-        // `upload_files` asks about, and sends nothing.
-        let fileInput = report.tag == "input" && report.type == "file"
-        return Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, passwordFilled: report.passwordFilled == true && !fileInput, inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
+        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, passwordFilled: report.passwordFilled == true, setsFiles: report.tag == "input" && report.type == "file", inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
     }
 
     var counts: [String: Int] { report.counts ?? [:] }
@@ -151,6 +148,9 @@ struct ActionTarget {
         let activates = (enter || key.isSpace) && Self.activatedByKeys.contains(report.role ?? "")
         if !activates, key.types(with: modifiers) { return (.type, nil) }
         let submits = report.submit == true && activates || enter && (report.submit == true || report.tag == "input" || report.editable == true && report.multiline != true)
+        // Beside a filled password, Enter anywhere may reach a page's own key listener that sends
+        // it, on a checkbox or a file input too: it asks as Enter in a field does.
+        if enter, report.passwordFilled == true { return (.press(enter: true), submits ? report.form : nil) }
         return (activates ? .activate : .press(enter: enter), submits ? report.form : nil)
     }
 

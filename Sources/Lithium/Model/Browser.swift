@@ -301,10 +301,10 @@ final class Browser {
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if Self.isZoomInWithoutShift(event), let self {
                 return MainActor.assumeIsolated {
-                    guard !NativeInput.isAgents(event), event.window === self.window, self.selectedTab != nil else { return event }
+                    guard !NativeInput.isAgents(event), event.window === self.window, self.selectedTab != nil else { return false }
                     self.zoomSelectedTab(by: PageZoom.step)
-                    return nil
-                }
+                    return true
+                } ? nil : event
             }
             // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }

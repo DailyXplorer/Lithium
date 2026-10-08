@@ -119,7 +119,39 @@ final class AgentTab {
                 reports[old] = nil
             }
             frames[token] = frame
+            if frames.count >= sweepAt { sweepFrames() }
         }
+    }
+
+    /// Child frames held before those WebKit no longer has are swept out: a page that keeps
+    /// swapping frames (rotating ads) would otherwise pile them up until it is left. Each is
+    /// asked once, in Lithium's world: a frame that is gone fails the call, and a busy one just
+    /// doesn't answer and stays. The next sweep waits for twice the frames still held.
+    static let framesBeforeSweep = 32
+    @ObservationIgnored private var sweepAt = framesBeforeSweep
+
+    private func sweepFrames() {
+        guard let webView = tab?.loadedWebView else { return }
+        sweepAt = frames.count * 2
+        for (token, frame) in frames {
+            webView.callAsyncJavaScript("return 0", arguments: [:], in: frame, in: PageProbe.world) { [weak self] result in
+                guard case .failure = result else { return }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.childFrame(token, answeredAs: nil)
+                    self.sweepAt = max(Self.framesBeforeSweep, self.frames.count * 2)
+                }
+            }
+        }
+    }
+
+    /// The tab's page went (it slept, or its process died): every frame went with it, and with
+    /// the pages left too.
+    func pageGone() {
+        frames = [:]
+        pagesLeft = []
+        reports = [:]
+        sweepAt = Self.framesBeforeSweep
     }
 
     /// How many main documents said hello: a main frame asked before the last one answered from

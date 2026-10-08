@@ -85,13 +85,20 @@
     try { return new URL(raw, document.baseURI).href; } catch { return ''; }
   };
 
+  // An element a page makes in another namespace (createElementNS) can share an HTML control's
+  // name but has none of its properties (`value`, `selectedOptions`, `cells`, `elements`): these
+  // names count only on HTML elements. A namespace, not instanceof, so it holds in the
+  // same-origin child documents `guards` and text waits read, whose elements have their own.
+  const htmlNamed = new Set(['input', 'select', 'textarea', 'tr', 'form']);
+  const tagOf = (element) => (htmlNamed.has(element.localName) && element.namespaceURI !== 'http://www.w3.org/1999/xhtml' ? '' : element.localName);
+
   // Roles
   const inputRoles = {
     button: 'button', submit: 'button', reset: 'button', image: 'button', file: 'button', color: 'button',
     checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox',
   };
   const implicitRole = (element) => {
-    switch (element.localName) {
+    switch (tagOf(element)) {
       case 'a': case 'area': return element.hasAttribute('href') ? 'link' : null;
       case 'button': case 'summary': return 'button';
       case 'input':
@@ -180,14 +187,14 @@
   // Sensitive fields (design section 7.3)
   const cardWords = /\b(card ?number|cardnumber|cc-?num|numero de (la )?carte|kartennummer|numero de tarjeta|numero (della )?carta|cvc|cvv2?|csc|security code|cryptogramme|code de securite|prufnummer|expiry|expiration|date d'?expiration|ablaufdatum|caducidad|scadenza|iban)\b/;
   const cardNumberWords = /\b(card ?number|cardnumber|cc-?num|numero de (la )?carte|kartennummer|numero de tarjeta|numero (della )?carta)\b/;
-  const isField = (element) => ['input', 'select', 'textarea'].includes(element.localName);
+  const isField = (element) => ['input', 'select', 'textarea'].includes(tagOf(element));
   const autocomplete = (element) => (element.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
   const fieldWords = (element) => plain([
     element.getAttribute('name'), element.id, element.getAttribute('aria-label'), element.getAttribute('placeholder'),
     ...[...(element.labels ?? [])].map((label) => label.textContent),
   ].filter(Boolean).join(' '));
   const isPassword = (element) => {
-    if (element.localName !== 'input') return false;
+    if (tagOf(element) !== 'input') return false;
     if (frame.passwords.has(element)) return true;
     // Inside shadow roots the bootstrap's observer sees no type change: note it while it shows.
     if (element.type === 'password') {
@@ -221,22 +228,22 @@
   const valueOf = (element, role) => {
     const guard = guardOf(element);
     if (guard) {
-      const filled = element.localName === 'select' ? element.selectedIndex > 0 : element.value !== '';
-      if (guard === 'payment' && filled && element.localName !== 'select' && isCardNumber(element)) {
+      const filled = tagOf(element) === 'select' ? element.selectedIndex > 0 : element.value !== '';
+      if (guard === 'payment' && filled && tagOf(element) !== 'select' && isCardNumber(element)) {
         const digits = element.value.replace(/\D/g, '');
         if (digits.length >= 12) return { value: `•••• ${digits.slice(-4)}`, filled };
       }
       return { value: '[redacted]', filled };
     }
-    if (element.localName === 'select') {
+    if (tagOf(element) === 'select') {
       const labels = [...element.selectedOptions].map((option) => collapse(option.label || option.text));
       return { value: cut(labels.join(', '), 80) };
     }
-    if (element.localName === 'input') {
+    if (tagOf(element) === 'input') {
       if (['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'file', 'hidden'].includes(element.type)) return null;
       return { value: cut(maskCards(element.value), 200) };
     }
-    if (element.localName === 'textarea') return { value: cut(maskCards(element.value), 200) };
+    if (tagOf(element) === 'textarea') return { value: cut(maskCards(element.value), 200) };
     if (role === 'textbox' && element.isContentEditable) return { value: cut(maskCards(textOf(element)), 200) };
     return null;
   };
@@ -391,7 +398,7 @@
 
   // A page script setting value, checked or selected fires no event and no mutation: the
   // controls the last snapshot showed are read again each time.
-  const controlState = (element) => (element.localName === 'select'
+  const controlState = (element) => (tagOf(element) === 'select'
     ? [...element.selectedOptions].map((option) => option.index).join(',')
     : `${element.checked} ${element.indeterminate} ${element.value}`);
   const controlStates = () => (frame.controls ?? []).map(controlState).join('\u0000');
@@ -472,7 +479,7 @@
       if (value?.filled) node.filled = true;
       const state = stateOf(element, role, focused);
       if (state.length) node.state = state;
-      if (element.localName === 'select') node.options = element.options.length;
+      if (tagOf(element) === 'select') node.options = element.options.length;
       const guard = isField(element) ? guardOf(element) : null;
       if (guard) node.guard = guard;
       if (isField(element)) controls.push(element);
@@ -658,7 +665,7 @@
       }
       // Cells and link text go through the same rules, so hidden text in them stays out too.
       const visibleText = (child, inMarkdown) => collapse(lines(child, { markdown: inMarkdown }).map((item) => item.text).join(' '));
-      if (tag === 'tr') {
+      if (tagOf(element) === 'tr') {
         const cellLines = [...element.cells].map((cell) => lines(cell, { markdown, sources }));
         const cells = cellLines.map((items) => items.map((item) => item.text).join(' '));
         // Spacer rows (Hacker News has one between stories) have nothing to read.
@@ -750,7 +757,7 @@
     if (element.required) field.required = true;
     const guard = guardOf(element);
     if (guard) field.guard = guard;
-    if (element.localName === 'select') {
+    if (tagOf(element) === 'select') {
       // A card field's choices (expiry months and years) are fine; which one is chosen isn't.
       field.options = [...element.options].slice(0, 100).map((option) => {
         const item = { label: cut(collapse(option.label || option.text), 80) };
@@ -768,7 +775,7 @@
     const found = [];
     const loose = [];
     for (const element of allElements(document)) {
-      if (element.localName === 'form') {
+      if (tagOf(element) === 'form') {
         if (!isVisible(element) && ![...element.elements].some(isFormField)) continue;
         let action = '';
         try { action = new URL(element.action, location.href).host; } catch {}
@@ -917,11 +924,21 @@
   const textTypes = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'date', 'datetime-local', 'month', 'time', 'week']);
   const isEditable = (element) => (element.localName === 'input' && textTypes.has(element.type)) || element.localName === 'textarea' || element.isContentEditable;
   const formOf = (element) => {
-    const form = element.form ?? element.closest?.('form');
+    // closest('form') would also take a form of another namespace.
+    let form = element.form;
+    for (let node = element.parentElement; !form && node; node = node.parentElement) if (tagOf(node) === 'form') form = node;
     if (!form) return undefined;
     const fields = [...form.elements];
     return { id: idOf(form), cards: fields.some((field) => isField(field) && isCard(field)), password: fields.some((field) => isPassword(field) && field.value !== '') };
   };
+  // A password field that isn't empty in the target's document, in any of its open shadow roots
+  // (a design system's field and button are often in two components), whoever filled it: a
+  // sign-in sent by a script from a plain button, a link, or Enter in a field outside any form
+  // sends it as a form's submit would (design section 7.3).
+  const passwordFilled = (element) => [...new Set([document, element.getRootNode()])].some((root) => {
+    for (const field of allElements(root)) if (isPassword(field) && field.value !== '') return true;
+    return false;
+  });
   // Whether the document is a payment page (design section 7.3): card fields and wallet buttons
   // anywhere in it, and the frames it holds by address.
   const walletSelector = 'apple-pay-button, gpay-button, .gpay-button, button, [role=button], input[type=button], input[type=submit]';
@@ -963,6 +980,7 @@
     if (isWallet(element, getComputedStyle(element))) facts.wallet = true;
     facts.form = formOf(element);
     if (isSubmit(element)) facts.submit = true;
+    if (passwordFilled(element)) facts.passwordFilled = true;
     if (isEditable(element)) facts.editable = true;
     if (element.localName === 'textarea' || (element.isContentEditable && element.localName !== 'input')) facts.multiline = true;
     if (element.readOnly && ['input', 'textarea'].includes(element.localName)) facts.readonly = true;
@@ -1111,7 +1129,7 @@
   const selectOption = ({ id, values, labels }) => {
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
-    if (element.localName !== 'select') return { token: frame.token, notSelect: true };
+    if (tagOf(element) !== 'select') return { token: frame.token, notSelect: true };
     const options = [...element.options];
     const label = (option) => collapse(option.label || option.text);
     const wanted = values ?? labels;
@@ -1166,15 +1184,35 @@
 
   // DOM waits: re-checked when the document changes, never by polling faster than 4 times a
   // second for changes no observer sees (a style animating, say). A text check walks the whole
-  // body, so it runs on that 4-a-second timer alone. Each wait is kept under the key Lithium
-  // gave it, so the call that started it can end it.
+  // body and those of the frames it reaches, so it runs on that 4-a-second timer alone. Each
+  // wait is kept under the key Lithium gave it, so the call that started it can end it.
   const waits = new Map();
+  // Text in a document and the shown same-origin frames in it, which this world reaches as
+  // `guards` does; a frame of another origin can't be read from here, and is counted instead.
+  const textIn = (root, needle, depth) => {
+    if (root.body && lines(root.body).some((line) => line.text.toLowerCase().includes(needle))) return { found: true, unread: 0 };
+    let unread = 0;
+    for (const element of root.querySelectorAll('iframe, frame')) {
+      if (isExtensionFrame(element) || !isVisible(element)) continue;
+      const inner = element.contentDocument;
+      if (!inner) {
+        unread++;
+      } else if (depth < 4) {
+        const framed = textIn(inner, needle, depth + 1);
+        if (framed.found) return framed;
+        unread += framed.unread;
+      }
+    }
+    return { found: false, unread };
+  };
   const wait = ({ id, state, text, present, timeoutMs, key }) => {
     const needle = text?.toLowerCase();
+    let unread = 0;
     const check = () => {
       if (needle !== undefined) {
-        const found = document.body ? lines(document.body).some((line) => line.text.toLowerCase().includes(needle)) : false;
-        return found === present;
+        const read = textIn(document, needle, 0);
+        unread = read.unread;
+        return read.found === present;
       }
       const element = elementOf(id);
       switch (state) {
@@ -1188,7 +1226,7 @@
       }
       return false;
     };
-    const answer = (met) => ({ token: frame.token, met });
+    const answer = (met) => ({ token: frame.token, met, unread: unread || undefined });
     if (check()) return answer(true);
     return new Promise((resolve) => {
       let pending = false;

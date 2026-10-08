@@ -307,6 +307,19 @@ struct AgentInputTests {
               account.addEventListener('click', () => setTimeout(() => document.getElementById(account.dataset.next).focus(), 0));
             </script>
             """),
+        "/script-login": (html, """
+            <title>Script sign-in</title><style>body { margin: 0 } input, button, #next { position: absolute; left: 40px; width: 160px; height: 30px }</style>
+            <input id="who" aria-label="Who" style="top: 40px"><secret-field></secret-field>
+            <button type="button" id="go" style="top: 160px" onclick="location = '/done'"><span style="display: block">Sign in</span></button>
+            <div id="next" style="top: 220px; cursor: pointer" onclick="location = '/done'">Continue</div>
+            <script>
+              document.getElementById('who').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });
+              // The password in one component's shadow root, the buttons outside it.
+              document.querySelector('secret-field').attachShadow({ mode: 'open' }).innerHTML =
+                '<input type="password" aria-label="Secret" style="position: absolute; left: 40px; top: 100px; width: 160px">';
+            </script>
+            \(logger)
+            """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
         "/pay": (html, """
             <title>Shop</title><style>body { margin: 0 }</style>
@@ -1339,6 +1352,35 @@ struct AgentInputTests {
             let submitted = try await call(client, "press", ["tab": .string(id), "keys": "Enter", "wait": "load"], answering: .allowOnce, expecting: .password)
             #expect(submitted["navigated"] == true, "\(submitted.content)")
             #expect(tab.url?.path() == "/done")
+        }
+    }
+
+    /// A sign-in a script sends, with no form: once the password is filled (by the user or a
+    /// password manager), its plain button, a right click on it, and Enter in a field ask as a
+    /// form's submit does, and nothing denied reaches the page: also with the password in a
+    /// component's shadow root, a div that only has a click listener, and a click by point,
+    /// which lands on the label inside the button.
+    @Test func aSignInWithoutAFormAsksOnceItsPasswordIsFilled() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "script-login"))
+            let button = try await ref(client, id, "button", "Sign in")
+            let next = try await ref(client, id, "clickable", "Continue")
+            let who = try await ref(client, id, "textbox", "Who")
+            _ = try await page(tab, "document.querySelector('secret-field').shadowRoot.querySelector('input').value = 'filled'")
+            for (tool, arguments) in [
+                ("click", ["tab": .string(id), "ref": .string(button)]), ("click", ["tab": .string(id), "ref": .string(button), "button": "right"]),
+                ("click", ["tab": .string(id), "ref": .string(next)]), ("click", ["tab": .string(id), "x": 120, "y": 175]),
+                ("type", ["tab": .string(id), "ref": .string(who), "text": "me", "submit": true]),
+            ] as [(String, JSONValue)] {
+                let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)
+                #expect(denied.code == "denied_by_user", "\(tool) \(arguments): \(denied.content)")
+            }
+            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(who)])).isError)
+            let entered = try await call(client, "press", ["tab": .string(id), "keys": "Enter"], answering: .deny, expecting: .password)
+            #expect(entered.code == "denied_by_user", "\(entered.content)")
+            #expect(try await log(tab, ["mousedown", "click", "contextmenu", "keydown"]).isEmpty)
+            #expect(tab.url?.path() == "/script-login")
+            #expect(try await page(tab, "return document.getElementById('who').value") as? String == "")
         }
     }
 

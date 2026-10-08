@@ -449,6 +449,25 @@ struct AgentServerTests {
         #expect(logged == ["tab": "t1", "accept": true, "text": "[redacted]"])
     }
 
+    /// A malformed `fill_form` fails, but its call is logged all the same: values given as a
+    /// string, or as list items that aren't objects, never reach the log.
+    @Test func neverLogsMalformedFillFormValues() {
+        let notes = CallNotes()
+        #expect(notes.logged(["tab": "t1", "fields": "hunter2secret"], tool: "fill_form") == ["tab": "t1", "fields": "[redacted]"])
+        #expect(notes.logged(["tab": "t1", "fields": ["hunter2secret", ["ref": "e1", "value": "Ann"], ["ref": "e2"]]], tool: "fill_form")
+            == ["tab": "t1", "fields": ["[redacted]", ["ref": "e1", "value": "[redacted]"], ["ref": "e2"]]])
+    }
+
+    /// Day files are named in the Gregorian calendar whatever the user's, so names sort by date
+    /// and retention compares like with like; the day is the user's local one.
+    @Test func logDayFilesAreGregorianDates() throws {
+        let date = try #require(ISO8601DateFormatter().date(from: "2026-10-08T23:30:00Z"))
+        #expect(AgentLog.fileName(for: date, timeZone: TimeZone(identifier: "UTC")!) == "2026-10-08.jsonl")
+        #expect(AgentLog.fileName(for: date, timeZone: TimeZone(identifier: "Asia/Tokyo")!) == "2026-10-09.jsonl")
+        #expect(AgentLog.fileName(for: date, timeZone: TimeZone(identifier: "America/Los_Angeles")!) == "2026-10-08.jsonl")
+        #expect(AgentLog.dayCalendar.identifier == .gregorian)
+    }
+
     @Test func takesAnotherPortWhenTheLastOneIsTaken() async throws {
         let first = try await Fixture()
         defer { first.hub.shutdown() }
@@ -953,6 +972,23 @@ struct AgentServerTests {
         await log.prune(now: now)
         let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
         #expect(files == [AgentLog.fileName(for: recent)])
+    }
+
+    /// Day files an earlier version named in a Buddhist year sort after every Gregorian one:
+    /// pruning drops them instead of keeping them, as the newest, forever.
+    @Test func prunesDayFilesNamedAfterTomorrow() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-log-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let log = AgentLog(folder: folder)
+        let now = Date()
+        await log.append(["tool": "a"], at: now)
+        let tomorrow = AgentLog.fileName(for: AgentLog.dayCalendar.date(byAdding: .day, value: 1, to: now)!)
+        for name in ["2569-10-01.jsonl", tomorrow] {
+            FileManager.default.createFile(atPath: folder.appending(path: name).path, contents: Data("{}\n".utf8))
+        }
+        await log.prune(now: now)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(files == [AgentLog.fileName(for: now), tomorrow].sorted())
     }
 
     private func permissions(_ url: URL) throws -> Int {

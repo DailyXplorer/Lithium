@@ -83,6 +83,13 @@ struct AgentGuardrailsTests {
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: true), .password, "submitting a filled password"),
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: false), nil, "submitting an empty password field"),
             (.activate, button("Pay €42.00"), Self.shop, Guardrails.Form(filledPassword: true), .payment, "a payment wins over a password"),
+            (.activate, Element(role: "button", name: "Sign in", passwordFilled: true), Self.shop, nil, .password, "a plain button beside a filled password, no form"),
+            (.activate, Element(role: "clickable", name: "Continue", passwordFilled: true), Self.shop, nil, .password, "a clickable beside a filled password"),
+            (.activate, Element(role: "text", name: "Next", passwordFilled: true), Self.shop, nil, .password, "a button's label, clicked by point, beside a filled password"),
+            (.activate, Element(role: "checkbox", name: "Remember me", passwordFilled: true), Self.shop, nil, nil, "a checkbox beside a filled password"),
+            (.activate, Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, nil, "a field clicked beside a filled password"),
+            (.press(enter: true), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, .password, "Enter in a field beside a filled password, no form"),
+            (.press(enter: false), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, nil, "Tab beside a filled password"),
             (.type, email, Self.checkout, nil, nil, "an email field on a checkout page"),
         ]
         for test in cases {
@@ -138,6 +145,23 @@ struct AgentGuardrailsTests {
         ]
         for test in fields {
             #expect(try asks(key(test.combo), on: test.target) == test.expected, "\(test.combo): \(test.why)")
+        }
+        // A sign-in a script sends, no form: a click on a field's own control beside the filled
+        // password is free, Enter on it is not.
+        let beside = { (role: String, type: String?) in
+            target(TargetReport(token: "d", role: role, name: "Attachment", tag: "input", type: type, passwordFilled: true))
+        }
+        for (control, why) in [(beside("button", "file"), "a file input"), (beside("checkbox", "checkbox"), "a checkbox"), (beside("radio", "radio"), "a radio")] {
+            #expect(asks(.click, on: control) == nil, "click: \(why) beside a filled password")
+            #expect(try asks(key("Space"), on: control) == nil, "Space: \(why) beside a filled password")
+            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .password, "\(combo): \(why) beside a filled password") }
+        }
+        // A payment still wins over the password: Enter on a Pay or wallet button beside it.
+        let pay = target(TargetReport(token: "d", role: "button", name: "Pay €42.00", tag: "button", passwordFilled: true))
+        let wallet = target(TargetReport(token: "d", role: "shadow-closed", name: "apple-pay-button", wallet: true, passwordFilled: true))
+        for (control, why) in [(pay, "a commit control"), (wallet, "an Apple Pay button")] {
+            #expect(asks(.click, on: control) == .payment, "click: \(why) beside a filled password")
+            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .payment, "\(combo): \(why) beside a filled password") }
         }
     }
 

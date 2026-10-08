@@ -40,7 +40,7 @@ extension AgentHub {
     /// A `timeoutMs` under 100 answers `invalid_params`.
     static let scriptTimeouts = 100...30_000
     /// What the agent gets back at most, after the scrub; the page sends ten times that at most.
-    static let maxScriptResult = 100_000
+    nonisolated static let maxScriptResult = 100_000
 
     private static let runner = Resources.bundle.url(forResource: "agent-evaluate", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
 
@@ -124,15 +124,17 @@ extension AgentHub {
             let ms = Int(took / .milliseconds(1))
 
             // Fields filled while it ran (by the script itself, or the user) are scrubbed.
-            var secrets: [String] = []
+            let secrets: [String]
             if let after = try? await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: .now + AgentHub.frameTimeout) {
                 secrets = after.reports.flatMap(\.0.secrets)
                 Self.callNotes?.secrets = secrets
+            } else {
+                secrets = []
             }
             let hosts = [host, origin?.host].compactMap { $0 }.filter { !$0.isEmpty }
             let cookies = await cookieValues(of: tab, hosts: hosts)
             if let error = answer.error {
-                let message = Self.scrubbed(error, secrets: secrets, cookies: cookies)
+                let message = await Task.detached { AgentHub.scrubbed(error, secrets: secrets, cookies: cookies) }.value
                 throw AgentToolError(code: "script_error", message: "The script threw \(SnapshotNode.quoted(String(message.prefix(1000)))).")
             }
             var fields: [String: JSONValue] = ["tab": .string(named.id), "world": isolated ? "isolated" : "page", "ms": .int(ms)]
@@ -141,18 +143,25 @@ extension AgentHub {
                 fields["undefined"] = true
                 return AgentToolOutput(structured: .object(fields), text: "undefined")
             }
-            var text = Self.scrubbed(json, secrets: secrets, cookies: cookies)
-            let truncated = answer.cut == true || text.count > Self.maxScriptResult
-            if truncated {
-                text = String(text.prefix(Self.maxScriptResult))
-                fields["truncated"] = true
-                fields["result"] = .string(text)
-            } else {
-                // A number the card rule replaced is no longer JSON: the text stands.
-                fields["result"] = (try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text)
-            }
-            return AgentToolOutput(structured: .object(fields), text: truncated ? "\(text)\n(cut at \(Self.maxScriptResult / 1000) KB)" : text)
+            let cut = answer.cut == true
+            let shown = await Task.detached { AgentHub.shown(json, cut: cut, secrets: secrets, cookies: cookies) }.value
+            fields["result"] = shown.result
+            if shown.truncated { fields["truncated"] = true }
+            return AgentToolOutput(structured: .object(fields), text: shown.truncated ? "\(shown.text)\n(cut at \(Self.maxScriptResult / 1000) KB)" : shown.text)
         }
+    }
+
+    /// A script's JSON as the agent gets it: scrubbed, cut to `maxScriptResult`, and decoded
+    /// when whole. Off the main actor: the page may send a megabyte, and each secret and pattern
+    /// is a pass over all of it.
+    nonisolated static func shown(_ json: String, cut: Bool, secrets: [String], cookies: [String]) -> (result: JSONValue, text: String, truncated: Bool) {
+        let text = scrubbed(json, secrets: secrets, cookies: cookies)
+        if cut || text.count > maxScriptResult {
+            let kept = String(text.prefix(maxScriptResult))
+            return (.string(kept), kept, true)
+        }
+        // A number the card rule replaced is no longer JSON: the text stands.
+        return ((try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text), text, false)
     }
 
     /// Scripts never run where a secret is present (design section 7.5): a value in a password or

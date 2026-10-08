@@ -25,6 +25,8 @@ struct TargetReport: Decodable {
     var wallet: Bool?
     var form: Form?
     var submit: Bool?
+    /// A password field that isn't empty in the target's document or shadow root.
+    var passwordFilled: Bool?
     var editable: Bool?
     var multiline: Bool?
     var readonly: Bool?
@@ -124,7 +126,7 @@ struct ActionTarget {
     }
 
     var element: Guardrails.Element {
-        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
+        Guardrails.Element(role: report.role ?? "text", name: report.name, field: report.field, wallet: report.wallet == true, passwordFilled: report.passwordFilled == true, setsFiles: report.tag == "input" && report.type == "file", inPaymentFrame: inPaymentFrame, inUnknownFrame: inUnknownFrame)
     }
 
     var counts: [String: Int] { report.counts ?? [:] }
@@ -146,6 +148,9 @@ struct ActionTarget {
         let activates = (enter || key.isSpace) && Self.activatedByKeys.contains(report.role ?? "")
         if !activates, key.types(with: modifiers) { return (.type, nil) }
         let submits = report.submit == true && activates || enter && (report.submit == true || report.tag == "input" || report.editable == true && report.multiline != true)
+        // Beside a filled password, Enter anywhere may reach a page's own key listener that sends
+        // it, on a checkbox or a file input too: it asks as Enter in a field does.
+        if enter, report.passwordFilled == true { return (.press(enter: true), submits ? report.form : nil) }
         return (activates ? .activate : .press(enter: enter), submits ? report.form : nil)
     }
 
@@ -977,7 +982,8 @@ extension AgentHub {
         case pointer
         /// A button pressed and let go: a click on what it lands on, whatever the tool. A drag's
         /// press and release land on two elements, and the stricter decides. A right click
-        /// opens the page's menu and activates nothing.
+        /// activates nothing itself, but the page gets its mousedown and mouseup, which its own
+        /// listeners may act on: it asks what a click asks.
         case press(on: [ActionTarget], NativeInput.Button)
         /// Keys or text into the target, `action` as `ActionTarget.guarded` decides it.
         case keys(into: ActionTarget, Guardrails.Action, submitting: TargetReport.Form?)
@@ -1016,9 +1022,8 @@ extension AgentHub {
             case .pointer:
                 gate.sends.insert(.pointer)
                 continue
-            case .press(let targets, let button):
+            case .press(let targets, _):
                 gate.sends.formUnion([.pointer, .buttons])
-                guard button != .right else { continue }
                 weighed = targets.map { ($0.guarded(.click).action, $0, $0.guarded(.click).submitting) }
             case .keys(let target, let action, let form):
                 gate.sends.insert(.keys)

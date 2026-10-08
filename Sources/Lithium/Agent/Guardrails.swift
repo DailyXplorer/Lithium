@@ -43,6 +43,12 @@ enum Guardrails {
         var field: String?
         /// An Apple Pay or Google Pay button.
         var wallet = false
+        /// A password field that isn't empty is in its document, whoever filled it: a sign-in
+        /// may send it without a form, from a plain button or link or on Enter.
+        var passwordFilled = false
+        /// A file input: it shows as a button, but a click on it only opens the file chooser,
+        /// which `upload_files` asks about. Enter on it may still send the password.
+        var setsFiles = false
         /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
         /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
@@ -92,10 +98,18 @@ enum Guardrails {
             if element.field == "password", action == .type { return .password }
         case .press(let enter):
             if element.field == "payment" { return .payment }
-            if element.field == "password", enter { return .password }
+            // Beside a filled password, Enter on a button is a press too (`ActionTarget.guarded`):
+            // a wallet or commit control still asks for the payment a click on it would.
+            if enter, element.wallet || isCommitControl(role: element.role, name: element.name) && (page.isPaymentPage || hasAmount(element.name)) { return .payment }
+            if enter, element.field == "password" || element.passwordFilled { return .password }
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
+            // A script can send the filled password from any click, form or not, and the target's
+            // own role often hides it: a span inside a button, a div that only has a click
+            // listener. Only a field's own controls are left out, and only from a click: Enter on
+            // them beside a filled password is a `.press` (`ActionTarget.guarded`).
+            if element.passwordFilled, !element.setsFiles, !Self.fieldRoles.contains(element.role) { return .password }
         }
         return form?.filledPassword == true ? .password : nil
     }
@@ -111,6 +125,11 @@ enum Guardrails {
     private static let actionable: Set<String> = [
         "link", "button", "textbox", "searchbox", "checkbox", "radio", "combobox", "listbox", "option", "slider",
         "spinbutton", "switch", "tab", "menuitem", "clickable", "shadow-closed", "frame",
+    ]
+
+    /// Controls a click sets rather than sends: clicking them beside a filled password is free.
+    private static let fieldRoles: Set<String> = [
+        "textbox", "searchbox", "checkbox", "radio", "switch", "combobox", "listbox", "option", "slider", "spinbutton",
     ]
 
     static let paymentPaths: Set<String> = ["checkout", "payment", "paiement", "pay", "kasse", "zahlung", "pago", "pagamento", "billing", "place-order"]

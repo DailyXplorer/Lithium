@@ -73,7 +73,7 @@ enum PageProbe {
     /// A page's answer. `JSONDecoder` refuses a whole document for one lone surrogate escape
     /// (`\ud83d` with no low half), which a page can write on purpose: such an answer is read
     /// again with each one replaced by U+FFFD. Only a refused answer pays for the repair.
-    static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
+    nonisolated static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {

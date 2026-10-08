@@ -204,18 +204,21 @@ struct AgentGuardrailsTests {
         let second = confirmation(.payment, site: "shop.example")
         confirmations.ask(first)
         confirmations.ask(second)
-        let shown = AgentConfirmationBanner(confirmation: first, confirmations: confirmations)
-        shown.answer(.allowOnce)
+        let shown = ContinuousClock.now
+        var protection = ClickProtection(at: shown)
+        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown)
         #expect(confirmations.pending.map(\.id) == [first.id, second.id])
-        shown.answer(.allowOnce, at: .now + ClickProtection.delay)
+        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown + ClickProtection.delay)
         #expect(confirmations.answers[first.id] == .allowOnce)
 
-        let next = AgentConfirmationBanner(confirmation: second, confirmations: confirmations)
-        next.answer(.allowOnce)
-        next.answer(.deny)
+        // The next prompt takes its place: the banner is armed again from there.
+        let replaced = shown + ClickProtection.delay
+        protection.rearm(at: replaced)
+        AgentConfirmationBanner.answer(.allowOnce, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(100))
+        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(499))
         #expect(confirmations.pending.map(\.id) == [second.id])
         #expect(confirmations.answers[second.id] == nil)
-        next.answer(.deny, at: .now + ClickProtection.delay)
+        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + ClickProtection.delay)
         #expect(confirmations.answers[second.id] == .deny)
     }
 

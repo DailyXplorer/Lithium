@@ -52,9 +52,14 @@ struct AgentConfirmationBanner: View {
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in protection.rearm() }
     }
 
-    func answer(_ answer: ConfirmationAnswer, at now: ContinuousClock.Instant = .now) {
+    private func answer(_ answer: ConfirmationAnswer) {
+        Self.answer(answer, to: confirmation.id, in: confirmations, protection: protection)
+    }
+
+    /// Answers only once the banner has stayed in place (see `protection`).
+    static func answer(_ answer: ConfirmationAnswer, to id: AgentConfirmation.ID, in confirmations: AgentConfirmations, protection: ClickProtection, at now: ContinuousClock.Instant = .now) {
         guard protection.accepts(at: now) else { return }
-        confirmations.answer(confirmation.id, answer)
+        confirmations.answer(id, answer)
     }
 
     /// Who asks (a name the agent gave itself), where, and what a site grant would mean.

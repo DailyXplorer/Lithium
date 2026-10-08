@@ -73,6 +73,13 @@ final class Privacy {
         template
             .replacingOccurrences(of: "__LITHIUM_SEED__", with: farblingValue("seed:\(site)", key: key))
             .replacingOccurrences(of: "__LITHIUM_MARK__", with: "m" + farblingValue("mark", key: key))
+            .replacingOccurrences(of: "__LITHIUM_ADOPT__", with: adopterName(key: key))
+    }
+
+    /// The name of the function farbling leaves on a frame or popup it protected: keyed like the
+    /// marker, as a fixed one would tell every page it runs in Lithium.
+    private static func adopterName(key: SymmetricKey) -> String {
+        "a" + farblingValue("adopt", key: key)
     }
 
     private static func farblingValue(_ message: String, key: SymmetricKey) -> String {
@@ -114,6 +121,10 @@ final class Privacy {
               const modes = { __proto__: null, ...\(json) }, href = location.href, at = href.indexOf('#');
               const mode = modes[at < 0 ? href : href.slice(0, at)];
               if (!mode) return;
+              // A window its page kept goes through the copy that protected it (see farbling.js):
+              // a `CustomEvent` the page left there would read the marker.
+              const adopter = window['\(adopterName(key: key))'];
+              if (typeof adopter === 'function') return adopter(document, mode);
               dispatchEvent(new CustomEvent('m\(farblingValue("mark", key: key))', { cancelable: true, detail: { __proto__: null, trustedTypes: mode } }));
             })();
             """

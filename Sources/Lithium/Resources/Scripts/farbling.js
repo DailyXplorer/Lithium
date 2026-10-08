@@ -11,6 +11,17 @@
 // shared. So a worker sees the real CPU count and unfarbled OffscreenCanvas and WebGL reads.
 (() => {
   'use strict';
+  // A frame or popup keeps its initial blank window, and whatever its creator's page put there,
+  // when its first page is of the same origin (HTML's window reuse). Nothing this copy would take from that window can be
+  // trusted then: a `CustomEvent` or `Reflect.apply` left there once read the marker, and with it
+  // the native functions. The copy that protected the window left this function on it (see
+  // `protect`), and looks after the new document with what it took while its own was clean.
+  // `window` and `document` can't be replaced. The function's name is keyed per launch (see
+  // Privacy.farbling), so a page can't guess it (nor put its own function there), and `protect`
+  // keeps it from every listing and from a proxy's traps.
+  const ADOPT = '__LITHIUM_ADOPT__';
+  const adopter = window[ADOPT];
+  if (typeof adopter === 'function') { adopter(document); return; }
   // Keyed hashes of the top page's site under a key of the launch (see Privacy.farbling): every
   // frame of a page gets them (frames of another origin mix theirs in, below), and nothing leads
   // from them to the key or another site's.
@@ -23,7 +34,8 @@
   // popup it opens is protected (a `call` that always returns true once skipped them), or skew
   // the noise itself (a `Math.floor` that returned a huge gap once left every pixel clean).
   const apply = Reflect.apply;
-  const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
+  const { hasOwn, defineProperty, getOwnPropertyDescriptor, freeze } = Object;
+  const sourceText = Function.prototype.toString;
   const { imul, floor, ceil, max, min, trunc } = Math;
   const BigIntCtor = BigInt, { asIntN } = BigInt, NumberCtor = Number, { isFinite } = Number;
   const WeakMapCtor = WeakMap, WeakSetCtor = WeakSet;
@@ -31,6 +43,13 @@
   const weakMapSet = WeakMap.prototype.set;
   const weakSetHas = WeakSet.prototype.has;
   const weakSetAdd = WeakSet.prototype.add;
+  // What a proxy of a window does without a trap of the page's (see `shield`). Not `apply` and
+  // `construct`: a window can't be called.
+  const TRAPS = ['getPrototypeOf', 'setPrototypeOf', 'isExtensible', 'preventExtensions', 'getOwnPropertyDescriptor',
+    'defineProperty', 'has', 'get', 'set', 'deleteProperty', 'ownKeys'];
+  const reflect = { __proto__: null };
+  for (let i = 0; i < TRAPS.length; i++) reflect[TRAPS[i]] = Reflect[TRAPS[i]];
+  const construct = Reflect.construct;
   // The canvas and array members the noise goes through, likewise: a canvas `width` that reads
   // 0, an empty `putImageData` or an array `length` past the limit once left every read clean.
   // They work on objects of any same-origin realm, so these serve the frames and popups too.
@@ -325,9 +344,17 @@
   const cores = (real) => max(2, min(real, 2 + floor(prng(0x51ed270b)() * (real - 1))));
 
   // Replacements report the original's source through toString, so pages cannot spot them. One
-  // map for every realm this copy protects, joined with the map of the copy in the parent, top or
-  // opener window: any realm's toString then sees through the replacements of all the others.
-  let disguises = new WeakMapCtor();
+  // registry for every realm this copy protects, joined with that of the copy in the parent, top
+  // or opener window: any realm's toString then sees through the replacements of all the others.
+  // Copies share these two functions, never the map: whoever gets hold of them can't reach a
+  // native original through them, only its source.
+  const replaced = new WeakMapCtor();
+  let disguises = freeze({ __proto__: null,
+    add: (replacement, original) => { apply(weakMapSet, replaced, [replacement, original]); },
+    source: (fn) => {
+      const original = apply(weakMapGet, replaced, [fn]);
+      return original ? apply(sourceText, original, []) : undefined;
+    } });
 
   // A protected window answers a cancelable event named MARK: the copy that protects it cancels it
   // and hands over its disguises. WebKit's per-frame injection and the hooks below can both reach a
@@ -337,11 +364,15 @@
   // tells the window's realm whether its policy enforces them or only reports. Shared like the
   // disguises, so a frame's copy finds its parent's.
   let trustedTypesModes = new WeakMapCtor();
+  // The windows that carry the adopter (see `protect`), shared likewise: a page reaches the
+  // frames a frame's copy protected too, and makes its proxies of them with its own `Proxy`.
+  let adopting = new WeakSetCtor();
   const answer = (event) => {
     apply(preventDefault, event, []);
     const box = read(eventDetail, event);
     if (box && !hasOwn(box, 'disguises')) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
     if (box && !hasOwn(box, 'modes')) defineProperty(box, 'modes', { __proto__: null, value: trustedTypesModes });
+    if (box && !hasOwn(box, 'adopting')) defineProperty(box, 'adopting', { __proto__: null, value: adopting });
     if (box && hasOwn(box, 'trustedTypes')) {
       const realm = sameOrigin(read(eventTarget, event));
       if (realm) apply(weakMapSet, trustedTypesModes, [realm, box.trustedTypes]);
@@ -358,9 +389,44 @@
     const others = [parent, top, opener];
     for (let i = 0; i < others.length; i++) {
       const box = others[i] && others[i] !== window && sameOrigin(others[i]) ? ask(others[i]) : null;
-      if (box && box.disguises) { disguises = box.disguises; trustedTypesModes = box.modes || trustedTypesModes; break; }
+      if (box && box.disguises) {
+        disguises = box.disguises; trustedTypesModes = box.modes || trustedTypesModes; adopting = box.adopting || adopting;
+        break;
+      }
     }
   } catch (_) {}
+
+  // The adopter is left out of every listing (see `protect`), and so must never reach a proxy's
+  // traps: `Object.keys`, `for…in` or spread of a proxy of a window ask its
+  // `getOwnPropertyDescriptor` trap about each of the window's keys. A proxy of such a window
+  // gets traps of this copy's instead, which call the page's with every other key and list the
+  // window's keys without it.
+  const unlisted = (keys) => {
+    const count = keys.length;
+    for (let i = 0; i < count; i++) {
+      if (keys[i] !== ADOPT) continue;
+      for (let j = i + 1; j < count; j++) keys[j - 1] = keys[j];
+      keys.length = count - 1;
+      break;
+    }
+    return keys;
+  };
+  const shield = (target, handler) => {
+    if (!apply(weakSetHas, adopting, [target]) || handler === null || (typeof handler !== 'object' && typeof handler !== 'function')) return handler;
+    const traps = { __proto__: null };
+    for (let i = 0; i < TRAPS.length; i++) {
+      const name = TRAPS[i], forward = reflect[name];
+      traps[name] = (...args) => {
+        if (args[1] === ADOPT) return apply(forward, undefined, args);
+        // Looked up on each call, as the browser does: the page may change its handler.
+        const trap = handler[name];
+        if (trap != null) return apply(trap, handler, args);
+        const result = apply(forward, undefined, args);
+        return name === 'ownKeys' ? unlisted(result) : result;
+      };
+    }
+    return traps;
+  };
 
   // A frame without a `src` fires `load` while it is being inserted: inside the native call, before
   // the hooks below or the observer at the end run, and a handler there reaches it through
@@ -394,15 +460,33 @@
     if (ask(win) !== null) return;
     apply(addEventListener, win, [MARK, answer]);
     watchLoads(win.document);
+    // For the copy in this window's next page, should that page keep the window (see the top),
+    // and for the Trusted Types flag there (see Privacy.trustedTypesScript). Not on the copy's
+    // own window. Configurable: a proxy of the window whose keys left out a fixed one would throw.
+    if (win !== window) {
+      try {
+        defineProperty(win, ADOPT, { __proto__: null, configurable: true, value: (doc, mode) => {
+          const view = read(documentView, doc);
+          if (!view || sameOrigin(view) !== realm) return;
+          if (mode === 'enforce' || mode === 'report') { apply(weakMapSet, trustedTypesModes, [realm, mode]); return; }
+          watchLoads(doc);
+          try { watchParsing(doc); } catch (_) {}
+        } });
+        apply(weakSetAdd, adopting, [win]);
+      } catch (_) {}
+    }
 
     const nativeToString = win.Function.prototype.toString;
     const disguise = (replacement, original) => {
       defineProperty(replacement, 'name', { value: original.name });
       defineProperty(replacement, 'length', { value: original.length });
-      apply(weakMapSet, disguises, [replacement, original]);
+      disguises.add(replacement, original);
       return replacement;
     };
-    const toString = disguise({ toString() { return apply(nativeToString, apply(weakMapGet, disguises, [this]) || this, []); } }.toString, nativeToString);
+    const toString = disguise({ toString() {
+      const source = disguises.source(this);
+      return source === undefined ? apply(nativeToString, this, []) : source;
+    } }.toString, nativeToString);
     defineProperty(win.Function.prototype, 'toString', { ...getOwnPropertyDescriptor(win.Function.prototype, 'toString'), value: toString });
 
     const patch = (proto, name, handler) => {
@@ -429,6 +513,25 @@
       const set = disguise(getOwnPropertyDescriptor({ set [name](value) { handler(original, this, value); } }, name).set, original);
       defineProperty(proto, name, { ...descriptor, set });
     };
+
+    // The adopter (above) is on frames and popups, listed from any realm: each leaves it out, and
+    // its proxies of them keep it from the page's traps (see `shield`).
+    try {
+      const NativeProxy = win.Proxy;
+      patch(NativeProxy, 'revocable', (target, self, args) => apply(target, self, [args[0], shield(args[0], args[1])]));
+      // A proxy of the native one, which has no `prototype` a function would add.
+      const ProxyShield = new NativeProxy(NativeProxy, { __proto__: null,
+        construct: (target, args, newTarget) => construct(target, [args[0], shield(args[0], args[1])], newTarget) });
+      disguises.add(ProxyShield, NativeProxy);
+      defineProperty(win, 'Proxy', { ...getOwnPropertyDescriptor(win, 'Proxy'), value: ProxyShield });
+      patch(win.Object, 'getOwnPropertyNames', (target, self, args) => unlisted(apply(target, self, args)));
+      patch(win.Reflect, 'ownKeys', (target, self, args) => unlisted(apply(target, self, args)));
+      patch(win.Object, 'getOwnPropertyDescriptors', (target, self, args) => {
+        const all = apply(target, self, args);
+        delete all[ADOPT];
+        return all;
+      });
+    } catch (_) {}
 
     try {
       const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', readImage);
@@ -762,14 +865,11 @@
     } catch (_) {}
   };
 
-  protect(window);
-  // Also when another copy protected this window already: a blank frame keeps its window, and the
-  // marker on it, when its first page loads, but that page's document is a new one.
-  watchLoads(document);
-
   // The parser adds frames through no method the hooks see, and `frames[n]` reaches them past the
   // getters: a blank `<iframe>` in the page's markup stayed a clean window for good. While the page
-  // parses, an observer protects them; its records come in before each inline script runs.
+  // parses, an observer protects them; its records come in before each inline script runs. For
+  // this page, and for the next page of a window this copy protected, should it keep the window.
+  let watchParsing = () => {};
   try {
     const MutationObserverCtor = MutationObserver;
     const observe = MutationObserver.prototype.observe;
@@ -782,38 +882,44 @@
     // A batch holds an element and, in records of their own, the children parsed into it since:
     // only elements whose parent isn't in the batch are searched, as searching each one searched
     // the same nodes once per level they are nested.
-    const parsed = (records) => {
-      const batch = new WeakSetCtor();
-      for (let pass = 0; pass < 2; pass++) for (let i = 0; i < records.length; i++) {
-        const added = read(addedNodes, records[i]);
-        const count = added ? read(nodeCount, added) : 0;
-        for (let j = 0; j < count; j++) {
-          const node = added[j];
-          if (read(nodeType, node) !== 1) continue;
-          if (pass === 0) { apply(weakSetAdd, batch, [node]); continue; }
-          const name = read(elementName, node);
-          if (name === 'iframe' || name === 'frame') protectFrame(node);
-          else if (read(firstElementChild, node) && !apply(weakSetHas, batch, [read(parentNode, node)])) {
-            const found = apply(queryAll[1], node, ['iframe, frame']);
-            const total = read(nodeCount, found);
-            for (let k = 0; k < total; k++) protectFrame(found[k]);
+    watchParsing = (doc) => {
+      const parsed = (records) => {
+        const batch = new WeakSetCtor();
+        for (let pass = 0; pass < 2; pass++) for (let i = 0; i < records.length; i++) {
+          const added = read(addedNodes, records[i]);
+          const count = added ? read(nodeCount, added) : 0;
+          for (let j = 0; j < count; j++) {
+            const node = added[j];
+            if (read(nodeType, node) !== 1) continue;
+            if (pass === 0) { apply(weakSetAdd, batch, [node]); continue; }
+            const name = read(elementName, node);
+            if (name === 'iframe' || name === 'frame') protectFrame(node);
+            else if (read(firstElementChild, node) && !apply(weakSetHas, batch, [read(parentNode, node)])) {
+              const found = apply(queryAll[1], node, ['iframe, frame']);
+              const total = read(nodeCount, found);
+              for (let k = 0; k < total; k++) protectFrame(found[k]);
+            }
           }
         }
-      }
-      // A Trusted Types policy in the markup still applies once a script removes it: kept while
-      // it's there for the write hook (see trustedTypesMode).
-      if (isTrustedHTML && records.length && !apply(weakMapGet, trustedTypesModes, [document])) {
-        try {
-          if (hasTrustedTypesMeta(document)) apply(weakMapSet, trustedTypesModes, [document, 'enforce']);
-        } catch (_) {}
-      }
+        // A Trusted Types policy in the markup still applies once a script removes it: kept while
+        // it's there for the write hook (see trustedTypesMode).
+        if (isTrustedHTML && records.length && !apply(weakMapGet, trustedTypesModes, [doc])) {
+          try {
+            if (hasTrustedTypesMeta(doc)) apply(weakMapSet, trustedTypesModes, [doc, 'enforce']);
+          } catch (_) {}
+        }
+      };
+      const observer = new MutationObserverCtor(parsed);
+      apply(observe, observer, [doc, { __proto__: null, childList: true, subtree: true }]);
+      // Once parsed, the page adds frames only through the hooks.
+      apply(addEventListener, doc, ['DOMContentLoaded', () => {
+        parsed(apply(takeRecords, observer, []));
+        apply(disconnect, observer, []);
+      }, { __proto__: null, once: true }]);
     };
-    const observer = new MutationObserverCtor(parsed);
-    apply(observe, observer, [document, { __proto__: null, childList: true, subtree: true }]);
-    // Once parsed, the page adds frames only through the hooks.
-    apply(addEventListener, document, ['DOMContentLoaded', () => {
-      parsed(apply(takeRecords, observer, []));
-      apply(disconnect, observer, []);
-    }, { __proto__: null, once: true }]);
   } catch (_) {}
+
+  protect(window);
+  watchLoads(document);
+  try { watchParsing(document); } catch (_) {}
 })();

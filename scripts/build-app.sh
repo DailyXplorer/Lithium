@@ -89,14 +89,22 @@ codesign --force --sign "$sign_hash" --identifier app.lithium.browser.mcp "$app/
 codesign --force --sign "$sign_hash" "$app"
 codesign --verify --deep --strict "$app"
 
-osascript -e 'tell application id "app.lithium.browser" to quit' >/dev/null 2>&1 || true
-# A sheet or dialog can veto the quit; give it 3 s, then force it.
-attempt=0
-while pgrep -x Lithium >/dev/null 2>&1; do
-  attempt=$((attempt + 1))
-  if [ "$attempt" -eq 30 ]; then pkill -x Lithium || true; fi
-  sleep 0.1
-done
+# Only a build that installs or opens the app quits the running one: the bundle id also names
+# the installed copy the user may be browsing in.
+if [ "$install" -eq 1 ] || [ "$run" -eq 1 ]; then
+  osascript -e 'tell application id "app.lithium.browser" to quit' >/dev/null 2>&1 || true
+  # A sheet or dialog can veto the quit. Forcing it would skip the app's own save at quit and
+  # lose what that sheet holds, so after 3 s the build stops instead.
+  attempt=0
+  while pgrep -x Lithium >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -eq 30 ]; then
+      printf 'Lithium did not quit; close its open dialogs, quit it, and run this again.\n' >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+fi
 
 output="$project_dir/.build/Lithium.app"
 rm -rf "$output"

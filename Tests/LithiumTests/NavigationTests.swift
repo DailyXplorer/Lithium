@@ -472,6 +472,54 @@ struct NavigationTests {
         #expect(ExternalApps.recorded == before, "Escape cancels")
     }
 
+    /// The press on a link is used up by the load it starts: the page it opens can't `click()`
+    /// another app's link (nor start a download) on it, however soon after the press it runs. So
+    /// too in a frame, whose own load nothing else checks the press for, whether the link or the
+    /// click's script (`location.href`) starts it.
+    @Test(arguments: [(false, false), (true, false), (true, true)]) func aPressDoesNotCarryOverToTheNextPage(inFrame: Bool, scripted: Bool) async throws {
+        let html = "Content-Type: text/html"
+        let link = #"""
+            <style>body { margin: 0 } a { position: absolute; left: 40px; top: 40px; width: 120px; height: 30px }</style>
+            """# + (scripted ? ##"<a href="#" onclick="location.href = '/next'; return false">Next</a>"## : #"<a href="/next">Next</a>"#)
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": (html, "<title>First</title>" + (inFrame ? #"<style>body { margin: 0 } iframe { border: 0; width: 400px; height: 300px }</style><iframe src="/link"></iframe>"# : link)),
+            "/link": (html, link),
+            "/next": (html, #"""
+                <title>Next</title><a id="app" href="lithium-test:open">Open</a>
+                <script>document.getElementById('app').click(); top.document.title = 'Clicked'</script>
+                """#),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        browser.appLinks.appOpening = { _ in URL(fileURLWithPath: "/Applications/Example.app") }
+        let before = ExternalApps.recorded
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "First" && !tab.webView.isLoading })
+        if inFrame {
+            #expect(await waitUntil(10) { (try? await tab.webView.evaluateJavaScript("!!document.querySelector('iframe').contentDocument?.querySelector('a')")) as? Bool == true })
+        }
+
+        let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        shown.isReleasedWhenClosed = false
+        let webView = tab.webView
+        webView.removeFromSuperview()
+        webView.frame = shown.contentLayoutRect
+        shown.contentView = webView
+        defer { shown.contentView = nil }
+        let point = webView.convert(CGPoint(x: 55, y: 50), to: nil)
+        let pressed = ContinuousClock.now
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: shown.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+            type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
+        }
+        #expect(await waitUntil(5) { webView.title == "Clicked" })
+        #expect(ContinuousClock.now - pressed < .seconds(1), "the next page ran within the press's second")
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(browser.appLinks.pending.isEmpty, "the next page's script asks nothing")
+        #expect(ExternalApps.recorded == before)
+    }
+
     /// The internal page's `call` reaches the app and gets its state back.
     private func bridgeAnswers(in tab: Lithium.Tab) async -> Bool {
         let answer = try? await tab.webView.callAsyncJavaScript("return typeof (await call('state'))", contentWorld: .page)

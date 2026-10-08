@@ -192,6 +192,29 @@ extension BrowserTests {
         #expect(browser.find.matchCount == 1)
     }
 
+    /// Summaries read the PDF's own text and selection: the web view under the viewer has none.
+    @Test func summariesReadThePDFsText() async throws {
+        let file = try makePDF(title: "Quarterly report", pages: ["Revenue grew", "Costs fell"])
+        let reader = PDFReader(url: file)
+        #expect(reader.open(try Data(contentsOf: file)))
+        let content = try #require(await reader.content(limit: SummaryText.maximumLength))
+        #expect(content.title == "Quarterly report")
+        #expect(content.text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) } == ["Revenue grew", "Costs fell"])
+        #expect(!content.isTruncated)
+        #expect(content.selection.isEmpty)
+
+        reader.view.setCurrentSelection(reader.document?.findString("Costs", withOptions: []).first, animate: false)
+        let selected = try #require(await reader.content(limit: 5))
+        #expect(selected.selection == "Costs")
+        #expect(selected.text == "Reven")
+        #expect(selected.isTruncated && !selected.isSelectionTruncated)
+
+        let locked = try makePDF(title: "Secret", pages: ["Hidden"], password: "open sesame")
+        let lockedReader = PDFReader(url: locked)
+        #expect(lockedReader.open(try Data(contentsOf: locked)))
+        #expect(await lockedReader.content(limit: 100) == nil)
+    }
+
     /// A text PDF with one outline entry per page, written by hand: PDFKit drops outlines it is given.
     private func makePDF(title: String, pages: [String], password: String? = nil) throws -> URL {
         let count = pages.count

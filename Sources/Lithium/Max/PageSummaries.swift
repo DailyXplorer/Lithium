@@ -135,7 +135,8 @@ final class PageSummaries {
         }
         entries[tab.id]?.shown = nil
 
-        guard let content = await PageReader.read(tab.webView) else {
+        let read = if let pdf = tab.pdf { await pdf.content(limit: SummaryText.maximumLength) } else { await PageReader.read(tab.webView) }
+        guard let content = read else {
             show(.page, .failed("Lithium couldn’t read this page."), in: tab, for: page)
             return
         }

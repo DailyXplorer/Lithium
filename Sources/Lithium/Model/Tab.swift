@@ -164,7 +164,7 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var readerRecheck: Task<Void, Never>?
 
     @ObservationIgnored private weak var browser: Browser?
-    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
+    @ObservationIgnored private var observations: [NSObject] = []
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
     /// The address the page's scripts were last set up for (nil: none, as on Lithium's pages), and
     /// what it was when the shown page committed: see `restoreProtections`.
@@ -752,6 +752,13 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated { self?.canGoForward = webView.canGoForward }
             },
         ]
+        // The mini player's surest sign a page plays: it then asks the page what it plays.
+        if let hearing = Hearing(webView, changed: { [weak self] in
+            guard let self, !self.isAsleep else { return }
+            self.browser?.nowPlaying.hearingChanged(self)
+        }) {
+            observations.append(hearing)
+        }
     }
 
     private func tellExtensions(_ properties: WKWebExtension.TabChangedProperties) {

@@ -471,8 +471,9 @@ final class Browser {
 
     func newTabFocusingAddress() {
         find.hide()
-        // Left for the address bar: it counts as used until now.
+        // Left for the address bar: it counts as used until now, as does the other side of its split.
         selectedTab?.markActive()
+        shownPartner?.markActive()
         if selectedTabID != nil { tabPickToken &+= 1 }
         selectedTabID = nil
         requestAddressFocus()
@@ -560,6 +561,8 @@ final class Browser {
             if picked { tabPickToken &+= 1 }
             find.hide()
             previous?.markActive()
+            // Leaving the screen too, and no view says so: its idle time starts now.
+            shownPartner?.markActive()
             recentTabs.didShow(tab, after: previous)
         }
         selectedTabID = tab.id

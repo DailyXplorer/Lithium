@@ -145,6 +145,34 @@ struct SpacesTests {
         #expect(!shared.contains { $0.name == "account" && $0.value == "work" })
     }
 
+    /// Settings › Clear site data counts and clears the site's cookies in every space's store, not
+    /// only the default one: a space's login doesn't survive it.
+    @Test func clearingSiteDataReachesSpacesWithTheirOwnCookies() async throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        var work = browser.newSpaceDraft()
+        work.separatesData = true
+        browser.addSpace(work)
+        let store = try #require(browser.spaceStore(for: work.id))
+        let host = "clear-\(UUID().uuidString.prefix(8).lowercased()).example"
+        for (target, value) in [(store, "work"), (WKWebsiteDataStore.default(), "home")] {
+            let cookie = try #require(HTTPCookie(properties: [.domain: host, .path: "/", .name: "account", .value: value]))
+            await target.httpCookieStore.setCookie(cookie)
+        }
+
+        browser.switchToSpace(Space.mainID)
+        let settings = browser.newTab(url: Internal.settingsURL)
+        #expect(await poll(30) { (try? await settings.webView.evaluateJavaScript("typeof call", in: nil, contentWorld: .page) as? String) == "function" })
+        let site = try await settings.webView.callAsyncJavaScript("return await call('site', host)", arguments: ["host": host], contentWorld: .page) as? [String: Any]
+        #expect(site?["cookies"] as? Int == 2)
+        #expect(site?["hasData"] as? Bool == true)
+
+        let cleared = try await settings.webView.callAsyncJavaScript("return await call('clearSiteData', host)", arguments: ["host": host], contentWorld: .page) as? [String: Any]
+        #expect(cleared?["cookies"] as? Int == 0)
+        let inSpace = await store.httpCookieStore.allCookies()
+        #expect(!inSpace.contains { $0.domain.hasSuffix(host) }, "the space's login is gone too")
+    }
+
     /// Deleting a space closes its tabs for good, drops its favorites, shows the space before it,
     /// and deletes its cookies. The main space stays.
     @Test func deletingASpaceClosesItsTabsAndDeletesItsData() async throws {
@@ -301,6 +329,15 @@ struct SpacesTests {
     }
 
     private func page(_ name: String) -> URL { URL(string: "data:text/html,\(name)")! }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return await condition()
+    }
 }
 
 /// The sidebar's two-finger swipe, as the events of a trackpad gesture reach it.

@@ -1021,6 +1021,12 @@ final class Browser {
 
     // MARK: Spaces
 
+    /// Every store that holds the user's (non-private) site data: the default one, and those of
+    /// the spaces that keep theirs apart.
+    var siteDataStores: [WKWebsiteDataStore] {
+        [.default()] + spaces.filter(\.separatesData).compactMap { spaceStore(for: $0.id) }
+    }
+
     /// The store of a space that keeps its data apart, made on first use and kept while the space
     /// is. Nil for the main space and those sharing its data, whose tabs use the default store.
     func spaceStore(for id: Space.ID) -> WKWebsiteDataStore? {

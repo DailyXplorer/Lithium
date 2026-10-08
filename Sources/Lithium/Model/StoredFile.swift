@@ -7,7 +7,12 @@ import Foundation
 enum StoredFile {
     /// The decoded file; nil when there is none, or none that can be read, which is then moved aside.
     static func read<Value: Decodable>(_ type: Value.Type, at url: URL) -> Value? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let data = try? Data(contentsOf: url) else {
+            // One there that can't be opened (its permissions) is kept aside too: the next save replaces it.
+            var isFolder: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder), !isFolder.boolValue { moveAside(url) }
+            return nil
+        }
         do {
             return try JSONDecoder().decode(Value.self, from: data)
         } catch {

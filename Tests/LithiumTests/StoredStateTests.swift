@@ -28,6 +28,18 @@ struct StoredStateTests {
         #expect(try keptAside(file) == [contents])
     }
 
+    /// A session there but not readable (its permissions) isn't taken for none: the next save
+    /// would replace it.
+    @Test func aSessionThatCantBeOpenedIsKeptAside() throws {
+        let file = try folder().appending(path: "session.json")
+        try Data(#"{"tabs": [], "selectedIndex": 0}"#.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        #expect(SessionStore.load(from: file) == Session())
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        let aside = try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
+        #expect(aside.count == 1 && aside[0].hasPrefix("session.json.unreadable-"))
+    }
+
     /// A field this build doesn't know (a newer build's) is no reason to lose the tabs.
     @Test func aSessionWithAnUnknownFieldIsRead() throws {
         let file = try folder().appending(path: "session.json")

@@ -257,7 +257,11 @@ private struct AddressField: NSViewRepresentable {
         field.usesSingleLineMode = true
         field.placeholderString = "Search or enter address"
         field.delegate = context.coordinator
-        field.onFocusChange = { editing in context.coordinator.parent.isEditing = editing }
+        field.onFocusChange = { editing in
+            let coordinator = context.coordinator
+            if editing { coordinator.editedTabID = coordinator.parent.browser.selectedTabID }
+            coordinator.parent.isEditing = editing
+        }
         context.coordinator.focusToken = focusToken
         return field
     }
@@ -278,6 +282,8 @@ private struct AddressField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: AddressField
         var focusToken = 0
+        /// The tab shown when editing began: Return sends the text there.
+        var editedTabID: Tab.ID?
 
         init(_ parent: AddressField) { self.parent = parent }
 
@@ -287,7 +293,7 @@ private struct AddressField: NSViewRepresentable {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 // Submit before resigning: ending the edit clears the suggestions being read.
-                parent.browser.submitAddress(field.stringValue)
+                parent.browser.submitAddress(field.stringValue, editing: editedTabID)
                 field.window?.makeFirstResponder(nil)
                 return true
             case #selector(NSResponder.moveDown(_:)) where !suggestions.items.isEmpty:

@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import WebKit
 
 /// Finds a site's icon and normalizes it to a 64 px PNG that is known to contain visible pixels.
@@ -12,10 +13,20 @@ final class Favicons {
     private var uses = 0
     private var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
-    private let session = URLSession(configuration: .ephemeral)
+    private let session: URLSession = {
+        // A server that trickles its answer gives up the fetch long before the default week.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 20
+        return URLSession(configuration: configuration)
+    }()
     private let folder: URL
     private let cacheLimit: Int
     nonisolated private static let side = 64
+    /// Icons are a few KB: a larger body is never one, and is not read past this.
+    nonisolated static let largestIcon = 512 * 1024
+    /// Past this many pixels an image is no icon, and decoding it would cost a lot of memory.
+    nonisolated static let largestPixels = 4096 * 4096
 
     init(folder: URL = .applicationSupportDirectory.appending(path: "Lithium/Favicons"), cacheLimit: Int = 500) {
         self.folder = folder
@@ -80,8 +91,8 @@ final class Favicons {
                 if let url = URL(string: path, relativeTo: site), let png = await Self.fetch(url, with: session) { return png }
             }
             // Some sites only declare their icons in the page, often on a CDN.
-            guard let (html, _) = try? await session.data(from: site) else { return nil }
-            for url in Self.declaredIcons(in: String(decoding: html.prefix(200_000), as: UTF8.self), base: site) {
+            guard let html = await Self.download(site, limit: 200_000, keepingPrefix: true, with: session) else { return nil }
+            for url in Self.declaredIcons(in: String(decoding: html, as: UTF8.self), base: site) {
                 if let png = await Self.fetch(url, with: session) { return png }
             }
             return nil
@@ -123,7 +134,7 @@ final class Favicons {
 
         let links = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [[String]] ?? []
         var candidates = links.compactMap { link -> Candidate? in
-            guard link.count == 4, let url = URL(string: link[0]) else { return nil }
+            guard link.count == 4, let url = URL(string: link[0]), Self.isFetchable(url) else { return nil }
             let isVector = link[3].contains("svg") || url.pathExtension.lowercased() == "svg"
             return Candidate(url: url, size: Self.size(sizes: link[1], rel: link[2]), isVector: isVector)
         }
@@ -132,12 +143,15 @@ final class Favicons {
         }
 
         for candidate in candidates.sorted(by: Candidate.preferred) {
+            // The tab moved on, and its next fetch took this one's place.
+            if Task.isCancelled { return nil }
             guard let png = await Self.fetch(candidate.url, with: session) else { continue }
             store(png, for: host)
             return png
         }
 
         for candidate in candidates {
+            if Task.isCancelled { return nil }
             let page = webView as? PageWebView
             page?.iconsDrawn.insert(candidate.url)
             let result = try? await webView.callAsyncJavaScript(
@@ -162,15 +176,34 @@ final class Favicons {
         return png
     }
 
-    /// The addresses icons are fetched from, as a page's `<link>` names them.
+    /// The addresses icons are fetched from, as a page's `<link>` names them: never `file:` or
+    /// any other scheme that would have Lithium read something on the Mac for the page.
     nonisolated static func isFetchable(_ url: URL) -> Bool {
         ["http", "https", "data"].contains(url.scheme?.lowercased())
     }
 
-    nonisolated private static func fetch(_ url: URL, with session: URLSession) async -> Data? {
-        guard let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
+    nonisolated static func fetch(_ url: URL, with session: URLSession) async -> Data? {
+        guard isFetchable(url), let data = await download(url, limit: largestIcon, with: session) else { return nil }
         return await normalizedInBackground(data)
+    }
+
+    /// The body, read as it comes and dropped past `limit` (or cut there, for a page read only
+    /// for its head), so a huge or endless answer is never held whole in Lithium's memory.
+    nonisolated static func download(_ url: URL, limit: Int, keepingPrefix: Bool = false, with session: URLSession) async -> Data? {
+        guard let (bytes, response) = try? await session.bytes(from: url),
+              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
+        defer { bytes.task.cancel() }
+        if !keepingPrefix, response.expectedContentLength > limit { return nil }
+        var data = Data()
+        do {
+            for try await byte in bytes {
+                guard data.count < limit else { return keepingPrefix ? data : nil }
+                data.append(byte)
+            }
+        } catch {
+            return nil
+        }
+        return data
     }
 
     /// Decoding, redrawing and encoding a large ICO or touch icon takes a few milliseconds, so it
@@ -181,7 +214,7 @@ final class Favicons {
 
     /// Redraws the icon at 64 px and rejects it when nothing visible was drawn.
     nonisolated static func normalized(_ data: Data) -> Data? {
-        guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0,
+        guard !isTooLarge(data), let image = NSImage(data: data), image.size.width > 0, image.size.height > 0,
               let bitmap = NSBitmapImageRep(
                   bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
@@ -198,6 +231,19 @@ final class Favicons {
         }
         guard visible > side * side / 50 else { return nil }
         return bitmap.representation(using: .png, properties: [:])
+    }
+
+    /// A small file can still declare a huge image (a PNG of one color compresses to almost
+    /// nothing): the size each image in it declares is read before anything is decoded.
+    nonisolated private static func isTooLarge(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return (0..<CGImageSourceGetCount(source)).contains { index in
+            guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int else { return false }
+            // In Double: a forged header's sizes would overflow an Int product.
+            return Double(width) * Double(height) > Double(largestPixels)
+        }
     }
 
     private struct Candidate {

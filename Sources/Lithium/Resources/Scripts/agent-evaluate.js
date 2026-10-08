@@ -33,6 +33,8 @@ return await (async (source, setup) => {
         case 'bigint': return `${item}n`;
         case 'function': return `[function ${item.name || 'anonymous'}]`;
         case 'symbol': return String(item);
+        // Half a surrogate pair comes back replaced, so the result still decodes as JSON.
+        case 'string': return item.toWellFormed();
         case 'object': break;
         default: return item;
       }
@@ -53,11 +55,13 @@ return await (async (source, setup) => {
     const fn = await source();
     const value = typeof fn === 'function' ? await (setup.wantsElement ? fn(element, args) : fn(args)) : fn;
     const json = serialize(value);
-    if (json !== undefined && json.length > setup.cap) return JSON.stringify({ json: json.slice(0, setup.cap), cut: true });
+    // Cut on a code point, never between the two halves of an emoji.
+    const end = /[\uD800-\uDBFF]/.test(json?.[setup.cap - 1] ?? '') ? setup.cap - 1 : setup.cap;
+    if (json !== undefined && json.length > setup.cap) return JSON.stringify({ json: json.slice(0, end), cut: true });
     return JSON.stringify({ json });
   } catch (error) {
     let message;
     try { message = error && typeof error === 'object' && 'message' in error ? `${error.name}: ${error.message}` : String(error); } catch { message = 'an error' }
-    return JSON.stringify({ error: message });
+    return JSON.stringify({ error: message.toWellFormed() });
   }
 })(lithiumFunction, lithium);

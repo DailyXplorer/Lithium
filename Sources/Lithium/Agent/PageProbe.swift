@@ -70,8 +70,53 @@ enum PageProbe {
         return Data(json.utf8)
     }
 
+    /// A page's answer. `JSONDecoder` refuses a whole document for one lone surrogate escape
+    /// (`\ud83d` with no low half), which a page can write on purpose: such an answer is read
+    /// again with each one replaced by U+FFFD. Only a refused answer pays for the repair.
     static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
-        try JSONDecoder().decode(type, from: data)
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            guard let repaired = replacingLoneSurrogates(in: data) else { throw error }
+            return try JSONDecoder().decode(type, from: repaired)
+        }
+    }
+
+    /// JSON text with every `\uD800`–`\uDFFF` escape that isn't half of a pair replaced by
+    /// `�`, or nil when there is none. Backslashes appear only in strings, so the text is
+    /// read escape by escape, and an escaped backslash before "ud83d" is left alone.
+    nonisolated static func replacingLoneSurrogates(in data: Data) -> Data? {
+        let bytes = [UInt8](data)
+        func unit(at index: Int) -> UInt16? {
+            guard index + 6 <= bytes.count, bytes[index] == UInt8(ascii: "\\"), bytes[index + 1] == UInt8(ascii: "u") else { return nil }
+            return UInt16(String(decoding: bytes[index + 2 ..< index + 6], as: UTF8.self), radix: 16)
+        }
+        var output: [UInt8] = []
+        output.reserveCapacity(bytes.count)
+        var changed = false
+        var index = 0
+        while index < bytes.count {
+            guard bytes[index] == UInt8(ascii: "\\") else {
+                output.append(bytes[index])
+                index += 1
+                continue
+            }
+            var length = min(2, bytes.count - index)
+            if let first = unit(at: index) {
+                length = 6
+                if (0xD800...0xDBFF).contains(first), let second = unit(at: index + 6), (0xDC00...0xDFFF).contains(second) {
+                    length = 12
+                } else if (0xD800...0xDFFF).contains(first) {
+                    output.append(contentsOf: Array(#"�"#.utf8))
+                    changed = true
+                    index += length
+                    continue
+                }
+            }
+            output.append(contentsOf: bytes[index ..< index + length])
+            index += length
+        }
+        return changed ? Data(output) : nil
     }
 }
 

@@ -128,6 +128,51 @@ struct AgentSnapshotModelTests {
         let inside = MaskReport(token: "i", path: "1.0", viewport: viewport, rects: [[0, 0, 10, 10]], frames: [])
         #expect(FrameLayout(main: main, children: [answered, inside]).masks == [CGRect(x: 500, y: 50, width: 200, height: 100), CGRect(x: 0, y: 400, width: 50, height: 50)])
     }
+
+    /// A field that moved or showed between the masks read before a picture and after it is
+    /// painted over at both places and on its way: the picture was taken between the two.
+    @Test func masksSpanAFieldThatMovedOrShowedDuringThePicture() throws {
+        let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let layout = { (rects: [[Double]]) in FrameLayout(main: MaskReport(token: "m", path: "", viewport: viewport, rects: rects, frames: []), children: []) }
+        let moved = layout([[0, 0, 100, 20]]).masking(layout([[300, 200, 100, 20]]))
+        #expect(try #require(moved.masks).contains(CGRect(x: 0, y: 0, width: 100, height: 20)))
+        #expect(try #require(moved.masks).contains(CGRect(x: 300, y: 200, width: 100, height: 20)))
+        #expect(try #require(moved.masks).contains(CGRect(x: 0, y: 0, width: 400, height: 220)))
+        // One that showed only in the later read, and one that went: both painted over.
+        let shown = layout([[0, 0, 100, 20]]).masking(layout([[0, 0, 100, 20], [50, 300, 100, 20]]))
+        #expect(try #require(shown.masks).contains(CGRect(x: 50, y: 300, width: 100, height: 20)))
+        let gone = layout([[0, 0, 100, 20], [50, 300, 100, 20]]).masking(layout([[0, 0, 100, 20]]))
+        #expect(try #require(gone.masks).contains(CGRect(x: 50, y: 300, width: 100, height: 20)))
+    }
+
+    /// A card form with one field per frame, read twice unchanged: the masks come in the same
+    /// order both times, so they compare equal and nothing is spanned between two frames' fields.
+    @Test func masksOfManyFramesKeepOneOrderAcrossReads() throws {
+        let viewport = PageViewport(w: 800, h: 600, sx: 0, sy: 0, pw: 800, ph: 600, dpr: 2, vx: 0, vy: 0, vs: 1)
+        let main = MaskReport(token: "m", path: "", viewport: viewport, rects: [], frames: (0..<8).map {
+            FrameReport.Frame(id: $0 + 1, index: $0, box: [0, Double($0) * 60, 300, 40], content: [0, Double($0) * 60, 300, 40, 1], src: "")
+        })
+        let children = (0..<8).map { MaskReport(token: "c\($0)", path: "\($0)", viewport: viewport, rects: [[10, 10, 100, 20]], frames: []) }
+        let first = FrameLayout(main: main, children: children)
+        let second = FrameLayout(main: main, children: children.reversed())
+        let masks = try #require(first.masks)
+        #expect(masks.count == 8)
+        #expect(second.masks == masks)
+        #expect(first.masking(second).masks == masks + masks + masks)
+    }
+
+    /// Half a surrogate pair in a page's answer (`agent.js` cut an emoji, or the page wrote one)
+    /// is replaced, where `JSONDecoder` alone refuses the whole answer.
+    @Test func loneSurrogatesInAnAnswerAreReplacedNotRefused() throws {
+        let decode = { (json: String) in try PageProbe.decode(JSONValue.self, from: Data(json.utf8)) }
+        #expect(try decode(#"{"name":"ab\ud83d","box":[1]}"#) == ["name": "ab\u{FFFD}", "box": [1]])
+        #expect(try decode(#"{"name":"\ude00x\ud83d😀"}"#) == ["name": "\u{FFFD}x\u{FFFD}😀"])
+        // A pair stays whole, and an escaped backslash before "ud83d" is text, not an escape.
+        #expect(try decode(#"{"name":"😀 \\ud83d"}"#) == ["name": "😀 \\ud83d"])
+        #expect(PageProbe.replacingLoneSurrogates(in: Data(#"{"name":"😀 \\ud83d é"}"#.utf8)) == nil)
+        // Invalid for any other reason, it is still refused.
+        #expect(throws: (any Error).self) { try decode(#"{"name":"\ud83d""#) }
+    }
 }
 
 /// The reading tools on a whole Browser, called through the hub as an MCP client calls them, on
@@ -338,6 +383,18 @@ struct AgentReadTests {
         "/font": (Self.html, "<title>Font</title><style>body { margin: 0 }</style><code><button style=\"font: 30px Late, serif\">Wide words here</button></code>"),
         "/late-shadow": (Self.html, "<title>Late</title><p>Late</p><x-late style=\"display:block;width:100px;height:40px\"></x-late>"),
         "/help": (Self.html, "<title>Help</title><p>help</p>"),
+        // Names cut at 80 and text at 160 code units, each limit inside an emoji, a lone half
+        // the page wrote itself, and heading levels no Int holds.
+        "/emoji": (Self.html, """
+            <title>Emoji</title><style>body { margin: 0; font: 16px sans-serif }</style>
+            <button>\(String(repeating: "😀", count: 50))</button>
+            <p>\(String(repeating: "😀", count: 100))</p>
+            <button id="lone">Lone</button>
+            <h2 aria-level="2.5">Odd level</h2><div role="heading" aria-level="1e30">Huge level</div><h3 aria-level="-0.5">Negative level</h3>
+            <script>document.getElementById('lone').textContent = 'Lone \\uD83D half';</script>
+            """),
+        // Each İ lowercases to two code units, so a lowercased copy's indexes run past the link.
+        "/turkish": (Self.html, "<title>Turkish</title><p>İİİİİİİİ <a href=\"/one\">target</a> words after it</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
     ]
 
@@ -1545,6 +1602,59 @@ struct AgentReadTests {
             let tab = try await open(client, base, "/article")
             let found = await client.call("find_text", ["tab": .string(tab), "text": " Big  news\n"])
             #expect(found["count"] == 1, "\(found.message)")
+        }
+    }
+
+    /// Cuts never split an emoji, a lone surrogate the page wrote comes back replaced, and odd
+    /// heading levels are clamped: the snapshot, read_text and find_text all answer.
+    @Test func emojiCutAtALimitAndLoneSurrogatesDontFailAnswers() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/emoji")
+            let json = await client.call("snapshot", ["tab": .string(tab), "format": "json", "scope": "page"])
+            #expect(!json.isError, "\(json.message)")
+            #expect(node(json, role: "button", name: String(repeating: "😀", count: 39) + "…") != nil, "\(text(json["nodes"]))")
+            #expect(node(json, role: "text", name: String(repeating: "😀", count: 79) + "…") != nil, "\(text(json["nodes"]))")
+            #expect(node(json, role: "button", name: "Lone \u{FFFD} half") != nil, "\(text(json["nodes"]))")
+            #expect(node(json, role: "heading", name: "Odd level")?["level"] == 2)
+            #expect(node(json, role: "heading", name: "Huge level")?["level"] == 9)
+            #expect(node(json, role: "heading", name: "Negative level")?["level"] == 3)
+            let read = await client.call("read_text", ["tab": .string(tab), "main": false, "maxChars": 3])
+            #expect(!read.isError, "\(read.message)")
+            #expect(read["text"]?.string?.hasPrefix("😀") == true, "\(read.content)")
+            let found = await client.call("find_text", ["tab": .string(tab), "text": "half"])
+            #expect(found["count"] == 1, "\(found.message)")
+        }
+    }
+
+    /// Matches are placed in the page's own text: a lowercased copy, longer, would name the words
+    /// after the link instead of the link.
+    @Test func findTextPlacesMatchesAfterLettersThatLowercaseLonger() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/turkish")
+            let found = await client.call("find_text", ["tab": .string(tab), "text": "TARGET"])
+            #expect(found["count"] == 1, "\(found.message)")
+            let match = try #require(items(found["matches"]).first)
+            #expect(match["role"] == "link", "\(found.content)")
+            #expect(match["context"]?.string?.contains("İİİİİİİİ target words") == true, "\(found.content)")
+        }
+    }
+
+    /// A child frame that navigates has one entry, its document's: the one before is dropped
+    /// at its hello, before any read.
+    @Test func aFrameThatNavigatesKeepsOneEntry() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try #require(client.tab(tab))
+            let state = try #require(client.hub.agentTab(for: named))
+            #expect(await waitUntil(10) { state.frames.count == 2 })
+            for source in ["/child?new", "/child?same", "/child?new"] {
+                let before = Set(state.frames.keys)
+                _ = try await named.webView.callAsyncJavaScript("document.getElementById('same').src = '\(source)'", contentWorld: .page)
+                #expect(await waitUntil(10) { !Set(state.frames.keys).subtracting(before).isEmpty })
+                #expect(state.frames.count == 2, "\(state.frames.keys)")
+            }
+            let json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(node(json, role: "button", name: "New") != nil, "\(text(json["nodes"]))")
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 import Testing
 import WebKit
@@ -65,6 +66,26 @@ struct SiteInfoTests {
         await info.loadCertificate(trust: nil)
         #expect(asked.map(\.absoluteString) == ["https://example.com:8443/", "https://example.com:8443/"])
         #expect(info.certificate == .unavailable)
+    }
+
+    /// Reading a trust nothing has evaluated has Security evaluate it, which may block: the panel
+    /// reads it off the main thread (`SiteInfo.certificate(from:)` asserts so in debug builds).
+    @Test func siteInfoReadsTheCertificateOffTheMainThread() async throws {
+        var anchors: CFArray?
+        #expect(SecTrustCopyAnchorCertificates(&anchors) == errSecSuccess)
+        let anchor = try #require((anchors as? [SecCertificate])?.first)
+        var made: SecTrust?
+        #expect(SecTrustCreateWithCertificates(anchor, SecPolicyCreateSSL(true, "example.com" as CFString), &made) == errSecSuccess)
+        let trust = try #require(made)
+
+        let info = SiteInfo(host: "example.com")
+        await info.loadCertificate(trust: trust)
+        guard case .found(let certificate) = info.certificate else {
+            Issue.record("no certificate read: \(info.certificate)")
+            return
+        }
+        #expect(certificate.subject == SecCertificateCopySubjectSummary(anchor) as String?)
+        #expect(certificate.issuer == certificate.subject)
     }
 
     @Test func siteInfoSummarizesPermissions() {

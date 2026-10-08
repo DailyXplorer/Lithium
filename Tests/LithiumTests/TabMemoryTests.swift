@@ -49,6 +49,26 @@ struct TabMemoryTests {
         #expect(await waitUntil(10) { !isRunning(process) }, "its page's process exits")
     }
 
+    /// Reload on a sleeping tab (its sidebar menu) wakes it on its page, rather than leaving an
+    /// empty web view on a tab that stays asleep.
+    @Test func reloadingASleepingTabWakesIt() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>Page</title>page")])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(60) { loaded(tab) })
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!)
+        defer { browser.close(other) }
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        #expect(tab.isAsleep)
+
+        browser.navigate(tab, .reload)
+        #expect(!tab.isAsleep)
+        #expect(await waitUntil(30) { loaded(tab) && tab.webView.title == "Page" })
+        #expect(tab.webView.url == base)
+    }
+
     /// Low memory spares tabs used a moment ago, a popup and its opener included. Critical memory
     /// puts every background tab to sleep, a favorite's page and a popup pair too, and their
     /// processes exit; the selected tab stays awake, and a slept one wakes on its page.

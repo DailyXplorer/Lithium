@@ -63,6 +63,9 @@ enum AddressInput {
         if let url = URL(string: input), let scheme = url.scheme?.lowercased() {
             if ["http", "https"].contains(scheme), url.host() != nil { return .address(url) }
             if ["about", "file", "data", Internal.scheme].contains(scheme) { return .address(url) }
+            // Handed to Mail by the browser. Read as `http://` below, "mailto:alice@…" would open
+            // a website with the typed text as its credentials.
+            if scheme == "mailto" { return .address(url) }
         }
 
         if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host() {
@@ -90,8 +93,12 @@ enum AddressInput {
         return tld.count >= 2 && tld.allSatisfy(\.isLetter)
     }
 
+    /// Dotted IPv4, or IPv6 typed in brackets (`[::1]`), which Foundation may hand back without them.
     private static func isIPAddress(_ host: String) -> Bool {
         let parts = host.split(separator: ".")
-        return parts.count == 4 && parts.allSatisfy { UInt8($0) != nil }
+        if parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) { return true }
+        let bare = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+        var address = in6_addr()
+        return bare.contains(":") && inet_pton(AF_INET6, bare, &address) == 1
     }
 }

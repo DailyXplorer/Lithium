@@ -281,6 +281,20 @@ struct SplitViewTests {
         try await Task.sleep(for: .milliseconds(50))
         browser.newTabFocusingAddress()
         #expect(c.lastActive > shown, "to the start page")
+
+        browser.select(tab("a", in: browser))
+        shown = c.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
+        #expect(c.lastActive > shown, "for another tab dropped beside the selected one")
+
+        browser.select(tab("a", in: browser))
+        let b = tab("b", in: browser)
+        #expect(browser.shownPartner === b)
+        shown = b.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        browser.exitSplit(of: tab("a", in: browser))
+        #expect(b.lastActive > shown, "by Exit Split View")
     }
 
     /// From one split straight to another, the panes are reused and don't appear again: the new

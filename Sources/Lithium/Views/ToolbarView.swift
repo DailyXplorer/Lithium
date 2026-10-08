@@ -59,6 +59,7 @@ private struct AddressBar: View {
             AddressField(
                 url: tab?.url,
                 focusToken: browser.addressFocusToken,
+                pickToken: browser.tabPickToken,
                 isEditing: $isEditing,
                 onDarkBackground: palette.isDark,
                 browser: browser
@@ -241,6 +242,7 @@ private struct PageMenu: View {
 private struct AddressField: NSViewRepresentable {
     let url: URL?
     let focusToken: Int
+    let pickToken: Int
     @Binding var isEditing: Bool
     let onDarkBackground: Bool
     let browser: Browser
@@ -263,11 +265,23 @@ private struct AddressField: NSViewRepresentable {
             coordinator.parent.isEditing = editing
         }
         context.coordinator.focusToken = focusToken
+        context.coordinator.pickToken = pickToken
         return field
     }
 
     func updateNSView(_ field: URLTextField, context: Context) {
         context.coordinator.parent = self
+        // The user picked another tab (⌃Tab, ⌘1…9): the edit was for the one left, so it ends
+        // and the new page takes the keyboard; Return can't send the text to the old tab and
+        // bring it back. Queued before a focus request of the same change (⌘T), which wins.
+        if context.coordinator.pickToken != pickToken {
+            context.coordinator.pickToken = pickToken
+            DispatchQueue.main.async { [browser] in
+                guard field.isEditing else { return }
+                field.window?.makeFirstResponder(nil)
+                browser.returnKeyboardToPage(fieldHadKeyboard: true)
+            }
+        }
         field.textColor = onDarkBackground && !isEditing ? .white : .labelColor
         if field.url != url || !field.isEditing {
             field.url = url
@@ -282,6 +296,7 @@ private struct AddressField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: AddressField
         var focusToken = 0
+        var pickToken = 0
         /// The tab shown when editing began: Return sends the text there.
         var editedTabID: Tab.ID?
 

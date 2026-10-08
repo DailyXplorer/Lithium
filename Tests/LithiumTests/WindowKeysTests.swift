@@ -158,6 +158,29 @@ struct WindowKeysTests {
         #expect(tab.customTitle == "Docs")
     }
 
+    /// A tab picked with the keyboard while the address bar edits ends the edit: Return then
+    /// can't send the text to the tab left and bring it back.
+    @Test func pickingAnotherTabEndsAddressEditing() async throws {
+        let (browser, first, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        let second = browser.newTab(url: URL(string: "data:text/html,second")!, selecting: false)
+        defer { browser.close(second) }
+        let page = first.url
+
+        browser.requestAddressFocus()
+        func editor() -> NSTextView? {
+            (window.firstResponder as? NSTextView).flatMap { $0.delegate is URLTextField ? $0 : nil }
+        }
+        #expect(await waitUntil(5) { editor() != nil })
+        editor()?.insertText("example.invalid", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        browser.select(second)
+        #expect(await waitUntil(5) { editor() == nil }, "the edit ends")
+        #expect(await waitUntil(5) { window.firstResponder === second.contentView }, "\(String(describing: window.firstResponder))")
+        #expect(browser.selectedTabID == second.id)
+        #expect(first.url == page, "the tab left is untouched")
+    }
+
     /// The whole window, far off screen, showing one loaded tab.
     private func shownBrowser() async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()

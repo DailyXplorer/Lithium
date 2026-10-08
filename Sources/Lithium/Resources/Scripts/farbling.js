@@ -93,11 +93,17 @@
   const readyState = member(Document.prototype, 'readyState').get;
   const currentScript = member(Document.prototype, 'currentScript').get;
   const documentURL = member(Document.prototype, 'URL').get;
+  const documentHead = member(Document.prototype, 'head').get;
   const regExpExec = RegExp.prototype.exec;
   const FRAME_TAG = /frame/i;
   // Documents with no response of their own, which take their creator's policies.
   const NO_RESPONSE = /^(about|blob|data):/i;
   const TRUSTED_TYPES_META = 'head meta[http-equiv="content-security-policy" i][content*="require-trusted-types-for" i]';
+  // Looked for in the head only, the one place WebKit takes such a policy from: it stays small.
+  const hasTrustedTypesMeta = (doc) => {
+    const head = read(documentHead, doc);
+    return !!head && read(nodeCount, apply(queryAll[1], head, [TRUSTED_TYPES_META])) > 0;
+  };
 
   // sfc32 over the seed's 128 bits with `salt` mixed in: too much state to search from a few
   // noisy pixels, unlike the 32 bits it once had. The first outputs are dropped to spread the salt.
@@ -262,6 +268,15 @@
 
   // Keyed by the realm's Window.prototype: a frame that navigates keeps its window but gets a new realm.
   const seen = new WeakSetCtor();
+  // The window that opened each popup, by the popup's blank realm: its `opener` can be set to null.
+  const creators = new WeakMapCtor();
+  const opened = (child, creator) => {
+    try {
+      const realm = sameOrigin(child);
+      if (realm) apply(weakMapSet, creators, [realm, creator]);
+      protect(child);
+    } catch (_) {}
+  };
   const protect = (win) => {
     const realm = win ? sameOrigin(win) : null;
     if (!realm || apply(weakSetHas, seen, [realm])) return;
@@ -533,7 +548,7 @@
       patch(documentProto, 'open', (target, self, args) => {
         const result = apply(target, self, args);
         // With three arguments it opens a window instead, as `open` does: a blank popup to protect.
-        if (args.length > 2) { try { protect(result); } catch (_) {} } else remark(self);
+        if (args.length > 2) opened(result, read(documentView, self)); else remark(self);
         return result;
       });
       // Whether Trusted Types apply to a document: from its response's headers (see
@@ -545,14 +560,14 @@
           const realm = view ? sameOrigin(view) : null;
           let mode = (realm && apply(weakMapGet, trustedTypesModes, [realm])) || apply(weakMapGet, trustedTypesModes, [doc]);
           try {
-            if (mode !== 'enforce' && read(nodeCount, apply(queryAll[9], doc, [TRUSTED_TYPES_META]))) {
+            if (mode !== 'enforce' && hasTrustedTypesMeta(doc)) {
               mode = 'enforce';
               apply(weakMapSet, trustedTypesModes, [doc, mode]);
             }
           } catch (_) {}
           if (mode || !realm || !apply(regExpExec, NO_RESPONSE, [`${read(documentURL, doc)}`])) return mode;
           let creator = null;
-          try { creator = view.parent !== view ? view.parent : view.opener; } catch (_) {}
+          try { creator = view.parent !== view ? view.parent : apply(weakMapGet, creators, [realm]) || view.opener; } catch (_) {}
           try { doc = creator && sameOrigin(creator) ? creator.document : null; } catch (_) { doc = null; }
         }
         return undefined;
@@ -619,8 +634,9 @@
     try {
       patch(hasOwn(win, 'open') ? win : win.Window.prototype, 'open', (target, self, args) => {
         // A bare `open()` calls it without a `this`, which the native one takes for the window.
-        const child = apply(target, self == null ? win : self, args);
-        try { protect(child); } catch (_) {}
+        const opener = self == null ? win : self;
+        const child = apply(target, opener, args);
+        opened(child, opener);
         return child;
       });
     } catch (_) {}
@@ -665,7 +681,7 @@
       // it's there for the write hook (see trustedTypesMode).
       if (isTrustedHTML && records.length && !apply(weakMapGet, trustedTypesModes, [document])) {
         try {
-          if (read(nodeCount, apply(queryAll[9], document, [TRUSTED_TYPES_META]))) apply(weakMapSet, trustedTypesModes, [document, 'enforce']);
+          if (hasTrustedTypesMeta(document)) apply(weakMapSet, trustedTypesModes, [document, 'enforce']);
         } catch (_) {}
       }
     };

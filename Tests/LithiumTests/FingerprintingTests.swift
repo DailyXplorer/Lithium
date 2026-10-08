@@ -647,6 +647,8 @@ struct FingerprintingTests {
             // The policy stays once its markup is gone.
             "rejectedAfterTheMetaIsRemoved": (csp + "<body><p id=\"kept\">kept</p><script>document.querySelector('meta').remove()</script></body>",
                                               nil, ["kept": true, "written": false, "threw": true]),
+            // Outside the head the browser ignores it, and so does farbling.
+            "metaOutsideTheHead": ("<body>" + csp + "<p id=\"kept\">kept</p></body>", nil, ["kept": false, "written": true, "threw": false]),
             "defaultPolicy": (csp + "<body><p id=\"kept\">kept</p><script>trustedTypes.createPolicy('default', { createHTML: (s) => s })</script></body>",
                               nil, ["kept": false, "written": true, "threw": false]),
         ]
@@ -674,7 +676,10 @@ struct FingerprintingTests {
             const srcdoc = document.createElement('iframe');
             srcdoc.srcdoc = policy.createHTML('<body></body>');
             await new Promise((resolve) => { srcdoc.onload = resolve; document.body.append(srcdoc); });
-            const targets = { blank: kept(blank.contentDocument), srcdoc: kept(srcdoc.contentDocument), popup: kept(open().document) };
+            // A popup whose opener is gone still has its creator's policies.
+            const orphan = open();
+            orphan.opener = null;
+            const targets = { blank: kept(blank.contentDocument), srcdoc: kept(srcdoc.contentDocument), popup: kept(open().document), orphan: kept(orphan.document) };
             const results = {};
             for (const [name, doc] of Object.entries(targets)) {
               let threw = false;
@@ -686,7 +691,7 @@ struct FingerprintingTests {
         let headers = ["Content-Security-Policy": "require-trusted-types-for 'script'"]
         for source in [nil, try Self.farbling()] {
             let result: [String: Bool] = try await run(probe, farbling: source, headers: headers, awaiting: true)
-            #expect(result == ["blank": true, "srcdoc": true, "popup": true], "farbling: \(source != nil)")
+            #expect(result == ["blank": true, "srcdoc": true, "popup": true, "orphan": true], "farbling: \(source != nil)")
         }
     }
 

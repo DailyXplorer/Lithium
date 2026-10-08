@@ -14,7 +14,8 @@ struct Space: Codable, Identifiable, Equatable {
     var name: String
     /// The sidebar's color while the space is shown; nil follows Settings › Appearance.
     var color: String?
-    /// A bundled Phosphor icon's name (`SpaceIconCatalog`) or an emoji.
+    /// A bundled Phosphor icon's name (`SpaceIconCatalog`), or an emoji an earlier version's
+    /// picker offered: those still show, but can't be picked anymore.
     var icon: String
     /// Cookies, logins and site storage of its own (`WKWebsiteDataStore(forIdentifier:)`, the
     /// space's id). Chosen when the space is made: data can't move between stores afterwards.
@@ -32,7 +33,7 @@ struct Space: Codable, Identifiable, Equatable {
     /// One per ⌃1…⌃9.
     static let limit = 9
 
-    /// Phosphor names are ASCII; anything else is an emoji.
+    /// Phosphor names are ASCII; anything else is an emoji saved by an earlier version.
     static func isEmoji(_ icon: String) -> Bool {
         !icon.unicodeScalars.allSatisfy(\.isASCII)
     }

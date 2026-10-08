@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import Lithium
 
-/// The space icon picker's icons and emoji: nothing built until the picker opens, quick to build
+/// The space icon picker's icons: nothing built until the picker opens, quick to build
 /// and to search on every keystroke, and every listed icon bundled.
 @MainActor
 @Suite(.serialized)
@@ -30,20 +30,16 @@ struct SpaceIconPickerTests {
         var catalog: SpaceIconCatalog?
         let build = clock.measure { catalog = SpaceIconCatalog.load() }
         #expect(build < .milliseconds(50), "built in \(build)")
-        let icons = catalog?.icons ?? [], emoji = catalog?.emoji ?? []
+        let icons = catalog?.icons ?? []
         for query in ["work", "home", "money", "music", "code", "travel", "school", "game", "smiling face", "x"] {
-            let search = clock.measure {
-                _ = SpaceIconCatalog.search(query, in: icons)
-                _ = SpaceIconCatalog.search(query, in: emoji)
-            }
+            let search = clock.measure { _ = SpaceIconCatalog.search(query, in: icons) }
             #expect(search < .milliseconds(5), "“\(query)” in \(search)")
         }
     }
 
-    @Test func searchesIconsByKeywordAndEmojiByName() {
+    @Test func searchesIconsByNameAndKeyword() {
         let catalog = SpaceIconCatalog.load()
         func icons(_ query: String) -> [String] { SpaceIconCatalog.search(query, in: catalog.icons).map(\.id) }
-        func emoji(_ query: String) -> [String] { SpaceIconCatalog.search(query, in: catalog.emoji).map(\.id) }
         let expected = [("work", "briefcase"), ("home", "house"), ("money", "wallet"), ("music", "music-notes"), ("code", "code"), ("travel", "airplane"), ("school", "graduation-cap"), ("game", "game-controller")]
         for (query, icon) in expected {
             #expect(icons(query).contains(icon), "“\(query)”")
@@ -51,12 +47,7 @@ struct SpaceIconPickerTests {
         #expect(icons("Graduation  CAP") == ["graduation-cap"], "every term, any case")
         #expect(icons("").count == catalog.icons.count)
         #expect(icons("zzz").isEmpty)
-
-        #expect(emoji("grinning").contains("😀"))
-        #expect(emoji("money bag") == ["💰"])
-        #expect(emoji("money-mouth").contains("🤑"))
-        #expect(emoji("ear").contains("👂"))
-        #expect(!emoji("ear").contains("🐻"), "a term matches the start of a word")
+        #expect(icons("ear").isEmpty, "a term matches the start of a word, not inside one (heart, learning)")
     }
 
     /// Every listed icon has its SVG (scripts/update-space-icons.py), and the suggestions are listed.
@@ -68,15 +59,23 @@ struct SpaceIconPickerTests {
         let missing = names.filter { Resources.bundle.url(forResource: $0, withExtension: "svg") == nil }
         #expect(missing.isEmpty, "not bundled: \(missing.joined(separator: ", "))")
         #expect(Space.icons.allSatisfy(names.contains))
-
-        let emoji = Set(catalog.emoji.map(\.id))
-        #expect(emoji.count > 1000)
-        #expect(SpaceIconPicker.suggestedEmoji.allSatisfy(emoji.contains))
-        #expect(!emoji.contains("🏻") && !emoji.contains("🇫"), "no skin tones or flag letters")
+        #expect(!names.contains(where: Space.isEmoji), "icons only, no emoji")
     }
 
-    /// A space keeps an icon's name or an emoji; a name that isn't bundled draws the globe.
-    @Test func spaceIconsAreNamesOrEmoji() {
+    /// The grid shows each icon once: an id in both the suggested row and the full list drew an
+    /// empty cell. Together the two sections still hold every icon.
+    @Test func gridIdentitiesAreUnique() {
+        let catalog = SpaceIconCatalog.load()
+        let sections = SpaceIconPicker.sections(of: catalog.icons)
+        let ids = (sections.suggested + sections.rest).map(\.id)
+        #expect(sections.suggested.map(\.id) == Array(Space.icons.prefix(7)))
+        #expect(Set(ids).count == ids.count, "duplicates: \(Dictionary(grouping: ids) { $0 }.filter { $1.count > 1 }.keys.sorted())")
+        #expect(Set(ids) == Set(catalog.icons.map(\.id)))
+    }
+
+    /// A space keeps an icon's name, or an emoji saved by an earlier version, which still draws;
+    /// a name that isn't bundled draws the globe.
+    @Test func spaceIconsAreNamesOrSavedEmoji() {
         #expect(!Space.isEmoji("graduation-cap"))
         #expect(Space.isEmoji("🎓"))
         #expect(Space.isEmoji("\u{2708}\u{FE0F}"))

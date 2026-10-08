@@ -56,12 +56,13 @@ struct UISnapshotTests {
         }
     }
 
-    /// The space editor's icon picker, on Icons and on Emoji, with its catalog built.
+    /// The space editor's icon picker with its catalog built, for a space with an icon and for one
+    /// with an emoji saved by an earlier version (nothing picked).
     @Test func spaceIconPickerSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Theme.registerFonts()
         let catalog = SpaceIconCatalog.load()
-        for (name, icon) in [("icons", "code"), ("emoji", "🎮")] {
+        for (name, icon) in [("icons", "code"), ("saved-emoji", "🎮")] {
             for isDark in [false, true] {
                 let picker = SpaceIconPicker(icon: .constant(icon), catalog: catalog)
                     .font(Theme.font(13))

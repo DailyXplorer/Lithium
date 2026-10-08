@@ -588,7 +588,8 @@ struct BrowserTests {
         _ = try await tab.webView.callAsyncJavaScript("window.marked = true", contentWorld: .page)
         let usesFont = { () async -> Bool? in
             (try? await tab.webView.callAsyncJavaScript(
-                "return getComputedStyle(document.body).fontFamily.startsWith('\"Lithium DM Sans\"')", contentWorld: .page)) as? Bool
+                "return getComputedStyle(document.querySelector('p')).fontFamily.split(',')[0].replace(/\"/g, '').trim() === 'Lithium DM Sans'",
+                contentWorld: .page)) as? Bool
         }
         try #require(PageStyle.websiteFamily == FontChoice.dmSans)
         #expect(await usesFont() == original)

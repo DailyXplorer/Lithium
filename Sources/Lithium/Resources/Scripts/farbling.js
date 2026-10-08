@@ -42,6 +42,7 @@
   const imageWidth = member(ImageData.prototype, 'width').get;
   const imageHeight = member(ImageData.prototype, 'height').get;
   const imageData = member(ImageData.prototype, 'data').get;
+  const audioBufferLength = member(globalThis.AudioBuffer && AudioBuffer.prototype, 'length').get;
   const createElement = member(Document.prototype, 'createElement').value;
   const canvasWidth = member(HTMLCanvasElement.prototype, 'width');
   const canvasHeight = member(HTMLCanvasElement.prototype, 'height');
@@ -247,11 +248,38 @@
     noisePixels(pixels, args[0] + left, args[1] + bottom, right - left, top - bottom, start + bottom * stride + left * 4, stride);
   };
 
-  const noiseSamples = (samples) => {
-    const length = samples ? apply(typedLength, samples, []) : 0;
-    if (length > MAX_SAMPLES) return;
-    const next = prng(0x9e3779b9);
-    for (let i = 0; i < length; i++) samples[i] += (next() - 0.5) * 1e-7;
+  // Samples get the pixels' kind of noise (see noisePixels): each moves within a pair of
+  // neighboring float32 values picked by its index in the buffer, and is decided on that pair. Noise
+  // read off a silent buffer is that of silence only, so it can't be taken off another; noising
+  // twice changes nothing (`getChannelData` noises the buffer itself, which `copyFromChannel` then
+  // reads); and a window copied from the middle gets what the whole buffer has there. `samples`
+  // holds the buffer's samples from `offset` on, of `total`; past the limit one sample in `step`
+  // is noised, which bounds the cost of a long recording and still moves any sum over its samples.
+  const sampleFloat = new Float32Array(1), sampleBits = new Uint32Array(sampleFloat.buffer);
+  const noiseSamples = (samples, offset, total) => {
+    if (read(typedKind, samples) !== 'Float32Array') return;
+    const count = min(read(typedLength, samples), total - offset), step = max(1, ceil(total / MAX_SAMPLES));
+    for (let i = (step - offset % step) % step; i < count; i += step) {
+      const spot = fmix(imul((offset + i) ^ seedWords[2], 0x9e3779b1) ^ seedWords[0]), shift = spot >>> 31;
+      sampleFloat[0] = samples[i];
+      const pair = floor((sampleBits[0] + shift) / 2), low = 2 * pair - shift;
+      // Pairs across a sign or exponent, or into infinities and NaN, are left alone.
+      if (low < 0 || ((low ^ (low + 1)) & 0xff800000) !== 0 || (low & 0x7f800000) === 0x7f800000) continue;
+      sampleBits[0] = low + (fmix(pair ^ spot ^ seedWords[3]) & 1);
+      samples[i] = sampleFloat[0];
+    }
+  };
+
+  // An analyser's bytes the same way, each in a pair of neighboring values picked by its index.
+  const noiseBytes = (values) => {
+    if (read(typedKind, values) !== 'Uint8Array') return;
+    const length = read(typedLength, values);
+    for (let i = 0; i < length; i++) {
+      const spot = fmix(imul(i ^ seedWords[1], 0x9e3779b1) ^ seedWords[2]), shift = spot >>> 31;
+      const pair = (values[i] + shift) >> 1, low = 2 * pair - shift;
+      if (low < 0 || low > 254) continue;
+      values[i] = low + (fmix(pair ^ spot ^ seedWords[3]) & 1);
+    }
   };
 
   // Frequencies are decibels, around -30 to -100: an offset as small as the samples' rounds away
@@ -427,13 +455,16 @@
         const samples = apply(target, self, args);
         if (!apply(weakSetHas, farbled, [samples])) {
           apply(weakSetAdd, farbled, [samples]);
-          noiseSamples(samples);
+          noiseSamples(samples, 0, read(typedLength, samples));
         }
         return samples;
       });
+      // The offset is converted once, as the native call would (see readImage): the copy's noise
+      // is keyed on where it starts in the buffer, and covers only what it copied.
       patch(win.AudioBuffer.prototype, 'copyFromChannel', (target, self, args) => {
+        if (args.length > 2) args[2] = args[2] >>> 0;
         const result = apply(target, self, args);
-        noiseSamples(args[0]);
+        noiseSamples(args[0], args.length > 2 ? args[2] : 0, read(audioBufferLength, self));
         return result;
       });
       patch(win.AnalyserNode.prototype, 'getFloatFrequencyData', (target, self, args) => {
@@ -441,6 +472,19 @@
         noiseFrequencies(args[0]);
         return result;
       });
+      patch(win.AnalyserNode.prototype, 'getFloatTimeDomainData', (target, self, args) => {
+        const result = apply(target, self, args);
+        noiseSamples(args[0], 0, read(typedLength, args[0]));
+        return result;
+      });
+      const bytes = ['getByteFrequencyData', 'getByteTimeDomainData'];
+      for (let i = 0; i < bytes.length; i++) {
+        patch(win.AnalyserNode.prototype, bytes[i], (target, self, args) => {
+          const result = apply(target, self, args);
+          noiseBytes(args[0]);
+          return result;
+        });
+      }
     } catch (_) {}
 
     try {

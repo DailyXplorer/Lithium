@@ -1182,4 +1182,69 @@ struct FingerprintingTests {
         #expect(try #require(protected["moved"] as? Int) > count / 2)
         #expect(protected["small"] == AnyHashable(true))
     }
+
+    /// Sample noise depends on each sample's value: what a silent buffer shows can't be taken off
+    /// another buffer's samples, as it once could, leaving them exact. A window copied from the
+    /// middle gets the whole buffer's noise there, and nothing past what it copied; a buffer past
+    /// the limit is still noised, and so are the analyser's time-domain and byte reads.
+    @Test func audioNoiseCantBeMeasuredAndRemoved() async throws {
+        // Stand for an analyser's output, without audio hardware.
+        let analyser = """
+            AnalyserNode.prototype.getFloatTimeDomainData = function (values) { values.fill(0.25); };
+            AnalyserNode.prototype.getByteTimeDomainData = function (values) { values.fill(128); };
+            AnalyserNode.prototype.getByteFrequencyData = function (values) { values.fill(100); };
+            """
+        let probe = """
+            (() => {
+              const length = 4096, wave = (i) => Math.fround(Math.sin(i / 7) * 0.5);
+              const make = (size) => {
+                const buffer = new AudioBuffer({ length: size, sampleRate: 44100 }), data = new Float32Array(size);
+                for (let i = 0; i < size; i++) data[i] = wave(i);
+                buffer.copyToChannel(data, 0);
+                return buffer;
+              };
+              const silent = new AudioBuffer({ length, sampleRate: 44100 }).getChannelData(0);
+              const buffer = make(length), full = buffer.getChannelData(0);
+              let noisy = 0, removed = 0;
+              for (let i = 0; i < length; i++) {
+                if (full[i] !== wave(i)) noisy++;
+                if (Math.fround(full[i] - silent[i]) === wave(i)) removed++;
+              }
+              // From the last 200 samples of a fresh buffer, into a longer array filled with 7.
+              const window = new Float32Array(300).fill(7);
+              make(length).copyFromChannel(window, 0, length - 200);
+              let windowOff = 0, past = 0;
+              for (let i = 0; i < 300; i++) {
+                if (i < 200) { if (window[i] !== full[length - 200 + i]) windowOff++; } else if (window[i] !== 7) past++;
+              }
+              const again = new Float32Array(length); buffer.copyFromChannel(again, 0);
+              let twice = 0; for (let i = 0; i < length; i++) if (again[i] !== full[i]) twice++;
+              const long = make(600000).getChannelData(0);
+              let longNoisy = 0; for (let i = 0; i < long.length; i++) if (long[i] !== wave(i)) longNoisy++;
+              const node = new OfflineAudioContext(1, 128, 44100).createAnalyser();
+              const moved = (values, clean) => values.filter((value) => value !== clean).length;
+              const times = new Float32Array(node.fftSize); node.getFloatTimeDomainData(times);
+              const timeBytes = new Uint8Array(node.fftSize); node.getByteTimeDomainData(timeBytes);
+              const frequencyBytes = new Uint8Array(node.frequencyBinCount); node.getByteFrequencyData(frequencyBytes);
+              const byteSpread = Math.max(...timeBytes.map((value) => Math.abs(value - 128)), ...frequencyBytes.map((value) => Math.abs(value - 100)));
+              return JSON.stringify({ noisy, removed, windowOff, past, twice, longNoisy, times: moved(times, 0.25),
+                timeBytes: moved(timeBytes, 128), frequencyBytes: moved(frequencyBytes, 100), byteSpread });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil, before: analyser)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling(), before: analyser)
+
+        #expect(bare == ["noisy": 0, "removed": 4096, "windowOff": 0, "past": 0, "twice": 0, "longNoisy": 0,
+                         "times": 0, "timeBytes": 0, "frequencyBytes": 0, "byteSpread": 0])
+        #expect(try #require(protected["noisy"]) > 4096 / 4)
+        #expect(try #require(protected["removed"]) < 4096 * 3 / 4)
+        #expect(protected["windowOff"] == 0)
+        #expect(protected["past"] == 0)
+        #expect(protected["twice"] == 0)
+        #expect(try #require(protected["longNoisy"]) > 0)
+        for name in ["times", "timeBytes", "frequencyBytes"] {
+            #expect(try #require(protected[name]) > 0, "\(name)")
+        }
+        #expect(protected["byteSpread"] == 1)
+    }
 }

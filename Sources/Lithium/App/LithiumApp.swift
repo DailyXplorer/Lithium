@@ -130,6 +130,10 @@ struct BrowserCommands: Commands {
             Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")
                 .disabled(browser.commandTab == nil)
+            // As in Safari and Orion; Esc in the page leaves it too.
+            Button(browser.commandTab?.isReading == true ? "Hide Reader" : "Show Reader") { browser.toggleReader(browser.commandTab) }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(browser.commandTab?.canRead != true)
             Divider()
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
                 if let tab = browser.selectedTab { browser.summaries.togglePanel(for: tab) }

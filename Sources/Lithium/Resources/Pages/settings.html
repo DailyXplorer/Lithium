@@ -96,6 +96,10 @@
       <div><div class="title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
       <label class="switch" for="website-font"><input type="checkbox" id="website-font" role="switch"><span></span></label>
     </div>
+    <div class="row">
+      <div><div class="title">Show the reader button</div><div class="hint">On pages that look like articles. ⇧⌘R opens the reader on any page.</div></div>
+      <label class="switch" for="reader-button"><input type="checkbox" id="reader-button" role="switch"><span></span></label>
+    </div>
     <h3>Keep the site's font on</h3>
     <div class="rows" id="site-fonts"></div>
     <form class="row" id="site-font-form">
@@ -341,6 +345,7 @@
     $('#mini-player').checked = appearance.miniPlayer;
     $('#tab-usage').checked = appearance.tabUsage;
     $('#website-font').checked = appearance.websiteFont;
+    $('#reader-button').checked = appearance.readerButton;
     $('#site-fonts').replaceChildren(...(appearance.siteFontDomains.length ? appearance.siteFontDomains.map((site) => {
       const button = el('button', { className: 'button', textContent: 'Remove' });
       button.onclick = () => call('setSiteFont', { site, keep: false }).then(render);
@@ -510,6 +515,7 @@
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
   $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#reader-button').onchange = (event) => call('setReaderButton', event.target.checked).then(render);
   $('#site-font-form').onsubmit = (event) => {
     event.preventDefault();
     const site = $('#site-font-site').value.trim();

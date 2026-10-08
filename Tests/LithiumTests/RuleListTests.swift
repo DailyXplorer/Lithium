@@ -40,6 +40,24 @@ struct RuleListTests {
         #expect((result.first?["action"] as? [String: Any])?["selector"] as? String == "#captchaBox, #cmdTextDisplay + *, #cmdTextDisplay + * + *, #cmdTextDisplay + * + * + *, #hero ~ .ad")
     }
 
+    /// Rewriting "#x ~ *" leaves the rest of the selector as written: commas in quotes, brackets,
+    /// parentheses or escaped once split it, and a space added after them changed what it matched.
+    @Test func siblingRewriteKeepsCommasInsideValues() throws {
+        let selector = #"a[href*="x,y"], .p\,q, :is(.a,.b) ~ i, [title='m,n'],#box ~ *"#
+        let rules: [[String: Any]] = [
+            ["trigger": ["url-filter": ".*"], "action": ["type": "css-display-none", "selector": selector]],
+        ]
+        let file = FileManager.default.temporaryDirectory.appending(path: "rules-\(UUID()).json")
+        try JSONSerialization.data(withJSONObject: rules).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let prepared = try #require(Privacy.prepared(file))
+        let result = try #require(try JSONSerialization.jsonObject(with: Data(prepared.utf8)) as? [[String: Any]])
+        #expect((result.first?["action"] as? [String: Any])?["selector"] as? String
+            == #"a[href*="x,y"], .p\,q, :is(.a,.b) ~ i, [title='m,n'],#box + *, #box + * + *, #box + * + * + *"#)
+        #expect(Privacy.selectorParts(selector).count == 5)
+    }
+
     /// A group whose new list fails to compile keeps blocking with its previous list, isn't
     /// counted, and leaves the set incomplete so it is tried again.
     @MainActor

@@ -787,7 +787,7 @@ final class AgentHub {
     /// `opener`, or the user pressed last in it: the tab is the user's to open.
     func open(_ url: URL, from opener: Tab) async -> Bool {
         guard actingSession(in: opener) != nil, let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
-        guard (try? await checkOpenable(url, in: nil, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
+        guard (try? await checkOpenable(url, in: nil, isPrivate: opener.isEphemeral, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
         let tab = browser.newAgentTab(session: session.label, privateStore: opener.privateStore)
         tab.load(url)
         didOpen(tab, from: opener)

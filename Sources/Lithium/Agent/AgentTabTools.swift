@@ -242,7 +242,7 @@ extension AgentHub {
     /// opens, so one the user denies leaves no tab behind.
     func openAgentTab(_ url: URL?, ephemeral: Bool, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> NamedTab {
         guard let browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
-        if let url { try await checkOpenable(url, in: nil, until: deadline) }
+        if let url { try await checkOpenable(url, in: nil, isPrivate: ephemeral, until: deadline) }
         let tab = browser.newAgentTab(session: session.label, privateStore: ephemeral ? .nonPersistent() : nil)
         let named = NamedTab(tab: tab, id: id(for: tab))
         touch(tab)

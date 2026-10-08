@@ -115,12 +115,12 @@ extension AgentHub {
     /// waits for the answer within `deadline` and `AgentConfirmations.timeout`. Deny is
     /// `denied_by_user`, no answer `confirmation_timeout`; the tab closing, the user navigating it,
     /// Stop and the session ending end the wait as they end any other. Every prompt and its
-    /// answer goes in the log.
-    func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
+    /// answer goes in the log; `isPrivate` says a tab not open yet will be private.
+    func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, isPrivate: Bool = false, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
         let started = Date()
         var logged: (answer: String, grant: ConfirmationGrant?) = ("cancelled", nil)
         defer {
-            let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, isPrivate: named?.tab.isEphemeral == true, session: session, answer: logged, waited: Date().timeIntervalSince(started))
+            let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, isPrivate: isPrivate || named?.tab.isEphemeral == true, session: session, answer: logged, waited: Date().timeIntervalSince(started))
             Task { await self.log.append(entry, at: started) }
         }
         // Stop, or the session ending, refuses whatever it would still ask.
@@ -193,13 +193,14 @@ extension AgentHub {
     }
 
     /// `file:` addresses ask each time; other addresses agents may open go through, and the
-    /// rest are `blocked_page`. `named` is the tab the address loads in, nil for a tab not open yet.
-    func checkOpenable(_ url: URL, in named: NamedTab?, session: MCPSession? = AgentHub.callSession, until deadline: ContinuousClock.Instant) async throws {
+    /// rest are `blocked_page`. `named` is the tab the address loads in, nil for a tab not open
+    /// yet, which `isPrivate` says will be private.
+    func checkOpenable(_ url: URL, in named: NamedTab?, isPrivate: Bool = false, session: MCPSession? = AgentHub.callSession, until deadline: ContinuousClock.Instant) async throws {
         try checkNotBlocked(url)
         guard AgentURLs.verdict(for: url) == .needsConfirmation else { return }
         guard let session else { throw AgentToolError(code: "denied_by_user", message: "file: addresses need the user’s Allow.") }
         let name = url.lastPathComponent.isEmpty ? url.path() : url.lastPathComponent
-        _ = try await confirm(.file, "open the local file “\(name)” (its folder becomes readable to the page)", subject: url.absoluteString, site: nil, in: named, session: session, until: deadline)
+        _ = try await confirm(.file, "open the local file “\(name)” (its folder becomes readable to the page)", subject: url.absoluteString, site: nil, in: named, isPrivate: isPrivate, session: session, until: deadline)
     }
 
     func checkNotBlocked(_ url: URL) throws {

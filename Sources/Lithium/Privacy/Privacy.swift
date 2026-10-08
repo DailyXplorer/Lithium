@@ -164,9 +164,7 @@ final class Privacy {
             let site = URL(string: String(url.absoluteString.dropFirst(5))).map(farblingSite) ?? ""
             return site.isEmpty ? UUID().uuidString : site
         }
-        guard let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")), !host.isEmpty else { return "" }
-        var address = in6_addr()
-        if host.contains(":") ? inet_pton(AF_INET6, host, &address) == 1 : inet_pton(AF_INET, host, &address) == 1 { return host }
+        guard let host = url.host(), !host.isEmpty else { return "" }
         return SiteInfo.registrable(host)
     }
 

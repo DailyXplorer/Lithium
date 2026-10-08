@@ -87,8 +87,14 @@ final class SiteInfo {
         return components.url
     }
 
+    /// An IP address is a site of its own (brackets dropped): the suffix list would take its last
+    /// label for a TLD and group `192.168.0.1` with `10.0.0.1` as "0.1".
     nonisolated static func registrable(_ host: String) -> String {
-        PublicSuffixList.effectiveTLDPlusOne(host.lowercased()) ?? host.lowercased()
+        let host = host.lowercased()
+        let bare = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+        var address = in6_addr()
+        if bare.contains(":") ? inet_pton(AF_INET6, bare, &address) == 1 : inet_pton(AF_INET, bare, &address) == 1 { return bare }
+        return PublicSuffixList.effectiveTLDPlusOne(host) ?? host
     }
 
     func load() async {

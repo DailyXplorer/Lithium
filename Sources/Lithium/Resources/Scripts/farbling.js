@@ -36,6 +36,7 @@
   // They work on objects of any same-origin realm, so these serve the frames and popups too.
   const member = (proto, name) => (proto && getOwnPropertyDescriptor(proto, name)) || {};
   const read = (getter, self) => { try { return apply(getter, self, []); } catch (_) { return 0; } };
+  const Uint8ArrayCtor = Uint8Array;
   const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
   const typedLength = member(typedArray, 'length').get;
   const typedKind = member(typedArray, Symbol.toStringTag).get;
@@ -61,7 +62,9 @@
     const proto = context && context.prototype;
     return { __proto__: null, getParameter: member(proto, 'getParameter').value,
       isContextLost: member(proto, 'isContextLost').value, checkFramebufferStatus: member(proto, 'checkFramebufferStatus').value,
-      drawingBufferWidth: member(proto, 'drawingBufferWidth').get, drawingBufferHeight: member(proto, 'drawingBufferHeight').get };
+      drawingBufferWidth: member(proto, 'drawingBufferWidth').get, drawingBufferHeight: member(proto, 'drawingBufferHeight').get,
+      getBufferParameter: member(proto, 'getBufferParameter').value, getBufferSubData: member(proto, 'getBufferSubData').value,
+      bufferSubData: member(proto, 'bufferSubData').value };
   };
   const gl1 = glMembers(globalThis.WebGLRenderingContext), gl2 = glMembers(globalThis.WebGL2RenderingContext);
   // And the members the voice filter reads: an `Array` `filter` that keeps everything or a voice
@@ -165,14 +168,16 @@
   // and noising a noised pixel changes nothing, so pixels the page puts back and reads again (an
   // editor's canvas, a data URL drawn back) keep the values they were given, and never drift
   // further than one. Clearing low bits doesn't undo it: for half the spots the pair straddles them.
-  // Rows are `stride` bytes apart (WebGL can pad them).
-  const noisePixels = (data, left, top, width, height, start, stride = width * 4) => {
+  // Rows are `stride` bytes apart (WebGL can pad them). With a `step`, for reads past the limit,
+  // only one pixel in `step` along a row is decided, picked by its spot and so staggered by row.
+  const noisePixels = (data, left, top, width, height, start, stride = width * 4, step = 1) => {
     const kind = apply(typedKind, data, []);
     if (kind !== 'Uint8ClampedArray' && kind !== 'Uint8Array') return;
     for (let row = 0; row < height; row++) {
-      let at = start + row * stride;
+      const first = (step - (left + top + row) % step) % step;
+      let at = start + row * stride + first * 4;
       const rowKey = fmix((top + row) ^ seedWords[1]) ^ seedWords[3];
-      for (let column = 0; column < width; column++, at += 4) {
+      for (let column = first; column < width; column += step, at += 4 * step) {
         const spot = fmix(imul((left + column) ^ seedWords[0], 0x9e3779b1) ^ rowKey);
         const channel = (spot >>> 1) % 3, shift = spot >>> 31;
         const value = data[at + channel], pair = (value + shift) >> 1, low = 2 * pair - shift;
@@ -205,31 +210,35 @@
   // are most likely GPU picking, which reads an object's id back from its color, where a step of
   // one picks another object. A page could read a scene that way pixel by pixel, unnoised: the
   // price of not breaking picking. The canvas's `toDataURL` and `toBlob` are still noised.
-  // A read that writes nothing (a lost context, a bound pack buffer, an incomplete framebuffer)
-  // gets no noise either: the array holds the page's own data then, as it does for the pixels of a
-  // read past the edges, which WebGL leaves alone. The canvas's edges are known; a bound
-  // framebuffer's are not (WebGL can't tell a texture's size), so only the bottom left ones count
-  // there. Rarer errors (a float framebuffer read as bytes) are page bugs, and not checked for.
+  // A read that writes nothing (a lost context, into an array while a pack buffer is bound, an
+  // incomplete framebuffer) gets no noise either: the array holds the page's own data then, as it
+  // does for the pixels of a read past the edges, which WebGL leaves alone. The canvas's edges are
+  // known; a bound framebuffer's are not (WebGL can't tell a texture's size), so only the bottom
+  // left ones count there. Rarer errors (a float framebuffer read as bytes) are page bugs, and not
+  // checked for. WebGL2 can read into a bound pack buffer instead, at an offset: see below.
   const GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
   const GL_PACK_ROW_LENGTH = 0x0D02, GL_PACK_SKIP_ROWS = 0x0D03, GL_PACK_SKIP_PIXELS = 0x0D04, GL_PACK_ALIGNMENT = 0x0D05;
   const GL_PIXEL_PACK_BUFFER_BINDING = 0x88ED, GL_FRAMEBUFFER = 0x8D40, GL_READ_FRAMEBUFFER = 0x8CA8, GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
-  const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA;
+  const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA, GL_PIXEL_PACK_BUFFER = 0x88EB, GL_BUFFER_SIZE = 0x8764;
   // The arguments are converted here, once, as the native call would (see `readImage`): a format
   // given as '6408' read the same to it, and skipped the noise.
-  const readPixelsArguments = (args) => {
+  const readPixelsArguments = (args, webgl2) => {
     if (args.length < 7) return;
     for (let i = 0; i < 6; i++) args[i] = i < 4 ? args[i] | 0 : args[i] >>> 0;
-    if (args.length > 7 && args[6] && typeof args[6] === 'object') args[7] = +args[7];
+    if (args[6] && typeof args[6] === 'object') { if (args.length > 7) args[7] = +args[7]; }
+    else if (webgl2 && args[6] != null) args[6] = +args[6];
   };
   const readPixelsNoise = (gl, webgl2, self, args) => {
     const pixels = args[6], width = args[2], height = args[3];
-    if (args[4] !== GL_RGBA || args[5] !== GL_UNSIGNED_BYTE || !pixels || typeof pixels !== 'object') return;
-    if (width <= 0 || height <= 0 || width * height <= 16 || width * height > MAX_PIXELS) return;
+    const packed = webgl2 && typeof pixels === 'number';
+    if (args[4] !== GL_RGBA || args[5] !== GL_UNSIGNED_BYTE || !packed && (!pixels || typeof pixels !== 'object')) return;
+    if (width <= 0 || height <= 0 || width * height <= 16) return;
     const parameter = (name) => apply(gl.getParameter, self, [name]);
     // WebGL1 has no offset: it ignores an 8th argument.
-    let start = webgl2 && args.length > 7 ? floor(args[7]) || 0 : 0, stride, right = width, top = height;
+    let start = packed ? floor(pixels) : webgl2 && args.length > 7 ? floor(args[7]) || 0 : 0, stride, right = width, top = height, length;
     try {
-      if (apply(gl.isContextLost, self, []) || (webgl2 && parameter(GL_PIXEL_PACK_BUFFER_BINDING))) return;
+      // A read into an array while a pack buffer is bound, or at an offset while none is, is an error.
+      if (apply(gl.isContextLost, self, []) || (webgl2 && !parameter(GL_PIXEL_PACK_BUFFER_BINDING) !== !packed)) return;
       if (apply(gl.checkFramebufferStatus, self, [webgl2 ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER]) !== GL_FRAMEBUFFER_COMPLETE) return;
       const alignment = parameter(GL_PACK_ALIGNMENT), rowLength = webgl2 ? parameter(GL_PACK_ROW_LENGTH) : 0;
       const skipPixels = webgl2 ? parameter(GL_PACK_SKIP_PIXELS) : 0;
@@ -241,11 +250,23 @@
         right = min(width, apply(gl.drawingBufferWidth, self, []) - args[0]);
         top = min(height, apply(gl.drawingBufferHeight, self, []) - args[1]);
       }
+      length = packed ? apply(gl.getBufferParameter, self, [GL_PIXEL_PACK_BUFFER, GL_BUFFER_SIZE]) : read(typedLength, pixels);
     } catch (_) { return; }
-    if (!(start >= 0) || start + (height - 1) * stride + width * 4 > read(typedLength, pixels)) return;
+    if (!(start >= 0) || start + (height - 1) * stride + width * 4 > length) return;
     const left = max(0, -args[0]), bottom = max(0, -args[1]);
     if (right <= left || top <= bottom) return;
-    noisePixels(pixels, args[0] + left, args[1] + bottom, right - left, top - bottom, start + bottom * stride + left * 4, stride);
+    // Past the limit, a share of the pixels, so the cost stays the same.
+    const step = ceil(width * height / MAX_PIXELS), x = args[0] + left, y = args[1] + bottom, columns = right - left, rows = top - bottom;
+    start += bottom * stride + left * 4;
+    if (!packed) { noisePixels(pixels, x, y, columns, rows, start, stride, step); return; }
+    // Pixels read into a pack buffer are read back and written over with the same noise: noising
+    // `getBufferSubData` instead would miss the page reading the buffer through another binding.
+    try {
+      const copy = new Uint8ArrayCtor((rows - 1) * stride + columns * 4);
+      apply(gl.getBufferSubData, self, [GL_PIXEL_PACK_BUFFER, start, copy]);
+      noisePixels(copy, x, y, columns, rows, 0, stride, step);
+      apply(gl.bufferSubData, self, [GL_PIXEL_PACK_BUFFER, start, copy]);
+    } catch (_) {}
   };
 
   // Samples get the pixels' kind of noise (see noisePixels): each moves within a pair of
@@ -441,7 +462,7 @@
       for (let i = 0; i < contexts.length; i++) {
         const gl = members[i], webgl2 = i === 1;
         patch(contexts[i] && contexts[i].prototype, 'readPixels', (target, self, args) => {
-          readPixelsArguments(args);
+          readPixelsArguments(args, webgl2);
           const result = apply(target, self, args);
           readPixelsNoise(gl, webgl2, self, args);
           return result;

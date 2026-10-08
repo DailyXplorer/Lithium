@@ -407,6 +407,50 @@ struct FingerprintingTests {
         #expect(protected["errors"] == bare["errors"])
     }
 
+    /// A read into a pack buffer gets the noise a read into an array does, whatever binding the page
+    /// reads the buffer back through, and only where the read wrote; a read past the size limit
+    /// still gets noise on a share of its pixels.
+    @Test func readPixelsNoiseCoversPackBuffersAndLargeReads() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 64; gl.canvas.height = 64; gl.viewport(0, 0, 64, 64);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const array = new Uint8Array(64 * 64 * 4); gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, array);
+              const buffer = gl.createBuffer();
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4 + 16, gl.STREAM_READ);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, 8);
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              gl.bindBuffer(gl.COPY_READ_BUFFER, buffer);
+              const packed = new Uint8Array(64 * 64 * 4 + 16);
+              gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, packed);
+              let noisy = 0, different = 0, outside = 0;
+              for (let i = 0; i < packed.length; i++) {
+                if (i < 8 || i >= 8 + array.length) { if (packed[i] !== 0) outside++; continue; }
+                if (packed[i] !== clean[(i - 8) % 4]) noisy++;
+                if (packed[i] !== array[i - 8]) different++;
+              }
+              const large = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              large.canvas.width = 1024; large.canvas.height = 512; large.viewport(0, 0, 1024, 512);
+              large.clearColor(0.5, 0.25, 0.75, 1); large.clear(large.COLOR_BUFFER_BIT);
+              const pixels = new Uint8Array(1024 * 512 * 4); large.readPixels(0, 0, 1024, 512, large.RGBA, large.UNSIGNED_BYTE, pixels);
+              let largeNoisy = 0; for (let i = 0; i < pixels.length; i++) if (pixels[i] !== clean[i % 4]) largeNoisy++;
+              return JSON.stringify({ error: gl.getError() + large.getError(), noisy, different, outside, largeNoisy });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare == ["error": 0, "noisy": 0, "different": 0, "outside": 0, "largeNoisy": 0])
+        #expect(protected["error"] == 0)
+        #expect(try #require(protected["noisy"]) > 0)
+        #expect(protected["different"] == 0)
+        #expect(protected["outside"] == 0)
+        #expect(try #require(protected["largeNoisy"]) > 0)
+    }
+
     /// Canvas noise follows the pixel's spot in the canvas, not where the read starts: a 1×1 read,
     /// an offset window or one with a negative size hands back what the full read has there.
     @Test func smallReadsGetTheNoiseOfTheFullRead() async throws {

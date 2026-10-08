@@ -8,7 +8,7 @@
 # One at a time, because the suites that run a whole Browser share its settings and home
 # folder (one sets tabs to fall asleep after 2 ms), and run side by side they slow and break
 # each other.
-set -u -m
+set -u
 cd "$(dirname "$0")/.."
 
 minutes=${LITHIUM_TEST_MINUTES-20}
@@ -87,7 +87,9 @@ handoffs="${TMPDIR:-/tmp}/lithium-test-handoffs.log"
 rm -f "$handoffs"
 started=$(date '+%Y-%m-%d %H:%M:%S')
 
-# Each in a process group of its own (set -m), so the watchdog can stop the whole test run.
+# The run in a process group of its own, so the watchdog can stop it whole. perl makes the group
+# rather than set -m: job control in a bash that isn't a terminal's (an agent's session) failed
+# to set the group (scripts/test-fast), and `kill -- -pid` then hit nothing.
 # Tests use the bundled filter lists: an update would download and compile them in the middle
 # of whatever test is running then (FilterUpdaterTests downloads them on purpose).
 # Unbuffered, so a log the watchdog cuts short ends with the test that was really running:
@@ -97,24 +99,51 @@ started=$(date '+%Y-%m-%d %H:%M:%S')
 # (a framework calling it directly), for the test process and everything it runs. SwiftPM's
 # own sandbox can't nest in it.
 CFFIXED_USER_HOME="$home" LITHIUM_NO_FILTER_UPDATES=1 LITHIUM_NO_EXTERNAL_OPEN=1 LITHIUM_HANDOFF_LOG="$handoffs" NSUnbufferedIO=YES \
+    perl -e 'setpgrp(0, 0); exec @ARGV' \
     sandbox-exec -p '(version 1) (allow default) (deny lsopen)' swift test --disable-sandbox --skip-build --no-parallel "$@" &
 tests=$!
+
+descendants() {
+    local child
+    for child in $(pgrep -P "$1"); do echo "$child"; descendants "$child"; done
+}
+# Stops the test run and returns once its processes are gone. swift test starts the test helper
+# (swiftpm-testing-helper) outside the run's group, so the run's descendants are listed first
+# and each gets SIGTERM too; one still there after 5 seconds is killed outright. The group is
+# signalled only once perl has made it, never the script's own.
+stop_tests() {
+    local pids alive pid
+    pids="$tests $(descendants "$tests")"
+    [ "$(ps -o pgid= -p "$tests" 2>/dev/null | tr -d ' ')" = "$tests" ] && kill -- -"$tests" 2>/dev/null
+    for pid in $pids; do kill "$pid" 2>/dev/null; done
+    for _ in $(seq 50); do
+        alive=""
+        for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+        [ -z "$alive" ] && return
+        sleep 0.1
+    done
+    for pid in $alive; do kill -KILL "$pid" 2>/dev/null; done
+}
 (
     sleep $((minutes * 60))
+    # Once stopping, it finishes: the script waits for it rather than cutting it short.
+    trap '' TERM
     echo "scripts/test: still running after $minutes minutes, stopped. The last test started above is stuck." >&2
-    kill -- -"$tests"
+    stop_tests
 ) &
 watchdog=$!
+# Its sleep too: left running, it would hold the script's output open for the rest of the time limit.
+stop_watchdog() { kill "$watchdog" $(pgrep -P "$watchdog") 2>/dev/null; }
 # Out of the terminal's process group, the tests would outlive a ⌃C or a closed terminal.
 # Exits 128 + the signal number, as if the signal had killed the script.
-stop() { kill -- -"$tests" -"$watchdog" 2>/dev/null; exit $((128 + $1)); }
+stop() { stop_watchdog; stop_tests; exit $((128 + $1)); }
 trap 'stop 1' HUP
 trap 'stop 2' INT
 trap 'stop 15' TERM
 
 wait "$tests"
 status=$?
-kill -- -"$watchdog" 2>/dev/null
+stop_watchdog
 wait "$watchdog" 2>/dev/null
 
 # Whatever passed, the run fails if it opened, or tried to open, another app on the user's

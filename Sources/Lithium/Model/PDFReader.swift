@@ -156,27 +156,43 @@ final class PDFReader: NSObject {
     static func openingPage(of url: URL) -> Int {
         let fragment = url.fragment() ?? ""
         guard fragment.hasPrefix("page=") else { return 0 }
-        return max(Int(fragment.dropFirst(5)) ?? 1, 1) - 1
+        return pageIndex(ofNumber: Int(fragment.dropFirst(5)) ?? 1)
     }
 
-    private static func entries(of parent: PDFOutline, in document: PDFDocument, id: inout Int) -> [OutlineEntry] {
-        (0..<parent.numberOfChildren).compactMap { index in
-            guard let child = parent.child(at: index) else { return nil }
+    /// The index of page `number`, counted from 1 as typed in the page field: `Int.min` typed
+    /// there would trap subtracting one, so a page below the first is the first.
+    static func pageIndex(ofNumber number: Int) -> Int {
+        max(number, 1) - 1
+    }
+
+    /// Any page's PDF writes its outline: one nested past reason, or looping back on itself, would
+    /// overflow the stack or never end, and a huge one would hold up the main thread. Past these,
+    /// entries are left out.
+    static let outlineDepthLimit = 64
+    static let outlineEntryLimit = 10_000
+
+    private static func entries(of parent: PDFOutline, in document: PDFDocument, depth: Int, id: inout Int) -> [OutlineEntry] {
+        guard depth < outlineDepthLimit else { return [] }
+        var entries: [OutlineEntry] = []
+        for index in 0..<parent.numberOfChildren {
+            guard id < outlineEntryLimit else { break }
+            guard let child = parent.child(at: index) else { continue }
             id += 1
             let entryID = id
-            let children = entries(of: child, in: document, id: &id)
-            return OutlineEntry(
+            let children = self.entries(of: child, in: document, depth: depth + 1, id: &id)
+            entries.append(OutlineEntry(
                 id: entryID,
                 label: child.label ?? "",
                 pageIndex: child.destination?.page.map(document.index(for:)),
                 children: children.isEmpty ? nil : children
-            )
+            ))
         }
+        return entries
     }
 
-    private static func entries(of root: PDFOutline, in document: PDFDocument) -> [OutlineEntry] {
+    static func entries(of root: PDFOutline, in document: PDFDocument) -> [OutlineEntry] {
         var id = 0
-        return entries(of: root, in: document, id: &id)
+        return entries(of: root, in: document, depth: 0, id: &id)
     }
 
     /// The document's own title, or its file name, as Chrome shows it.

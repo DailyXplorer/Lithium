@@ -234,6 +234,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/category/extensions")!)
         case "clearHistory":
             await browser.history.clear()
+            await browser.clearIcons()
             return (await visits(browser, matching: ""), nil)
         case "history":
             return (await visits(browser, matching: value as? String ?? ""), nil)

@@ -121,6 +121,19 @@ final class Favicons {
         return folder.appending(path: "\(safe).png")
     }
 
+    /// Clear History: the icon kept for every host visited would still list them, so they go too,
+    /// but for `hosts` (favorites and open tabs, which show theirs). Files are removed off the main thread.
+    func clear(keeping hosts: Set<String>) async {
+        missing = []
+        cache = cache.filter { hosts.contains($0.key) }
+        let folder = folder
+        let kept = Set(hosts.map { file(for: $0).lastPathComponent })
+        await Task.detached(priority: .userInitiated) {
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            for file in files where !kept.contains(file.lastPathComponent) { try? FileManager.default.removeItem(at: file) }
+        }.value
+    }
+
     private func store(_ png: Data, for host: String) {
         remember(png, for: host)
         missing.remove(host)

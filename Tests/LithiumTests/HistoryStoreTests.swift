@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Lithium
 
@@ -46,6 +47,30 @@ struct HistoryStoreTests {
         #expect(await store.visitsInBackground(matching: "")?.isEmpty == true)
         store.record(URL(string: "https://swift.org/")!, title: "Swift")
         #expect(store.visits(matching: "").map(\.title) == ["Swift"])
+    }
+
+    /// While a clear holds the file, the main connection's writes would fail at once
+    /// (`SQLITE_BUSY`): visits and titles written meanwhile are kept, and written once it is done.
+    @Test func visitsDuringAClearAreKept() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "history-\(UUID()).sqlite")
+        let store = HistoryStore(fileURL: file)
+        store.record(URL(string: "https://old.example/")!, title: "Old")
+        // Another connection holds the write lock, so the clear can't finish before the visit.
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await store.clear() }
+        while !store.isClearing { await Task.yield() }
+        let url = URL(string: "https://new.example/")!
+        store.record(url, title: "")
+        store.updateTitle("New", for: url)
+        store.writeTitles()
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+
+        #expect(store.visits(matching: "").map(\.title) == ["New"])
     }
 
     /// A page retitling itself (an unread count) costs one write a moment later, not one per

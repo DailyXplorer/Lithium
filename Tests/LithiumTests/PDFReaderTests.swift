@@ -337,3 +337,44 @@ extension BrowserTests {
         return condition()
     }
 }
+
+@MainActor
+struct PDFPageFieldAndOutlineTests {
+    /// The page field takes any `Int`: `Int.min` used to trap subtracting one.
+    @Test func anyPageNumberGivesAPageIndex() {
+        #expect(PDFReader.pageIndex(ofNumber: 3) == 2)
+        #expect(PDFReader.pageIndex(ofNumber: 1) == 0)
+        #expect(PDFReader.pageIndex(ofNumber: 0) == 0)
+        #expect(PDFReader.pageIndex(ofNumber: Int.min) == 0)
+        #expect(PDFReader.pageIndex(ofNumber: Int.max) == Int.max - 1)
+    }
+
+    /// Any page's PDF writes its outline: one nested past reason or with a huge number of
+    /// entries is cut short, rather than overflowing the stack or holding up the window.
+    @Test func aDeepOrHugeOutlineIsCutShort() {
+        let document = PDFDocument()
+        let deep = PDFOutline()
+        var parent = deep
+        for level in 0..<500 {
+            let child = PDFOutline()
+            child.label = "Level \(level)"
+            parent.insertChild(child, at: 0)
+            parent = child
+        }
+        var depth = 0
+        var level = PDFReader.entries(of: deep, in: document)
+        while let first = level.first {
+            depth += 1
+            level = first.children ?? []
+        }
+        #expect(depth == PDFReader.outlineDepthLimit)
+
+        let wide = PDFOutline()
+        for index in 0..<(PDFReader.outlineEntryLimit + 50) {
+            let child = PDFOutline()
+            child.label = "Entry \(index)"
+            wide.insertChild(child, at: index)
+        }
+        #expect(PDFReader.entries(of: wide, in: document).count == PDFReader.outlineEntryLimit)
+    }
+}

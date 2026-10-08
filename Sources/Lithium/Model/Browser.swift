@@ -511,8 +511,8 @@ final class Browser {
         tab.answerHiddenDialog()
         switch step {
         case .open(let url): tab.load(url)
-        case .back: tab.webView.goBack()
-        case .forward: tab.webView.goForward()
+        case .back: tab.goBack()
+        case .forward: tab.goForward()
         case .reload: tab.reload()
         case .stop: tab.stopLoading()
         }
@@ -859,6 +859,13 @@ final class Browser {
     func saveNow() {
         saveSession()
         history.writeTitles()
+    }
+
+    /// With the history cleared, the icons kept for the sites in it; favorites and open tabs
+    /// keep theirs. A private tab's host doesn't count: keeping it would keep an earlier visit.
+    func clearIcons() async {
+        let hosts = pins.map(\.url) + tabs.filter { !$0.isEphemeral }.compactMap(\.url)
+        await favicons.clear(keeping: Set(hosts.compactMap { $0.host() }))
     }
 
     // MARK: Favorites

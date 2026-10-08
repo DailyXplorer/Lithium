@@ -134,6 +134,15 @@ final class PageWebView: WKWebView {
         super.keyDown(with: event)
     }
 
+    /// Lithium's shortcuts before the page's (`Shortcuts`): in a tab, a split, a quick link
+    /// window or a private window alike.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        Shortcuts.performInMenu(event, menu: Self.mainMenu()) || super.performKeyEquivalent(with: event)
+    }
+
+    /// The app's menu bar; a test's own menu stands in for it.
+    static var mainMenu = { NSApp.mainMenu }
+
     override func scrollWheel(with event: NSEvent) {
         noteUser(event, pressing: false)
         super.scrollWheel(with: event)

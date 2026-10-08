@@ -58,7 +58,7 @@ struct SpaceButton: View {
 
     var body: some View {
         Button(action: action) {
-            Icon(space.phosphor, size: 14)
+            SpaceIcon(space.icon, size: 14)
                 .frame(maxWidth: 28)
                 .frame(height: 28)
                 .background(
@@ -90,8 +90,6 @@ struct SpaceEditor: View {
     let close: () -> Void
     @FocusState private var isNameFocused: Bool
 
-    private let columns = Array(repeating: GridItem(.fixed(28), spacing: 6), count: 5)
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(isNew ? "New space" : "Edit space")
@@ -115,20 +113,7 @@ struct SpaceEditor: View {
                     .help(hex)
                 }
             }
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
-                ForEach(Space.icons, id: \.self) { icon in
-                    Button { space.icon = icon.rawValue } label: {
-                        Icon(icon, size: 15)
-                            .frame(width: 28, height: 28)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(space.icon == icon.rawValue ? Color.accentColor.opacity(0.22) : .primary.opacity(0.05))
-                            )
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+            SpaceIconPicker(icon: $space.icon)
             if isNew {
                 VStack(alignment: .leading, spacing: 3) {
                     Toggle("Separate cookies and logins", isOn: $space.separatesData)
@@ -159,6 +144,111 @@ struct SpaceEditor: View {
     private func commit() {
         save(space)
         close()
+    }
+}
+
+/// The space editor's icons: Icons or Emoji, a search field, a suggested row, then the rest in a
+/// lazy grid, so only the cells scrolled into view are made. The catalog is built off the main
+/// thread as the editor opens, and goes when it closes.
+struct SpaceIconPicker: View {
+    @Binding var icon: String
+    @State private var catalog: SpaceIconCatalog?
+    @State private var showsEmoji: Bool
+    @State private var query = ""
+
+    /// Seven cells fill the editor's width.
+    private static let columns = Array(repeating: GridItem(.fixed(28), spacing: 4), count: 7)
+    static let suggestedEmoji = ["🏠", "💼", "🎓", "💰", "🎵", "\u{2708}\u{FE0F}", "🎮"]
+
+    /// `catalog` is for snapshots; the editor builds its own.
+    init(icon: Binding<String>, catalog: SpaceIconCatalog? = nil) {
+        _icon = icon
+        _catalog = State(initialValue: catalog)
+        _showsEmoji = State(initialValue: Space.isEmoji(icon.wrappedValue))
+    }
+
+    var body: some View {
+        let all = catalog.map { showsEmoji ? $0.emoji : $0.icons } ?? []
+        let results = query.isEmpty ? [] : SpaceIconCatalog.search(query, in: all)
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("Search", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Icons or emoji", selection: $showsEmoji) {
+                    Text("Icons").tag(false)
+                    Text("Emoji").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            ScrollView {
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 4) {
+                    if query.isEmpty {
+                        Section { ForEach(suggested, content: cell) }
+                        Section { ForEach(all, content: cell) } header: { Divider().padding(.vertical, 2) }
+                    } else {
+                        ForEach(results, content: cell)
+                    }
+                }
+            }
+            .id(showsEmoji)
+            .frame(height: 140)
+            .overlay {
+                if !query.isEmpty, results.isEmpty, catalog != nil {
+                    Text("No matches").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task {
+            guard catalog == nil else { return }
+            catalog = await Task.detached(priority: .userInitiated) { SpaceIconCatalog.load() }.value
+        }
+    }
+
+    private var suggested: [SpaceIconCatalog.Entry] {
+        showsEmoji ? Self.suggestedEmoji.map { SpaceIconCatalog.emoji($0) } : Space.icons.prefix(7).map { SpaceIconCatalog.icon($0) }
+    }
+
+    private func cell(_ entry: SpaceIconCatalog.Entry) -> some View {
+        Button { icon = entry.id } label: {
+            SpaceIcon(entry.id, size: 15)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(icon == entry.id ? Color.accentColor.opacity(0.22) : .primary.opacity(0.05))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(entry.label)
+        .accessibilityLabel(entry.label)
+    }
+}
+
+/// A space's icon: a bundled Phosphor icon, or an emoji. A name that isn't bundled shows the globe.
+struct SpaceIcon: View {
+    let icon: String
+    let size: CGFloat
+
+    init(_ icon: String, size: CGFloat) {
+        self.icon = icon
+        self.size = size
+    }
+
+    var body: some View {
+        if Space.isEmoji(icon) {
+            Text(icon)
+                .font(.system(size: size))
+                .fixedSize()
+                .frame(width: size, height: size)
+        } else {
+            Image(nsImage: Phosphor.image(named: icon) ?? Phosphor.globe.image)
+                .resizable()
+                .renderingMode(.template)
+                .interpolation(.high)
+                .frame(width: size, height: size)
+        }
     }
 }
 

@@ -1,0 +1,296 @@
+globe-simple	web internet world browse personal general
+folder-simple	files projects general
+lock-simple	private secure general
+highlighter	notes highlight research general
+hand	personal general
+briefcase	career work office job business
+buildings	work office job business
+building-office	work job business
+bank	work office job business
+calendar	schedule work office job business
+calendar-check	work office job business
+calendar-blank	work office job business
+clipboard	work office job business
+clipboard-text	work office job business
+kanban	project tasks work office job business
+presentation-chart	work office job business
+chart-bar	work office job business
+chart-line	work office job business
+chart-pie	work office job business
+table	work office job business
+files	work office job business
+file-text	work office job business
+note	notes work office job business
+notepad	notes work office job business
+notebook	notes journal work office job business
+pencil-line	work office job business
+envelope-simple	mail email work office job business
+paper-plane-tilt	send mail work office job business
+phone-call	work office job business
+user-circle	account profile work office job business
+users-three	team work office job business
+target	goals work office job business
+flag-banner	work office job business
+handshake	deal clients work office job business
+archive	work office job business
+tray	inbox work office job business
+house	home life family
+house-line	home life family
+couch	living home house life family
+bed	sleep home house life family
+bathtub	home house life family
+armchair	home house life family
+lamp-pendant	home house life family
+key	home house life family
+door	home house life family
+fire-simple	fireplace home house life family
+washing-machine	laundry chores home house life family
+broom	cleaning chores home house life family
+plant	garden home house life family
+flower	garden home house life family
+tree	garden home house life family
+garage	car home house life family
+bell-simple	home house life family
+gift	present birthday home house life family
+cake	birthday party home house life family
+graduation-cap	university college school learning study education class
+book	read school learning study education class
+book-open	read school learning study education class
+books	library read school learning study education class
+student	school learning study education class
+chalkboard-teacher	school learning study education class
+exam	test school learning study education class
+pen-nib	writing school learning study education class
+ruler	school learning study education class
+math-operations	school learning study education class
+atom	science physics school learning study education class
+flask	science chemistry lab school learning study education class
+microscope	science biology lab school learning study education class
+globe-hemisphere-west	geography world school learning study education class
+translate	language school learning study education class
+lightbulb	idea school learning study education class
+brain	think school learning study education class
+wallet	money finance bank pay budget
+coins	money finance bank pay budget
+money	finance bank pay budget
+credit-card	money finance bank pay budget
+currency-dollar	usd money finance bank pay budget
+currency-eur	euro money finance bank pay budget
+currency-gbp	pound money finance bank pay budget
+currency-btc	bitcoin crypto money finance bank pay budget
+piggy-bank	savings money finance pay budget
+receipt	bills expenses money finance bank pay budget
+shopping-bag-open	shopping money finance bank pay budget
+tag	price money finance bank pay budget
+ticket	money finance bank pay budget
+percent	sale money finance bank pay budget
+scales	law legal money finance bank pay budget
+airplane	flight travel trip vacation holiday places
+airplane-tilt	flight travel trip vacation holiday places
+airplane-in-flight	travel trip vacation holiday places
+suitcase	luggage travel trip vacation holiday places
+suitcase-rolling	luggage travel trip vacation holiday places
+map-trifold	maps travel trip vacation holiday places
+map-pin	location place travel trip vacation holiday places
+compass	travel trip vacation holiday places
+globe-hemisphere-east	world travel trip vacation holiday places
+mountains	hiking outdoors travel trip vacation holiday places
+tent	camping outdoors travel trip vacation holiday places
+backpack	hiking travel trip vacation holiday places
+car	drive travel trip vacation holiday places
+car-simple	drive travel trip vacation holiday places
+bicycle	bike cycling travel trip vacation holiday places
+train	travel trip vacation holiday places
+train-simple	travel trip vacation holiday places
+boat	travel trip vacation holiday places
+sailboat	sailing travel trip vacation holiday places
+bus	travel trip vacation holiday places
+taxi	cab travel trip vacation holiday places
+road-horizon	trip travel vacation holiday places
+umbrella-simple	beach travel trip vacation holiday places
+city	travel trip vacation holiday places
+island	beach travel trip vacation holiday places
+music-note	media audio video movie entertainment
+music-notes	media audio video movie entertainment
+headphones	listen music media audio video movie entertainment
+microphone	podcast music media audio video movie entertainment
+microphone-stage	sing karaoke music media audio video movie entertainment
+guitar	music media audio video movie entertainment
+piano-keys	piano music media audio video movie entertainment
+speaker-high	music media audio video movie entertainment
+queue	playlist music media audio video movie entertainment
+vinyl-record	music media audio video movie entertainment
+radio	podcast music media audio video movie entertainment
+record	music media audio video movie entertainment
+film-slate	cinema music media audio video movie entertainment
+film-strip	cinema music media audio video movie entertainment
+camera	photo photography music media audio video movie entertainment
+video-camera	music media audio movie entertainment
+television	tv shows music media audio video movie entertainment
+monitor-play	streaming music media audio video movie entertainment
+play-circle	watch music media audio video movie entertainment
+code	tech development programming computer dev
+code-simple	tech development programming computer dev
+terminal	shell code tech development programming computer dev
+terminal-window	shell code tech development programming computer dev
+bug	debug code tech development programming computer dev
+brackets-curly	code tech development programming computer dev
+git-branch	github code tech development programming computer dev
+git-commit	code tech development programming computer dev
+git-merge	code tech development programming computer dev
+git-pull-request	github review code tech development programming computer dev
+git-fork	code tech development programming computer dev
+cpu	hardware code tech development programming computer dev
+hard-drives	server code tech development programming computer dev
+database	data code tech development programming computer dev
+cloud-arrow-up	upload code tech development programming computer dev
+desktop	code tech development programming computer dev
+laptop	code tech development programming computer dev
+device-mobile	phone code tech development programming computer dev
+wifi-high	network code tech development programming computer dev
+robot	ai bot code tech development programming computer dev
+function	code tech development programming computer dev
+file-code	tech development programming computer dev
+tree-structure	code tech development programming computer dev
+game-controller	gaming console games fun play
+dice-five	board game games fun play
+dice-one	board game games fun play
+puzzle-piece	extensions game games fun play
+cards	poker game games fun play
+crown	game games fun play
+trophy	win game games fun play
+medal	award game games fun play
+confetti	party celebrate game games fun play
+smiley	happy game games fun play
+smiley-wink	game games fun play
+ghost	game games fun play
+alien	game games fun play
+balloon	party game games fun play
+cube	game games fun play
+shooting-star	game games fun play
+barbell	weights sport sports fitness exercise gym
+basketball	sport sports fitness exercise gym
+football	sport sports fitness exercise gym
+soccer-ball	football sport sports fitness exercise gym
+tennis-ball	sport sports fitness exercise gym
+baseball	sport sports fitness exercise gym
+person-simple-run	running sport sports fitness exercise gym
+person-simple-walk	walking sport sports fitness exercise gym
+person-simple-swim	swimming sport sports fitness exercise gym
+person-simple-bike	cycling sport sports fitness exercise gym
+flag-checkered	race sport sports fitness exercise gym
+golf	sport sports fitness exercise gym
+hockey	sport sports fitness exercise gym
+volleyball	sport sports fitness exercise gym
+timer	sport sports fitness exercise gym
+alarm	clock sport sports fitness exercise gym
+sneaker	shoes running sport sports fitness exercise gym
+heartbeat	cardio health wellness medical care
+heart	love health wellness medical care
+first-aid	health wellness medical care
+pill	medicine health wellness medical care
+syringe	vaccine health wellness medical care
+stethoscope	doctor health wellness medical care
+bandaids	health wellness medical care
+thermometer	health wellness medical care
+eye	vision health wellness medical care
+wind	breathe health wellness medical care
+bone	health wellness medical care
+tooth	dentist health wellness medical care
+drop	water health wellness medical care
+moon-stars	sleep night health wellness medical care
+leaf	calm health wellness medical care
+person-arms-spread	yoga meditation health wellness medical care
+coffee	cafe food drink cooking eat recipes
+coffee-bean	food drink cooking eat recipes
+beer-bottle	food drink cooking eat recipes
+wine	food drink cooking eat recipes
+pizza	food drink cooking eat recipes
+hamburger	burger food drink cooking eat recipes
+bread	bakery food drink cooking eat recipes
+cookie	food drink cooking eat recipes
+ice-cream	food drink cooking eat recipes
+cooking-pot	kitchen food drink eat recipes
+fork-knife	restaurant dinner food drink cooking eat recipes
+knife	kitchen food drink cooking eat recipes
+egg	food drink cooking eat recipes
+carrot	vegetables food drink cooking eat recipes
+cherries	fruit food drink cooking eat recipes
+avocado	fruit food drink cooking eat recipes
+popcorn	food drink cooking eat recipes
+martini	cocktail bar food drink cooking eat recipes
+bowl-food	drink cooking eat recipes
+shopping-cart	groceries shop store buy retail
+shopping-cart-simple	groceries shop store buy retail
+storefront	shopping shop store buy retail
+basket	shopping shop store buy retail
+handbag	shopping shop store buy retail
+t-shirt	clothes fashion shopping shop store buy retail
+watch	shopping shop store buy retail
+diamond	jewelry shopping shop store buy retail
+package	delivery parcel shopping shop store buy retail
+truck	delivery shopping shop store buy retail
+barcode	shopping shop store buy retail
+chat-circle	message social friends communication people
+chats	messages social chat friends communication people
+chat-teardrop-text	message social friends communication people
+users	social chat friends communication people
+users-four	social chat friends communication people
+heart-straight	love social chat friends communication people
+hand-waving	hello social chat friends communication people
+hand-heart	charity social chat friends communication people
+thumbs-up	like social chat friends communication people
+megaphone-simple	marketing announce social chat friends communication people
+at	email mention social chat friends communication people
+share-network	share social chat friends communication people
+rocket-launch	startup social chat friends communication people
+tree-evergreen	nature outdoors weather garden
+tree-palm	beach nature outdoors weather garden
+flower-tulip	spring nature outdoors weather garden
+sun	summer day nature outdoors weather garden
+moon	night nature outdoors weather garden
+cloud	nature outdoors weather garden
+cloud-rain	nature outdoors weather garden
+snowflake	winter snow nature outdoors weather garden
+rainbow	nature outdoors weather garden
+fish	animal nature outdoors weather garden
+bird	animal nature outdoors weather garden
+butterfly	animal nature outdoors weather garden
+cat	animal pet nature outdoors weather garden
+dog	animal pet nature outdoors weather garden
+horse	animal nature outdoors weather garden
+paw-print	animal pet nature outdoors weather garden
+waves	sea ocean nature outdoors weather garden
+drop-half	water nature outdoors weather garden
+grains	farm nature outdoors weather garden
+palette	colors paint creative art design draw
+paint-brush	creative art design draw
+paint-bucket	creative art design draw
+pencil	creative art design draw
+scissors	crafts creative art design draw
+sketch-logo	diamond creative art design draw
+shapes	creative art design draw
+star	favorite creative art design draw
+sparkle	ai magic creative art design draw
+magic-wand	creative art design draw
+image	photo picture creative art design draw
+frame-corners	photo creative art design draw
+lightning	power energy misc symbol tools
+fire	misc symbol tools
+flame	misc symbol tools
+anchor	misc symbol tools
+hourglass	time misc symbol tools
+infinity	misc symbol tools
+gear-six	settings misc symbol tools
+wrench	repair misc symbol tools
+hammer	build diy misc symbol tools
+toolbox	misc symbol tools
+diamonds-four	misc symbol tools
+square-logo	misc symbol tools
+circle-dashed	misc symbol tools
+hexagon	misc symbol tools
+triangle	misc symbol tools
+seal-check	verified misc symbol tools
+bookmark-simple	saved misc symbol tools
+flag-pennant	misc symbol tools
+push-pin	pinned misc symbol tools

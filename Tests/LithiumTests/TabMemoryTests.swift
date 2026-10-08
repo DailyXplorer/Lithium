@@ -29,6 +29,32 @@ struct TabMemoryTests {
         #expect(await waitUntil(10) { !isRunning(process) }, "its page's process exits")
     }
 
+    /// An icon that takes its time doesn't keep a closed tab, or its page, alive until it comes.
+    @Test func closedTabIsFreedWhileItsIconIsStillLoading() async throws {
+        let iconRequested = Flag()
+        let (iconServer, iconBase) = try await LocalHTTP.serve(
+            ["/icon.png": ("Content-Type: image/png", Data())], delay: 60, requested: { _ in iconRequested.set() }
+        )
+        defer { iconServer.cancel() }
+        let page = #"<title>Page</title><link rel="icon" href="\#(iconBase.appending(path: "icon.png").absoluteString)">page"#
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
+        defer { listener.cancel() }
+        let favicons = Favicons(folder: FileManager.default.temporaryDirectory.appending(path: "tab-memory-icons-\(UUID().uuidString)"))
+        let browser = Browser(favicons: favicons, notifications: NotificationCenter())
+        weak var weakTab: Tab?
+        weak var weakWebView: WKWebView?
+        do {
+            let tab = browser.newTab(url: base)
+            #expect(await waitUntil(60) { loaded(tab) })
+            #expect(await waitUntil(30) { iconRequested.isSet })
+            weakTab = tab
+            weakWebView = tab.webView
+            browser.close(tab)
+        }
+        #expect(await waitUntil(10) { weakTab == nil }, "the closed tab is freed")
+        #expect(await waitUntil(10) { weakWebView == nil }, "its web view is freed")
+    }
+
     @Test func sleepingTabDropsItsWebView() async throws {
         let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>Page</title>page")])
         defer { listener.cancel() }
@@ -118,6 +144,15 @@ struct TabMemoryTests {
 
     private func isRunning(_ process: pid_t) -> Bool {
         process > 0 && kill(process, 0) == 0
+    }
+
+    /// Set from Network's queue, read on the main actor.
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+
+        func set() { lock.withLock { value = true } }
+        var isSet: Bool { lock.withLock { value } }
     }
 }
 

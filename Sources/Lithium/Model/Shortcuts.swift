@@ -38,11 +38,15 @@ enum Shortcuts {
         }
     }
 
-    /// Whether the menu gets `event` before the page: a ⌘ or ⌃ key the user pressed that isn't
-    /// for editing text. An agent's keys are the page's (`NativeInput`).
+    /// Whether the menu gets `event` before the page: a ⌘ key the user pressed that isn't for
+    /// editing text, or one of Lithium's ⌃ keys (⌃⇥, ⌃1–9). Other ⌃ keys move the cursor in text
+    /// fields (⌃F), and macOS 15's Window ▸ Move & Resize items look like them: Fill is fn⌃F, but
+    /// `keyEquivalentModifierMask` hides fn. An agent's keys are the page's (`NativeInput`).
     static func isMenusFirst(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, !event.modifierFlags.isDisjoint(with: [.command, .control]) else { return false }
-        return !editingKeys.contains(Key(event)) && !NativeInput.isAgents(event)
+        let key = Key(event)
+        if !event.modifierFlags.contains(.command), key.characters != "\t", !("1"..."9").contains(key.characters) { return false }
+        return !editingKeys.contains(key) && !NativeInput.isAgents(event)
     }
 
     /// Runs the menu item `event` is the shortcut of, if it is the menu's to take first. False

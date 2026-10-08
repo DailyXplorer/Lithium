@@ -51,6 +51,32 @@ struct ShortcutPriorityTests {
         #expect(actions.ran.count == 5, "\(actions.ran)")
     }
 
+    /// macOS 15's Window ▸ Move & Resize items need fn (Fill is fn⌃F), which their
+    /// `keyEquivalentModifierMask` hides: ⌃F, ⌃C and ⌃← in a text field stay the page's, fn held
+    /// or not (arrow keys always come with fn). Lithium's ⌃1 and ⌃⇥ still go to the menu.
+    @Test func controlKeysOtherThanLithiumsStayThePages() throws {
+        _ = NSApplication.shared
+        let actions = Actions()
+        let left = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (title, key) in [("fill", "f"), ("center", "c"), ("left", left), ("first tab", "1"), ("next recent tab", "\t")] {
+            let item = NSMenuItem(title: title, action: #selector(Actions.run(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.function, .control]
+            item.target = actions
+            menu.addItem(item)
+        }
+        let keys: [(String, NSEvent.ModifierFlags)] = [("f", .control), ("f", [.control, .function]), ("c", .control),
+                                                       (left, [.control, .function, .numericPad])]
+        for (characters, flags) in keys {
+            #expect(!Shortcuts.performInMenu(try key(characters, flags), menu: menu), "\(flags) \(characters)")
+        }
+        #expect(actions.ran.isEmpty, "\(actions.ran)")
+        #expect(Shortcuts.performInMenu(try key("1", .control), menu: menu))
+        #expect(Shortcuts.performInMenu(try key("\t", .control), menu: menu))
+        #expect(actions.ran == ["first tab", "next recent tab"], "\(actions.ran)")
+    }
+
     /// A page's web view gives Lithium's shortcut to the menu, whatever the page listens to, and
     /// keeps an editing key for the page.
     @Test func thePagesWebViewHandsLithiumsShortcutToTheMenu() throws {

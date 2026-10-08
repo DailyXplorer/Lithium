@@ -116,7 +116,7 @@ final class AgentTab {
             if let id = ResourceLoadSpy.frameID(of: frame),
                let old = frames.first(where: { $0.key != token && ResourceLoadSpy.frameID(of: $0.value) == id })?.key {
                 frames[old] = nil
-                reports[old] = nil
+                forgetDocument(old)
             }
             frames[token] = frame
             if frames.count >= sweepAt { sweepFrames() }
@@ -187,16 +187,28 @@ final class AgentTab {
         mainDocument = token
     }
 
-    /// Refs held for the page shown, and for the pages left that Back may bring back.
-    var refCounts: (shown: Int, kept: Int) {
-        (table.refs.count, pagesLeft.reduce(0) { $0 + $1.refs.refs.count })
+    /// Refs held for the page shown, and for the pages left that Back may bring back; frame refs
+    /// held for the page shown.
+    var refCounts: (shown: Int, kept: Int, frames: Int) {
+        (table.refs.count, pagesLeft.reduce(0) { $0 + $1.refs.refs.count }, table.frameRefs.count)
     }
 
     /// A child frame answered as another document (it navigated), or not at all (it is gone).
     func childFrame(_ token: String, answeredAs current: String?) {
         guard current != token, let frame = frames.removeValue(forKey: token) else { return }
-        reports[token] = nil
+        forgetDocument(token)
         if let current, frames[current] == nil { frames[current] = frame }
+    }
+
+    /// A child document gone: its report, and its frame ref with the `<iframe>` that ref named,
+    /// so a page that keeps swapping frames (rotating ads) doesn't pile them up. The ref then
+    /// answers as any frame that is gone.
+    private func forgetDocument(_ token: String) {
+        reports[token] = nil
+        guard let ref = table.frameRefs.removeValue(forKey: token) else { return }
+        if let element = table.refs.removeValue(forKey: ref), table.frameElements[element] == ref {
+            table.frameElements[element] = nil
+        }
     }
 
     /// The frame to call for a document, nil once it is gone.

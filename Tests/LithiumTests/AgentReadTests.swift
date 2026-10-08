@@ -253,6 +253,7 @@ struct AgentReadTests {
             <title>Focus</title><input id="search" aria-label="Search"><iframe id="inner" src="/focus-child"></iframe>
             """),
         "/focus-child": (Self.html, "<input id=\"field\" aria-label=\"Inner\">"),
+        "/rootless": (Self.html, "<title>Rootless</title><script>document.removeChild(document.documentElement)</script>"),
         "/object": (Self.html, """
             <title>Object</title><style>body { margin: 0; background: white }</style>
             <object data="/secret-box" type="text/html" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"></object>
@@ -1565,6 +1566,24 @@ struct AgentReadTests {
         }
     }
 
+    /// A walk whose answer came too late still saved what it saw: the report Lithium kept from
+    /// the walk before is never taken as current, even when nothing bumped the generation (a
+    /// script setting a field's value).
+    @Test func aLateWalkLeavesNoOlderReportCurrent() async throws {
+        try await withAgent { client, base in
+            let webView = try #require(client.tab(try await open(client, base, "/focus-child"))?.webView)
+            let walk = { (arguments: [String: Any]) async throws -> FrameReport in
+                try PageProbe.decode(FrameReport.self, from: try await PageProbe.run("snapshot", arguments, in: .main, of: webView))
+            }
+            let kept = try await walk(["scope": "page", "key": "page"])
+            _ = try await webView.callAsyncJavaScript("document.getElementById('field').value = 'set by a script'", contentWorld: .page)
+            // The walk whose answer Lithium dropped.
+            _ = try await walk(["scope": "page", "key": "page"])
+            let next = try await walk(["scope": "page", "key": "page", "since": try #require(kept.gen), "of": kept.token])
+            #expect(next.unchanged != true)
+        }
+    }
+
     /// The main frame's answer from the page it left, coming after the next page said hello,
     /// leaves the next page and its frames where they are.
     @Test func aLateAnswerOfThePageLeftDoesntBringItBack() async throws {
@@ -1814,6 +1833,42 @@ struct AgentReadTests {
             #expect(first.isSubset(of: state.frames.keys))
             client.hub.pageGone(named)
             #expect(state.frames.isEmpty)
+        }
+    }
+
+    /// A page that removed its root element still reads, as empty, the first time and after.
+    @Test func aPageWithoutARootElementStillReads() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/rootless")
+            for round in 0..<2 {
+                let read = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+                #expect(!read.isError, "\(round): \(read.message)")
+            }
+        }
+    }
+
+    /// The frame refs of frames swapped out go with them: a page that keeps rotating a frame
+    /// while an agent reads it doesn't pile up a ref per frame it ever showed.
+    @Test func frameRefsOfFramesTakenAwayDontPileUp() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try #require(client.tab(tab))
+            let state = try #require(client.hub.agentTab(for: named))
+            #expect(await waitUntil(10) { state.frames.count == 2 })
+            for round in 0..<8 {
+                let before = Set(state.frames.keys)
+                _ = try await named.webView.callAsyncJavaScript("""
+                    document.querySelectorAll('.swapped').forEach((frame) => frame.remove());
+                    const frame = document.createElement('iframe');
+                    frame.className = 'swapped';
+                    frame.src = '/child?new';
+                    document.body.append(frame);
+                    """, contentWorld: .page)
+                #expect(await waitUntil(10) { !Set(state.frames.keys).subtracting(before).isEmpty }, "\(round)")
+                let read = await client.call("snapshot", ["tab": .string(tab), "scope": "page"])
+                #expect(!read.isError, "\(round): \(read.message)")
+            }
+            #expect(state.refCounts.frames <= 4, "\(state.refCounts)")
         }
     }
 

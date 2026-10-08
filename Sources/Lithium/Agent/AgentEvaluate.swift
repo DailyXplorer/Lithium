@@ -1,13 +1,16 @@
 import Foundation
+import JavaScriptCore
 import WebKit
 
 /// What `agent.js` reports around an agent's script, per frame: the values of its password and
 /// card fields (any one keeps the script from running; those filled while it ran are scrubbed
-/// out of its result), whether a card field is filled or focused, whether it holds an
-/// extension's frame, and the addresses of the frames it holds.
+/// out of its result), whether one ever held a value since `agent.js` came, whether a card
+/// field is filled or focused, whether it holds an extension's frame, and the addresses of the
+/// frames it holds.
 struct GuardReport: Decodable, DocumentReport {
     let token: String
     var secrets: [String] = []
+    var filledBefore = false
     var card = false
     var manager = false
     var frames: [String] = []
@@ -69,6 +72,7 @@ extension AgentHub {
         let named = try tab(named: try arguments.string("tab"))
         let function = try arguments.string("function")
         guard function.utf8.count <= 100_000 else { throw Arguments.invalid("function must be under 100 KB.") }
+        guard Self.isOneExpression(function) else { throw Arguments.invalid("function must be one function or expression, such as () => document.title.") }
         let ref = try arguments.optionalString("ref")
         if let ref, !AgentTab.isRef(ref) { throw Arguments.invalid("ref must be a ref from snapshot, such as e9.") }
         let frameRef = try arguments.optionalString("frame")
@@ -170,6 +174,20 @@ extension AgentHub {
         return ((try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text), text, false)
     }
 
+    /// Whether `function` stays inside the brackets the runner pastes it into. Text that closes
+    /// them could declare a function (`setTimeout`, `addEventListener`), which JavaScript hoists
+    /// above the wait for the hand-over, so it would run before `agent.js`'s last check. Such
+    /// text parses inside one pair of brackets or inside two, never both.
+    nonisolated static func isOneExpression(_ function: String) -> Bool {
+        let context = JSGlobalContextCreate(nil)
+        defer { JSGlobalContextRelease(context) }
+        return ["(async () => (\n\(function)\n))", "(async () => ((\n\(function)\n)))"].allSatisfy { source in
+            let script = JSStringCreateWithCFString(source as CFString)
+            defer { JSStringRelease(script) }
+            return JSCheckScriptSyntax(context, script, nil, 1, nil)
+        }
+    }
+
     /// Scripts never run where a secret is present (design section 7.5): a value in a password or
     /// card field, or a card field in use, in any frame Lithium can read; a password manager's
     /// (an extension's) frame or a payment provider's frame, which it can't; a payment provider's
@@ -177,6 +195,11 @@ extension AgentHub {
     /// log line, which may quote one.
     private func checkNoSecrets(_ named: NamedTab, _ webView: WKWebView, frame document: String?, of target: FrameTarget, named name: String?, until deadline: ContinuousClock.Instant) async throws {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
+        // A script reaches a linked window's page too (`opener.document`, a popup's handle), whose
+        // fields no check here reads.
+        if browser?.tabs.contains(where: { $0 !== named.tab && ($0 === named.tab.scriptOpener || $0.scriptOpener === named.tab) }) == true {
+            throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts while a window it opened, or the one that opened it, is open: a script could reach that page. Use snapshot and the input tools instead.")
+        }
         let found = try await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: deadline)
         if target.info != nil, !found.reports.contains(where: { $0.1.document == document }) {
             throw AgentToolError(code: "timeout", message: "\(named.id)’s frame \(name ?? "") didn’t answer, so Lithium couldn’t check its fields. Try again.")
@@ -185,6 +208,9 @@ extension AgentHub {
         Self.callNotes?.secrets = reports.flatMap(\.secrets)
         let origins = state.frames.values.map(\.securityOrigin)
         if reports.contains(where: { !$0.secrets.isEmpty }) { throw Self.secretPresent(named) }
+        if reports.contains(where: \.filledBefore) {
+            throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts: a password or card value was entered on this page, which an earlier script may have kept. Use snapshot and the input tools instead.")
+        }
         if reports.contains(where: \.card) {
             throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts: a card field is in use on this page. Use snapshot and the input tools, which ask the user before paying.")
         }

@@ -33,6 +33,7 @@ struct AgentEvaluateTests {
             <script>document.body.append(Object.assign(document.createElement('iframe'), { src: location.protocol + '//localhost:' + location.port + '/page' }))</script>
             """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
+        "/opener": (html, "<title>Opener</title><button onclick=\"window.popup = window.open('/signin')\">Open</button>"),
     ]
 
     /// PR 10's benchmark mode, removed in PR 11: its key must change nothing.
@@ -241,15 +242,85 @@ struct AgentEvaluateTests {
         }
     }
 
+    /// A listener an allowed script leaves catches a password typed later: once the field is
+    /// empty again, the next script still doesn't run, in either world.
+    @Test func aPasswordTypedAfterAScriptRanKeepsLaterScriptsFromRunning() async throws {
+        try await withAgent { client, base in
+            for world: JSONValue in ["isolated", "page"] {
+                let id = try await open(client, base.appending(path: "signin"))
+                let listening = await evaluate(client, id, "() => { document.querySelector('#pw').addEventListener('input', (event) => { window.kept = event.target.value }) }", ["world": world])
+                #expect(!listening.isError, "\(world): \(listening.content)")
+                _ = try await client.tab(id)?.webView.callAsyncJavaScript("""
+                    const pw = document.querySelector('#pw');
+                    pw.value = '\(Self.password)';
+                    pw.dispatchEvent(new Event('input', { bubbles: true }));
+                    pw.value = '';
+                    """, contentWorld: .page)
+                let kept = await evaluate(client, id, "() => window.kept", ["world": world])
+                #expect(kept.code == "blocked", "\(world): \(kept.content)")
+                #expect(!String(decoding: kept.content.encoded(), as: UTF8.self).contains(Self.password))
+            }
+        }
+    }
+
+    /// Text that closes the wrapper the function is pasted into is refused before anything runs:
+    /// a function it declared there would be hoisted above the wait for agent.js's hand-over.
+    /// Functions and expressions, `await` and a closing line comment included, still run.
+    @Test func codeOutsideTheFunctionIsRefused() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "signin"))
+            for function in [
+                "0); document.querySelector('#pw').value = 'filled early'; (0",
+                "0); function setTimeout() { document.querySelector('#pw').value = 'filled early' } (0",
+                "0)\nfunction addEventListener() { document.querySelector('#pw').value = 'filled early' }\n(0",
+            ] {
+                let refused = await evaluate(client, id, function)
+                #expect(refused.code == "invalid_params", "\(function): \(refused.content)")
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let value = try await client.tab(id)?.webView.callAsyncJavaScript("return document.querySelector('#pw').value", contentWorld: .page) as? String
+            #expect(value == "")
+            for function in ["document.title", "await Promise.resolve(document.title)", "() => document.title // the title", "function () { return document.title }"] {
+                let ran = await evaluate(client, id, function)
+                #expect(ran["result"] == "Sign in", "\(function): \(ran.content)")
+            }
+        }
+    }
+
+    /// A popup and the page that opened it reach each other's documents (`opener`, the handle
+    /// `window.open` returned), which no check reads: neither runs scripts while both are open.
+    @Test func neitherAPopupNorItsOpenerRunsScripts() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "opener"))
+            var button: String?
+            for _ in 0..<50 where button == nil {
+                let snapshot = await client.call("snapshot", ["tab": .string(id), "format": "json", "scope": "page"])
+                button = snapshot["nodes"]?.items?.first { $0["role"] == "button" && $0["name"] == "Open" }?["ref"]?.string
+                if button == nil { try await Task.sleep(for: .milliseconds(50)) }
+            }
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try #require(button))])
+            let popup = try #require(clicked["newTabs"]?.items?.first?["tab"]?.string, "\(clicked.content)")
+            for tab in [id, popup] {
+                let refused = await evaluate(client, tab, "() => 1")
+                #expect(refused.code == "blocked", "\(tab): \(refused.content)")
+            }
+            client.browser.close(try #require(client.tab(popup)))
+            let freed = await evaluate(client, id, "() => 1")
+            #expect(freed["result"] == 1, "\(freed.content)")
+        }
+    }
+
     /// A script that fills a password, then keeps the page busy past the after-run read, leaves
-    /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed.
+    /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed. The
+    /// password is split in the function, which Lithium can't mask either, so the day's log the
+    /// last test reads never holds it whole, whichever runs first.
     @Test func aResultLithiumCantCheckIsWithheld() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
             let busy = await evaluate(client, id, """
                 () => {
                   const pw = document.querySelector('#pw');
-                  pw.value = ['\(Self.password)'].join('');
+                  pw.value = ['\(Self.password.prefix(3))', '\(Self.password.dropFirst(3))'].join('');
                   setTimeout(() => { const end = Date.now() + 3000; while (Date.now() < end) {} });
                   return pw.value;
                 }
@@ -377,7 +448,7 @@ struct AgentEvaluateTests {
             let result = await evaluate(client, id, function, ["world": "page"])
             #expect(result.code == "blocked", "\(result.content)")
             let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
-            #expect(!log.contains(Self.password))
+            #expect(!log.contains(Self.password), "\(log.split(separator: "\n").filter { $0.contains(Self.password) })")
             let line = try #require(log.split(separator: "\n").last { $0.contains("\"evaluate\"") }.map { try JSONValue.decode(Data($0.utf8)) })
             let logged = try #require(line["params"]?["function"]?.string)
             #expect(logged.hasPrefix("() => '[redacted]' === document.title"), "\(logged)")

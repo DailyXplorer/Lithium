@@ -337,7 +337,13 @@ extension AgentHub {
                 throw Arguments.invalid("\(target.label) holds one line: \\n would submit its form. Use submit: true.")
             }
             ctx.state.acting?.caption = "Typing in \(target.shortName)"
+            // Each \n is a real Enter key: it asks as `press Enter` in that field does.
+            let enter = { (field: ActionTarget) -> (Delivery, describing: String) in
+                let (action, form) = field.guarded(.key(NativeKey.named["Enter"]!, []))
+                return (.keys(into: field, action, submitting: form), "press Enter in \(field.shortName)")
+            }
             var steps: [(Delivery, describing: String)] = [(.keys(into: target, .type, submitting: nil), "type into \(target.shortName)" + (submit ? " and submit its form" : ""))]
+            if text.contains("\n") { steps.append(enter(target)) }
             if submit { steps.append((.keys(into: target, .press(enter: true), submitting: target.report.form), "submit the form of \(target.shortName)")) }
             if target.report.focused != true { steps.append((.press(on: [target], .left), "click \(target.shortName)")) }
             let gate = try await hub.gate(steps, ctx)
@@ -370,6 +376,7 @@ extension AgentHub {
                         throw Arguments.invalid("Focus moved from \(target.label) to \(focused.label), which holds one line: \\n would submit its form. Use submit: true.")
                     }
                     var moved: [(Delivery, describing: String)] = [(.keys(into: focused, .type, submitting: nil), "type into \(focused.shortName)" + (submit ? " and submit its form" : ""))]
+                    if text.contains("\n") { moved.append(enter(focused)) }
                     if submit { moved.append((.keys(into: focused, .press(enter: true), submitting: focused.report.form), "submit the form of \(focused.shortName)")) }
                     _ = try await hub.gate(moved, ctx)
                     into = focused

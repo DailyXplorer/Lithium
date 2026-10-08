@@ -353,8 +353,12 @@ private struct Scrubber: View {
 
 /// Times as players show them: m:ss, or h:mm:ss past an hour.
 enum PlaybackTime {
+    /// About 115 days, longer than any real media. Pages report these numbers themselves, and a
+    /// finite one past `Int.max` would trap converting to `Int`, crashing the app.
+    static let longest: Double = 1e7
+
     static func format(_ seconds: Double) -> String {
-        let total = Int(seconds.isFinite ? max(seconds, 0) : 0)
+        let total = Int(seconds.isFinite ? min(max(seconds, 0), longest) : 0)
         let (hours, minutes, rest) = (total / 3600, total / 60 % 60, total % 60)
         return hours > 0
             ? String(format: "%d:%02d:%02d", hours, minutes, rest)

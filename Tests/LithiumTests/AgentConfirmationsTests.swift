@@ -175,6 +175,58 @@ struct AgentConfirmationsTests {
         }
     }
 
+    /// A private tab saves nothing: its calls and its download's prompt are logged, marked, but
+    /// never with the addresses, host or site it went to.
+    @Test func aPrivateTabsCallsAreLoggedWithoutItsAddresses() async throws {
+        try await withAgent { client, base in
+            let opened = await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "ephemeral": true, "wait": "load"])
+            #expect(!opened.isError, "\(opened.content)")
+            let id = try #require(opened["tab"]?.string)
+            let report = base.appending(path: "report.csv").absoluteString
+            let (allowed, _) = try await call(client, "navigate", ["tab": .string(id), "url": .string(report)], answering: .allowOnce, expecting: .download)
+            #expect(allowed["download"]?["file"] == "report.csv", "\(allowed.content)")
+
+            var entries: [JSONValue] = []
+            for _ in 0..<100 where !entries.contains(where: { $0["event"] == "confirmation" }) {
+                entries = await client.hub.log.entries(limit: 3)
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(Set(entries.compactMap { $0["tool"]?.string ?? $0["event"]?.string }) == ["tab_open", "navigate", "confirmation"])
+            for entry in entries {
+                #expect(entry["ephemeral"] == true)
+                #expect(entry["params"] == nil && entry["subject"] == nil && entry["site"] == nil)
+                #expect(entry["tab"] == ["id": .string(id)])
+                let text = String(decoding: entry.encoded(), as: UTF8.self)
+                #expect(!text.contains("127.0.0.1") && !text.contains("report.csv") && !text.contains("/one"), "\(text)")
+            }
+        }
+    }
+
+    /// A private tab's `file:` address is asked before the tab exists: its prompt is still
+    /// logged without the path.
+    @Test func aPrivateTabOpenOfAFileIsLoggedWithoutItsPath() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "agent-private-\(UUID().uuidString).html")
+        try "<title>Notes</title>".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try await withAgent { client, _ in
+            let (opened, _) = try await call(client, "tab_open", ["url": .string(file.absoluteString), "ephemeral": true, "wait": "load"], answering: .allowOnce, expecting: .file)
+            #expect(!opened.isError, "\(opened.content)")
+
+            var entries: [JSONValue] = []
+            for _ in 0..<100 where !entries.contains(where: { $0["event"] == "confirmation" }) {
+                entries = await client.hub.log.entries(limit: 2)
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(Set(entries.compactMap { $0["tool"]?.string ?? $0["event"]?.string }) == ["tab_open", "confirmation"])
+            for entry in entries {
+                #expect(entry["ephemeral"] == true)
+                #expect(entry["params"] == nil && entry["subject"] == nil)
+                let text = String(decoding: entry.encoded(), as: UTF8.self)
+                #expect(!text.contains(file.lastPathComponent), "\(text)")
+            }
+        }
+    }
+
     /// Two alike downloads during one action of the agent (a double click on a download link)
     /// each ask and are each logged: the Allow the first got never answers the second.
     @Test func eachDownloadDuringAnActionAsks() async throws {

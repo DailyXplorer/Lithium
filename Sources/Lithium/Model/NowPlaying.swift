@@ -48,8 +48,9 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             artwork = text("artwork").flatMap(Self.picture)
             isPaused = body["paused"] as? Bool ?? true
             isAudible = body["audible"] as? Bool ?? true
-            duration = number("duration").flatMap { $0 > 0 ? $0 : nil }
-            time = min(number("time") ?? 0, duration ?? .infinity)
+            // A page may claim any length: past `PlaybackTime.longest` it is none, like a stream's.
+            duration = number("duration").flatMap { 0 < $0 && $0 <= PlaybackTime.longest ? $0 : nil }
+            time = min(number("time") ?? 0, duration ?? PlaybackTime.longest)
             rate = number("rate").flatMap { $0 > 0 ? $0 : nil } ?? 1
             hasPrevious = body["previous"] as? Bool ?? false
             hasNext = body["next"] as? Bool ?? false

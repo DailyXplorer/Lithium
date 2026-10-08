@@ -30,6 +30,10 @@ final class Extensions: NSObject {
     @ObservationIgnored private(set) lazy var webstoreBridge = WebstoreBridge(extensions: self)
     @ObservationIgnored private let folder: URL
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    /// The last install or removal of each extension, which the next one waits for: both swap
+    /// its files and context across awaits, and overlapping, they left it running twice or
+    /// brought a removed one back without its files.
+    @ObservationIgnored private var changes: [String: Task<Void, Never>] = [:]
     /// Why the list couldn't be written last time: an install doesn't report success for an
     /// extension that would be gone after a relaunch.
     @ObservationIgnored private var saveError: Error?
@@ -95,6 +99,12 @@ final class Extensions: NSObject {
             do { try ditto.run() } catch { continuation.resume(throwing: error) }
         }
         guard status == 0 else { throw CocoaError(.fileReadCorruptFile) }
+        // WebKit serves an extension's files from its folder: a link in the package could lead
+        // it to any file the user can read.
+        let items = FileManager.default.enumerator(at: staging, includingPropertiesForKeys: [.isSymbolicLinkKey])
+        if items?.contains(where: { (try? ($0 as? URL)?.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true }) == true {
+            throw ChromeWebStore.PackageError.notAPackage
+        }
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: staging, to: destination)
     }
@@ -147,6 +157,8 @@ final class Extensions: NSObject {
         for pattern in webExtension.allRequestedMatchPatterns {
             context.setPermissionStatus(.grantedExplicitly, for: pattern)
         }
+        // A load that ended first (at launch, from the settings switch) is replaced, not left running.
+        if let old = contexts.removeValue(forKey: id) { try? controller.unload(old) }
         try controller.load(context)
         contexts[id] = context
     }
@@ -161,6 +173,10 @@ final class Extensions: NSObject {
     /// Runs the extension in `archive` (a ZIP) as `id`, replacing an older version. Every permission
     /// it requests is granted, so with `approved` set, one asking for more is refused.
     func install(archive: Data, id: String, approved: ChromeWebStore.Access? = nil) async throws {
+        try await serially(id) { try await self.replace(id, with: archive, approved: approved) }
+    }
+
+    private func replace(_ id: String, with archive: Data, approved: ChromeWebStore.Access?) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let package = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
         try archive.write(to: package)
@@ -202,6 +218,10 @@ final class Extensions: NSObject {
 
     /// Removes the extension and, as Chrome does, the data it stored.
     func remove(id: String) async {
+        try? await serially(id) { await self.delete(id) }
+    }
+
+    private func delete(_ id: String) async {
         if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
         installed.removeAll { $0.id == id }
         try? FileManager.default.removeItem(at: files(id))
@@ -209,6 +229,19 @@ final class Extensions: NSObject {
         let types: Set<WKWebExtension.DataType> = [.local, .session, .synchronized]
         let records = await controller.dataRecords(ofTypes: types).filter { $0.uniqueIdentifier == id }
         if !records.isEmpty { await controller.removeData(ofTypes: types, from: records) }
+    }
+
+    /// Runs `change` once the extension's earlier install or removal has ended.
+    private func serially(_ id: String, _ change: @escaping @MainActor () async throws -> Void) async throws {
+        let previous = changes[id]
+        let task = Task { @MainActor in
+            await previous?.value
+            try await change()
+        }
+        let done = Task { _ = try? await task.value }
+        changes[id] = done
+        defer { if changes[id] == done { changes[id] = nil } }
+        try await task.value
     }
 
     func setEnabled(_ enabled: Bool, id: String) async {

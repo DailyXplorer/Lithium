@@ -24,10 +24,12 @@
     for (const type of types) apply(unlisten, window, [type, note, true]);
     send();
   };
+  // A getter that throws is the page's own code at leaving too: counted as a handler.
+  const hasProperty = () => { try { return typeof window.onbeforeunload === 'function'; } catch { return true; } };
   const note = (event) => {
     if (!event.isTrusted) return;
     interacted = true;
-    if (event.type === 'input' || hasHandler || typeof window.onbeforeunload === 'function') tell();
+    if (event.type === 'input' || hasHandler || hasProperty()) tell();
   };
   for (const type of types) apply(listen, window, [type, note, true]);
 

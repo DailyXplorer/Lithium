@@ -165,4 +165,11 @@ if [ -n "$launched" ] || [ -s "$handoffs" ]; then
 else
     echo "scripts/test: no app launched since $started; no hand-off in $handoffs."
 fi
+# Tests on the real network, model or sites run only when asked (README): said, so a pass isn't
+# read as covering them.
+gated=""
+for gate in LITHIUM_NETWORK_TESTS LITHIUM_MODEL_TESTS LITHIUM_LIVE_TESTS; do
+    [ "${!gate-}" = 1 ] || gated="$gated $gate"
+done
+[ -n "$gated" ] && echo "scripts/test: skipped the tests gated by$gated (set to 1 to run them)."
 exit "$status"

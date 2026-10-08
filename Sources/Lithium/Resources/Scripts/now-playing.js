@@ -50,10 +50,14 @@
     // element's time and duration may span several tracks).
     const time = position ? positionNow() : active.currentTime;
     const duration = position ? position.duration : active.duration;
+    // The page can replace what picking and drawing the picture use (Image, the array methods):
+    // without it, the player still shows the media.
+    let picture = null;
+    try { picture = draw(artwork(metadata?.artwork)); } catch {}
     send({
       title: metadata?.title || null,
       artist: metadata?.artist || null,
-      artwork: draw(artwork(metadata?.artwork)),
+      artwork: picture,
       paused,
       // Muted while it plays, it keeps its own card but takes no player from another tab.
       audible: isAudible(active),

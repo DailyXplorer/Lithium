@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 import WebKit
@@ -71,6 +72,23 @@ struct CookieFiltersTests {
         #expect(!sources.built(manifest(["ads": ["easylist", "ubo-unbreak"], "cookies": ["ubo-cookies", "ubo-unbreak"]])))
         #expect(!sources.built(manifest(["ads": nil, "cookies": ["ubo-cookies", "easylist-cookies", "ubo-unbreak"]])))
     }
+
+    /// A list's new address or a changed token changes no group: the set built from the old
+    /// FilterSources.json is refreshed all the same.
+    @Test func aChangedSourcesFileIsNotBuiltFromTheSameSources() throws {
+        let bundled = try #require(FilterUpdater.bundled()).sources
+        let data = try Data(contentsOf: try #require(Resources.bundle.url(forResource: "FilterSources", withExtension: "json")))
+        #expect(bundled.digest == SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+
+        let groups = ["ads": ["easylist"]]
+        let sources = FilterUpdater.Sources(lists: [:], groups: groups, trueTokens: [], digest: "new")
+        func manifest(_ digest: String?) -> Manifest {
+            Manifest(updated: "2026-10-02T00:00:00Z", groups: groups.mapValues { Manifest.Group(lists: $0, webkitRules: 1) }, advancedRules: nil, sources: digest)
+        }
+        #expect(sources.built(manifest("new")))
+        #expect(!sources.built(manifest("old")))
+        #expect(!sources.built(manifest(nil)))
+    }
 }
 
 /// Filter updates from lists served in the test, without the network.
@@ -86,7 +104,7 @@ struct FilterUpdateTests {
         configuration.protocolClasses = [StubLists.self]
         let lists = Dictionary(uniqueKeysWithValues: Set(groups.values.joined()).map { ($0, url($0)) })
         return FilterUpdater(
-            sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration),
+            sources: .init(lists: lists, groups: groups, trueTokens: [], digest: "test-sources"), session: URLSession(configuration: configuration),
             bundledFilters: bundledFilters, minimumRules: minimumRules
         )
     }
@@ -253,6 +271,28 @@ struct FilterUpdateTests {
         #expect(try read("lists/flaky.txt") == goodCopy)
     }
 
+    /// An include is followed only on the list's own server: another site's, or a file on the
+    /// Mac, is skipped. The set names the FilterSources.json it was built from.
+    @Test func includesComeOnlyFromTheListsOwnServer() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let other = URL(string: "https://other-\(host)/extra.txt")!
+        StubLists.serve("||elsewhere-rule.example^", at: other)
+        StubLists.serve("||same-server-rule.example^", at: url("same"))
+        StubLists.serve("""
+            !#include \(other.absoluteString)
+            !#include file:///etc/hosts
+            !#include same.txt
+            ||own-list-rule.example^
+            """, at: url("easylist"))
+        try await updater(["ads": ["easylist"]]).update(into: destination)
+
+        let rules = try read("ads.json")
+        #expect(rules.contains("own-list-rule") && rules.contains("same-server-rule"))
+        #expect(!rules.contains("elsewhere-rule"))
+        #expect(try manifest().failedLists == nil)
+        #expect(try manifest().sources == "test-sources")
+    }
+
     /// Automatic updates after a failure wait longer each time, up to a day, instead of fetching every list each hour.
     @MainActor
     @Test func failedUpdatesAreRetriedWithABackoff() {
@@ -335,6 +375,61 @@ struct FilterUpdateTests {
         python.waitUntilExit()
         #expect(python.terminationStatus == 0)
         #expect(printed == "empty failed\nfew failed\ngood 12\nhtml failed\nportal failed\n")
+    }
+
+    /// scripts/update-filters.py reads a malformed `!#if` as false without stopping or hanging the
+    /// build, follows an include only on the list's own server, and `--check` sees a set built
+    /// from another FilterSources.json as one to build again.
+    @Test func updateScriptKeepsToItsListsAndSources() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let check = """
+            import importlib.util, json, pathlib, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            folder = pathlib.Path(sys.argv[2])
+            for condition in ["env_safari", "!env_safari", "foo()", "1/0", "9**9**9", "env_safari && ("]:
+                print(condition, script.eval_condition(condition))
+            (folder / "main.txt").write_text("!#include https://example.invalid/list.txt\\n!#include neighbour.txt\\n||main.example^\\n")
+            (folder / "neighbour.txt").write_text("||neighbour.example^\\n")
+            print(*script.expand((folder / "main.txt").as_uri(), set()))
+            built = folder / "set"
+            (built / "lists").mkdir(parents=True)
+            for name in ["ads.json", "advanced.txt", "scriptlets.txt", "lists/main.txt"]:
+                (built / name).write_text("")
+            script.GROUPS = {"ads": ["main"]}
+            for sources in [script.SOURCES_DIGEST, "older", None]:
+                manifest = {"format": script.FORMAT, "groups": {"ads": {"lists": ["main"]}}}
+                if sources:
+                    manifest["sources"] = sources
+                (built / "manifest.json").write_text(json.dumps(manifest))
+                print("complete", script.complete(built))
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.path]
+        let output = Pipe()
+        python.standardOutput = output
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == """
+            env_safari True
+            !env_safari False
+            foo() False
+            1/0 False
+            9**9**9 False
+            env_safari && ( False
+            ||neighbour.example^ ||main.example^
+            complete True
+            complete False
+            complete False
+
+            """)
     }
 
     /// scripts/update-filters.py clones and builds the converter again when its clone is of

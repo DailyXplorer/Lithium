@@ -1,4 +1,5 @@
 import ContentBlockerConverter
+import CryptoKit
 import Foundation
 
 /// Downloads the filter lists named in FilterSources.json and compiles them with AdGuard's
@@ -10,11 +11,14 @@ struct FilterUpdater: Sendable {
         let lists: [String: URL]
         let groups: [String: [String]]
         let trueTokens: Set<String>
+        /// The SHA-256 of FilterSources.json, which scripts/update-filters.py writes too: a list's
+        /// new address or a changed token changes no group, and would wait for the next update.
+        var digest: String? = nil
 
         /// Whether `manifest` was built from these groups and lists. A folder downloaded before a
         /// list was added lacks it until refreshed, however recent it is.
         func built(_ manifest: Manifest) -> Bool {
-            groups == manifest.groups.compactMapValues(\.lists)
+            groups == manifest.groups.compactMapValues(\.lists) && (digest == nil || manifest.sources == digest)
         }
     }
 
@@ -29,7 +33,8 @@ struct FilterUpdater: Sendable {
     static func bundled() -> FilterUpdater? {
         guard let url = Resources.bundle.url(forResource: "FilterSources", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let sources = try? JSONDecoder().decode(Sources.self, from: data) else { return nil }
+              var sources = try? JSONDecoder().decode(Sources.self, from: data) else { return nil }
+        sources.digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         return FilterUpdater(sources: sources)
     }
 
@@ -104,7 +109,8 @@ struct FilterUpdater: Sendable {
             groups: groups,
             advancedRules: advanced.count,
             scriptletRules: scriptlets.count,
-            failedLists: failed.isEmpty ? nil : failed
+            failedLists: failed.isEmpty ? nil : failed,
+            sources: sources.digest
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -177,7 +183,11 @@ struct FilterUpdater: Sendable {
                 continue
             } else if line.hasPrefix("!#include ") {
                 let path = line.dropFirst(10).trimmingCharacters(in: .whitespaces)
-                if let included = URL(string: path, relativeTo: url)?.absoluteURL {
+                // Only from the list's own server: an include elsewhere (another site, a file on
+                // the Mac) is skipped.
+                if let included = URL(string: path, relativeTo: url)?.absoluteURL,
+                   included.scheme?.lowercased() == url.scheme?.lowercased(),
+                   included.host()?.lowercased() == url.host()?.lowercased(), included.port == url.port {
                     lines += try await expand(included, seen: &seen)
                 }
             } else if !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[Adblock") {
@@ -258,6 +268,8 @@ struct Manifest: Codable {
     var scriptletRules: Int? = nil
     /// Lists that failed to download: their last good copy stands in, if there is one.
     var failedLists: [String]? = nil
+    /// The FilterSources.json it was built from (`FilterUpdater.Sources.digest`).
+    var sources: String? = nil
 
     var date: Date? { ISO8601DateFormatter().date(from: updated) }
 

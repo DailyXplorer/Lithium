@@ -558,6 +558,23 @@ struct NowPlayingPageTests {
         #expect(color.blueComponent > 0.9 && color.redComponent < 0.1)
     }
 
+    /// A page that took away what drawing the picture uses still reports its media.
+    @Test func reportsWithoutThePagesImage() async throws {
+        let page = try await PlayingPage("""
+            <video src="red.mp4" loop playsinline></video>
+            <script>
+              navigator.mediaSession.metadata = new MediaMetadata({ title: 'Song', artwork: [{ src: 'https://i.example/512.jpg', sizes: '512x512' }] });
+              window.Image = null;
+            </script>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('video')")
+
+        #expect(await waitUntil { page.last?.isPaused == false })
+        #expect(page.last?.title == "Song")
+        #expect(page.last?.artwork == nil)
+    }
+
     /// Spotify pauses a moment after its handler is called: the page mustn't say it still plays.
     @Test func reportsAToggleOnceThePageFollows() async throws {
         let page = try await PlayingPage("""

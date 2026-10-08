@@ -62,6 +62,19 @@ struct MarkdownReaderTests {
         #expect(webView.url?.lastPathComponent == "NOTES.md")
     }
 
+    /// A link keeps a bare `%` as it is (`100%.md`), which doesn't decode: the name is the title as written.
+    @Test func titlesAFileWithABarePercentSign() async throws {
+        let webView = try await load("# Start", named: "start.md")
+        let folder = try #require(webView.url).deletingLastPathComponent()
+        try "No heading here".write(to: folder.appending(path: "100%.md"), atomically: true, encoding: .utf8)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        _ = try await webView.evaluateJavaScript("location.href = '100%.md#a%'")
+        try await loaded.wait()
+        #expect(try await value("location.pathname", in: webView)?.hasSuffix("/100%.md") == true)
+        #expect(try await value("document.title", in: webView) == "100%.md")
+    }
+
     @Test func leavesOtherTextFilesAlone() async throws {
         let webView = try await load("# Not markdown", named: "notes.txt")
         #expect(try await value("String(document.querySelector('article'))", in: webView) == "null")

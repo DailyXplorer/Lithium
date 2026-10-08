@@ -373,7 +373,8 @@ struct AgentNetworkTests {
             #expect(byText("from the frame")?["frame"]?.string?.wholeMatch(of: /f\d+/) != nil)
             #expect(byText("plain")?["frame"] == nil)
 
-            guard case .array(let serious)? = (await client.call("console_log", ["tab": .string(id), "level": "warn"]))["messages"] else { return }
+            let filtered = await client.call("console_log", ["tab": .string(id), "level": "warn"])
+            guard case .array(let serious)? = filtered["messages"] else { Issue.record("\(filtered.content)"); return }
             #expect(Set(serious.compactMap { $0["level"]?.string }) == ["warn", "error"])
             let last = try #require(messages.last?["id"])
             #expect((await client.call("console_log", ["tab": .string(id), "since": last]))["messages"] == [])

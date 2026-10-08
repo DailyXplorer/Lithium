@@ -132,7 +132,8 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(second) })
         for _ in 0..<200 {
             browser.select(second)
-            guard await waitUntil(5, { loaded(second) }) else { continue }
+            // Not skipped: a selected tab that never loads is what this test is for.
+            guard await waitUntil(5, { loaded(second) }) else { Issue.record("the selected tab didn't load"); break }
             browser.select(first)
             try await Task.sleep(for: .microseconds(Int.random(in: 1_500...3_500)))
             browser.select(second)
@@ -677,6 +678,33 @@ struct BrowserTests {
         browser.select(typed)
         #expect(await waitUntil(10) { loaded(typed) && typed.webView.title == "Form" })
         #expect(!typed.hasUnsavedInput)
+    }
+
+    /// An `onbeforeunload` that throws when read is the page's own code at leaving: a key pressed
+    /// there counts, as with a handler.
+    @Test func aThrowingBeforeUnloadPropertyCountsAsAHandler() async throws {
+        let page = "<script>Object.defineProperty(window, 'onbeforeunload', { configurable: true, get() { throw new Error('no') } })</script><title>Canvas</title><canvas></canvas>"
+        let (listener, base) = try await LocalHTTP.serve(["/canvas": ("Content-Type: text/html", page)])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "canvas"), selecting: false)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) })
+
+        // Off screen and never ordered in: the key goes to the page as a real one.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        window.contentView = tab.webView
+        window.makeFirstResponder(tab.webView)
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let key = try #require(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: "j", charactersIgnoringModifiers: "j", isARepeat: false, keyCode: 38
+            ))
+            if type == .keyDown { tab.webView.keyDown(with: key) } else { tab.webView.keyUp(with: key) }
+        }
+        #expect(await waitUntil(10) { tab.hasUnsavedInput })
     }
 
     /// A page that retitles itself again and again writes the session once, a moment later,

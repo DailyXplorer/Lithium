@@ -389,4 +389,10 @@ verdict=passed
 [ "$app_launched" -eq 1 ] && [ "$status" -eq 0 ] && status=3
 echo "Test run with $total_tests tests in $total_suites suites $verdict after $wall seconds with $total_issues issues."
 echo "scripts/test-fast: logs in $out"
+# As scripts/test says: a pass doesn't cover the tests on the real network, model or sites.
+gated=""
+for gate in LITHIUM_NETWORK_TESTS LITHIUM_MODEL_TESTS LITHIUM_LIVE_TESTS; do
+    [ "${!gate-}" = 1 ] || gated="$gated $gate"
+done
+[ -n "$gated" ] && echo "scripts/test-fast: skipped the tests gated by$gated (set to 1 to run them)."
 exit "$status"

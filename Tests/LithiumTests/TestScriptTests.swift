@@ -73,6 +73,46 @@ struct TestScriptTests {
         #expect(alive.isEmpty, "test run and helper stopped")
     }
 
+    /// A run says which tests it skipped for want of the network, model or live-site gates, so a
+    /// pass isn't read as covering them.
+    @Test func namesTheGatedTestsItSkipped() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "test-script-\(UUID())")
+        let bin = folder.appending(path: "bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // A build and a test run that pass at once.
+        let fakes = ["swift": "#!/bin/bash\nexit 0\n", "sandbox-exec": "#!/bin/bash\nshift 2\nexec \"$@\"\n", "log": "#!/bin/bash\nexit 0\n"]
+        for (name, source) in fakes {
+            let file = bin.appending(path: name)
+            try source.write(to: file, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        }
+
+        let script = Process()
+        script.executableURL = URL(filePath: "/bin/bash")
+        script.arguments = [
+            URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/test").standardized.path,
+            "--scratch-path", folder.appending(path: "scratch").path,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = "\(bin.path):\(environment["PATH"] ?? "/usr/bin:/bin")"
+        environment["TMPDIR"] = folder.path + "/"
+        environment["LITHIUM_NETWORK_TESTS"] = nil
+        environment["LITHIUM_MODEL_TESTS"] = "0"
+        environment["LITHIUM_LIVE_TESTS"] = "1"
+        script.environment = environment
+        let output = Pipe()
+        script.standardInput = FileHandle.nullDevice
+        script.standardOutput = output
+        script.standardError = FileHandle.nullDevice
+        try script.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        script.waitUntilExit()
+
+        #expect(script.terminationStatus == 0)
+        #expect(printed.contains("scripts/test: skipped the tests gated by LITHIUM_NETWORK_TESTS LITHIUM_MODEL_TESTS (set to 1 to run them).\n"))
+    }
+
     /// Each checkout builds in a folder of its own, so a run never tests another checkout's build.
     /// A link to the old shared folder is moved; one the user made stays.
     @Test func eachCheckoutBuildsInItsOwnFolder() throws {

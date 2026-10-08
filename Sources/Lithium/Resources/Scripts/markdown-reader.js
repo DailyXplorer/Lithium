@@ -28,6 +28,8 @@
   const article = document.createElement('article');
   article.append(...parsed.body.childNodes);
   document.body.replaceChildren(article);
-  document.title = article.querySelector('h1')?.textContent.trim() || decodeURIComponent(location.pathname.split('/').pop());
-  if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+  // A bare `%` (`100%.md`, `#a%`) stays as it is in an address, and doesn't decode.
+  const decode = (text) => { try { return decodeURIComponent(text); } catch { return text; } };
+  document.title = article.querySelector('h1')?.textContent.trim() || decode(location.pathname.split('/').pop());
+  if (location.hash) document.getElementById(decode(location.hash.slice(1)))?.scrollIntoView();
 })();

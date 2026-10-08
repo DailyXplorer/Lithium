@@ -8,7 +8,7 @@ struct ExtensionsTests {
     private let id = "aabbccddeeffgghhiijjkkllmmnnoopp"
 
     /// A tiny Manifest V3 extension, zipped with its files at the root like a store package.
-    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#) throws -> Data {
+    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#, links: [String: String] = [:]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         let zip = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID()).zip")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
@@ -17,6 +17,9 @@ struct ExtensionsTests {
             try? FileManager.default.removeItem(at: zip)
         }
         try Data(manifest.utf8).write(to: source.appending(path: "manifest.json"))
+        for (name, destination) in links {
+            try FileManager.default.createSymbolicLink(atPath: source.appending(path: name).path, withDestinationPath: destination)
+        }
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         ditto.arguments = ["-c", "-k", source.path, zip.path]
@@ -58,6 +61,58 @@ struct ExtensionsTests {
 
         try await extensions.install(archive: try archive(), id: id, approved: shown)
         #expect(extensions.contexts[id] != nil)
+    }
+
+    /// A link in the package could have WebKit serve a file from anywhere on the Mac: the package
+    /// is refused, and nothing is kept.
+    @Test func aPackageWithALinkIsRefused() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        let linked = try archive(links: ["hosts.txt": "/etc/hosts"])
+
+        await #expect(throws: ChromeWebStore.PackageError.notAPackage) {
+            try await extensions.install(archive: linked, id: id)
+        }
+        #expect(extensions.contexts[id] == nil)
+        #expect(extensions.installed.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: id).path))
+    }
+
+    /// Two installs of one extension at once (the store's button pressed twice) leave it loaded once.
+    @Test(.timeLimit(.minutes(1))) func overlappingInstallsLoadItOnce() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        let package = try archive()
+        let first = Task { try await extensions.install(archive: package, id: id) }
+        let second = Task { try await extensions.install(archive: package, id: id) }
+        try await first.value
+        try await second.value
+
+        #expect(extensions.controller.extensionContexts.count == 1)
+        #expect(extensions.contexts[id].map { extensions.controller.extensionContexts.contains($0) } == true)
+        #expect(extensions.installed.count == 1)
+    }
+
+    /// Removed while an install of it is still under way, the extension stays removed.
+    @Test(.timeLimit(.minutes(1))) func removedWhileInstallingStaysRemoved() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        let package = try archive()
+        let installing = Task { try await extensions.install(archive: package, id: id) }
+        // The install writes the package before it waits for `ditto` to unpack it.
+        while (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.isEmpty != false { await Task.yield() }
+        try #require(extensions.installed.isEmpty, "the install ended before it could be removed")
+        let manifest = folder.appending(path: "\(id)/manifest.json").path
+        await extensions.remove(id: id)
+        try await installing.value
+
+        #expect(extensions.installed.isEmpty)
+        #expect(extensions.contexts[id] == nil)
+        #expect(extensions.controller.extensionContexts.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: manifest))
     }
 
     /// Earlier builds only kept the ZIP archive: the next launch unpacks it and loads the files,

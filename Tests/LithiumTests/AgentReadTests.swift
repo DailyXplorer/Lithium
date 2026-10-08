@@ -1835,6 +1835,31 @@ struct AgentReadTests {
         }
     }
 
+    /// The frame refs of frames swapped out go with them: a page that keeps rotating a frame
+    /// while an agent reads it doesn't pile up a ref per frame it ever showed.
+    @Test func frameRefsOfFramesTakenAwayDontPileUp() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try #require(client.tab(tab))
+            let state = try #require(client.hub.agentTab(for: named))
+            #expect(await waitUntil(10) { state.frames.count == 2 })
+            for round in 0..<8 {
+                let before = Set(state.frames.keys)
+                _ = try await named.webView.callAsyncJavaScript("""
+                    document.querySelectorAll('.swapped').forEach((frame) => frame.remove());
+                    const frame = document.createElement('iframe');
+                    frame.className = 'swapped';
+                    frame.src = '/child?new';
+                    document.body.append(frame);
+                    """, contentWorld: .page)
+                #expect(await waitUntil(10) { !Set(state.frames.keys).subtracting(before).isEmpty }, "\(round)")
+                let read = await client.call("snapshot", ["tab": .string(tab), "scope": "page"])
+                #expect(!read.isError, "\(round): \(read.message)")
+            }
+            #expect(state.refCounts.frames <= 4, "\(state.refCounts)")
+        }
+    }
+
     /// A text wait reads the same-origin frames too: text shown only there is present, and isn't
     /// gone while it shows. Text gone says how many frames of another origin it couldn't check.
     @Test func textWaitsReadSameOriginFrames() async throws {

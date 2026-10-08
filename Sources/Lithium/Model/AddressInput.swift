@@ -69,7 +69,9 @@ enum AddressInput {
             if scheme == "mailto" { return .address(url) }
         }
 
-        if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host() {
+        // "alice@example.com" would open example.com with "alice" as its login: an email
+        // address, like "user:password@host", is searched instead.
+        if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host(), url.user == nil, url.password == nil {
             if host == "localhost" || isIPAddress(host) {
                 return .address(url)
             }

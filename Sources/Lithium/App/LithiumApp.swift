@@ -130,15 +130,19 @@ struct BrowserCommands: Commands {
             .keyboardShortcut("p", modifiers: [.command, .option])
             .disabled(browser.videoPopout.tab == nil && !browser.videoPopout.canShowSelected)
             Divider()
-            Button("Zoom In") { zoom(by: 0.1) }
+            // ⌘= zooms in too (`Browser.isZoomInWithoutShift`).
+            Button("Zoom In") { browser.zoomSelectedTab(by: PageZoom.step) }
                 .keyboardShortcut("+")
-            Button("Zoom Out") { zoom(by: -0.1) }
+                .disabled(browser.selectedTab == nil)
+            Button("Zoom Out") { browser.zoomSelectedTab(by: -PageZoom.step) }
                 .keyboardShortcut("-")
+                .disabled(browser.selectedTab == nil)
             Button("Actual Size") {
                 guard let tab = browser.selectedTab else { return }
                 if let pdf = tab.pdf { pdf.setScale(1) } else { tab.webView.pageZoom = 1 }
             }
                 .keyboardShortcut("0")
+                .disabled(browser.selectedTab == nil)
             Divider()
             Menu("Developer") {
                 Button("Show Web Inspector") { showDeveloperTools(.inspector) }
@@ -204,13 +208,4 @@ struct BrowserCommands: Commands {
         DeveloperTools.show(panel, in: tab.webView)
     }
 
-    private func zoom(by delta: Double) {
-        guard let tab = browser.selectedTab else { return }
-        if let pdf = tab.pdf {
-            if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
-            return
-        }
-        let webView = tab.webView
-        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
-    }
 }

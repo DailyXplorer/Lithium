@@ -209,6 +209,24 @@ struct WindowKeysTests {
         #expect(first.url == page, "the tab left is untouched")
     }
 
+    /// ⌘= zooms in like Zoom In's ⌘+; the shifted key, which types "+", is left to the menu.
+    @Test func commandEqualsZoomsIn() throws {
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                                          characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 24))
+        }
+        #expect(Browser.isZoomInWithoutShift(try key("=", .command)))
+        #expect(!Browser.isZoomInWithoutShift(try key("+", [.command, .shift])))
+        #expect(!Browser.isZoomInWithoutShift(try key("=", [])))
+        #expect(!Browser.isZoomInWithoutShift(try key("=", [.command, .option])))
+
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        browser.zoomSelectedTab(by: PageZoom.step)
+        #expect(tab.webView.pageZoom == 1.1)
+    }
+
     /// The whole window, far off screen, showing one loaded tab.
     private func shownBrowser() async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()

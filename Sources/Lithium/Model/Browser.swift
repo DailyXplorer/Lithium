@@ -294,6 +294,13 @@ final class Browser {
         guard eventMonitors.isEmpty else { return }
         // Escape is caught before any text field sees it, since a focused field editor swallows it.
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if Self.isZoomInWithoutShift(event), let self {
+                return MainActor.assumeIsolated {
+                    guard !NativeInput.isAgents(event), event.window === self.window, self.selectedTab != nil else { return event }
+                    self.zoomSelectedTab(by: PageZoom.step)
+                    return nil
+                }
+            }
             // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }
             return MainActor.assumeIsolated {
@@ -310,6 +317,22 @@ final class Browser {
             return event
         }
         eventMonitors = [escape, click].compactMap { $0 }
+    }
+
+    /// ⌘=, Zoom In as most people press it: the menu's "+" takes Shift on most layouts.
+    nonisolated static func isZoomInWithoutShift(_ event: NSEvent) -> Bool {
+        event.charactersIgnoringModifiers == "=" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+    }
+
+    /// Zoom In and Zoom Out: the PDF viewer's own steps, or the page's zoom.
+    func zoomSelectedTab(by delta: Double) {
+        guard let tab = selectedTab else { return }
+        if let pdf = tab.pdf {
+            if delta > 0 { pdf.zoomIn() } else { pdf.zoomOut() }
+            return
+        }
+        let webView = tab.webView
+        webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
     }
 
     /// Ends text editing when a click lands outside the field being edited. The click then goes

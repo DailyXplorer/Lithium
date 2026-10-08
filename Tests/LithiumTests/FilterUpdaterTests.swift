@@ -185,6 +185,25 @@ struct FilterUpdateTests {
         #expect(rules.contains("bundled-flaky") && !rules.contains("downloaded-flaky"))
     }
 
+    /// A staging folder an update interrupted by quitting left behind goes with the next update,
+    /// once untouched for a day; one of an update under way stays.
+    @Test func anAbandonedStagingFolderIsRemoved() async throws {
+        let parent = FileManager.default.temporaryDirectory.appending(path: "filters-parent-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let abandoned = parent.appending(path: ".filters-\(UUID().uuidString)")
+        let current = parent.appending(path: ".filters-\(UUID().uuidString)")
+        for folder in [abandoned, current] {
+            try FileManager.default.createDirectory(at: folder.appending(path: "lists"), withIntermediateDirectories: true)
+        }
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 24 * 60 * 60)], ofItemAtPath: abandoned.path)
+
+        StubLists.serve("||steady.example^", at: url("steady"))
+        try await updater(["ads": ["steady"]]).update(into: parent.appending(path: "filters"))
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(FileManager.default.fileExists(atPath: current.path))
+        #expect(FileManager.default.fileExists(atPath: parent.appending(path: "filters/manifest.json").path))
+    }
+
     /// A set dated in the future (built with the clock set ahead) neither outranks the sets built
     /// after it nor stops the automatic updates.
     @MainActor

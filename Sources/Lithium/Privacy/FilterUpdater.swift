@@ -42,6 +42,7 @@ struct FilterUpdater: Sendable {
     /// fails, or a failing one has no copy at all, nothing is written and the error thrown, so the
     /// current set keeps that list's rules.
     func update(into destination: URL) async throws {
+        Self.removeAbandonedStaging(beside: destination)
         var downloaded: [String: [String]] = [:]
         var failed: [String] = []
         var lastError: Error?
@@ -113,6 +114,18 @@ struct FilterUpdater: Sendable {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
         } else {
             try FileManager.default.moveItem(at: staging, to: destination)
+        }
+    }
+
+    /// Quitting during an update ends it before its `defer` removes the staging folder. One left
+    /// untouched for a day is such an update's, not one under way, and goes, as AdvancedBlocking's do.
+    static func removeAbandonedStaging(beside destination: URL) {
+        let folder = destination.deletingLastPathComponent()
+        let others = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for other in others where other.lastPathComponent.hasPrefix(".filters-") {
+            guard let modified = try? other.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  Date().timeIntervalSince(modified) >= 24 * 60 * 60 else { continue }
+            try? FileManager.default.removeItem(at: other)
         }
     }
 

@@ -149,6 +149,57 @@ struct ContextMenuDownloadTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["logo.svg"])
     }
 
+    /// Cancelled from the list, a download replacing a file takes its hidden file with it, even
+    /// if WebKit never reports the end: a later download could otherwise be swapped for it.
+    @Test func cancellingADownloadThatReplacesAFileRemovesItsHiddenFile() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>Page</p>")])
+        defer { listener.cancel() }
+        let slow = try await serveSlowly("logo.svg", Data(repeating: 0x20, count: 2_000))
+        defer { slow.listener.cancel() }
+        let (folder, file) = try existingFile()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        Downloads.shared.chooseDestination = { _, _ in file }
+        defer { Downloads.shared.chooseDestination = { _, _ in nil } }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { !tab.webView.isLoading && tab.webView.url == base })
+        let contents = { (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] }
+
+        let item = try await downloadFromMenu(slow.url.appending(path: "logo.svg"), in: tab)
+        #expect(await waitUntil(30) { contents().count == 2 }, "the download is written to a hidden file")
+        item.cancel()
+        #expect(item.state == .cancelled)
+        #expect(contents() == ["logo.svg"])
+        // Past the rest of the body, which would have finished the download.
+        try await Task.sleep(for: .seconds(3))
+        #expect(item.state == .cancelled)
+        #expect(contents() == ["logo.svg"])
+        #expect(try String(contentsOf: file, encoding: .utf8) == "original")
+    }
+
+    /// Sizes come from the servers: two near Int64.max add up past it.
+    @Test func overallProgressSurvivesHugeSizes() async throws {
+        let silent = try await serve { _ in }
+        defer { silent.listener.cancel() }
+        let downloads = Downloads()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        var started: [WKDownload] = []
+        for path in ["one", "two"] {
+            let download = await webView.startDownload(using: URLRequest(url: silent.url.appending(path: path)))
+            downloads.track(download)
+            started.append(download)
+        }
+        defer { downloads.items.forEach { $0.cancel() } }
+        for download in started {
+            download.progress.totalUnitCount = .max
+            download.progress.completedUnitCount = .max / 2
+        }
+        #expect(await waitUntil(10) { downloads.active.allSatisfy { $0.totalBytes == .max } })
+        let fraction = try #require(downloads.overallFraction)
+        #expect(abs(fraction - 0.5) < 0.01)
+    }
+
     /// A menu download that ends before WebKit asks where to save leaves nothing that would make
     /// a later ordinary download ask.
     @Test func aMenuDownloadFailingBeforeThePanelLeavesNothingBehind() async throws {

@@ -258,11 +258,16 @@ final class Favicons {
         }
     }
 
-    private static func size(sizes: String, rel: String) -> Int {
+    /// The page writes `sizes`: a negative or huge value would overflow the distance to 64 px
+    /// when candidates are sorted, so only positive sizes count, and none past `largestSide`.
+    nonisolated static func size(sizes: String, rel: String) -> Int {
         if sizes.lowercased() == "any" { return 64 }
         let largest = sizes.split(separator: " ")
             .compactMap { $0.lowercased().split(separator: "x").first.flatMap { Int($0) } }
+            .filter { $0 > 0 }
             .max()
-        return largest ?? (rel.contains("apple-touch-icon") ? 180 : 32)
+        return largest.map { min($0, largestSide) } ?? (rel.contains("apple-touch-icon") ? 180 : 32)
     }
+
+    nonisolated private static let largestSide = 4096
 }

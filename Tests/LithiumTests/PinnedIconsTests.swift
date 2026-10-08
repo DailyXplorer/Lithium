@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Network
 import Testing
+import WebKit
 @testable import Lithium
 
 /// Pinned tabs' icons follow their pages: a swapped `<link rel=icon>` while awake, a new day
@@ -222,6 +223,36 @@ struct PinnedIcons {
         #expect(huge.count < Favicons.largestIcon)
         #expect(Favicons.normalized(huge) == nil)
         #expect(Favicons.normalized(try gray(64)) != nil)
+    }
+
+    /// A page writes `sizes` itself: a negative or huge one counts as none or as the largest
+    /// icon, never a size whose distance to 64 px overflows.
+    @Test func sizesAPageWritesAreKeptInRange() {
+        #expect(Favicons.size(sizes: "-9223372036854775808x-9223372036854775808", rel: "icon") == 32)
+        #expect(Favicons.size(sizes: "-1x-1", rel: "apple-touch-icon") == 180)
+        #expect(Favicons.size(sizes: "0x0", rel: "icon") == 32)
+        #expect(Favicons.size(sizes: "9223372036854775807x9223372036854775807", rel: "icon") == 4096)
+        #expect(Favicons.size(sizes: "-5x-5 16x16", rel: "icon") == 16)
+        #expect(Favicons.size(sizes: "16x16 192x192", rel: "icon") == 192)
+        #expect(Favicons.size(sizes: "any", rel: "icon") == 64)
+    }
+
+    /// Such a page used to crash Lithium as soon as it loaded, when its icon candidates were sorted.
+    @Test func aPageWithHostileIconSizesStillGetsItsIcon() async throws {
+        let page = """
+            <!doctype html><title>Sizes</title>
+            <link rel="icon" sizes="-9223372036854775807x-9223372036854775807" href="/red.png">
+            <link rel="icon" sizes="9223372036854775807x9223372036854775807" href="/blue.png">
+            """
+        let (server, base) = try await Self.serveIcons(page: page)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let found = await Self.favicons().favicon(for: webView)
+        let icons = [try #require(Favicons.normalized(Self.red)), try #require(Favicons.normalized(Self.blue))]
+        #expect(found.map(icons.contains) == true)
     }
 
     /// A page animating its icon gets it fetched, and the favorite saved, at most every

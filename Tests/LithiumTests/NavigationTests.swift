@@ -225,6 +225,34 @@ struct NavigationTests {
         #expect(await bridgeAnswers(in: tab))
     }
 
+    /// A load of another site that never shows a page (a 204 here; Stop or a download alike) gives
+    /// the shown page back its own protections: its next frames once farbled with the target's seed.
+    @Test func aLoadThatNeverShowsLeavesThePageItsOwnProtections() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data("<title>Shown</title>".utf8)),
+            "/empty": ("HTTP/1.1 204 No Content\r\nContent-Type: text/plain", Data()),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "Shown" && !tab.webView.isLoading })
+        let controller = tab.webView.configuration.userContentController
+        let farbling = { (url: URL) in browser.privacy.scripts(true, for: url).first?.source }
+        let shown = try #require(farbling(base))
+        let other = try #require(URL(string: "http://localhost:\(base.port ?? 0)/empty"))
+        #expect(farbling(other) != shown)
+        #expect(controller.userScripts.contains { $0.source == shown })
+
+        _ = try await tab.webView.evaluateJavaScript("location.href = '\(other.absoluteString)'; 0")
+        #expect(await waitUntil(15) { requests["/empty"] == 1 && !tab.webView.isLoading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(controller.userScripts.contains { $0.source == shown })
+        #expect(!controller.userScripts.contains { $0.source == farbling(other) })
+        #expect(tab.webView.url == base)
+    }
+
     /// Closing the selected tab tells extensions (`chrome.tabs.onActivated`) which tab took over.
     @Test func closingTheSelectedTabTellsExtensionsWhichIsActive() async throws {
         let id = "ppoonnmmllkkjjiihhggffeeddccbbaa"

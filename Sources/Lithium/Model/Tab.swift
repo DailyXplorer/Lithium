@@ -128,6 +128,11 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
+    /// The address the page's scripts were last set up for (nil: none, as on Lithium's pages), and
+    /// what it was when the shown page committed: see `restoreProtections`.
+    @ObservationIgnored private var protectedURL: URL?
+    @ObservationIgnored private var shownProtectedURL: URL?
+    @ObservationIgnored private var protectionRequests = 0
     /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
@@ -241,6 +246,7 @@ final class Tab: NSObject, Identifiable {
 
     private func attach(_ webView: WKWebView) {
         hasShownPage = false
+        shownProtectedURL = nil
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsMagnification = true
@@ -522,6 +528,7 @@ final class Tab: NSObject, Identifiable {
         hasWebstoreBridge = false
         isAsleep = true
         appliedProtections = nil
+        protectedURL = nil
         canGoBack = false
         canGoForward = false
         isLoading = false
@@ -601,10 +608,14 @@ final class Tab: NSObject, Identifiable {
         browser.extensions.didChange(properties, of: self)
     }
 
-    private func applyProtections(for url: URL) async {
+    /// `stillWanted`, checked once the lists are ready, can call it off.
+    private func applyProtections(for url: URL, if stillWanted: (() -> Bool)? = nil) async {
         guard let privacy = browser?.privacy else { return }
+        protectionRequests += 1
         await privacy.waitUntilReady()
         await browser?.extensions.waitUntilLoaded()
+        if let stillWanted, !stillWanted() { return }
+        protectedURL = url
         let enabled = privacy.isEnabled(for: url, privateSession: privateSession)
         let controller = webView.configuration.userContentController
         if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
@@ -625,6 +636,31 @@ final class Tab: NSObject, Identifiable {
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, isPrivate: isEphemeral, to: controller)
         browser?.agent?.install(on: controller, for: self)
+    }
+
+    /// A main-frame load that ends without showing its page (Stop, a failure, a 204, a download, a
+    /// refused address) left the shown page with the scripts set up for its target: a frame the
+    /// page adds next would farble with that site's seed and get its rules. They go back to the
+    /// shown page's, unless another load set up its own meanwhile.
+    private func restoreProtections() {
+        guard hasShownPage, protectedURL != shownProtectedURL else { return }
+        let shown = shownProtectedURL, stale = protectedURL, requests = protectionRequests
+        // Once WebKit is done with the load: nothing else set up scripts since, and no load is on its way.
+        let untouched = { [weak self] (started: Int) in
+            guard let self else { return false }
+            return protectionRequests == requests + started && protectedURL == stale && !webView.isLoading
+        }
+        Task {
+            guard let shown else {
+                // Lithium's page, which had none.
+                guard untouched(0) else { return }
+                webView.configuration.userContentController.removeAllUserScripts()
+                browser?.agent?.removeConsole(from: webView.configuration.userContentController)
+                protectedURL = nil
+                return
+            }
+            await applyProtections(for: shown) { untouched(1) }
+        }
     }
 
     /// Adds the advanced rules for a frame's own site (an embed, an ad, a consent prompt) before
@@ -660,6 +696,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
+        restoreProtections()
         lastUnshownLoad = load
         unshownLoads += 1
         browser?.agent?.loadEndedUnshown(in: self)
@@ -885,6 +922,7 @@ extension Tab: WKNavigationDelegate {
             trustedInternalURL = nil
             webView.configuration.userContentController.removeAllUserScripts()
             browser?.agent?.removeConsole(from: webView.configuration.userContentController)
+            protectedURL = nil
             setWebstoreBridge(false)
             // Before the page's first script asks for it; taken away only once another page commits.
             setInternalBridge(true)
@@ -1009,6 +1047,7 @@ extension Tab: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         hasShownPage = true
+        shownProtectedURL = protectedURL
         awaitCommit(false)
         // A new document: its script tells again, a page back from the cache too.
         hasUnsavedInput = false
@@ -1085,6 +1124,7 @@ extension Tab: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         // Whatever the error, cancellations included: the old page was only on its way out.
         guard !goToAddressAfterWaking() else { return }
+        restoreProtections()
         // A load given up with no load after it ends here, as one that became a download does.
         if Self.isDropped(error), !webView.isLoading, unshownLoads == unshownAtStart { endedUnshown(.dropped) }
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)

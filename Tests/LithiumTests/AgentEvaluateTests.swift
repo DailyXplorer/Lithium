@@ -40,7 +40,6 @@ struct AgentEvaluateTests {
     private static let oldBenchmarkKey = "agentScriptsAutoAllowUntil"
 
     private func withAgent(scripts: Bool = true, _ body: (Client, URL) async throws -> Void) async throws {
-        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         UserDefaults.standard.set(scripts, forKey: Preference.agentRunScripts)
         defer {
             UserDefaults.standard.removeObject(forKey: Preference.agentRunScripts)
@@ -51,12 +50,19 @@ struct AgentEvaluateTests {
         // A log of the test's own: the shared day file also gets other tests' lines, and their clears.
         let folder = FileManager.default.temporaryDirectory.appending(path: "agent-evaluate-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
+        // Cleared right before `Browser()`, with no await between: another suite can turn the shared
+        // switch back on, and `init` would then start a hub on the shared folder, so ours is ignored.
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         let browser = Browser()
         await browser.privacy.waitUntilReady()
         await browser.extensions.waitUntilLoaded()
         await browser.setAgentAccess(true, folder: folder)
         var failure: (any Error)?
-        do { try await body(try await Client(browser: browser), base) } catch { failure = error }
+        do {
+            let client = try await Client(browser: browser)
+            try #require(client.hub.folder == folder)
+            try await body(client, base)
+        } catch { failure = error }
         browser.tabs.forEach(browser.close)
         await browser.setAgentAccess(false)
         if let failure { throw failure }

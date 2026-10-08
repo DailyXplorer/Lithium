@@ -79,6 +79,8 @@
   const preventDefault = member(Event.prototype, 'preventDefault').value;
   const eventTarget = member(Event.prototype, 'target').get;
   const elementName = member(Element.prototype, 'localName').get;
+  const firstElementChild = member(Element.prototype, 'firstElementChild').get;
+  const querySelector = member(Element.prototype, 'querySelector').value;
   const addEventListener = member(EventTarget.prototype, 'addEventListener').value;
   const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
   const nodeType = member(Node.prototype, 'nodeType').get;
@@ -480,15 +482,16 @@
       for (let i = 0; i < count; i++) protectFrame(found[i]);
     };
     // Runs on every DOM insertion of the page, so it does as little as it can: most nodes
-    // are elements without children, which cannot hold a frame.
+    // are elements without children, which cannot hold a frame. Through the saved members, as
+    // everywhere: a frame given an own `nodeType` of 3 once went in unprotected.
     const protectInserted = (node) => {
-      if (node === null || typeof node !== 'object' || node.nodeType !== 1) return;
-      const name = node.localName;
+      if (node === null || typeof node !== 'object' || read(nodeType, node) !== 1) return;
+      const name = read(elementName, node);
       if (name === 'iframe' || name === 'frame') protectFrame(node);
-      else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) protectAll(framesIn(node));
+      else if (read(firstElementChild, node) && apply(querySelector, node, ['iframe, frame']) !== null) protectAll(framesIn(node));
     };
     // A fragment hands its children over on insertion, so its frames are listed before.
-    const framesBefore = (node) => node !== null && typeof node === 'object' && node.nodeType === 11 ? framesIn(node) : null;
+    const framesBefore = (node) => node !== null && typeof node === 'object' && read(nodeType, node) === 11 ? framesIn(node) : null;
     const protectAfter = (fragmentFrames, node) => {
       if (fragmentFrames === null) protectInserted(node); else protectAll(fragmentFrames);
     };
@@ -697,8 +700,6 @@
     const disconnect = MutationObserver.prototype.disconnect;
     const takeRecords = MutationObserver.prototype.takeRecords;
     const addedNodes = member(MutationRecord.prototype, 'addedNodes').get;
-    const localName = member(Element.prototype, 'localName').get;
-    const firstElementChild = member(Element.prototype, 'firstElementChild').get;
     const protectFrame = (frame) => {
       try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
     };
@@ -714,7 +715,7 @@
           const node = added[j];
           if (read(nodeType, node) !== 1) continue;
           if (pass === 0) { apply(weakSetAdd, batch, [node]); continue; }
-          const name = read(localName, node);
+          const name = read(elementName, node);
           if (name === 'iframe' || name === 'frame') protectFrame(node);
           else if (read(firstElementChild, node) && !apply(weakSetHas, batch, [read(parentNode, node)])) {
             const found = apply(queryAll[1], node, ['iframe, frame']);

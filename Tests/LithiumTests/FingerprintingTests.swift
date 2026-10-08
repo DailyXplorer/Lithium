@@ -549,6 +549,42 @@ struct FingerprintingTests {
         }
     }
 
+    /// The insertion hooks read nodes through the members saved at load: a frame, a fragment or a
+    /// box with own `nodeType`, `localName` or `querySelector` values doesn't go in unprotected.
+    /// Srcdoc frames, which are still blank windows when the page reaches them.
+    @Test func framesWithOwnNodeMembersAreProtected() async throws {
+        let probe = """
+            (() => {
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const last = () => hash(frames[frames.length - 1]);
+              const frame = () => { const f = document.createElement('iframe'); f.srcdoc = '<p>frame</p>'; return f; };
+              const own = (node, name, value) => { Object.defineProperty(node, name, { value }); return node; };
+              const routes = { page: hash(window) };
+              document.body.appendChild(own(frame(), 'nodeType', 3)); routes.nodeType = last();
+              document.body.append(own(own(frame(), 'localName', 'div'), 'firstElementChild', null)); routes.localName = last();
+              const box = document.createElement('div'); box.appendChild(frame());
+              document.body.appendChild(own(box, 'querySelector', () => null)); routes.querySelector = last();
+              const fragment = document.createDocumentFragment(); fragment.appendChild(frame());
+              document.body.appendChild(own(fragment, 'nodeType', 1)); routes.fragment = last();
+              return JSON.stringify(routes);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare.count == 5)
+        #expect(Set(bare.values).count == 1, "\(bare)")
+        #expect(protected["page"] != bare["page"])
+        for (route, value) in protected {
+            #expect(value == protected["page"], "\(route)")
+        }
+    }
+
     /// Any realm's `toString` sees through the replacements of every other: of a frame the hooks
     /// protected, and of one WebKit's injection protected with a copy of the script of its own.
     /// A blank frame that keeps its realm when its page loads gets the noise once, not twice.

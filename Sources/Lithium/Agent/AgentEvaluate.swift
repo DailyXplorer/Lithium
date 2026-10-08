@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 import WebKit
 
 /// What `agent.js` reports around an agent's script, per frame: the values of its password and
@@ -71,6 +72,7 @@ extension AgentHub {
         let named = try tab(named: try arguments.string("tab"))
         let function = try arguments.string("function")
         guard function.utf8.count <= 100_000 else { throw Arguments.invalid("function must be under 100 KB.") }
+        guard Self.isOneExpression(function) else { throw Arguments.invalid("function must be one function or expression, such as () => document.title.") }
         let ref = try arguments.optionalString("ref")
         if let ref, !AgentTab.isRef(ref) { throw Arguments.invalid("ref must be a ref from snapshot, such as e9.") }
         let frameRef = try arguments.optionalString("frame")
@@ -170,6 +172,20 @@ extension AgentHub {
         }
         // A number the card rule replaced is no longer JSON: the text stands.
         return ((try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text), text, false)
+    }
+
+    /// Whether `function` stays inside the brackets the runner pastes it into. Text that closes
+    /// them could declare a function (`setTimeout`, `addEventListener`), which JavaScript hoists
+    /// above the wait for the hand-over, so it would run before `agent.js`'s last check. Such
+    /// text parses inside one pair of brackets or inside two, never both.
+    nonisolated static func isOneExpression(_ function: String) -> Bool {
+        let context = JSGlobalContextCreate(nil)
+        defer { JSGlobalContextRelease(context) }
+        return ["(async () => (\n\(function)\n))", "(async () => ((\n\(function)\n)))"].allSatisfy { source in
+            let script = JSStringCreateWithCFString(source as CFString)
+            defer { JSStringRelease(script) }
+            return JSCheckScriptSyntax(context, script, nil, 1, nil)
+        }
     }
 
     /// Scripts never run where a secret is present (design section 7.5): a value in a password or

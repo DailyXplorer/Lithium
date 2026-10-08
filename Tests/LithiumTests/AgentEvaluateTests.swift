@@ -263,13 +263,27 @@ struct AgentEvaluateTests {
         }
     }
 
-    /// Text that closes the wrapper the function is pasted into runs only once agent.js handed
-    /// the frame over: here, filling a password before that would have blocked the hand-over.
-    @Test func codeOutsideTheFunctionRunsOnlyAfterTheHandOver() async throws {
+    /// Text that closes the wrapper the function is pasted into is refused before anything runs:
+    /// a function it declared there would be hoisted above the wait for agent.js's hand-over.
+    /// Functions and expressions, `await` and a closing line comment included, still run.
+    @Test func codeOutsideTheFunctionIsRefused() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
-            let result = await evaluate(client, id, "0); document.querySelector('#pw').value = 'filled early'; (0")
-            #expect(result["result"] == 0, "\(result.content)")
+            for function in [
+                "0); document.querySelector('#pw').value = 'filled early'; (0",
+                "0); function setTimeout() { document.querySelector('#pw').value = 'filled early' } (0",
+                "0)\nfunction addEventListener() { document.querySelector('#pw').value = 'filled early' }\n(0",
+            ] {
+                let refused = await evaluate(client, id, function)
+                #expect(refused.code == "invalid_params", "\(function): \(refused.content)")
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let value = try await client.tab(id)?.webView.callAsyncJavaScript("return document.querySelector('#pw').value", contentWorld: .page) as? String
+            #expect(value == "")
+            for function in ["document.title", "await Promise.resolve(document.title)", "() => document.title // the title", "function () { return document.title }"] {
+                let ran = await evaluate(client, id, function)
+                #expect(ran["result"] == "Sign in", "\(function): \(ran.content)")
+            }
         }
     }
 

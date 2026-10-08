@@ -160,7 +160,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "updateFilters":
             browser.privacy.updateFiltersNow()
         case "enableProtections":
-            if let host = value as? String { browser.privacy.setEnabled(true, host: host) }
+            if let host = value as? String { browser.setProtections(true, host: host) }
         case "setPermission":
             if let entry = value as? [String: String], let host = entry["host"],
                let kind = entry["kind"].flatMap(PermissionKind.init(rawValue:)) {

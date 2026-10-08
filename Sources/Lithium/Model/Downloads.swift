@@ -21,6 +21,7 @@ final class DownloadItem: Identifiable {
     private(set) var totalBytes: Int64 = -1
 
     @ObservationIgnored fileprivate weak var download: WKDownload?
+    @ObservationIgnored fileprivate weak var list: Downloads?
     /// Asks where to save before it starts, as a download from the page menu does.
     @ObservationIgnored fileprivate let asksWhere: Bool
     @ObservationIgnored private var observation: NSKeyValueObservation?
@@ -66,7 +67,10 @@ final class DownloadItem: Identifiable {
     }
 
     func cancel() {
-        download?.cancel()
+        if let download {
+            download.cancel()
+            list?.didCancel(download)
+        }
         finish(.cancelled)
     }
 }
@@ -101,16 +105,22 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Combined progress of running downloads, when their sizes are known.
     var overallFraction: Double? {
         let running = active
-        let total = running.reduce(Int64(0)) { $0 + max(0, $1.totalBytes) }
+        // In Double: the sizes come from the servers' Content-Length, and two near Int64.max
+        // would overflow an Int64 sum.
+        let total = running.reduce(0.0) { $0 + Double(max(0, $1.totalBytes)) }
         guard !running.isEmpty, total > 0 else { return nil }
-        return Double(running.reduce(Int64(0)) { $0 + $1.completedBytes }) / Double(total)
+        return running.reduce(0.0) { $0 + Double(max(0, $1.completedBytes)) } / total
     }
 
     func track(_ download: WKDownload, askingWhere: Bool = false) {
         download.delegate = self
         let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download", asksWhere: askingWhere)
+        item.list = self
         byDownload[ObjectIdentifier(download)] = item
         destinations[ObjectIdentifier(download)] = nil
+        // Left by a cancelled download whose address this one reuses, it would be swapped in
+        // for this one's file when it finishes.
+        partials[ObjectIdentifier(download)] = nil
         items.insert(item, at: 0)
     }
 
@@ -234,6 +244,12 @@ final class Downloads: NSObject, WKDownloadDelegate {
             // Makes the Downloads stack bounce in the Dock, like Safari.
             DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: destination.path)
         }
+    }
+
+    /// WebKit may never report a download cancelled from the list: the hidden file it was
+    /// writing to goes now, with its entry.
+    fileprivate func didCancel(_ download: WKDownload) {
+        if let partial = partials.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: partial) }
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {

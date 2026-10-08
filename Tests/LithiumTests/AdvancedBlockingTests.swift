@@ -151,6 +151,25 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: URL(string: "https://music.youtube.com/")!) == nil)
     }
 
+    /// uBO's bare `site#@#+js()` turns off every scriptlet on the site, generic ones too, and no other site's.
+    @Test func aBareExceptionTurnsOffEveryScriptletOnTheSite() async throws {
+        let filters = """
+            youtube.com##+js(set, lithiumProbe, 1)
+            ##+js(set, lithiumGeneric, 1)
+            example.org##+js(set, lithiumOther, 1)
+            music.youtube.com#@#+js()
+            """
+        let ubo = try #require(UBOScriptlets.bundled)
+        let rules = ubo.adguardRules(fromUBO: filters.split(separator: "\n").map(String.init))
+        #expect(rules.filter { $0.hasPrefix("music.youtube.com#@%#") }.count == 2, "\(rules)")
+
+        let blocking = try await makeBlocking(uboScriptlets: filters)
+        let watch = try #require(blocking.script(for: URL(string: "https://www.youtube.com/watch?v=x")!))
+        #expect(watch.contains(#"setConstant("lithiumProbe","1")"#) && watch.contains(#"setConstant("lithiumGeneric","1")"#))
+        #expect(blocking.script(for: URL(string: "https://music.youtube.com/")!) == nil)
+        #expect(try #require(blocking.script(for: URL(string: "https://example.org/")!)).contains(#"setConstant("lithiumOther","1")"#))
+    }
+
     /// What YouTube does on every in-app navigation: fetch /youtubei/v1/player, whose answer carries the ads.
     @Test func uboScriptletsStripAdsFromYouTubePlayerResponses() async throws {
         let blocking = try await makeBlocking(uboScriptlets: """

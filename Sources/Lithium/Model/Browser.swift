@@ -259,10 +259,19 @@ final class Browser {
         }
     }
 
-    /// Reloads the page so its content blockers and scripts match the new setting.
     func setProtections(_ enabled: Bool, for tab: Tab?) {
-        privacy.setEnabled(enabled, for: tab?.url, privateSession: tab?.privateSession)
-        navigate(tab, .reload)
+        guard let tab, let host = Privacy.siteHost(tab.url) else { return }
+        guard let session = tab.privateSession else { return setProtections(enabled, host: host) }
+        // A private tab's choice holds for its private session only, and so do the reloads.
+        privacy.setEnabled(enabled, for: tab.url, privateSession: session)
+        tabs.filter { !$0.isAsleep && $0.privateSession == session && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
+    }
+
+    /// Reloads every open page of the site, not just the one the user changed it from, so their
+    /// content blockers and scripts match the new setting. Sleeping tabs get it when they wake.
+    func setProtections(_ enabled: Bool, host: String) {
+        privacy.setEnabled(enabled, host: host)
+        tabs.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
 
     /// Reuses a tab already showing that internal page, moving it to the requested section.

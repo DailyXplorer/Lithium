@@ -19,7 +19,7 @@ While iterating, run `scripts/test-fast` (same arguments, plus `--jobs N` and `-
 
 On the first build, `scripts/update-filters.py` downloads the filter lists and converts them (into `Sources/Lithium/Resources/Filters`, not versioned). Run it again to refresh the lists, then rebuild.
 
-`.build` is a symlink to `~/Library/Caches/Lithium/build`: iCloud-synced folders tag build products with extended attributes that break code signing.
+`.build` is a symlink to a folder of `~/Library/Caches/Lithium/builds` named after the checkout: iCloud-synced folders tag build products with extended attributes that break code signing, and two checkouts sharing one folder would test or ship each other's build.
 
 ## Protections
 

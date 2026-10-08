@@ -185,6 +185,22 @@ struct FingerprintingTests {
         #expect(script("https://www.example.co.uk/") == script("https://shop.example.co.uk/"))
     }
 
+    /// A top-level `blob:` page farbles as its creator's site: every site's blob pages once shared
+    /// the seed of "", which linked them. An opaque creator's gets a seed of its own each time.
+    @Test func blobPagesTakeTheirCreatorsSite() {
+        let site = { (address: String) in Privacy.farblingSite(URL(string: address)!) }
+        #expect(site("blob:https://www.example.co.uk/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c") == "example.co.uk")
+        #expect(site("BLOB:http://10.0.0.1:8080/6f1c0a52") == "10.0.0.1")
+        let opaque = site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c")
+        #expect(!opaque.isEmpty)
+        #expect(opaque != site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c"))
+
+        let privacy = Privacy()
+        let script = { (address: String) in privacy.scripts(true, for: URL(string: address)!).first?.source }
+        #expect(script("blob:https://alice.example/1") == script("https://alice.example/"))
+        #expect(script("blob:https://alice.example/1") != script("blob:https://bob.example/1"))
+    }
+
     /// Private tabs farble with keys of their own: the same site's canvas reads differently there.
     @Test func privateTabsGetTheirOwnKeys() async throws {
         let privacy = Privacy()
@@ -407,6 +423,99 @@ struct FingerprintingTests {
         #expect(protected["errors"] == bare["errors"])
     }
 
+    /// A read into a pack buffer gets the noise a read into an array does, whatever binding the page
+    /// reads the buffer back through, and only where the read wrote; a read past the size limit
+    /// still gets noise on a share of its pixels.
+    @Test func readPixelsNoiseCoversPackBuffersAndLargeReads() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 64; gl.canvas.height = 64; gl.viewport(0, 0, 64, 64);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const array = new Uint8Array(64 * 64 * 4); gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, array);
+              const buffer = gl.createBuffer();
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4 + 16, gl.STREAM_READ);
+              gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, 8);
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              gl.bindBuffer(gl.COPY_READ_BUFFER, buffer);
+              const packed = new Uint8Array(64 * 64 * 4 + 16);
+              gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, packed);
+              let noisy = 0, different = 0, outside = 0;
+              for (let i = 0; i < packed.length; i++) {
+                if (i < 8 || i >= 8 + array.length) { if (packed[i] !== 0) outside++; continue; }
+                if (packed[i] !== clean[(i - 8) % 4]) noisy++;
+                if (packed[i] !== array[i - 8]) different++;
+              }
+              const large = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              large.canvas.width = 1024; large.canvas.height = 512; large.viewport(0, 0, 1024, 512);
+              large.clearColor(0.5, 0.25, 0.75, 1); large.clear(large.COLOR_BUFFER_BIT);
+              const pixels = new Uint8Array(1024 * 512 * 4); large.readPixels(0, 0, 1024, 512, large.RGBA, large.UNSIGNED_BYTE, pixels);
+              let largeNoisy = 0; for (let i = 0; i < pixels.length; i++) if (pixels[i] !== clean[i % 4]) largeNoisy++;
+              return JSON.stringify({ error: gl.getError() + large.getError(), noisy, different, outside, largeNoisy });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare == ["error": 0, "noisy": 0, "different": 0, "outside": 0, "largeNoisy": 0])
+        #expect(protected["error"] == 0)
+        #expect(try #require(protected["noisy"]) > 0)
+        #expect(protected["different"] == 0)
+        #expect(protected["outside"] == 0)
+        #expect(try #require(protected["largeNoisy"]) > 0)
+    }
+
+    /// A read far larger than the canvas noises every pixel it covers, not one in a few at spots the
+    /// page can predict; offsets that WebKit reads as 0 (NaN, Infinity, 2^32, an object that isn't
+    /// an array view) get the noise a read at 0 does, into a pack buffer or an array.
+    @Test func readPixelsOversizedReadsAndOddOffsetsAreNoised() async throws {
+        let probe = """
+            (() => {
+              const gl = document.createElement('canvas').getContext('webgl2', { preserveDrawingBuffer: true });
+              gl.canvas.width = 300; gl.canvas.height = 150; gl.viewport(0, 0, 300, 150);
+              gl.clearColor(0.5, 0.25, 0.75, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+              const clean = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, clean);
+              const count = (pixels, width, odd) => {
+                let noisy = 0;
+                for (let y = 0; y < 150; y++) for (let x = 0; x < 300; x++) {
+                  if (odd && !((x + y) & 1)) continue;
+                  for (let c = 0; c < 4; c++) if (pixels[(y * width + x) * 4 + c] !== clean[c]) { noisy++; break; }
+                }
+                return noisy;
+              };
+              const huge = new Uint8Array(1000 * 1000 * 4); gl.readPixels(0, 0, 1000, 1000, gl.RGBA, gl.UNSIGNED_BYTE, huge);
+              const result = { oversizedOdd: count(huge, 1000, true) };
+              const size = 300 * 150 * 4, buffer = gl.createBuffer();
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+              gl.bufferData(gl.PIXEL_PACK_BUFFER, size, gl.STREAM_READ);
+              for (const [name, offset] of [['packNaN', NaN], ['packInfinity', Infinity], ['packArray', []], ['packObject', {}]]) {
+                gl.bufferSubData(gl.PIXEL_PACK_BUFFER, 0, new Uint8Array(size));
+                gl.readPixels(0, 0, 300, 150, gl.RGBA, gl.UNSIGNED_BYTE, offset);
+                const packed = new Uint8Array(size); gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, packed);
+                result[name] = count(packed, 300, false);
+              }
+              gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+              for (const [name, offset] of [['arrayInfinity', Infinity], ['arrayWrapped', 2 ** 32]]) {
+                const pixels = new Uint8Array(size); gl.readPixels(0, 0, 300, 150, gl.RGBA, gl.UNSIGNED_BYTE, pixels, offset);
+                result[name] = count(pixels, 300, false);
+              }
+              result.error = gl.getError();
+              return JSON.stringify(result);
+            })()
+            """
+        let names = ["oversizedOdd", "packNaN", "packInfinity", "packArray", "packObject", "arrayInfinity", "arrayWrapped"]
+        let bare: [String: Int] = try await run(probe, farbling: nil)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare == Dictionary(uniqueKeysWithValues: (names + ["error"]).map { ($0, 0) }))
+        #expect(protected["error"] == 0)
+        for name in names {
+            #expect(try #require(protected[name]) > 0, "\(name)")
+        }
+    }
+
     /// Canvas noise follows the pixel's spot in the canvas, not where the read starts: a 1×1 read,
     /// an offset window or one with a negative size hands back what the full read has there.
     @Test func smallReadsGetTheNoiseOfTheFullRead() async throws {
@@ -542,6 +651,42 @@ struct FingerprintingTests {
         let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
 
         #expect(bare.count >= 11)
+        #expect(Set(bare.values).count == 1, "\(bare)")
+        #expect(protected["page"] != bare["page"])
+        for (route, value) in protected {
+            #expect(value == protected["page"], "\(route)")
+        }
+    }
+
+    /// The insertion hooks read nodes through the members saved at load: a frame, a fragment or a
+    /// box with own `nodeType`, `localName` or `querySelector` values doesn't go in unprotected.
+    /// Srcdoc frames, which are still blank windows when the page reaches them.
+    @Test func framesWithOwnNodeMembersAreProtected() async throws {
+        let probe = """
+            (() => {
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const last = () => hash(frames[frames.length - 1]);
+              const frame = () => { const f = document.createElement('iframe'); f.srcdoc = '<p>frame</p>'; return f; };
+              const own = (node, name, value) => { Object.defineProperty(node, name, { value }); return node; };
+              const routes = { page: hash(window) };
+              document.body.appendChild(own(frame(), 'nodeType', 3)); routes.nodeType = last();
+              document.body.append(own(own(frame(), 'localName', 'div'), 'firstElementChild', null)); routes.localName = last();
+              const box = document.createElement('div'); box.appendChild(frame());
+              document.body.appendChild(own(box, 'querySelector', () => null)); routes.querySelector = last();
+              const fragment = document.createDocumentFragment(); fragment.appendChild(frame());
+              document.body.appendChild(own(fragment, 'nodeType', 1)); routes.fragment = last();
+              return JSON.stringify(routes);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare.count == 5)
         #expect(Set(bare.values).count == 1, "\(bare)")
         #expect(protected["page"] != bare["page"])
         for (route, value) in protected {
@@ -721,21 +866,38 @@ struct FingerprintingTests {
         #expect(protected["frame1"] == protected["page"])
     }
 
-    /// A frame that reloads with Trusted Types, or several frames of one address, add their script
-    /// once: copies piled up until the next main-frame navigation.
-    @Test func trustedTypesScriptIsAddedOncePerAddress() throws {
+    /// A page keeps one Trusted Types script, whatever its frames' addresses: a frame that reloads,
+    /// several frames of one address, and frames of new addresses once added a script each, which
+    /// piled up until the next main-frame navigation. That navigation's page starts afresh.
+    @Test func trustedTypesScriptsDontPileUp() throws {
         let privacy = Privacy()
         let controller = WKUserContentController()
-        let response = { (address: String) in
+        let response = { (address: String, header: String) in
             HTTPURLResponse(url: URL(string: address)!, statusCode: 200, httpVersion: nil,
-                            headerFields: ["Content-Security-Policy": "require-trusted-types-for 'script'"])!
+                            headerFields: [header: "require-trusted-types-for 'script'"])!
         }
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame"), to: controller)
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again"), to: controller)
-        #expect(controller.userScripts.count == 1)
-        privacy.addTrustedTypesScript(true, for: response("https://example.com/other"), to: controller)
-        privacy.addTrustedTypesScript(false, for: response("https://example.com/off"), to: controller)
+        let enforced = "Content-Security-Policy", reported = "Content-Security-Policy-Report-Only"
+        let farbling = WKUserScript(source: "farbling", injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        controller.addUserScript(farbling)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame", enforced), to: controller)
+        privacy.addTrustedTypesScript(true, for: response("https://example.com/frame#again", enforced), to: controller)
         #expect(controller.userScripts.count == 2)
+        for index in 0..<20 {
+            privacy.addTrustedTypesScript(true, for: response("https://example.com/other?\(index)", reported), to: controller)
+        }
+        privacy.addTrustedTypesScript(false, for: response("https://example.com/off", enforced), to: controller)
+        #expect(controller.userScripts.count == 2)
+        // After the page's farbling, holding every address but the one it was off for.
+        let source = try #require(controller.userScripts.last?.source)
+        #expect(controller.userScripts.first?.source == farbling.source)
+        #expect(source.contains("\"https:\\/\\/example.com\\/frame\":\"enforce\""))
+        #expect(source.contains("\"https:\\/\\/example.com\\/other?19\":\"report\""))
+        #expect(!source.contains("off"))
+
+        controller.removeAllUserScripts()
+        privacy.addTrustedTypesScript(true, for: response("https://example.org/", enforced), to: controller)
+        #expect(controller.userScripts.count == 1)
+        #expect(controller.userScripts.first?.source.contains("example.com") == false)
     }
 
     /// A blank frame fires `load` while it is inserted, before the observer or the insertion hooks
@@ -1145,5 +1307,75 @@ struct FingerprintingTests {
         let count = try #require(protected["count"] as? Int)
         #expect(try #require(protected["moved"] as? Int) > count / 2)
         #expect(protected["small"] == AnyHashable(true))
+    }
+
+    /// Sample noise depends on each sample's value: what a silent buffer shows can't be taken off
+    /// another buffer's samples, as it once could, leaving them exact. A window copied from the
+    /// middle gets the whole buffer's noise there, and nothing past what it copied; a long buffer is
+    /// noised on every sample, not on a share at known places, and so are the analyser's
+    /// time-domain and byte reads.
+    @Test func audioNoiseCantBeMeasuredAndRemoved() async throws {
+        // Stand for an analyser's output, without audio hardware.
+        let analyser = """
+            AnalyserNode.prototype.getFloatTimeDomainData = function (values) { values.fill(0.25); };
+            AnalyserNode.prototype.getByteTimeDomainData = function (values) { values.fill(128); };
+            AnalyserNode.prototype.getByteFrequencyData = function (values) { values.fill(100); };
+            """
+        let probe = """
+            (() => {
+              const length = 4096, wave = (i) => Math.fround(Math.sin(i / 7) * 0.5);
+              const make = (size) => {
+                const buffer = new AudioBuffer({ length: size, sampleRate: 44100 }), data = new Float32Array(size);
+                for (let i = 0; i < size; i++) data[i] = wave(i);
+                buffer.copyToChannel(data, 0);
+                return buffer;
+              };
+              const silent = new AudioBuffer({ length, sampleRate: 44100 }).getChannelData(0);
+              const buffer = make(length), full = buffer.getChannelData(0);
+              let noisy = 0, removed = 0;
+              for (let i = 0; i < length; i++) {
+                if (full[i] !== wave(i)) noisy++;
+                if (Math.fround(full[i] - silent[i]) === wave(i)) removed++;
+              }
+              // From the last 200 samples of a fresh buffer, into a longer array filled with 7.
+              const window = new Float32Array(300).fill(7);
+              make(length).copyFromChannel(window, 0, length - 200);
+              let windowOff = 0, past = 0;
+              for (let i = 0; i < 300; i++) {
+                if (i < 200) { if (window[i] !== full[length - 200 + i]) windowOff++; } else if (window[i] !== 7) past++;
+              }
+              const again = new Float32Array(length); buffer.copyFromChannel(again, 0);
+              let twice = 0; for (let i = 0; i < length; i++) if (again[i] !== full[i]) twice++;
+              const long = make(600000).getChannelData(0);
+              // Odd samples too: they once came back exact past the limit, the same on every site.
+              let longNoisy = 0, longOdd = 0;
+              for (let i = 0; i < long.length; i++) if (long[i] !== wave(i)) { longNoisy++; if (i & 1) longOdd++; }
+              const node = new OfflineAudioContext(1, 128, 44100).createAnalyser();
+              const moved = (values, clean) => values.filter((value) => value !== clean).length;
+              const times = new Float32Array(node.fftSize); node.getFloatTimeDomainData(times);
+              const timeBytes = new Uint8Array(node.fftSize); node.getByteTimeDomainData(timeBytes);
+              const frequencyBytes = new Uint8Array(node.frequencyBinCount); node.getByteFrequencyData(frequencyBytes);
+              const byteSpread = Math.max(...timeBytes.map((value) => Math.abs(value - 128)), ...frequencyBytes.map((value) => Math.abs(value - 100)));
+              return JSON.stringify({ noisy, removed, windowOff, past, twice, longNoisy, longOdd, times: moved(times, 0.25),
+                timeBytes: moved(timeBytes, 128), frequencyBytes: moved(frequencyBytes, 100), byteSpread });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil, before: analyser)
+        let protected: [String: Int] = try await run(probe, farbling: Self.farbling(), before: analyser)
+
+        #expect(bare == ["noisy": 0, "removed": 4096, "windowOff": 0, "past": 0, "twice": 0, "longNoisy": 0, "longOdd": 0,
+                         "times": 0, "timeBytes": 0, "frequencyBytes": 0, "byteSpread": 0])
+        #expect(try #require(protected["noisy"]) > 4096 / 4)
+        #expect(try #require(protected["removed"]) < 4096 * 3 / 4)
+        #expect(protected["windowOff"] == 0)
+        #expect(protected["past"] == 0)
+        #expect(protected["twice"] == 0)
+        // About half the samples move, wherever they are.
+        #expect(try #require(protected["longNoisy"]) > 600000 / 4)
+        #expect(try #require(protected["longOdd"]) > 600000 / 8)
+        for name in ["times", "timeBytes", "frequencyBytes"] {
+            #expect(try #require(protected[name]) > 0, "\(name)")
+        }
+        #expect(protected["byteSpread"] == 1)
     }
 }

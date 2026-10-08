@@ -520,9 +520,6 @@ final class Tab: NSObject, Identifiable {
         pdfHistory = [:]
         hasInternalBridge = false
         hasWebstoreBridge = false
-        forgetLiveIcon()
-        faviconLoad?.cancel()
-        faviconLoad = nil
         isAsleep = true
         appliedProtections = nil
         canGoBack = false
@@ -537,6 +534,11 @@ final class Tab: NSObject, Identifiable {
     func tearDown() {
         answerHiddenDialog()
         observations.removeAll()
+        // A favicon fetch holds the tab and its web view, and can last a minute on a page that
+        // names many icons: a closed tab's page would keep running until it ends.
+        faviconLoad?.cancel()
+        faviconLoad = nil
+        forgetLiveIcon()
         guard let loadedWebView else { return }
         loadedWebView.stopLoading()
         loadedWebView.navigationDelegate = PutAwayWebView.refusing

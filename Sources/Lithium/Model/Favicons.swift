@@ -39,9 +39,10 @@ final class Favicons {
         self.missingLimit = missingLimit
     }
 
+    /// The title too: the tab may not have heard of it yet when its page finishes loading.
     private static let collectScript = """
-        return [...document.querySelectorAll('link[rel~="icon"], link[rel~="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]')]
-            .map(link => [link.href, link.getAttribute('sizes') || '', link.rel, link.type || '']);
+        return { title: document.title, links: [...document.querySelectorAll('link[rel~="icon"], link[rel~="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]')]
+            .map(link => [link.href, link.getAttribute('sizes') || '', link.rel, link.type || '']) };
         """
 
     /// Lets the page's own engine draw an icon it references. SVG favicons often style
@@ -158,22 +159,28 @@ final class Favicons {
         try? png.write(to: file(for: host), options: .atomic)
     }
 
-    func favicon(for webView: WKWebView) async -> Data? {
+    /// While the page shows an unread count (in its title, or `counting` through `setAppBadge`),
+    /// its touch icon comes first when the host has no icon yet: sites draw the count into their
+    /// favicon, never their touch icon.
+    func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
         let generation = generation
 
-        let links = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [[String]] ?? []
+        let found = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [String: Any]
+        let links = found?["links"] as? [[String]] ?? []
+        let preferringTouchIcon = counting || UnreadBadge.count(inTitle: found?["title"] as? String ?? "") != nil
         var candidates = links.compactMap { link -> Candidate? in
             guard link.count == 4, let url = URL(string: link[0]), Self.isFetchable(url) else { return nil }
             let isVector = link[3].contains("svg") || url.pathExtension.lowercased() == "svg"
-            return Candidate(url: url, size: Self.size(sizes: link[1], rel: link[2]), isVector: isVector)
+            return Candidate(url: url, size: Self.size(sizes: link[1], rel: link[2]), isVector: isVector, isTouchIcon: link[2].contains("apple-touch-icon"))
         }
         if let fallback = URL(string: "/favicon.ico", relativeTo: page)?.absoluteURL {
-            candidates.append(Candidate(url: fallback, size: 32, isVector: false))
+            candidates.append(Candidate(url: fallback, size: 32, isVector: false, isTouchIcon: false))
         }
 
-        for candidate in candidates.sorted(by: Candidate.preferred) {
+        let sorted = candidates.sorted(by: Candidate.preferred)
+        for candidate in preferringTouchIcon ? sorted.filter(\.isTouchIcon) + sorted.filter { !$0.isTouchIcon } : sorted {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
             guard let png = await Self.fetch(candidate.url, with: session) else { continue }
@@ -200,11 +207,12 @@ final class Favicons {
     }
 
     /// The icon a page declares, fetched afresh past the cache: a calendar's changes with the
-    /// date, at a new address or the same one. Stored for the host only when its pixels changed.
-    func refresh(host: String, from url: URL) async -> Data? {
+    /// date, at a new address or the same one. Stored for the host only when its pixels changed
+    /// and `keeping` still holds once it came.
+    func refresh(host: String, from url: URL, keeping: () -> Bool = { true }) async -> Data? {
         let generation = generation
         guard Self.isFetchable(url), let png = await Self.fetch(url, with: session) else { return nil }
-        if generation == self.generation, cachedData(host: host) != png { store(png, for: host) }
+        if generation == self.generation, keeping(), cachedData(host: host) != png { store(png, for: host) }
         return png
     }
 
@@ -282,6 +290,7 @@ final class Favicons {
         let url: URL
         let size: Int
         let isVector: Bool
+        let isTouchIcon: Bool
 
         /// Raster icons first (AppKit draws them faithfully), closest to 64 px.
         static func preferred(_ a: Candidate, _ b: Candidate) -> Bool {

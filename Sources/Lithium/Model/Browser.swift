@@ -1390,11 +1390,12 @@ final class Browser {
     }
 
     /// The pinned page's icon, fetched afresh from where it says it is. A fetch that outlasts
-    /// the page's site, the pin or the icon (a later one may come back first) isn't theirs.
+    /// the page's site, the pin or the icon (a later one may come back first) isn't theirs; nor
+    /// one named just before the page's count came in, likely the copy with the count drawn in.
     func refreshIcon(of tab: Tab, from url: URL) async {
         guard let pinID = tab.pinID, let host = tab.url?.host(),
-              let data = await favicons.refresh(host: host, from: url),
-              tab.pinID == pinID, tab.url?.host() == host, tab.liveIcon == url else { return }
+              let data = await favicons.refresh(host: host, from: url, keeping: { tab.unread.shown == nil }),
+              tab.pinID == pinID, tab.url?.host() == host, tab.liveIcon == url, tab.unread.shown == nil else { return }
         tab.showFavicon(data)
         if let index = pins.firstIndex(where: { $0.id == pinID }), pins[index].url.host() == host {
             storeIcon(data, from: url, inPinAt: index)

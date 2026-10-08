@@ -899,17 +899,22 @@ final class Tab: NSObject, Identifiable {
             return
         }
         // The icon the pinned page names wins anyway.
-        guard liveIcon == nil else { return }
+        guard !followsPageIcon else { return }
         // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
         let host = url?.host()
         let favicons = browser?.favicons ?? .shared
         // A private tab shows an icon already cached, and fetches and stores none.
-        let found = isEphemeral ? host.flatMap(favicons.cachedData(host:)) : await favicons.favicon(for: webView)
+        let found = isEphemeral ? host.flatMap(favicons.cachedData(host:)) : await favicons.favicon(for: webView, counting: unread.shown != nil)
         guard !Task.isCancelled, let data = found, url?.host() == host,
-              liveIcon == nil, data != faviconData else { return }
+              !followsPageIcon, data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
         browser?.didLoadFavicon(data, in: self)
+    }
+
+    /// The pinned page's own icon is shown: it names one, and the tile shows no unread badge.
+    private var followsPageIcon: Bool {
+        liveIcon != nil && unread.shown == nil
     }
 
     /// Shows an icon fetched for the pinned page; an unchanged one is left alone.
@@ -921,16 +926,19 @@ final class Tab: NSObject, Identifiable {
 
     /// Fetches the icon the page names, once per address for this web view. One fetch runs at a
     /// time, then waits `iconInterval` before the address named last, so a page animating its
-    /// icon can't have the favorite and its file rewritten at every frame.
+    /// icon can't have the favorite and its file rewritten at every frame. While the tile shows
+    /// an unread badge nothing is fetched: Discord, Gmail or WhatsApp then name a copy of their
+    /// icon with the count drawn in, which would show it twice. The clean one stays, and the
+    /// page's next icon once the count is gone is followed again.
     private func followIcon(_ url: URL) {
         guard url != liveIcon else { return }
         liveIcon = url
-        guard iconFollow == nil else { return }
+        guard iconFollow == nil, unread.shown == nil else { return }
         faviconLoad?.cancel()
         faviconLoad = nil
         iconFollow = Task { [weak self] in
             var fetched: URL?
-            while !Task.isCancelled, let tab = self, let next = tab.liveIcon, next != fetched {
+            while !Task.isCancelled, let tab = self, tab.unread.shown == nil, let next = tab.liveIcon, next != fetched {
                 fetched = next
                 await tab.browser?.refreshIcon(of: tab, from: next)
                 try? await Task.sleep(for: Self.iconInterval)
@@ -962,7 +970,10 @@ final class Tab: NSObject, Identifiable {
             // The user is looking at it already.
             guard browser?.selectedTabID != id || loadedWebView?.window?.isKeyWindow != true else { return }
             updateUnread { $0.notify() }
-        case .icon(let url): followIcon(url)
+        case .icon(let url, let title):
+            // The count that came with the icon holds its fetch back.
+            if let title, !isShowingError { updateUnread { $0.setTitle(title) } }
+            followIcon(url)
         }
     }
 

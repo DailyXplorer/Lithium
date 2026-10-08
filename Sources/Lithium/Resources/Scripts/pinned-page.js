@@ -70,7 +70,8 @@
     const href = links.length ? links[links.length - 1].href : '';
     if (!href || href === lastIcon) return;
     lastIcon = href;
-    send({ type: 'icon', href });
+    // Sites that draw their unread count into the icon change the title with it.
+    send({ type: 'icon', href, title: document.title });
   };
   // The app forgot the icon when it was unpinned, so it is told again.
   define(globalThis, key, (next) => {

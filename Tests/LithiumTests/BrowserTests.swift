@@ -251,6 +251,32 @@ struct BrowserTests {
         #expect(Downloads.shared.items.count == before)
     }
 
+    /// A page sending itself to a file, or clicking its own `<a download>`, without a press asks
+    /// first: otherwise any page could fill Downloads. The address the user opens still downloads.
+    @Test func aPageDownloadingWithoutAClickAsksFirst() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/sends": ("Content-Type: text/html", "<script>location.href = '/file'</script>"),
+            "/clicks": ("Content-Type: text/html", #"<a id="file" href="/note.txt" download>Note</a><script>document.getElementById('file').click()</script>"#),
+            "/file": ("Content-Type: text/plain\r\nContent-Disposition: attachment; filename=note.txt", "Lithium"),
+            "/note.txt": ("Content-Type: text/plain", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let host = try #require(base.host())
+        let before = Downloads.shared.items.count
+        for path in ["sends", "clicks"] {
+            let page = browser.newTab(url: base.appending(path: path))
+            defer { browser.close(page) }
+            #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } }, "\(path)")
+            let request = try #require(browser.permissions.pending.first { $0.tabID == page.id })
+            #expect(request.kinds == [.downloads] && request.host == host)
+            browser.permissions.dismiss(request)
+        }
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
+        #expect(browser.permissions.decisions[host]?[.downloads] == nil, "nothing is remembered")
+    }
+
     /// A private tab's answer holds for its private session only, in memory: nothing is saved,
     /// normal tabs still ask, and it goes when the session's last tab closes.
     @Test func privateTabPermissionsStayInTheirSession() async throws {

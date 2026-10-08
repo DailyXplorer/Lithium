@@ -39,10 +39,9 @@
   .extension img { width: 24px; height: 24px; flex: none; }
   .extension .actions { display: flex; align-items: center; gap: 10px; }
   #start-kind button { padding: 5px 11px; white-space: nowrap; }
-  #site-font-site { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--line); background: none;
-    padding: 6px 0; font: inherit; color: inherit; outline: none; transition: border .12s; }
-  #site-font-site:focus { border-color: var(--accent); }
-  .font-picker { max-width: 220px; }
+  #site-font-site { flex: 1; min-width: 0; }
+  /* Both font pickers line up, wide enough for most family names. */
+  .font-picker { width: 220px; }
   .sample { font-size: 13px; }
   .snippet > div { min-width: 0; }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
@@ -62,7 +61,7 @@
     </div>
     <div class="row" id="color-row">
       <div><div class="title">Color</div><div class="hint" id="color-hex"></div></div>
-      <div class="swatches" id="swatches"><input type="color" id="custom-color" title="Custom color"></div>
+      <div class="swatches" id="swatches"><input type="color" class="custom" id="custom-color" title="Custom color"></div>
     </div>
     <div class="row">
       <div><div class="title">Reveal sensitivity</div><div class="hint">How fast the hidden sidebar appears.</div></div>
@@ -83,7 +82,7 @@
     </div>
     <div class="row" id="start-color-row">
       <div><div class="title">Color</div><div class="hint" id="start-color-hex"></div></div>
-      <div class="swatches" id="start-swatches"><input type="color" id="start-custom-color" title="Custom color"></div>
+      <div class="swatches" id="start-swatches"><input type="color" class="custom" id="start-custom-color" title="Custom color"></div>
     </div>
     <div class="row" id="start-gradient-row">
       <div><div class="title">Colors</div></div>
@@ -96,7 +95,7 @@
     <h3>Font</h3>
     <div class="row">
       <div><div class="title">Interface</div><div class="hint sample" id="interface-sample">The quick brown fox jumps over the lazy dog.</div></div>
-      <select class="font-picker" id="interface-font"></select>
+      <span class="select"><select class="font-picker" id="interface-font"></select></span>
     </div>
     <div class="row">
       <div><div class="title" id="website-font-title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
@@ -104,7 +103,7 @@
     </div>
     <div class="row" id="website-family-row">
       <div><div class="title">Website font</div><div class="hint sample" id="website-sample">The quick brown fox jumps over the lazy dog.</div></div>
-      <select class="font-picker" id="website-family"><option value="">Same as interface</option></select>
+      <span class="select"><select class="font-picker" id="website-family"><option value="">Same as interface</option></select></span>
     </div>
     <h3>Websites</h3>
     <div class="row">
@@ -186,7 +185,7 @@
     </div>
     <div class="row" id="summary-language-row">
       <div><div class="title">Summary language</div><div class="hint">Also used for translations.</div></div>
-      <select id="summary-language"></select>
+      <span class="select"><select id="summary-language"></select></span>
     </div>
   </section>
 
@@ -328,7 +327,7 @@
     const select = el('select', {}, [['', 'Ask'], ['allow', 'Allow'], ['deny', 'Block']].map(([value, label]) => el('option', { value, textContent: label })));
     select.value = decision || '';
     select.onchange = () => call('setPermission', { host, kind, decision: select.value }).then(render);
-    return select;
+    return el('span', { className: 'select' }, [select]);
   };
 
   const renderSite = (site) => {

@@ -57,8 +57,9 @@ h3 + .row, .rows > .row:first-child { border-top: 0; }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--line); }
 .segmented button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; }
 .segmented button.on { background: var(--accent-soft); color: var(--accent); }
+.segmented button:not(.on):hover { color: var(--ink); }
 
-.button { border: 1px solid var(--line); background: none; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-weight: 550; white-space: nowrap; transition: background .12s; }
+.button { border: 1px solid var(--line); background: none; padding: 7px 14px; border-radius: 9px; cursor: pointer; font-weight: 550; white-space: nowrap; transition: background .12s; }
 .button:hover { background: var(--hover); }
 .button.accent { color: var(--accent); border-color: transparent; background: var(--accent-soft); }
 .button.danger { color: var(--danger); }
@@ -67,7 +68,12 @@ h3 + .row, .rows > .row:first-child { border-top: 0; }
 .swatches { display: flex; gap: 10px; align-items: center; }
 .swatch { width: 24px; height: 24px; border-radius: 50%; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px var(--line); }
 .swatch.on { outline: 2px solid var(--accent); outline-offset: 3px; }
-input[type=color] { width: 28px; height: 28px; border: 0; padding: 0; background: none; cursor: pointer; }
+/* A colour well is a swatch too; the custom one wears a rainbow ring, like macOS's. */
+input[type=color] { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; border: 0; padding: 0; border-radius: 50%; background: none; cursor: pointer; }
+input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type=color]::-webkit-color-swatch { border: 0; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line); }
+input[type=color].custom { padding: 3px; background: conic-gradient(#F25C54, #F7B32B, #5BC77A, #3FA7F2, #8C6CF0, #F25C54); }
+input[type=color].custom::-webkit-color-swatch { box-shadow: 0 0 0 1.5px var(--bg); }
 
 /* On/off switch */
 .switch { position: relative; width: 38px; height: 22px; flex: none; }
@@ -81,7 +87,24 @@ input[type=color] { width: 28px; height: 28px; border: 0; padding: 0; background
 .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .status.ready::before { background: #2FA36B; }
 
-select { border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; background: none; }
+/* A dropdown's closed control looks like a button, with Phosphor's caret instead of the native
+   glyph; the list it opens stays the native menu. A select can't draw a ::after, so the caret
+   sits on a .select wrapper. 37px is the segmented control's and the buttons' height, set
+   outright since WebKit doesn't size a select or a text field by its line height. */
+.select { position: relative; display: inline-flex; flex: none; }
+.select::after { content: ""; position: absolute; right: 12px; top: 50%; width: 12px; height: 12px; margin-top: -6px;
+  background: var(--muted); pointer-events: none;
+  -webkit-mask: url(lithium://pages/icon/caret-down) center / contain no-repeat; mask: url(lithium://pages/icon/caret-down) center / contain no-repeat; }
+select { -webkit-appearance: none; appearance: none; border: 1px solid var(--line); border-radius: 9px; height: 37px; padding: 0 32px 0 14px;
+  background: none; font-weight: 500; cursor: pointer; transition: background .12s; }
+select:hover:not(:disabled) { background: var(--hover); }
+select:disabled, .select:has(select:disabled)::after { opacity: .5; cursor: default; }
+
+input[type=text] { border: 1px solid var(--line); border-radius: 9px; height: 37px; padding: 0 12px; background: none; outline: none; transition: border-color .12s; }
+input[type=text]:focus { border-color: var(--accent); }
+
+/* One keyboard focus ring for every control, the switch's. */
+:is(.button, .segmented button, select, .swatch, input[type=color]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type=search] { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 12px 0 12px 30px; font-size: 16px; outline: none; transition: border .12s; }
 input[type=search]:focus { border-color: var(--accent); }
 

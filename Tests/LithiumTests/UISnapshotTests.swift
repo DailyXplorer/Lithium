@@ -437,7 +437,7 @@ struct UISnapshotTests {
 
 /// Answers the settings page the way `InternalBridge` does, with a fixed sample state.
 @MainActor
-private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
+final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
         let action = (message.body as? [String: Any])?["action"] as? String
         if action == "site" { return (["cookies": 14, "hasData": true], nil) }

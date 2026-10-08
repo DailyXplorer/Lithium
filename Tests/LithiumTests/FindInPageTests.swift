@@ -1,4 +1,5 @@
 import Testing
+import WebKit
 @testable import Lithium
 
 /// Searches that finish out of order, driven by targets that answer when told to.
@@ -93,6 +94,56 @@ struct FindInPageTests {
         #expect(find.focusToken == 0 && !find.focusesField)
         find.show()
         #expect(find.focusToken == 1 && find.focusesField)
+    }
+
+    /// Each step in a long page scrolls its match into view, in the window and in a box that
+    /// scrolls on its own, and marks it; closing the bar unmarks it and leaves it selected.
+    @Test(.timeLimit(.minutes(1))) func stepsScrollEachMatchIntoView() async throws {
+        let gap = "<div style='height: 3000px'></div>"
+        let page = """
+            <!doctype html><body style="font: 16px sans-serif">
+            <p id="one">Needle at the top</p>\(gap)
+            <p id="two">Needle in the middle</p>\(gap)
+            <div style="height: 300px; overflow: auto">\(gap)<p id="three">Needle in a box</p>\(gap)</div>\(gap)
+            </body>
+            """
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        /// The id of the marked match's paragraph, if the page shows it there: nothing covers it.
+        func shown() async throws -> String? {
+            let script = """
+                const range = CSS.highlights.get('lithium-find')?.values().next().value;
+                if (!range) return null;
+                const box = range.getBoundingClientRect();
+                const seen = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+                return seen === range.startContainer.parentElement ? seen.id : null;
+                """
+            // Lithium's world: each world keeps its own copy of the highlights' list.
+            return try await webView.callAsyncJavaScript(script, contentWorld: .defaultClient) as? String
+        }
+
+        let find = FindInPage()
+        await find.update(query: "needle", in: webView)
+        #expect(find.matchCount == 3)
+        #expect(try await shown() == "one")
+        for (forward, id) in [(true, "two"), (true, "three"), (true, "one"), (false, "three"), (false, "two")] {
+            await find.step(forward: forward, in: webView)
+            #expect(try await shown() == id, "stepping \(forward ? "forward" : "back") to \(id)")
+        }
+
+        find.hide()
+        let deadline = ContinuousClock.now + .seconds(5)
+        var selected: String?
+        while ContinuousClock.now < deadline {
+            selected = try await webView.callAsyncJavaScript("return CSS.highlights.size ? null : String(getSelection());", contentWorld: .defaultClient) as? String
+            if selected != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(selected == "Needle")
     }
 
     @MainActor

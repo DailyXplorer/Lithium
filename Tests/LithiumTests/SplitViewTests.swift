@@ -140,16 +140,53 @@ struct SplitViewTests {
     @Test func theClickAfterADragDroppedElsewhereReachesThePage() throws {
         let browser = browser(with: ["a", "b"])
         browser.select(tab("a", in: browser))
-        _ = browser.startDragging(tab("b", in: browser))
+        let item = browser.startDragging(tab("b", in: browser))
         let zone = SplitDropZone.DropView()
         zone.isDragging = { browser.splits.draggedTabID != nil }
-        #expect(zone.takesMouse(buttons: 1))
+        zone.carries = { browser.carriesDraggedTab($0) }
+        #expect(zone.takesMouse(buttons: 1, drag: item))
 
         let event = try #require(NSEvent.mouseEvent(
             with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         browser.noteClick(event)
-        #expect(!zone.takesMouse(buttons: 1))
+        #expect(!zone.takesMouse(buttons: 1, drag: item))
+    }
+
+    /// A file or an image from another app carries no text, so the drop zone, registered for text
+    /// only, never sees it enter: it stands down as the drag reaches it, and the page gets the drop.
+    @Test func aFileDragFromAnotherAppAfterATabDragReachesThePage() {
+        let browser = browser(with: ["a", "b"])
+        browser.select(tab("a", in: browser))
+        let item = browser.startDragging(tab("b", in: browser))
+        let zone = SplitDropZone.DropView()
+        zone.isDragging = { browser.splits.draggedTabID != nil }
+        zone.carries = { browser.carriesDraggedTab($0) }
+        #expect(zone.takesMouse(buttons: 1, drag: item))
+        #expect(!zone.takesMouse(buttons: 0, drag: item))
+
+        #expect(!zone.takesMouse(buttons: 1, drag: nil))
+        #expect(browser.splits.draggedTabID == nil)
+        #expect(!zone.takesMouse(buttons: 1, drag: item))
+    }
+
+    /// A tab dragged to the sidebar and a drag from another app, with no click in between: the
+    /// drop zone stands down for the outside drag, which goes on to the page.
+    @Test func aDragFromAnotherAppAfterATabDragReachesThePage() {
+        let browser = browser(with: ["a", "b"])
+        browser.select(tab("a", in: browser))
+        let item = browser.startDragging(tab("b", in: browser))
+        #expect(browser.carriesDraggedTab(item))
+        #expect(browser.splits.draggedTabID != nil)
+
+        #expect(!browser.carriesDraggedTab("https://example.com/"))
+        #expect(browser.splits.draggedTabID == nil)
+        #expect(!browser.carriesDraggedTab(nil))
+
+        // Dropped in the sidebar, the tab's drag is over.
+        _ = browser.startDragging(tab("b", in: browser))
+        #expect(!browser.dropTab([item], on: .agentGroup))
+        #expect(browser.splits.draggedTabID == nil)
     }
 
     /// The address bar, Reload and the rest act on the selected tab: in split view the focused

@@ -280,6 +280,20 @@ final class Browser {
         tabs.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
 
+    /// Settings' font choices ("Use DM Sans on websites", a site's own font) reach the open pages
+    /// they change, as protections do: the font is a script set up as a page loads, so those pages
+    /// reload. Lithium's own pages stay, Settings among them. Sleeping tabs get it when they wake.
+    func changePageFont(_ change: () -> Void) {
+        let pages = tabs.compactMap { tab -> (Tab, URL, Bool)? in
+            guard !tab.isAsleep, let url = tab.url, !Internal.isInternal(url) else { return nil }
+            return (tab, url, PageStyle.usesDMSans(url, privateSession: tab.privateSession))
+        }
+        change()
+        for (tab, url, used) in pages where PageStyle.usesDMSans(url, privateSession: tab.privateSession) != used {
+            navigate(tab, .reload)
+        }
+    }
+
     /// Reuses a tab already showing that internal page, moving it to the requested section.
     private func openInternal(_ url: URL) {
         if let existing = tabs.first(where: { $0.url?.host() == url.host() && Internal.isInternal($0.url) }) {
@@ -476,11 +490,13 @@ final class Browser {
     /// at `index` in the list, or at its end, just above the Agent group it leaves.
     func keep(_ tab: Tab, at index: Int? = nil) {
         guard tab.isInAgentGroup, let from = tabs.firstIndex(where: { $0 === tab }) else { return }
-        var reordered = tabs
-        reordered.remove(at: from)
-        tab.openedByAgent = nil
-        reordered.insert(tab, at: Self.position(inTabList: index ?? .max, of: reordered))
-        tabs = reordered
+        extensions.moving(tab) {
+            var reordered = tabs
+            reordered.remove(at: from)
+            tab.openedByAgent = nil
+            reordered.insert(tab, at: Self.position(inTabList: index ?? .max, of: reordered))
+            tabs = reordered
+        }
     }
 
     enum TabDropTarget {
@@ -492,6 +508,7 @@ final class Browser {
     /// A tab from the Agent group dropped on the tab list joins it there. Dropped among the
     /// Agent group, it stays: the group has no order of its own to change.
     func dropTab(_ items: [String], on target: TabDropTarget) -> Bool {
+        endTabDrag()
         guard case .tabList(let index) = target,
               let tab = agentTabs.first(where: { $0.id.uuidString == items.first }) else { return false }
         keep(tab, at: index)
@@ -572,8 +589,9 @@ final class Browser {
         suggestions.clear()
     }
 
+    /// A click on a row: to the tab being edited, as Return sends it (`submitAddress(_:editing:)`).
     func accept(_ suggestion: Suggestion) {
-        accept(suggestion, in: selectedTab)
+        accept(suggestion, in: suggestions.editedTabID.flatMap { id in tabs.first { $0.id == id } })
     }
 
     private func accept(_ suggestion: Suggestion, in tab: Tab?) {
@@ -602,7 +620,7 @@ final class Browser {
         // In split view the other side comes on screen too, maybe from another split: its pane
         // is reused, so it doesn't wake as it appears.
         shownPartner?.markActive()
-        if previous !== tab { extensions.didActivate(tab, previous: previous) }
+        extensions.didSelect(tab)
     }
 
     /// The selection falls back on the tab's group, never on a favorite: the tab below the
@@ -655,7 +673,7 @@ final class Browser {
         tabs.remove(at: index)
         extensions.didClose(tab)
         // Extensions would otherwise go on taking the closed tab for the active one.
-        if wasSelected, let selectedTab { extensions.didActivate(selectedTab, previous: nil) }
+        if wasSelected { extensions.didSelect(selectedTab) }
         dropPrivateData(of: tab)
     }
 
@@ -728,7 +746,7 @@ final class Browser {
         guard let closed = closedTabs.popLast() else { return }
         let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
         let tab = insertTab(at: pin == nil ? closed.index ?? 0 : 0, configuration: makeConfiguration(for: closed.url))
-        tab.pinID = pin?.id
+        extensions.moving(tab) { tab.pinID = pin?.id }
         tab.customTitle = closed.customTitle
         tab.load(closed.url, history: closed.history)
         select(tab)
@@ -764,10 +782,14 @@ final class Browser {
         tabs.compactMap { $0.url?.absoluteString }.joined(separator: "\n")
     }
 
-    /// Empty or whitespace-only names give the tab back its page title.
-    func rename(_ tab: Tab, to name: String) {
+    /// Empty or whitespace-only names give the tab back its page title. A tab without a name of
+    /// its own keeps none when left with the title its field `shown` (a double-click, then a click
+    /// away): that would freeze the page's title on it.
+    func rename(_ tab: Tab, to name: String, shown: String? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        tab.customTitle = trimmed.isEmpty ? nil : trimmed
+        if tab.customTitle != nil || trimmed != shown?.trimmingCharacters(in: .whitespacesAndNewlines) {
+            tab.customTitle = trimmed.isEmpty ? nil : trimmed
+        }
         renamingTabID = nil
     }
 
@@ -863,7 +885,7 @@ final class Browser {
         restoreSplits(session.splits, tabs: restored)
         if let selected {
             selectedTabID = selected.id
-            extensions.didActivate(selected, previous: nil)
+            extensions.didSelect(selected)
         }
     }
 
@@ -912,7 +934,7 @@ final class Browser {
             select(tab)
         } else {
             let tab = newTab(url: pin.url)
-            tab.pinID = pin.id
+            extensions.moving(tab) { tab.pinID = pin.id }
         }
     }
 
@@ -921,11 +943,13 @@ final class Browser {
     func pin(_ tab: Tab, at index: Int? = nil) {
         guard tab.pinID == nil, !tab.isEphemeral, let url = tab.url else { return }
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData)
-        pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
-        leaveSplit(tab)
-        tab.pinID = pin.id
-        // The user's from now on: unpinned, it goes to the tab list.
-        tab.openedByAgent = nil
+        extensions.moving(tab) {
+            pins.insert(pin, at: min(max(index ?? pins.count, 0), pins.count))
+            leaveSplit(tab)
+            tab.pinID = pin.id
+            // The user's from now on: unpinned, it goes to the tab list.
+            tab.openedByAgent = nil
+        }
         // Its name field was in the list, which no longer shows it.
         if renamingTabID == tab.id { renamingTabID = nil }
     }
@@ -942,12 +966,15 @@ final class Browser {
         guard from != to else { return }
         var reordered = pins
         reordered.insert(reordered.remove(at: from), at: to)
-        pins = reordered
+        extensions.moving(liveTab(for: pins[from])) { pins = reordered }
     }
 
     func unpin(_ pin: Pin) {
-        liveTab(for: pin)?.pinID = nil
-        pins.removeAll { $0.id == pin.id }
+        let live = liveTab(for: pin)
+        extensions.moving(live) {
+            live?.pinID = nil
+            pins.removeAll { $0.id == pin.id }
+        }
         pinIcons[pin.id] = nil
     }
 

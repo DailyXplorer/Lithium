@@ -163,11 +163,27 @@ extension Browser {
         return tab.id.uuidString
     }
 
+    /// A tab dropped in the sidebar (on the tab list, the favorites) ends its drag there.
+    func endTabDrag() {
+        if splits.draggedTabID != nil { splits.draggedTabID = nil }
+    }
+
+    /// Whether a drag over the page carries the tab dragged from the sidebar. Anything else (a
+    /// link or text from another app) means that tab's drag ended without a click to say so: the
+    /// drop zone stands down, and the page gets the drop.
+    func carriesDraggedTab(_ item: String?) -> Bool {
+        guard let dragged = splits.draggedTabID, item == dragged.uuidString else {
+            endTabDrag()
+            return false
+        }
+        return true
+    }
+
     /// From the window's click monitor, before the click goes on. A click in the other side of
     /// the split focuses it, as Arc does; any click ends a tab drag that was dropped elsewhere.
     /// The other side's video popped out, its web view is in the player: a click there is the player's.
     func noteClick(_ event: NSEvent) {
-        if splits.draggedTabID != nil { splits.draggedTabID = nil }
+        endTabDrag()
         guard let partner = shownPartner, partner !== videoPopout.tab, !NativeInput.isAgents(event),
               let view = partner.loadedWebView, view.window === event.window else { return }
         if view.bounds.contains(view.convert(event.locationInWindow, from: nil)) { select(partner) }

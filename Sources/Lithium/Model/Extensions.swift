@@ -39,6 +39,13 @@ final class Extensions: NSObject {
     @ObservationIgnored private var saveError: Error?
     /// The toolbar's extensions button, where their popups open.
     @ObservationIgnored weak var popupAnchor: NSView?
+    /// The tab WebKit was last told is active (`didSelect`), which `ExtensionWindow.activeTab(for:)`
+    /// answers: told one tab and answered another, WebKit failed extensions' tab calls.
+    @ObservationIgnored private(set) weak var activeTab: Tab?
+    /// Whether WebKit was last told the window is focused: from launch, then as the app comes
+    /// to the front or leaves it.
+    @ObservationIgnored private(set) var isFocused = true
+    @ObservationIgnored nonisolated(unsafe) private var activeObservers: [any NSObjectProtocol] = []
 
     static let scheme = "webkit-extension"
 
@@ -53,10 +60,19 @@ final class Extensions: NSObject {
         controller.delegate = self
     }
 
+    deinit {
+        activeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
     func start() {
         guard loadTask == nil else { return }
         controller.didOpenWindow(window)
         controller.didFocusWindow(window)
+        activeObservers = [(NSApplication.didBecomeActiveNotification, true), (NSApplication.didResignActiveNotification, false)].map { name, isActive in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidChangeActive(isActive) }
+            }
+        }
         loadTask = Task {
             for entry in installed where entry.isEnabled { await load(entry) }
         }
@@ -288,12 +304,35 @@ final class Extensions: NSObject {
 
     func didClose(_ tab: Tab) {
         guard !tab.isEphemeral else { return }
+        if activeTab === tab { activeTab = nil }
         controller.didCloseTab(tab, windowIsClosing: false)
     }
 
-    func didActivate(_ tab: Tab, previous: Tab?) {
-        guard !tab.isEphemeral else { return }
-        controller.didActivateTab(tab, previousActiveTab: previous?.isEphemeral == true ? nil : previous)
+    /// The selection moved to `tab`. WebKit can't be told there is no active tab: the start page
+    /// and a private tab leave the last normal tab active, as Chrome leaves a normal window's
+    /// active tab when an incognito one is in front.
+    func didSelect(_ tab: Tab?) {
+        guard let tab, !tab.isEphemeral, tab !== activeTab else { return }
+        let previous = activeTab
+        activeTab = tab
+        controller.didActivateTab(tab, previousActiveTab: previous)
+    }
+
+    /// Reports a tab whose place in `tabs` the change moved (pinned, unpinned, kept from the
+    /// Agent group): extensions read places as they are, but WebKit sends no `onMoved` by itself.
+    func moving(_ tab: Tab?, _ change: () -> Void) {
+        let from = tab.flatMap { tabs.firstIndex(of: $0) }
+        change()
+        guard let tab, let from, let to = tabs.firstIndex(of: tab), to != from else { return }
+        controller.didMoveTab(tab, from: from, in: window)
+    }
+
+    /// The app came to the front or left it: extensions hear of it (`windows.onFocusChanged`), and
+    /// no window is focused while another app is.
+    func appDidChangeActive(_ isActive: Bool) {
+        guard isActive != isFocused else { return }
+        isFocused = isActive
+        controller.didFocusWindow(isActive ? window : nil)
     }
 
     func didChange(_ properties: WKWebExtension.TabChangedProperties, of tab: Tab) {
@@ -308,7 +347,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
     }
 
     func webExtensionController(_ controller: WKWebExtensionController, focusedWindowFor extensionContext: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-        window
+        isFocused ? window : nil
     }
 
     func webExtensionController(
@@ -422,9 +461,11 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
         extensions.tabs
     }
 
-    /// None while a private tab shows.
+    /// The tab WebKit was told is active (`Extensions.didSelect`), never a private one, and only
+    /// while it is in `tabs(for:)`: WebKit refuses the window's tabs otherwise.
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
-        extensions.browser?.selectedTab.flatMap { $0.isEphemeral ? nil : $0 }
+        guard let tab = extensions.activeTab, extensions.tabs.contains(where: { $0 === tab }) else { return nil }
+        return tab
     }
 
     func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType {

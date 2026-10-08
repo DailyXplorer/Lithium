@@ -290,7 +290,8 @@ extension AgentHub {
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         // Lithium's own pages are shown to the user, never to the agent: those can wake.
         if !AgentURLs.isBlocked(named.tab.url) { try await hub.checkWakeable(named, until: .now + AgentConfirmations.timeout) }
-        hub.browser?.select(named.tab)
+        // Not the user's pick: their typing in the address bar goes on, and doesn't land in this page.
+        hub.browser?.select(named.tab, picked: false)
         hub.touch(named.tab)
         return hub.page(named, reached: nil)
     }

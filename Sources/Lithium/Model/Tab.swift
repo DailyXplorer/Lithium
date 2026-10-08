@@ -1520,8 +1520,9 @@ extension Tab: WKWebExtensionTab {
         !isLoading
     }
 
+    /// Not the user's pick: their typing in the address bar goes on, and doesn't land in this page.
     func activate(for context: WKWebExtensionContext) async throws {
-        browser?.select(self)
+        browser?.select(self, picked: false)
     }
 
     func close(for context: WKWebExtensionContext) async throws {

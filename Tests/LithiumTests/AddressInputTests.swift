@@ -32,6 +32,9 @@ struct AddressInputTests {
         ("www.bbc.co.uk", "https://www.bbc.co.uk"),
         ("mac-mini.local", "https://mac-mini.local"),
         ("router.lan:8080", "http://router.lan:8080"),
+        ("nas:5000", "http://nas:5000"),
+        ("router:8080/admin", "http://router:8080/admin"),
+        ("psalm23:4", "https://search.brave.com/search?q=psalm23:4"),
     ])
     func resolves(input: String, expected: String) {
         #expect(AddressInput.url(for: input, engine: .brave)?.absoluteString == expected)

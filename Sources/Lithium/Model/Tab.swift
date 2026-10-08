@@ -53,8 +53,12 @@ final class Tab: NSObject, Identifiable {
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
-        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store.
-        if let privateStore { configuration.websiteDataStore = privateStore }
+        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store,
+        // and no extension runs in it (`Extensions.tabs`).
+        if let privateStore {
+            configuration.websiteDataStore = privateStore
+            configuration.webExtensionController = nil
+        }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
         webView.tab = self
@@ -127,6 +131,8 @@ final class Tab: NSObject, Identifiable {
     /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
+    /// Lithium's error page stands in for the page, from `showError` until the next load starts.
+    var isShowingError: Bool { failedURL != nil }
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
     /// another page commits.
@@ -544,8 +550,11 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep else { return }
                     self.title = webView.title ?? ""
-                    if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.tidyTitle = nil
+                    // Lithium's error page names itself, not the page: its title goes no further
+                    // than the tab (not the history, the session, the badge or extensions).
+                    guard !self.isShowingError else { return }
+                    if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.browser?.tidyTitles.update(self)
                     if let url = self.url { self.historyStore?.updateTitle(self.title, for: url) }
                     self.tellExtensions(.title)
@@ -1355,7 +1364,7 @@ extension Tab: WKWebExtensionTab {
     }
 
     func indexInWindow(for context: WKWebExtensionContext) -> Int {
-        browser?.navigationOrder.firstIndex(of: self) ?? NSNotFound
+        browser?.extensions.tabs.firstIndex(of: self) ?? NSNotFound
     }
 
     func webView(for context: WKWebExtensionContext) -> WKWebView? {

@@ -255,6 +255,12 @@ final class Privacy {
 
     func setEnabled(_ enabled: Bool, for url: URL?) {
         guard let host = Self.siteHost(url) else { return }
+        setEnabled(enabled, host: host)
+    }
+
+    /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,
+    /// an IPv6 one may not parse back to the same host.
+    func setEnabled(_ enabled: Bool, host: String) {
         if enabled { disabledHosts.remove(host) } else { disabledHosts.insert(host) }
         UserDefaults.standard.set(disabledHosts.sorted(), forKey: Self.disabledHostsKey)
     }

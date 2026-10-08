@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 @testable import Lithium
 
-/// Return and Escape in the browser window: what they may answer or close. Windows sit far off
+/// Return, Escape and ⌘W in the browser window: what they may answer or close. Windows sit far off
 /// screen. Runs a whole Browser, so only in a throwaway home folder (see `BrowserTests`).
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
@@ -76,6 +76,38 @@ struct WindowKeysTests {
         #expect(browser.ownsEscape(in: window))
     }
 
+    /// ⌘W closes the selected tab only from the browser's window; another window in front (a
+    /// detached Web Inspector) closes itself and leaves the tab alone. The windows are never shown.
+    @Test func closeTabActsOnlyInTheBrowsersWindow() {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,kept")!)
+        defer { browser.close(tab) }
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        browser.window = window
+        let inspector = ClosingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        inspector.isReleasedWhenClosed = false
+
+        browser.closeTabOrWindow(keyWindow: inspector)
+        #expect(inspector.didClose, "the window in front closes")
+        #expect(browser.selectedTab === tab, "the tab stays")
+
+        browser.closeTabOrWindow(keyWindow: nil)
+        #expect(browser.selectedTab === tab, "no window in front, nothing closes")
+
+        let other = browser.newTab(url: URL(string: "data:text/html,closed")!)
+        browser.closeTabOrWindow(keyWindow: window)
+        #expect(!browser.tabs.contains { $0 === other })
+
+        // A video in full screen: WebKit's window in front holds the page, and ⌘W closes the tab.
+        let video = browser.newTab(url: URL(string: "data:text/html,video")!)
+        let fullScreen = ClosingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        fullScreen.isReleasedWhenClosed = false
+        fullScreen.contentView?.addSubview(video.webView)
+        browser.closeTabOrWindow(keyWindow: fullScreen)
+        #expect(!fullScreen.didClose)
+        #expect(!browser.tabs.contains { $0 === video }, "the tab closes")
+    }
+
     /// The window can't be key off screen, so the key goes straight to the shortcuts.
     private func press(_ characters: String, keyCode: UInt16, in view: NSView, _ window: NSWindow) -> Bool {
         view.performKeyEquivalent(with: NSEvent.keyEvent(
@@ -92,5 +124,15 @@ struct WindowKeysTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
+    }
+}
+
+/// Tells whether it was closed, though never shown.
+private final class ClosingWindow: NSWindow {
+    private(set) var didClose = false
+
+    override func close() {
+        didClose = true
+        super.close()
     }
 }

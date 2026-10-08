@@ -160,7 +160,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "updateFilters":
             browser.privacy.updateFiltersNow()
         case "enableProtections":
-            if let host = value as? String { browser.privacy.setEnabled(true, for: URL(string: "https://\(host)/")) }
+            if let host = value as? String { browser.privacy.setEnabled(true, host: host) }
         case "setPermission":
             if let entry = value as? [String: String], let host = entry["host"],
                let kind = entry["kind"].flatMap(PermissionKind.init(rawValue:)) {
@@ -234,9 +234,9 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/category/extensions")!)
         case "clearHistory":
             browser.history.clear()
-            return (visits(browser, matching: ""), nil)
+            return (await visits(browser, matching: ""), nil)
         case "history":
-            return (visits(browser, matching: value as? String ?? ""), nil)
+            return (await visits(browser, matching: value as? String ?? ""), nil)
         case "deleteVisit":
             if let id = value as? Int64 ?? (value as? NSNumber)?.int64Value { browser.history.delete(id: id) }
             return (nil, nil)
@@ -283,8 +283,9 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    private func visits(_ browser: Browser, matching query: String) -> [[String: Any]] {
-        browser.history.visits(matching: query).map {
+    /// Read off the main thread; nil for a query the page already replaced with a newer one.
+    private func visits(_ browser: Browser, matching query: String) async -> [[String: Any]]? {
+        await browser.history.visitsInBackground(matching: query)?.map {
             ["id": $0.id, "url": $0.url.absoluteString, "title": $0.title, "time": $0.date.timeIntervalSince1970 * 1000]
         }
     }

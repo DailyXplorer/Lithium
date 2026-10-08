@@ -552,6 +552,36 @@ struct AgentServerTests {
         #expect(try await fixture.post(Fixture.initializeMessage()).headers["mcp-session-id"] != nil)
     }
 
+    /// The toolbar's robot: absent with access merely on, there from a session's `initialize`
+    /// through its calls, gone when the client ends it or Stop does, and after Allow Agents Again.
+    @Test func indicatorShowsOnlyWhileAnAgentIsConnected() async throws {
+        let started = AsyncStream<Void>.makeStream()
+        let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])
+        defer { fixture.hub.shutdown() }
+        #expect(!fixture.hub.isConnected)
+
+        let ended = try await fixture.initialize()
+        #expect(fixture.hub.isConnected)
+        let end = try await RawHTTP.send(port: fixture.port, method: "DELETE", headers: [
+            "Authorization": "Bearer \(fixture.endpoint.token)", "Mcp-Session-Id": ended,
+        ])
+        #expect(end.status == 200)
+        #expect(!fixture.hub.isConnected)
+
+        let session = try await fixture.initialize()
+        #expect(fixture.hub.isConnected)
+        let pending = Task { try await fixture.post(Self.call("wait"), session: session) }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        #expect(fixture.hub.isActing && fixture.hub.isConnected)
+
+        fixture.hub.stop()
+        _ = try await pending.value
+        #expect(!fixture.hub.isConnected)
+        fixture.hub.allowAgain()
+        #expect(!fixture.hub.isConnected)
+    }
+
     @Test func clientCancellationKeepsTheSession() async throws {
         let started = AsyncStream<Void>.makeStream()
         let fixture = try await Fixture(tools: [Self.waitTool(started.continuation)])

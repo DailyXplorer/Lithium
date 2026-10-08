@@ -26,7 +26,8 @@ struct ToolbarView: View {
             AddressBar(tab: tab)
                 .frame(maxWidth: 560)
             Spacer(minLength: 16)
-            if let agent = browser.agent {
+            // Only while an agent is connected, for its Stop; otherwise in the ⋯ menu.
+            if let agent = browser.agent, agent.isConnected {
                 AgentButton(agent: agent)
             }
             if browser.energy.isOn {
@@ -35,7 +36,6 @@ struct ToolbarView: View {
             ExtensionsButton(tab: tab)
             DownloadsButton()
             SummaryButton(tab: tab)
-            ShieldButton(tab: tab)
             CaptureButton()
             PageMenu(tab: tab)
         }
@@ -119,26 +119,7 @@ private struct ConnectionButton: View {
     }
 }
 
-private struct ShieldButton: View {
-    let tab: Tab?
-    @Environment(Browser.self) private var browser
-    @State private var isPresented = false
-
-    var body: some View {
-        let enabled = browser.privacy.isEnabled(for: tab?.url, privateSession: tab?.privateSession)
-        IconButton(
-            icon: enabled ? .shield : .shieldOff,
-            help: enabled ? "Protections on (⇧⌘P)" : "Protections off (⇧⌘P)",
-            isEnabled: tab?.url?.scheme?.hasPrefix("http") == true
-        ) {
-            isPresented.toggle()
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            ShieldPanel(tab: tab)
-        }
-    }
-}
-
+/// Opened from the ⋯ menu: protections are set once per site, so they don't need a toolbar button.
 private struct ShieldPanel: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
@@ -202,32 +183,22 @@ struct ShieldView: View {
     }
 }
 
+/// What an item of the ⋯ menu opens: a menu can't hold a popover, so it opens from the ⋯ button.
+enum PageMenuPanel: Hashable, Identifiable {
+    case qrCode(URL)
+    case protections
+    case agents
+    var id: Self { self }
+}
+
 private struct PageMenu: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
-    @State private var qrCodeURL: URL?
+    @State private var panel: PageMenuPanel?
 
     var body: some View {
         Menu {
-            Button("Copy Link") {
-                guard let url = tab?.url else { return }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.absoluteString, forType: .string)
-            }
-            .disabled(tab?.url == nil)
-            Button("QR Code for This Page") { qrCodeURL = tab?.url }
-                .disabled(tab?.url?.scheme?.hasPrefix("http") != true)
-            Button(tab?.pinID == nil ? "Pin Tab" : "Unpin Tab") {
-                browser.togglePinForSelectedTab()
-            }
-            .disabled(tab?.url == nil || tab?.isEphemeral == true)
-            Button("Pop Out Video") { browser.videoPopout.showSelected() }
-                .disabled(!browser.videoPopout.canShowSelected)
-            Divider()
-            Button("Show All History") { browser.openHistory() }
-            Button("Extensions") { browser.openSettings(section: "extensions") }
-            Divider()
-            Button("Settings…") { browser.openSettings() }
+            PageMenuItems(tab: tab, panel: $panel)
         } label: {
             Icon(.more, size: 18)
                 .frame(width: 28, height: 28)
@@ -238,9 +209,48 @@ private struct PageMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .opacity(0.85)
-        .popover(isPresented: Binding(get: { qrCodeURL != nil }, set: { if !$0 { qrCodeURL = nil } }), arrowEdge: .bottom) {
-            if let qrCodeURL { QRCodeView(url: qrCodeURL) }
+        .popover(item: $panel, arrowEdge: .bottom) { panel in
+            switch panel {
+            case .qrCode(let url): QRCodeView(url: url)
+            case .protections: ShieldPanel(tab: tab)
+            case .agents: if let agent = browser.agent { AgentPanel(agent: agent) }
+            }
         }
+    }
+}
+
+/// The ⋯ menu's items, apart so a test can draw them.
+struct PageMenuItems: View {
+    let tab: Tab?
+    @Binding var panel: PageMenuPanel?
+    @Environment(Browser.self) private var browser
+
+    var body: some View {
+        Button("Copy Link") {
+            guard let url = tab?.url else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        }
+        .disabled(tab?.url == nil)
+        Button("QR Code for This Page") { panel = tab?.url.map(PageMenuPanel.qrCode) }
+            .disabled(tab?.url?.scheme?.hasPrefix("http") != true)
+        Button("Site Protections…") { panel = .protections }
+            .disabled(tab?.url?.scheme?.hasPrefix("http") != true)
+        Button(tab?.pinID == nil ? "Pin Tab" : "Unpin Tab") {
+            browser.togglePinForSelectedTab()
+        }
+        .disabled(tab?.url == nil || tab?.isEphemeral == true)
+        Button("Pop Out Video") { browser.videoPopout.showSelected() }
+            .disabled(!browser.videoPopout.canShowSelected)
+        Divider()
+        Button("Show All History") { browser.openHistory() }
+        Button("Extensions") { browser.openSettings(section: "extensions") }
+        // With access off there is no panel: Settings is where it is turned on.
+        Button("Agents") {
+            if browser.agent == nil { browser.openSettings(section: "agents") } else { panel = .agents }
+        }
+        Divider()
+        Button("Settings…") { browser.openSettings() }
     }
 }
 

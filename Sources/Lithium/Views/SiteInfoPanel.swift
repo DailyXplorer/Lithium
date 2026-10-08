@@ -32,6 +32,10 @@ private struct LiveSiteInfo: View {
             cookieCount: info.cookieCount,
             canClear: info.hasData && !info.isClearing,
             permissions: browser.permissions.decisions(for: info.host, privateSession: tab.privateSession),
+            protections: Binding(
+                get: { browser.privacy.isEnabled(for: tab.url, privateSession: tab.privateSession) },
+                set: { browser.setProtections($0, for: tab) }
+            ),
             usesSiteFont: url.flatMap { url in
                 guard PageStyle.offersSiteFont(url) else { return nil }
                 return Binding(
@@ -72,6 +76,8 @@ struct SiteInfoView: View {
     let cookieCount: Int?
     let canClear: Bool
     let permissions: [PermissionKind: PermissionDecision]
+    /// The ⋯ menu's Site Protections switch, here too: no toolbar button holds it any more.
+    var protections: Binding<Bool>?
     /// Nil where the website font wouldn't apply anyway.
     var usesSiteFont: Binding<Bool>?
     var siteFontIsFixed = false
@@ -138,6 +144,13 @@ struct SiteInfoView: View {
                 }
                 Row(label: "Permissions") {
                     Text(Self.permissionSummary(permissions))
+                }
+                if let protections {
+                    Toggle(isOn: protections) {
+                        Text("Block ads and trackers").foregroundStyle(.secondary)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
                 }
                 if let usesSiteFont {
                     Toggle(isOn: usesSiteFont) {

@@ -654,7 +654,7 @@ Lithium does not guarantee: that the payment heuristic catches every payment; th
 
 ## 8. Transparency
 
-- **Indicator.** A toolbar button appears while access is on. Idle: outline. Connected: filled. Acting: accent color with a pulse. Its pop-over lists sessions with their self-reported names, the current action per tab, the last 10 log lines, **Stop Agent**, and **Open Log**.
+- **Indicator.** A toolbar button appears while an agent is connected: filled, accent color with a pulse while it acts. With access on and no agent, the ⋯ menu's **Agents** item opens the same pop-over. It lists sessions with their self-reported names, the current action per tab, the last 10 log lines, **Stop Agent**, and **Open Log**.
 - **Tab badges.** A small robot glyph on the favicon of every tab an agent touched (opened, navigated, selected, stopped), until the tab closes or access is turned off. An accent ring while an action runs in it (PR 5). The hover card adds a line, "Opened by an agent" or "Used by an agent". It leaves out the client's self-reported name, which the indicator's panel already shows next to the session.
 - **In the page.** While an agent acts in the visible tab: the accent border, the caption, and the agent pointer dot (section 5.7).
 - **Log.** Section 7.6. Stop is reachable from the indicator, the Lithium menu (⌃⌘.), and the Dock menu.

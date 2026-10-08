@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// In the toolbar while agent access is on, so an agent is never connected unseen: an outline
-/// robot with no agent, filled with one, accent-colored and pulsing while one acts. Its panel
-/// lists the sessions and holds Stop.
+/// In the toolbar while an agent is connected (`AgentHub.isConnected`), so one is never
+/// connected unseen: a filled robot, accent-colored and pulsing while it acts. Its panel lists
+/// the sessions and holds Stop; the ⋯ menu opens the same panel the rest of the time.
 struct AgentButton: View {
     let agent: AgentHub
     @State private var isPresented = false
     @State private var pulse = false
 
     var body: some View {
-        IconButton(icon: agent.sessions.isEmpty ? .robot : .robotFill, help: help) {
+        IconButton(icon: .robotFill, help: help) {
             isPresented.toggle()
         }
         .foregroundStyle(agent.isActing ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
@@ -21,13 +21,7 @@ struct AgentButton: View {
         }
     }
 
-    private var help: String {
-        switch agent.state {
-        case .stopped: "Agents stopped"
-        case .failed: "Agent access isn’t working"
-        case .starting, .listening: agent.sessions.isEmpty ? "Agent access on" : "Agent connected"
-        }
-    }
+    private var help: String { agent.isActing ? "Agent acting" : "Agent connected" }
 }
 
 struct AgentPanel: View {

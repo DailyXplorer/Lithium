@@ -365,6 +365,74 @@ struct UISnapshotTests {
         }
     }
 
+    /// The toolbar with agent access on, without an agent and with one connected (the robot shows
+    /// only then), in a wide window and a narrow one.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func toolbarSnapshots() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        let browser = Browser()
+        await browser.setAgentAccess(true)
+        func shoot(_ name: String) throws {
+            for width in [1100, 640] {
+                for isDark in [false, true] {
+                    let palette = SidebarPalette(style: .solid, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
+                    let toolbar = ToolbarView()
+                        .foregroundStyle(palette.ink)
+                        .environment(\.sidebarPalette, palette)
+                        .environment(browser)
+                        .font(Theme.font(13))
+                        .frame(width: CGFloat(width))
+                        .padding(.vertical, 8)
+                    try render(toolbar, isDark: isDark).write(to: directory.appending(path: "toolbar-\(name)-\(width)-\(isDark ? "dark" : "light").png"))
+                }
+            }
+        }
+        try shoot("no-agent")
+        _ = try await AgentTabsTests.Client(browser: browser)
+        try shoot("agent")
+        await browser.setAgentAccess(false)
+    }
+
+    /// The ⋯ menu's items for a web page, drawn as a list: a menu only draws once it is open.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func pageMenuSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        SessionStore.save(Session())
+        let browser = Browser()
+        let tab = browser.newTab(selecting: false)
+        tab.restore(url: URL(string: "https://www.example.com/")!, title: "Example")
+        defer {
+            browser.close(tab, remembering: false)
+            SessionStore.save(Session())
+        }
+        for isDark in [false, true] {
+            let menu = VStack(alignment: .leading, spacing: 6) {
+                PageMenuItems(tab: tab, panel: .constant(nil))
+            }
+            .buttonStyle(.plain)
+            .font(Theme.font(13))
+            .padding(12)
+            .frame(width: 220, alignment: .leading)
+            .environment(browser)
+            try render(menu, isDark: isDark).write(to: directory.appending(path: "page-menu-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
+    /// The lock's panel with the protections switch, on and off.
+    @Test func siteInfoProtectionsSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        for isOn in [true, false] {
+            for isDark in [false, true] {
+                let panel = SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 29, canClear: true, permissions: [:], protections: .constant(isOn), showsCertificate: .constant(false))
+                try render(panel, isDark: isDark).write(to: directory.appending(path: "site-info-protections-\(isOn ? "on" : "off")-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// The sidebar with two folders: one open with its tabs, the selected one among them, and one
     /// collapsed with its count; a tab outside folders below them.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))

@@ -1092,16 +1092,17 @@ extension Tab: WKNavigationDelegate {
         }
         let reader = PDFReader(url: url)
         reader.isPrivate = isEphemeral
-        // Like a website's links: never Lithium's own pages, local files only from a local PDF
-        // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
-        let isLocal = url.isFileURL
+        // Like a website's links: never Lithium's own pages, local files only from a local PDF and
+        // inside its folder (a file opens with read access to its own folder, which the PDF could
+        // otherwise choose), and other apps' schemes (mailto:) go to those apps.
+        let folder = url.isFileURL ? url.deletingLastPathComponent().standardizedFileURL.pathComponents : nil
         let site = url.host() ?? ""
         reader.onOpenLink = { [weak self] url, inNewTab in
             guard let self else { return }
             let scheme = url.scheme?.lowercased()
             switch scheme {
             case "http", "https", "file":
-                guard scheme != "file" || isLocal else { return }
+                guard scheme != "file" || folder.map({ url.standardizedFileURL.pathComponents.starts(with: $0) }) == true else { return }
                 if inNewTab { self.browser?.newTab(url: url, selecting: false, privateStore: self.privateStore, openedFrom: self) } else { self.load(url) }
             case Internal.scheme, Extensions.scheme:
                 break

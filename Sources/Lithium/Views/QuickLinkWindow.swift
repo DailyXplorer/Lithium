@@ -101,6 +101,16 @@ struct QuickLinkView: View {
                         PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                     }
                 }
+                // While this window is in front (`Browser.showsFindBar`), as in the main window.
+                .overlay(alignment: .topTrailing) {
+                    if browser.showsFindBar(over: tab) {
+                        FindBar(tab: tab)
+                            .padding(.top, tab.pdf == nil ? 10 : 50)
+                            .padding(.horizontal, 10)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
         }
         .font(Theme.font(13))
         .background(Color(nsColor: .windowBackgroundColor))

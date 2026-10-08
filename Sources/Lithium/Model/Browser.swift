@@ -453,7 +453,9 @@ final class Browser {
     /// or under a sheet (the capture preview), and not while a text field edits (the address bar
     /// ends its editing itself), unless it is the find field or a tab's name, which Escape closes.
     func ownsEscape(in window: NSWindow?) -> Bool {
-        guard let window, window === self.window, window.attachedSheet == nil else { return false }
+        guard let window, window.attachedSheet == nil else { return false }
+        // A link's window has only the find bar to close.
+        if window !== self.window { return find.isVisible && window === quickLinks.keyWindow }
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return true }
         return find.isFieldFocused || isRenaming
     }
@@ -503,8 +505,31 @@ final class Browser {
     /// bar, a tab's name), as ⌘F does: the field leaving would leave it on the window, where keys
     /// beep. Unless that field had it, a field still editing (the address bar) keeps it.
     func returnKeyboardToPage(fieldHadKeyboard: Bool) {
-        guard let page = selectedTab?.contentView, let window = page.window else { return }
+        guard let page = commandTab?.contentView, let window = page.window else { return }
         if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
+    }
+
+    /// ⌘F. Find follows the window in front, as the other page commands do (`commandTab`): the
+    /// bar shows over that window's page only, so a link's window finds in its own page.
+    func toggleFind() {
+        if find.isVisible {
+            find.hide()
+            returnKeyboardToPage(fieldHadKeyboard: true)
+        } else if commandTab != nil {
+            find.show()
+        }
+    }
+
+    /// ⌘G and ⇧⌘G, which open the bar without taking the keyboard.
+    func findStep(forward: Bool) async {
+        guard let tab = commandTab else { return }
+        find.show(focusingField: false)
+        await find.step(forward: forward, in: tab.findTarget)
+    }
+
+    /// Whether the find bar shows over `tab`: the page of the window in front.
+    func showsFindBar(over tab: Tab) -> Bool {
+        find.isVisible && commandTab === tab
     }
 
     /// In Zen mode, Show Sidebar (⌘B, the top bar's button) asks for the sidebar back, which takes

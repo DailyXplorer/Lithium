@@ -71,6 +71,9 @@ final class QuickLinks {
         close(tab)
     }
 
+    /// `keyTab`'s window.
+    var keyWindow: NSWindow? { keyTab.flatMap { windows[$0.id] } }
+
     func windowBecameKey(_ tab: Tab) {
         keyTab = tab
     }

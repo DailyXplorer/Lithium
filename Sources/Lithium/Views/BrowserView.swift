@@ -151,7 +151,7 @@ struct ContentCard: View {
             // and above the player.
             .overlay(alignment: .topTrailing) {
                 // In split view, over the focused page instead (`SplitPane`).
-                if let tab, browser.find.isVisible, browser.split(of: tab) == nil {
+                if let tab, browser.showsFindBar(over: tab), browser.split(of: tab) == nil {
                     FindBar(tab: tab)
                         .padding(.top, tab.pdf == nil ? 10 : 50)
                         .padding(.horizontal, 10)

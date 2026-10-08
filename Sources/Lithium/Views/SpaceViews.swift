@@ -28,6 +28,9 @@ struct SpaceBar: View {
                 }
             }
             Spacer(minLength: 0)
+            IconButton(icon: .folder, help: "New folder (⌥⌘N)") {
+                withAnimation(.snappy(duration: 0.2)) { browser.newFolder() }
+            }
             IconButton(icon: .plus, help: "New space", isEnabled: browser.canAddSpace) { isCreating = true }
                 .popover(isPresented: $isCreating, arrowEdge: .top) {
                     SpaceEditor(space: browser.newSpaceDraft(), isNew: true) { space in

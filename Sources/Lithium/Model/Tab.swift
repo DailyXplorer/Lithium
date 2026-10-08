@@ -200,6 +200,8 @@ final class Tab: NSObject, Identifiable {
     var openedByAgent: String?
     var isInAgentGroup: Bool { pinID == nil && openedByAgent != nil }
     var isInTabList: Bool { pinID == nil && openedByAgent == nil }
+    /// The sidebar folder the tab is in (`TabFolder`). Only a tab of the tab list is in one.
+    var folderID: TabFolder.ID?
     /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
     /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
     /// address it was sent to (`go(to:)`), isn't counted.

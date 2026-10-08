@@ -200,21 +200,74 @@ extension BrowserTests {
         let bytes = Data("%PDF-1.4 new".utf8)
 
         let fresh = folder.appending(path: "Fresh.pdf")
-        try Downloads.write(bytes, to: fresh)
+        try Downloads.write(bytes, to: fresh, from: nil)
         #expect(try Data(contentsOf: fresh) == bytes)
 
         let taken = folder.appending(path: "Taken.pdf")
         let old = Data("%PDF-1.4 old".utf8)
         try old.write(to: taken)
-        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: taken) }
+        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: taken, from: nil) }
         #expect(try Data(contentsOf: taken) == old)
 
         let missing = folder.appending(path: "Gone/Missing.pdf")
-        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: missing) }
+        #expect(throws: (any Error).self) { try Downloads.write(bytes, to: missing, from: nil) }
         #expect(!FileManager.default.fileExists(atPath: missing.path))
 
         let left = try FileManager.default.contentsOfDirectory(atPath: folder.path)
         #expect(Set(left) == ["Fresh.pdf", "Taken.pdf"], "no hidden partial is left behind")
+    }
+
+    /// A PDF saved from the viewer is quarantined like WebKit's downloads, and a name near the
+    /// 255 bytes a file name can have still saves: the hidden file it is written to first is short.
+    @Test func savedPDFsAreQuarantinedWhateverTheirNameLength() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let bytes = Data("%PDF-1.4 report".utf8)
+
+        let long = folder.appending(path: String(repeating: "a", count: 251) + ".pdf")
+        try Downloads.write(bytes, to: long, from: URL(string: "https://reports.example/view?id=1"))
+        #expect(try Data(contentsOf: long) == bytes)
+        #expect(try quarantineType(of: long) == kLSQuarantineTypeWebDownload as String)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == [long.lastPathComponent])
+
+        // A longer title is cut short, by whole characters, its number and extension kept.
+        let numbered = Downloads.fileName(String(repeating: "é", count: 200), " 2.pdf")
+        #expect(numbered.utf8.count <= 255 && numbered.hasSuffix("é 2.pdf"))
+        let reader = PDFReader(url: URL(string: "https://reports.example/\(String(repeating: "b", count: 300)).pdf")!)
+        #expect(reader.filename.utf8.count == 255 && reader.filename.hasSuffix("b.pdf"))
+    }
+
+    /// Preview's copy of a downloaded PDF is quarantined, and made again when the document at the
+    /// same address changes, even to one of the same size.
+    @Test func previewCopiesFollowTheDocumentAndAreQuarantined() throws {
+        let address = URL(string: "https://reports.example/view?id=1")!
+        let monday = try Data(contentsOf: makePDF(title: "Report", pages: ["Monday"]))
+        let friday = try Data(contentsOf: makePDF(title: "Report", pages: ["Friday"]))
+        try #require(monday.count == friday.count && monday != friday)
+        func copy(of data: Data) throws -> URL {
+            let reader = PDFReader(url: address)
+            try #require(reader.open(data))
+            let before = ExternalApps.recorded
+            reader.openInPreview()
+            let handOff = ExternalApps.recorded.dropFirst(before.count)
+            guard case .openWith(let copy, _)? = handOff.first, handOff.count == 1 else { throw CancellationError() }
+            return copy
+        }
+
+        let first = try copy(of: monday)
+        defer { try? FileManager.default.removeItem(at: first.deletingLastPathComponent()) }
+        let second = try copy(of: friday)
+        defer { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+        #expect(first.lastPathComponent == "Report.pdf")
+        #expect(try Data(contentsOf: first) == monday)
+        #expect(try Data(contentsOf: second) == friday)
+        #expect(try quarantineType(of: second) == kLSQuarantineTypeWebDownload as String)
+        #expect(try copy(of: monday) == first, "the same document reuses its copy")
+    }
+
+    private func quarantineType(of file: URL) throws -> String? {
+        try file.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties?[kLSQuarantineTypeKey as String] as? String
     }
 
     /// Preview's copy of a downloaded PDF would stay on disk: a private tab never makes one.

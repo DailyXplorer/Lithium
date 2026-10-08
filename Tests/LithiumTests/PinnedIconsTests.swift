@@ -307,6 +307,24 @@ struct PinnedIcons {
         #expect(pin()?.iconURL == nil)
     }
 
+    /// Clear History while an icon is still on its way: the late answer doesn't put the cleared
+    /// host's icon back, on disk or in memory.
+    @Test func clearingHistoryDropsAnIconStillOnItsWay() async throws {
+        let requests = Requests()
+        let (slow, base) = try await LocalHTTP.serve(["/red.png": ("Content-Type: image/png", Self.red)], delay: 1, requested: { requests.record($0) })
+        defer { slow.cancel() }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "pinned-icons-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder)
+
+        let fetch = Task { await favicons.refresh(host: "visited.example", from: base.appending(path: "red.png")) }
+        #expect(await waitUntil(10) { requests["/red.png"] == 1 })
+        await favicons.clear(keeping: [])
+        #expect(await fetch.value != nil)
+        #expect(favicons.cachedData(host: "visited.example") == nil)
+        #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "visited.example.png").path))
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

@@ -1565,6 +1565,24 @@ struct AgentReadTests {
         }
     }
 
+    /// A walk whose answer came too late still saved what it saw: the report Lithium kept from
+    /// the walk before is never taken as current, even when nothing bumped the generation (a
+    /// script setting a field's value).
+    @Test func aLateWalkLeavesNoOlderReportCurrent() async throws {
+        try await withAgent { client, base in
+            let webView = try #require(client.tab(try await open(client, base, "/focus-child"))?.webView)
+            let walk = { (arguments: [String: Any]) async throws -> FrameReport in
+                try PageProbe.decode(FrameReport.self, from: try await PageProbe.run("snapshot", arguments, in: .main, of: webView))
+            }
+            let kept = try await walk(["scope": "page", "key": "page"])
+            _ = try await webView.callAsyncJavaScript("document.getElementById('field').value = 'set by a script'", contentWorld: .page)
+            // The walk whose answer Lithium dropped.
+            _ = try await walk(["scope": "page", "key": "page"])
+            let next = try await walk(["scope": "page", "key": "page", "since": try #require(kept.gen), "of": kept.token])
+            #expect(next.unchanged != true)
+        }
+    }
+
     /// The main frame's answer from the page it left, coming after the next page said hello,
     /// leaves the next page and its frames where they are.
     @Test func aLateAnswerOfThePageLeftDoesntBringItBack() async throws {

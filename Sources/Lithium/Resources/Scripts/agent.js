@@ -584,8 +584,10 @@
     frame.boxStates = boxStates();
     frame.sheetStates = sheetStates();
     frame.url = location.href;
+    // Each walk has a generation of its own: the states above are this walk's, so a report
+    // Lithium kept from an earlier walk (this one answered too late) never counts as unchanged.
     return {
-      token: frame.token, gen: generation, path: framePath(), url: frame.url, title: document.title, viewport: view,
+      token: frame.token, gen: ++generation, path: framePath(), url: frame.url, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit, pay,
     };
   };

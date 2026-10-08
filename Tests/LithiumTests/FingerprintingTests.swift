@@ -317,7 +317,8 @@ struct FingerprintingTests {
     }
 
     /// `readPixels` noise follows the arguments as the native call converts them and the rows as
-    /// the pack settings lay them out, and stays off a read that wrote nothing.
+    /// the pack settings lay them out, and stays off a read that wrote nothing and off pixels past
+    /// the canvas's edges.
     @Test func readPixelsNoiseFollowsThePackedLayout() async throws {
         let probe = """
             (() => {
@@ -349,8 +350,30 @@ struct FingerprintingTests {
               gl.readPixels(0, 0, 33, 33, gl.RGBA, gl.UNSIGNED_BYTE, aligned);
               layout('aligned', aligned, 0, 136, 33, 33);
               gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
-              // Reads that write nothing: through a bound pack buffer, from an incomplete framebuffer, on a lost context.
+              // A read past the canvas's edges: only the 64 × 64 pixels inside are written.
+              const past = new Uint8Array(80 * 80 * 4).fill(7);
+              gl.readPixels(-8, -8, 80, 80, gl.RGBA, gl.UNSIGNED_BYTE, past);
+              result.pastNoisy = 0; result.pastOutside = 0;
+              for (let i = 0; i < past.length; i++) {
+                const x = (i >> 2) % 80 - 8, y = Math.floor(i / 320) - 8;
+                if (x >= 0 && x < 64 && y >= 0 && y < 64) { if (past[i] !== clean[i % 4]) result.pastNoisy++; }
+                else if (past[i] !== 7) result.pastOutside++;
+              }
+              // WebGL1 ignores an 8th argument: the read lands at the start of the array all the same.
+              const one = document.createElement('canvas').getContext('webgl', { preserveDrawingBuffer: true });
+              one.canvas.width = 16; one.canvas.height = 16; one.viewport(0, 0, 16, 16);
+              one.clearColor(0.5, 0.25, 0.75, 1); one.clear(one.COLOR_BUFFER_BIT);
+              const plain = new Uint8Array(16 * 16 * 4), offset = new Uint8Array(16 * 16 * 4 + 16).fill(7);
+              one.readPixels(0, 0, 16, 16, one.RGBA, one.UNSIGNED_BYTE, plain);
+              one.readPixels(0, 0, 16, 16, one.RGBA, one.UNSIGNED_BYTE, offset, 16);
+              result.webgl1Noisy = plain.filter((value, i) => value !== clean[i % 4]).length;
+              result.webgl1Moved = offset.filter((value, i) => i < plain.length ? value !== plain[i] : value !== 7).length;
+              // Reads that write nothing: through a bound pack buffer, from an incomplete framebuffer, on a lost context,
+              // with a row length shorter than the row and its skipped pixels.
               const unwritten = new Uint8Array(64 * 64 * 4).fill(7), errors = [];
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 60); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 8);
+              gl.readPixels(0, 0, 56, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
+              gl.pixelStorei(gl.PACK_ROW_LENGTH, 0); gl.pixelStorei(gl.PACK_SKIP_PIXELS, 0);
               gl.bindBuffer(gl.PIXEL_PACK_BUFFER, gl.createBuffer());
               gl.bufferData(gl.PIXEL_PACK_BUFFER, 64 * 64 * 4, gl.STREAM_READ);
               gl.readPixels(0, 0, 64, 64, gl.RGBA, gl.UNSIGNED_BYTE, unwritten); errors.push(gl.getError());
@@ -368,15 +391,19 @@ struct FingerprintingTests {
         let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
         let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
 
-        for name in ["strings", "skipped", "aligned"] {
+        for name in ["strings", "skipped", "aligned", "past"] {
             #expect(bare["\(name)Noisy"] == AnyHashable(0), "\(name)")
             #expect(bare["\(name)Outside"] == AnyHashable(0), "\(name)")
             #expect(try #require(protected["\(name)Noisy"] as? Int) > 0, "\(name)")
             #expect(protected["\(name)Outside"] == AnyHashable(0), "\(name)")
         }
+        #expect(bare["webgl1Noisy"] == AnyHashable(0))
+        #expect(try #require(protected["webgl1Noisy"] as? Int) > 0)
+        #expect(bare["webgl1Moved"] == AnyHashable(0))
+        #expect(protected["webgl1Moved"] == AnyHashable(0))
         #expect(bare["unwritten"] == AnyHashable(0))
         #expect(protected["unwritten"] == AnyHashable(0))
-        #expect(bare["errors"] == AnyHashable("1282,1286,37442"))
+        #expect(bare["errors"] == AnyHashable("1282,1282,1286,37442"))
         #expect(protected["errors"] == bare["errors"])
     }
 

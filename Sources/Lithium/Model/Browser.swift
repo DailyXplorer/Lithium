@@ -511,8 +511,8 @@ final class Browser {
         tab.answerHiddenDialog()
         switch step {
         case .open(let url): tab.load(url)
-        case .back: tab.webView.goBack()
-        case .forward: tab.webView.goForward()
+        case .back: tab.goBack()
+        case .forward: tab.goForward()
         case .reload: tab.reload()
         case .stop: tab.stopLoading()
         }

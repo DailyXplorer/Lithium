@@ -340,7 +340,17 @@ final class Tab: NSObject, Identifiable {
         // left on the tab until it wakes. Waking loads its page, which is the reload.
         if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
-        if let failedURL { load(failedURL) } else { webView.reload() }
+        if let failedURL { load(failedURL) } else { appStartedLoad = webView.reload() != nil }
+    }
+
+    /// Back and Forward asked of the app (the toolbar, an extension), unlike the page's own
+    /// `history.back()`: a file they lead to downloads without asking.
+    func goBack() {
+        appStartedLoad = webView.goBack() != nil
+    }
+
+    func goForward() {
+        appStartedLoad = webView.goForward() != nil
     }
 
     /// What shows the page: the PDF viewer or the web view. Keyboard focus goes back to it.
@@ -891,7 +901,8 @@ extension Tab: WKNavigationDelegate {
             return (await askToDownload() ? .download : .cancel, preferences)
         }
         if isMainFrame, action.targetFrame != nil, !Self.isRedirect(action) {
-            loadWasRequested = appStartedLoad || [.backForward, .reload].contains(action.navigationType) || Self.isPressed(action, in: webView)
+            // Not every Back or Reload: a page's own `history.go(0)` comes as one too.
+            loadWasRequested = appStartedLoad || Self.isPressed(action, in: webView)
             appStartedLoad = false
         }
 
@@ -1205,7 +1216,7 @@ extension Tab: WKNavigationDelegate {
             showError(Self.crashedAgain, for: url)
         } else {
             lastCrashReload = Date()
-            webView.reload()
+            appStartedLoad = webView.reload() != nil
             // The new process starts from the page's settings; said again in case mute isn't among them.
             if isMuted { applyMute(to: webView) }
         }
@@ -1511,12 +1522,12 @@ extension Tab: WKWebExtensionTab {
 
     func goBack(for context: WKWebExtensionContext) async throws {
         wake()
-        webView.goBack()
+        goBack()
     }
 
     func goForward(for context: WKWebExtensionContext) async throws {
         wake()
-        webView.goForward()
+        goForward()
     }
 
     /// What an extension or an agent does in a tab counts as using it, so the next sleep pass leaves it be.

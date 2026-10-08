@@ -320,6 +320,12 @@ struct NavigationTests {
             browser.find.hide()
             browser.close(tab)
         }
+        // Counted in the page's rendered text: drawn in a window far off screen.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil) }
+        window.contentView = tab.webView
+        window.orderFrontRegardless()
         #expect(await waitUntil(30) { tab.webView.title == "Many" && !tab.webView.isLoading })
         browser.find.show(focusingField: false)
         await browser.find.update(query: "lithium", in: tab.findTarget)

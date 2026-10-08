@@ -421,13 +421,13 @@ struct UISnapshotTests {
         }
     }
 
-    /// The lock's panel with the protections switch, on and off.
+    /// The lock's panel with its two switches, on and off, each one right-aligned in its row.
     @Test func siteInfoProtectionsSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Theme.registerFonts()
         for isOn in [true, false] {
             for isDark in [false, true] {
-                let panel = SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 29, canClear: true, permissions: [:], protections: .constant(isOn), showsCertificate: .constant(false))
+                let panel = SiteInfoView(host: "www.youtube.com", favicon: nil, connection: .secure, certificate: .loading, cookieCount: 29, canClear: true, permissions: [:], protections: .constant(isOn), usesSiteFont: .constant(!isOn), showsCertificate: .constant(false))
                 try render(panel, isDark: isDark).write(to: directory.appending(path: "site-info-protections-\(isOn ? "on" : "off")-\(isDark ? "dark" : "light").png"))
             }
         }

@@ -146,20 +146,12 @@ struct SiteInfoView: View {
                     Text(Self.permissionSummary(permissions))
                 }
                 if let protections {
-                    Toggle(isOn: protections) {
-                        Text("Block ads and trackers").foregroundStyle(.secondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
+                    SwitchRow(label: "Block ads and trackers", isOn: protections)
                 }
                 if let usesSiteFont {
-                    Toggle(isOn: usesSiteFont) {
-                        Text("Use this site's font").foregroundStyle(.secondary)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .disabled(siteFontIsFixed)
-                    .help(siteFontIsFixed ? "Pages on this Mac keep their font" : "Instead of your font")
+                    SwitchRow(label: "Use this site's font", isOn: usesSiteFont)
+                        .disabled(siteFontIsFixed)
+                        .help(siteFontIsFixed ? "Pages on this Mac keep their font" : "Instead of your font")
                 }
             }
 
@@ -205,6 +197,22 @@ private struct Row<Value: View>: View {
             Text(label).foregroundStyle(.secondary)
             Spacer(minLength: 8)
             value
+        }
+    }
+}
+
+/// A switch laid out as a `Row`: label on the left with the others, switch on the right with
+/// their values. A bare `Toggle` only takes its own width, so the column centred it.
+private struct SwitchRow: View {
+    let label: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Row(label: label) {
+            Toggle(label, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
         }
     }
 }

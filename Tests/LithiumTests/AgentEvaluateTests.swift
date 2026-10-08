@@ -48,10 +48,13 @@ struct AgentEvaluateTests {
         }
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
         defer { listener.cancel() }
+        // A log of the test's own: the shared day file also gets other tests' lines, and their clears.
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-evaluate-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
         let browser = Browser()
         await browser.privacy.waitUntilReady()
         await browser.extensions.waitUntilLoaded()
-        await browser.setAgentAccess(true)
+        await browser.setAgentAccess(true, folder: folder)
         var failure: (any Error)?
         do { try await body(try await Client(browser: browser), base) } catch { failure = error }
         browser.tabs.forEach(browser.close)
@@ -312,8 +315,8 @@ struct AgentEvaluateTests {
 
     /// A script that fills a password, then keeps the page busy past the after-run read, leaves
     /// Lithium nothing to scrub with: the result is withheld rather than sent unscrubbed. The
-    /// password is split in the function, which Lithium can't mask either, so the day's log the
-    /// last test reads never holds it whole, whichever runs first.
+    /// password is split in the function, which Lithium can't mask either, so the log never
+    /// holds it whole.
     @Test func aResultLithiumCantCheckIsWithheld() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
@@ -447,7 +450,7 @@ struct AgentEvaluateTests {
             let function = "() => '\(Self.password)' === document.title\(padding)"
             let result = await evaluate(client, id, function, ["world": "page"])
             #expect(result.code == "blocked", "\(result.content)")
-            let log = try String(contentsOf: AgentLog.folder.appending(path: AgentLog.fileName(for: Date())), encoding: .utf8)
+            let log = String(decoding: await client.hub.log.export(), as: UTF8.self)
             #expect(!log.contains(Self.password), "\(log.split(separator: "\n").filter { $0.contains(Self.password) })")
             let line = try #require(log.split(separator: "\n").last { $0.contains("\"evaluate\"") }.map { try JSONValue.decode(Data($0.utf8)) })
             let logged = try #require(line["params"]?["function"]?.string)

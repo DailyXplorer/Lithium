@@ -2,7 +2,8 @@
 // asks for the reader. Swaps the page's document for one holding its article alone, and back: the
 // page's own stays as it was, detached, so leaving returns to it without a reload (its frames,
 // which lose their document when detached, load again).
-// Arguments: action ('enter', 'exit' or 'style'), style ({ size, theme, font }), css (for 'enter').
+// Arguments: action ('enter', 'exit' or 'style'), style ({ size, theme, font }), css and font (DM
+// Sans as base64) for 'enter'.
 // The article is found by Mozilla Readability, Firefox's reader, bundled at the end of this file.
 
 const applyStyle = (root) => {
@@ -32,11 +33,26 @@ if (!document.body) return false;
 // ads, sign-ups or links elsewhere, which Readability keeps when they read like a sentence; and
 // its images take the picture the page shows: only the page knows that.
 const unrendered = new Set(['script', 'style', 'noscript', 'template', 'link', 'meta']);
-const unlikely = /(^|[\s_-])ads?([\s_-]|$)|advert|sponsor|promo|newsletter|subscribe|signup|related|recommend|share|social|cookie|popup|modal|comment|sidebar|breadcrumb|pagination|footer|menu/i;
+const unlikely = /(^|[\s_-])ads?([\s_-]|$)|advert|sponsor|promo|newsletter|subscribe|signup|related|recommend|share|social|cookie|popup|modal|comment|sidebar|breadcrumb|pagination|footer|menu|carousel|slider|swiper|slick|splide|glide/i;
 const likely = /article|content|story|post|entry|main|body|text/i;
 const isClutter = (element) => {
   const name = `${typeof element.className === 'string' ? element.className : ''} ${element.id}`;
   return unlikely.test(name) && !likely.test(name) && element.textContent.length < 1000;
+};
+// Page furniture Readability keeps when it reads like a sentence: carousels and their slides,
+// tabs, sliders, what the page reads out to screen readers ("Slide 1 of 5") or shows them alone
+// (a box clipped to a pixel), and counters in a box of their own: not "1/2" in a recipe, nor "3 of
+// 4" in a sentence or a table.
+const furnitureRoles = new Set(['tablist', 'tab', 'slider', 'progressbar', 'status', 'timer', 'marquee', 'toolbar', 'menubar', 'menu']);
+const counter = /^\s*((slide|item|image|photo|picture|page|step)\s*\d+\s*(of|\/)|\d+\s+of)\s*\d+\s*$/i;
+const isFurniture = (element, computed) => {
+  if (furnitureRoles.has(element.getAttribute('role'))) return true;
+  if (/carousel|slide/i.test(element.getAttribute('aria-roledescription') ?? '')) return true;
+  const live = element.getAttribute('aria-live');
+  if (live && live !== 'off' && element.textContent.length < 200) return true;
+  if (computed.position === 'absolute' && computed.overflow === 'hidden' && element.offsetWidth <= 1 && element.offsetHeight <= 1) return true;
+  return computed.display !== 'inline' && element.localName !== 'td' && element.localName !== 'th'
+    && element.childElementCount < 4 && element.textContent.length < 40 && counter.test(element.textContent);
 };
 const copy = document.cloneNode(true);
 const originals = document.body.getElementsByTagName('*');
@@ -46,7 +62,7 @@ for (let index = 0; index < copies.length; index++) {
   const element = originals[index];
   if (removed?.contains(element) || unrendered.has(element.localName)) continue;
   const computed = getComputedStyle(element);
-  if (computed.display === 'none' || computed.visibility === 'hidden' || isClutter(element)) {
+  if (computed.display === 'none' || computed.visibility === 'hidden' || isClutter(element) || isFurniture(element, computed)) {
     removed = element;
     copies[index].remove();
   } else if (element.localName === 'img') {
@@ -147,9 +163,15 @@ root.dir = found.dir || document.documentElement.dir;
 const head = document.createElement('head');
 const pageTitle = document.createElement('title');
 pageTitle.textContent = document.title;
-const sheet = document.createElement('style');
-sheet.textContent = css;
-head.append(pageTitle, sheet);
+head.append(pageTitle);
+// A constructed sheet and a font made from its bytes: the page's Content-Security-Policy, which
+// outlives its document, blocks a <style> element and a data: font, but neither of these.
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(css);
+if (font && ![...document.fonts].some((face) => face.family.replace(/"/g, '') === 'Lithium DM Sans')) {
+  const bytes = Uint8Array.fromBase64 ? Uint8Array.fromBase64(font) : Uint8Array.from(atob(font), (char) => char.charCodeAt(0));
+  document.fonts.add(new FontFace('Lithium DM Sans', bytes, { weight: '100 1000' }));
+}
 const header = document.createElement('header');
 const about = document.createElement('p');
 about.className = 'site';
@@ -170,8 +192,9 @@ body.append(article);
 root.append(head, body);
 applyStyle(root);
 
-window.__lithiumReader = { root: document.documentElement, sheets: document.adoptedStyleSheets, x: scrollX, y: scrollY };
-document.adoptedStyleSheets = [];
+// A copy of the page's sheets: the array is live, and would hold the reader's instead.
+window.__lithiumReader = { root: document.documentElement, sheets: [...document.adoptedStyleSheets], x: scrollX, y: scrollY };
+document.adoptedStyleSheets = [sheet];
 document.replaceChild(root, document.documentElement);
 scrollTo(0, 0);
 return true;

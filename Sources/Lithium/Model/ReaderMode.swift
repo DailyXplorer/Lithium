@@ -35,27 +35,28 @@ enum ReaderMode {
 
     /// False when the page has no article to show.
     static func enter(_ webView: WKWebView, style: ReaderStyle) async -> Bool {
-        await run("enter", style: style, css: css, in: webView)
+        await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
     }
 
     static func exit(_ webView: WKWebView) async {
-        _ = await run("exit", style: .init(), css: "", in: webView)
+        _ = await run("exit", style: .init(), in: webView)
     }
 
     static func apply(_ style: ReaderStyle, to webView: WKWebView) async {
-        _ = await run("style", style: style, css: "", in: webView)
+        _ = await run("style", style: style, in: webView)
     }
 
-    private static func run(_ action: String, style: ReaderStyle, css: String, in webView: WKWebView) async -> Bool {
-        let arguments: [String: Any] = ["action": action, "style": style.arguments, "css": css]
+    private static func run(_ action: String, style: ReaderStyle, css: String = "", font: String = "", in webView: WKWebView) async -> Bool {
+        let arguments: [String: Any] = ["action": action, "style": style.arguments, "css": css, "font": font]
         let result = try? await webView.callAsyncJavaScript(script, arguments: arguments, contentWorld: .defaultClient)
         return result as? Bool ?? false
     }
 
     private static let checkScript = source("reader-check", "js")
     private static let script = source("reader", "js")
-    /// DM Sans travels inline, as for Markdown: pages can't reach the app bundle.
-    private static let css = PageStyle.fontFace + source("reader", "css")
+    /// DM Sans travels apart, as bytes (`reader.js`): pages can't reach the app bundle, and a strict
+    /// Content-Security-Policy blocks a data: font.
+    private static let css = source("reader", "css")
 
     private static func source(_ name: String, _ fileExtension: String) -> String {
         Resources.bundle.url(forResource: name, withExtension: fileExtension)

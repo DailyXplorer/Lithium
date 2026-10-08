@@ -35,6 +35,15 @@ private enum ReaderPages {
         """
 
     static let short = "<!doctype html><title>Home</title><body><p>Hello.</p><a href='/a'>A</a></body>"
+
+    /// No inline style nor data: font, as on GitHub and Google's sites: a <style> element or an
+    /// @font-face the reader added would be blocked.
+    static let strictPolicy = "Content-Type: text/html; charset=utf-8\r\nContent-Security-Policy: style-src 'self'; font-src 'self'"
+
+    static func fixture(_ name: String) throws -> String {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "html"))
+        return try String(contentsOf: url, encoding: .utf8)
+    }
 }
 
 @MainActor
@@ -54,8 +63,7 @@ struct ReaderModeTests {
     }
 
     private func fixture(_ name: String) throws -> String {
-        let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "html"))
-        return try String(contentsOf: url, encoding: .utf8)
+        try ReaderPages.fixture(name)
     }
 
     /// A synthetic page with a structure that cut real articles short: every paragraph, numbered
@@ -166,6 +174,72 @@ struct ReaderModeTests {
         await ReaderMode.apply(ReaderStyle(size: 15, theme: .dark, font: .sans), to: webView)
         #expect(try await value("document.documentElement.dataset.theme", in: webView) == "dark")
         #expect(try await value("getComputedStyle(document.querySelector('article')).fontSize", in: webView) == "15px")
+    }
+
+    /// Served with a Content-Security-Policy that blocks inline styles and data: fonts, the page
+    /// still gets the reader's look: its column, size, DM Sans, and tables scrolling inside it.
+    @Test func stylesPagesUnderAStrictPolicy() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": (ReaderPages.strictPolicy, try fixture("reader-carousel"))])
+        defer { listener.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: base))
+        try await loaded.wait()
+        // The policy bites: the page's own inline style (17px) is blocked.
+        #expect(try await value("getComputedStyle(document.body).fontSize", in: webView) == "16px")
+        _ = try await webView.evaluateJavaScript("""
+            const pageSheet = new CSSStyleSheet();
+            pageSheet.replaceSync('.page-sheet {}');
+            document.adoptedStyleSheets = [pageSheet]; 0
+            """)
+
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        let article = "getComputedStyle(document.querySelector('article'))"
+        #expect(try await value("\(article).fontSize", in: webView) == "19px")
+        #expect(try await value("\(article).maxWidth", in: webView) != "none")
+        #expect(try await value("\(article).fontFamily.split(',')[0].replace(/\"/g, '')", in: webView) == "Lithium DM Sans")
+        let fontLoaded = try await webView.callAsyncJavaScript("""
+            await document.fonts.ready;
+            return [...document.fonts].some((face) => face.family.replace(/"/g, '') === 'Lithium DM Sans' && face.status === 'loaded');
+            """, contentWorld: .page)
+        #expect(fontLoaded as? Bool == true)
+        #expect(try await value("""
+            (() => {
+              const table = document.querySelector('table'), article = document.querySelector('article');
+              const right = article.getBoundingClientRect().right - parseFloat(getComputedStyle(article).paddingRight);
+              return String(table.getBoundingClientRect().right <= right + 0.5 && table.scrollWidth > table.clientWidth);
+            })()
+            """, in: webView) == "true")
+
+        await ReaderMode.apply(ReaderStyle(size: 23, theme: .dark, font: .sans), to: webView)
+        #expect(try await value("\(article).fontSize", in: webView) == "23px")
+        // The reader's sheet leaves with it, and the page's own comes back.
+        await ReaderMode.exit(webView)
+        #expect(try await value("document.adoptedStyleSheets.map((sheet) => sheet.cssRules[0].selectorText).join()", in: webView) == ".page-sheet")
+    }
+
+    /// Carousels with their "Slide 1 of 3" labels, tabs, a screen reader's label and a lone
+    /// counter stay out; counts within the text stay in.
+    @Test func leavesCarouselsAndLabelsOut() async throws {
+        let webView = try await expectWholeArticle("reader-carousel", paragraphs: 6, without: [
+            "Slide 1 of 3", "coating line, where", "Cylindrical cells", "Opens a glossary", "4 of 12",
+        ])
+        #expect(try await value("document.body.innerText", in: webView)?.contains("1/2 part binder to 3 of 4 parts") == true)
+    }
+
+    /// A product's landing page isn't offered the reader, while an article whose page calls itself
+    /// a website still is; forced, the landing page's reader leaves the carousel out.
+    @Test func offersNoReaderOnLandingPages() async throws {
+        let webView = try await load(try fixture("reader-landing-page"))
+        #expect(await ReaderMode.check(webView) == .none)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        #expect(text.contains("It thinks through problems"))
+        #expect(!text.contains("Slide 1 of") && !text.contains("See what it can build"))
+
+        let website = ReaderPages.article.replacingOccurrences(of: "<title>", with: "<meta property=\"og:type\" content=\"website\"><title>")
+        #expect(await ReaderMode.check(try await load(website)) == .article)
     }
 
     /// With DM Sans on websites (the default), the page's font script leaves the reader's font
@@ -394,6 +468,29 @@ struct ReaderSnapshotTests {
             let image = try await webView.takeSnapshot(configuration: nil)
             let png = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
             try png.write(to: directory.appending(path: "reader-page-\(name).png"))
+        }
+    }
+
+    /// An article with a carousel and a wide table, served with a strict Content-Security-Policy.
+    @Test func strictPolicyPageSnapshots() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let (listener, base) = try await LocalHTTP.serve(["/": (ReaderPages.strictPolicy, try ReaderPages.fixture("reader-carousel"))])
+        defer { listener.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1100))
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 900, height: 1100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = webView
+        defer { window.contentView = nil }
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: base))
+        try await loaded.wait()
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        for (name, isDark) in [("light", false), ("dark", true)] {
+            window.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
+            try await Task.sleep(for: .milliseconds(400))
+            let image = try await webView.takeSnapshot(configuration: nil)
+            let png = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+            try png.write(to: directory.appending(path: "reader-strict-policy-\(name).png"))
         }
     }
 

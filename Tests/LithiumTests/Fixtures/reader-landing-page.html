@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Model 3 Pro - Example Labs</title>
+<meta property="og:type" content="website">
+<style>body { font: 16px sans-serif; } .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }</style>
+</head>
+<body>
+<!-- A product landing page, as for a new AI model: a tagline, a carousel with its slide labels,
+     cards of one heading and one blurb each, and a benchmark table. Not an article. -->
+<header><nav><a href="/">Example Labs</a> <a href="/models">Models</a> <a href="/research">Research</a></nav></header>
+<main>
+  <section class="hero">
+    <h1>Model 3 Pro</h1>
+    <p>Our most capable model yet, for your hardest problems.</p>
+    <a href="/try">Try it now</a>
+  </section>
+  <section class="showcase" aria-roledescription="carousel">
+    <div aria-live="polite">Slide 1 of 2</div>
+    <div role="group" aria-roledescription="slide"><p>See what it can build from a single prompt.</p></div>
+    <div class="slide-label">Slide 1 of 5</div>
+  </section>
+  <section class="cards">
+    <div class="card"><h3>Reasoning</h3><p>It thinks through problems step by step before it answers, which makes it far better at mathematics, science and the kind of puzzles that trip up faster models.</p><a href="/reasoning">Learn more</a> <a href="/try">Try it</a></div>
+    <div class="card"><h3>Coding</h3><p>It writes, reviews and fixes code across whole repositories, keeps track of how the pieces fit together, and explains each change it makes in plain language.</p><a href="/coding">Learn more</a></div>
+    <div class="card"><h3>Long context</h3><p>It reads a million tokens at once, enough for a long book, a large codebase or hours of video, and still finds the one detail that answers your question.</p><a href="/context">Learn more</a></div>
+    <div class="card"><h3>Multimodal</h3><p>It understands text, images, audio and video together, so you can ask about a chart in a slide deck or a moment in a recorded meeting in the same breath.</p><a href="/multimodal">Learn more</a></div>
+    <div class="card"><h3>Agents</h3><p>It plans and carries out tasks over many steps with the tools you give it, checks its own work along the way, and asks you before anything it cannot undo.</p><a href="/agents">Learn more</a></div>
+    <div class="card"><h3>Safety</h3><p>It was tested by internal and external teams for months before release, against misuse, bias and the risks that grow with every new capability we add.</p><a href="/safety">Learn more</a></div>
+  </section>
+  <section class="benchmarks">
+    <h2>Benchmarks</h2>
+    <table><tr><th>Benchmark</th><th>Model 3 Pro</th><th>Model 2.5 Pro</th><th>Other model</th></tr>
+      <tr><td>Reasoning test</td><td>91.9%</td><td>86.4%</td><td>88.1%</td></tr>
+      <tr><td>Coding test</td><td>76.2%</td><td>59.6%</td><td>72.7%</td></tr></table>
+  </section>
+</main>
+<footer><p>Copyright Example Labs</p></footer>
+</body>
+</html>

@@ -15,7 +15,7 @@ enum PageStyle {
     /// DM Sans travels inline, since web pages cannot reach the app bundle. Every page decodes
     /// it again, so it goes as WOFF2: the same font as DMSans.ttf, compressed to about a third
     /// (`scripts/make-web-font.py`).
-    private static let fontBase64 = Resources.bundle.url(forResource: "DMSans", withExtension: "woff2")
+    static let fontBase64 = Resources.bundle.url(forResource: "DMSans", withExtension: "woff2")
         .flatMap { try? Data(contentsOf: $0) }?.base64EncodedString() ?? ""
 
     /// Declares "Lithium DM Sans" for pages Lithium renders itself.

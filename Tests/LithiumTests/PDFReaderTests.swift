@@ -58,7 +58,8 @@ extension BrowserTests {
     }
 
     /// A PDF from the web can't open local files; a local PDF can open its neighbours, but nothing
-    /// outside its folder, which would open with read access to that file's own folder.
+    /// outside its folder, which would open with read access to that file's own folder, nor the
+    /// folder itself, which would open with read access to the one above.
     @Test func onlyLocalPDFsFollowLinksToFiles() async throws {
         let file = try makePDF(title: "Links", pages: ["Here"])
         let neighbour = file.deletingLastPathComponent().appending(path: "neighbour.html")
@@ -82,8 +83,11 @@ extension BrowserTests {
         #expect(await waitForPDF(30) { local.pdf?.pageCount == 1 })
         local.pdf?.onOpenLink?(outside, false)
         local.pdf?.onOpenLink?(file.deletingLastPathComponent().appending(path: "../\(outsideName)"), false)
+        local.pdf?.onOpenLink?(file.deletingLastPathComponent(), false)
+        local.pdf?.onOpenLink?(file.deletingLastPathComponent().appending(path: "sub/.."), false)
         try await Task.sleep(for: .milliseconds(500))
         #expect(local.pdf?.pageCount == 1 && local.webView.title != "Outside")
+        #expect(local.url?.lastPathComponent == file.lastPathComponent)
         local.pdf?.onOpenLink?(neighbour, false)
         #expect(await waitForPDF(30) { local.webView.title == "Neighbour" })
     }

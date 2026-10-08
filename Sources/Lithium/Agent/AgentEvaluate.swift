@@ -3,11 +3,13 @@ import WebKit
 
 /// What `agent.js` reports around an agent's script, per frame: the values of its password and
 /// card fields (any one keeps the script from running; those filled while it ran are scrubbed
-/// out of its result), whether a card field is filled or focused, whether it holds an
-/// extension's frame, and the addresses of the frames it holds.
+/// out of its result), whether one ever held a value since `agent.js` came, whether a card
+/// field is filled or focused, whether it holds an extension's frame, and the addresses of the
+/// frames it holds.
 struct GuardReport: Decodable, DocumentReport {
     let token: String
     var secrets: [String] = []
+    var filledBefore = false
     var card = false
     var manager = false
     var frames: [String] = []
@@ -177,6 +179,11 @@ extension AgentHub {
     /// log line, which may quote one.
     private func checkNoSecrets(_ named: NamedTab, _ webView: WKWebView, frame document: String?, of target: FrameTarget, named name: String?, until deadline: ContinuousClock.Instant) async throws {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
+        // A script reaches a linked window's page too (`opener.document`, a popup's handle), whose
+        // fields no check here reads.
+        if browser?.tabs.contains(where: { $0 !== named.tab && ($0 === named.tab.scriptOpener || $0.scriptOpener === named.tab) }) == true {
+            throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts while a window it opened, or the one that opened it, is open: a script could reach that page. Use snapshot and the input tools instead.")
+        }
         let found = try await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: deadline)
         if target.info != nil, !found.reports.contains(where: { $0.1.document == document }) {
             throw AgentToolError(code: "timeout", message: "\(named.id)’s frame \(name ?? "") didn’t answer, so Lithium couldn’t check its fields. Try again.")
@@ -185,6 +192,9 @@ extension AgentHub {
         Self.callNotes?.secrets = reports.flatMap(\.secrets)
         let origins = state.frames.values.map(\.securityOrigin)
         if reports.contains(where: { !$0.secrets.isEmpty }) { throw Self.secretPresent(named) }
+        if reports.contains(where: \.filledBefore) {
+            throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts: a password or card value was entered on this page, which an earlier script may have kept. Use snapshot and the input tools instead.")
+        }
         if reports.contains(where: \.card) {
             throw AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts: a card field is in use on this page. Use snapshot and the input tools, which ask the user before paying.")
         }

@@ -1295,6 +1295,16 @@
   // them. The values go to Lithium alone, which also takes them out of what a script returns,
   // and the frames' addresses let it spot a payment provider's.
   const isSecretField = (element) => isField(element) && (isPassword(element) || isCard(element));
+  const secretValue = (element) => (element.localName === 'select' ? (element.selectedIndex > 0 ? element.value : '') : element.value);
+  // An earlier script's listener, or its page-world globals, may keep a value typed after it
+  // ran and hand it to a later script once the field is empty again: once a secret field held a
+  // value in this document, no script runs here.
+  let filledBefore = false;
+  addEventListener('input', (event) => {
+    if (filledBefore) return;
+    const target = event.composedPath()[0];
+    if (target?.nodeType === 1 && isSecretField(target) && secretValue(target)) filledBefore = true;
+  }, { capture: true, passive: true });
   const guards = () => {
     const secrets = new Set();
     const frames = [];
@@ -1311,14 +1321,16 @@
           try { inner = element.contentDocument; } catch { /* cross-origin */ }
           if (inner && depth < 4) visit(inner, depth + 1);
         } else if (isSecretField(element)) {
-          const value = element.localName === 'select' ? (element.selectedIndex > 0 ? element.value : '') : element.value;
+          const value = secretValue(element);
           if (value) secrets.add(value);
           if (!isPassword(element) && (value || element === focused)) card = true;
         }
       }
     };
     visit(document, 0);
-    return { token: frame.token, path: framePath(), secrets: [...secrets], card, manager, frames };
+    // Child documents' values latch here too: the script reaches them from this one.
+    if (secrets.size) filledBefore = true;
+    return { token: frame.token, path: framePath(), secrets: [...secrets], filledBefore, card, manager, frames };
   };
   // Hands `evaluate`'s world the element `id` names, by an event only that world listens for (a
   // random name, so the page can't). It goes to `document` when no element is asked for, and to
@@ -1327,7 +1339,7 @@
   // that holds one gets no event, and the script never runs.
   const handOver = ({ id, element: name }) => {
     const held = guards();
-    if (held.secrets.length || held.card || held.manager) return { token: frame.token, blocked: true };
+    if (held.secrets.length || held.filledBefore || held.card || held.manager) return { token: frame.token, blocked: true };
     if (id === undefined) {
       document.dispatchEvent(new CustomEvent(name));
       return { token: frame.token };

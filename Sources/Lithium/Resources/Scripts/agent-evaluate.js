@@ -1,31 +1,29 @@
-// The body `evaluate` runs (PR 10), in Lithium's script world or the page's. The agent's
-// function is pasted into a wrapper first, so it sees none of the names below but `lithium`,
-// which holds nothing secret, and an expression in its place is evaluated only once agent.js
-// has handed over the element its ref names (by an event whose name only this call knows),
-// after agent.js found no password or card value in the frame. It is then called with the
-// element and its args. What it returns comes back as JSON text, which Lithium scrubs before
-// the agent sees it.
+// The body `evaluate` runs (PR 10), in Lithium's script world or the page's. It first waits for
+// agent.js to hand over the element its ref names (by an event whose name only this call
+// knows), which agent.js sends only after it found no password or card value in the frame. The
+// agent's function is pasted in below that wait, so even text that closes the wrapper and runs
+// code of its own runs no sooner. It sees none of the names below but `lithium` and
+// `lithiumHandedOver`, which hold nothing secret, and is called with the element and its args.
+// What it returns comes back as JSON text, which Lithium scrubs before the agent sees it.
+const lithiumHandedOver = await new Promise((resolve) => {
+  const take = (event) => {
+    const target = event.composedPath()[0];
+    done(target === document ? { element: undefined } : target === window ? { stale: true } : { element: target });
+  };
+  const done = (value) => {
+    removeEventListener(lithium.element, take, true);
+    clearTimeout(timer);
+    resolve(value);
+  };
+  addEventListener(lithium.element, take, true);
+  const timer = setTimeout(() => done({ lost: true }), 3000);
+});
+if (lithiumHandedOver.lost) return JSON.stringify({ lost: true });
+if (lithiumHandedOver.stale) return JSON.stringify({ stale: true });
 const lithiumFunction = async () => (
 __LITHIUM_FUNCTION__
 );
-return await (async (source, setup) => {
-  const lost = {};
-  const element = await new Promise((resolve) => {
-    const take = (event) => {
-      const target = event.composedPath()[0];
-      done(target === document ? undefined : target === window ? null : target);
-    };
-    const done = (value) => {
-      removeEventListener(setup.element, take, true);
-      clearTimeout(timer);
-      resolve(value);
-    };
-    addEventListener(setup.element, take, true);
-    const timer = setTimeout(() => done(lost), 3000);
-  });
-  if (element === lost) return JSON.stringify({ lost: true });
-  if (element === null) return JSON.stringify({ stale: true });
-
+return await (async (source, setup, element) => {
   const serialize = (value) => {
     const seen = new WeakSet();
     return JSON.stringify(value, (key, item) => {
@@ -64,4 +62,4 @@ return await (async (source, setup) => {
     try { message = error && typeof error === 'object' && 'message' in error ? `${error.name}: ${error.message}` : String(error); } catch { message = 'an error' }
     return JSON.stringify({ error: message.toWellFormed() });
   }
-})(lithiumFunction, lithium);
+})(lithiumFunction, lithium, lithiumHandedOver.element);

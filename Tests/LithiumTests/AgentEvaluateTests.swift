@@ -33,6 +33,7 @@ struct AgentEvaluateTests {
             <script>document.body.append(Object.assign(document.createElement('iframe'), { src: location.protocol + '//localhost:' + location.port + '/page' }))</script>
             """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
+        "/opener": (html, "<title>Opener</title><button onclick=\"window.popup = window.open('/signin')\">Open</button>"),
     ]
 
     /// PR 10's benchmark mode, removed in PR 11: its key must change nothing.
@@ -238,6 +239,60 @@ struct AgentEvaluateTests {
             _ = try await client.tab(id)?.webView.callAsyncJavaScript("document.querySelector('#pw').value = 'typed by the user'", contentWorld: .page)
             let filled = await evaluate(client, id, "() => document.querySelector('#pw').value")
             #expect(filled.code == "blocked", "\(filled.content)")
+        }
+    }
+
+    /// A listener an allowed script leaves catches a password typed later: once the field is
+    /// empty again, the next script still doesn't run, in either world.
+    @Test func aPasswordTypedAfterAScriptRanKeepsLaterScriptsFromRunning() async throws {
+        try await withAgent { client, base in
+            for world: JSONValue in ["isolated", "page"] {
+                let id = try await open(client, base.appending(path: "signin"))
+                let listening = await evaluate(client, id, "() => { document.querySelector('#pw').addEventListener('input', (event) => { window.kept = event.target.value }) }", ["world": world])
+                #expect(!listening.isError, "\(world): \(listening.content)")
+                _ = try await client.tab(id)?.webView.callAsyncJavaScript("""
+                    const pw = document.querySelector('#pw');
+                    pw.value = '\(Self.password)';
+                    pw.dispatchEvent(new Event('input', { bubbles: true }));
+                    pw.value = '';
+                    """, contentWorld: .page)
+                let kept = await evaluate(client, id, "() => window.kept", ["world": world])
+                #expect(kept.code == "blocked", "\(world): \(kept.content)")
+                #expect(!String(decoding: kept.content.encoded(), as: UTF8.self).contains(Self.password))
+            }
+        }
+    }
+
+    /// Text that closes the wrapper the function is pasted into runs only once agent.js handed
+    /// the frame over: here, filling a password before that would have blocked the hand-over.
+    @Test func codeOutsideTheFunctionRunsOnlyAfterTheHandOver() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "signin"))
+            let result = await evaluate(client, id, "0); document.querySelector('#pw').value = 'filled early'; (0")
+            #expect(result["result"] == 0, "\(result.content)")
+        }
+    }
+
+    /// A popup and the page that opened it reach each other's documents (`opener`, the handle
+    /// `window.open` returned), which no check reads: neither runs scripts while both are open.
+    @Test func neitherAPopupNorItsOpenerRunsScripts() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "opener"))
+            var button: String?
+            for _ in 0..<50 where button == nil {
+                let snapshot = await client.call("snapshot", ["tab": .string(id), "format": "json", "scope": "page"])
+                button = snapshot["nodes"]?.items?.first { $0["role"] == "button" && $0["name"] == "Open" }?["ref"]?.string
+                if button == nil { try await Task.sleep(for: .milliseconds(50)) }
+            }
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(try #require(button))])
+            let popup = try #require(clicked["newTabs"]?.items?.first?["tab"]?.string, "\(clicked.content)")
+            for tab in [id, popup] {
+                let refused = await evaluate(client, tab, "() => 1")
+                #expect(refused.code == "blocked", "\(tab): \(refused.content)")
+            }
+            client.browser.close(try #require(client.tab(popup)))
+            let freed = await evaluate(client, id, "() => 1")
+            #expect(freed["result"] == 1, "\(freed.content)")
         }
     }
 

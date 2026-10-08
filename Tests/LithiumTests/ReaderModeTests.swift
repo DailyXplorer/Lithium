@@ -53,6 +53,28 @@ struct ReaderModeTests {
         try await webView.evaluateJavaScript(script) as? String
     }
 
+    private func fixture(_ name: String) throws -> String {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "html"))
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// A synthetic page with a structure that cut real articles short: every paragraph, numbered
+    /// "Paragraph 01" on, reaches the reader, and none of what sat around them does.
+    @discardableResult
+    private func expectWholeArticle(_ name: String, paragraphs: Int, without clutter: [String]) async throws -> WKWebView {
+        let webView = try await load(try fixture(name))
+        #expect(await ReaderMode.check(webView) == .article)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        for index in 1...paragraphs {
+            #expect(text.contains(String(format: "Paragraph %02d", index)), "paragraph \(index) of \(name)")
+        }
+        for leftover in clutter {
+            #expect(!text.contains(leftover), "\(leftover) in \(name)")
+        }
+        return webView
+    }
+
     @Test func tellsArticlesFromOtherPages() async throws {
         #expect(await ReaderMode.check(try await load(ReaderPages.article)) == .article)
         #expect(await ReaderMode.check(try await load(ReaderPages.short)) == .none)
@@ -100,6 +122,32 @@ struct ReaderModeTests {
         #expect(try await value("String(window.pageState)", in: webView) == "42")
         #expect(try await value("String(document.querySelectorAll('*').length)", in: webView) == before)
         #expect(try await value("String(document.styleSheets.length)", in: webView) == "1")
+    }
+
+    /// Each paragraph in its own section, custom element and div, as on some company blogs.
+    @Test func keepsParagraphsSplitAcrossSections() async throws {
+        try await expectWholeArticle("reader-split-sections", paragraphs: 9, without: ["Listen to article", "Products", "Related stories", "Copyright footer"])
+    }
+
+    /// A story cut into wrapped chunks by ads, photos, a pull quote, a sign-up box and links to
+    /// other stories, with an offer the page keeps hidden.
+    @Test func keepsStoriesCutByFiguresAndAsides() async throws {
+        try await expectWholeArticle("reader-figures-asides", paragraphs: 8, without: [
+            "Front page", "Advertisement", "Read more", "Get the morning briefing", "Subscribe now", "Copyright footer", "Most read",
+        ])
+    }
+
+    /// A long read in chapters, each wrapped twice, none holding most of the text.
+    @Test func keepsLongReadsInChapters() async throws {
+        let webView = try await expectWholeArticle("reader-long-sections", paragraphs: 8, without: ["Issues"])
+        #expect(try await value("[...document.querySelectorAll('article h2')].map((h) => h.textContent).join('|')", in: webView)
+            == "I. A stone that burned red|II. Grease, glass and mood|III. The bomb and the battery|IV. The rush")
+    }
+
+    /// Text broken by blank lines instead of paragraphs, in an old table layout: the button
+    /// offers the reader there too.
+    @Test func readsTextBrokenByBlankLines() async throws {
+        try await expectWholeArticle("reader-line-breaks", paragraphs: 4, without: [])
     }
 
     @Test func leavesPagesWithoutAnArticleAlone() async throws {

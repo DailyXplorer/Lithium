@@ -142,15 +142,16 @@ struct TidyTitlesTabsTests {
         #expect(await waitUntil(30) { !tab.webView.isLoading && tab.title == first })
         #expect(await waitUntil(10) { model.asked == [first] })
 
-        // Each a new long title while the first is still answered.
+        // Each a new long title while the first is still answered, each held past the settling
+        // delay: only the wait for the request before it keeps it from the model.
         var last = first
         for minute in 1...5 {
             last = "Live match commentary at minute \(minute) with every score update from the stadium"
             _ = try await tab.webView.evaluateJavaScript("document.title = '\(last)'")
             #expect(await waitUntil(5) { tab.title == last })
+            try await Task.sleep(for: .seconds(1))
         }
-        // Past the settling delay of every one of them.
-        try await Task.sleep(for: .seconds(1))
+        #expect(model.asked == [first], "one title at a time")
         model.answers = true
 
         #expect(await waitUntil(10) { model.asked.count == 2 })

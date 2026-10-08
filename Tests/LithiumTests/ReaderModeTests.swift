@@ -40,6 +40,16 @@ private enum ReaderPages {
     /// @font-face the reader added would be blocked.
     static let strictPolicy = "Content-Type: text/html; charset=utf-8\r\nContent-Security-Policy: style-src 'self'; font-src 'self'"
 
+    /// Google's kind: nonces for its own scripts and styles, Trusted Types, fonts from its host alone.
+    static let googlePolicy = "Content-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'self'; "
+        + "script-src 'nonce-corpus' 'strict-dynamic' 'unsafe-eval'; style-src 'nonce-corpus'; font-src https://fonts.gstatic.com; "
+        + "img-src 'self' data:; object-src 'none'; base-uri 'self'; require-trusted-types-for 'script'"
+
+    /// GitHub's: inline styles allowed, but nothing from anywhere but its own hosts, fonts included.
+    static let githubPolicy = "Content-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'; base-uri 'self'; "
+        + "font-src github.githubassets.com; img-src 'self' data: github.githubassets.com; script-src github.githubassets.com; "
+        + "style-src 'unsafe-inline' github.githubassets.com"
+
     static func fixture(_ name: String) throws -> String {
         let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "html"))
         return try String(contentsOf: url, encoding: .utf8)
@@ -228,6 +238,7 @@ struct ReaderModeTests {
         let text = try #require(try await value("document.body.innerText", in: webView))
         #expect(text.contains("1/2 part binder to 3 of 4 parts"))
         #expect(text.contains("Step 2 of 3") && text.contains("learn more about the plant"))
+        #expect(text.contains("the formation hall find out more"))
     }
 
     /// A product's landing page isn't offered the reader, while an article whose page calls itself
@@ -242,6 +253,33 @@ struct ReaderModeTests {
 
         let website = ReaderPages.article.replacingOccurrences(of: "<title>", with: "<meta property=\"og:type\" content=\"website\"><title>")
         #expect(await ReaderMode.check(try await load(website)) == .article)
+    }
+
+    /// Pages modeled on the reported one and on other strict-policy sites, each served with its
+    /// site's kind of policy: the button comes on the articles alone, and the reader, even forced,
+    /// is styled and has no slide labels.
+    @Test(arguments: [
+        ("reader-corpus-deepmind", ReaderPages.googlePolicy, "none", "It thinks through hard problems"),
+        ("reader-corpus-github", ReaderPages.githubPolicy, "article", "Paragraph 05: contributions are welcome"),
+        ("reader-corpus-google-blog", ReaderPages.googlePolicy, "article", "Paragraph 05: everything the lab learns"),
+    ])
+    func readsStrictPolicySites(name: String, policy: String, state: String, kept: String) async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": (policy, try fixture(name))])
+        defer { listener.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: base))
+        try await loaded.wait()
+        #expect(await ReaderMode.check(webView).rawValue == state, "\(name)")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()), "\(name)")
+        let article = "getComputedStyle(document.querySelector('article'))"
+        #expect(try await value("\(article).fontSize", in: webView) == "19px", "\(name)")
+        #expect(try await value("\(article).maxWidth", in: webView) != "none", "\(name)")
+        #expect(try await value("\(article).fontFamily.split(',')[0].replace(/\"/g, '')", in: webView) == "Lithium DM Sans", "\(name)")
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        #expect(text.contains(kept), "\(name)")
+        #expect(text.range(of: #"Slide \d+ of \d+"#, options: .regularExpression) == nil, "\(name)")
     }
 
     /// Documentation whose page calls itself something else (GitHub says "object"), its paragraphs

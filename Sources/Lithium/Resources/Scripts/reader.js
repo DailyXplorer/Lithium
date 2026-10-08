@@ -47,11 +47,18 @@ const isClutter = (element) => {
 const furnitureRoles = new Set(['tablist', 'tab', 'slider', 'progressbar', 'status', 'timer', 'marquee', 'toolbar', 'menubar', 'menu']);
 const counter = /^\s*((slide|item|image|photo|picture|page|step)\s*\d+\s*(of|\/)|\d+\s+of)\s*\d+\s*$/i;
 const teaser = /^\s*(learn|read|see|find out|discover) more\s*$/i;
-const inText = (node) => node?.nodeType === Node.TEXT_NODE && node.textContent.trim() !== '';
+// Within a sentence when its nearest sibling that shows something, either way, is text or an inline
+// element with some ("see <em>this</em> <a>learn more</a>"), not a card's paragraph or heading.
+const inText = (node, step) => {
+  while (node && (node.nodeType === Node.COMMENT_NODE || node.nodeType === Node.TEXT_NODE && node.textContent.trim() === '')) node = node[step];
+  if (node?.nodeType === Node.TEXT_NODE) return true;
+  return node?.nodeType === Node.ELEMENT_NODE && node.localName !== 'br' && node.textContent.trim() !== ''
+    && getComputedStyle(node).display.startsWith('inline');
+};
 const isFurniture = (element, computed) => {
   if (furnitureRoles.has(element.getAttribute('role'))) return true;
   if (element.localName === 'a' && teaser.test(element.textContent)
-    && !inText(element.previousSibling) && !inText(element.nextSibling)) return true;
+    && !inText(element.previousSibling, 'previousSibling') && !inText(element.nextSibling, 'nextSibling')) return true;
   if (/carousel|slide/i.test(element.getAttribute('aria-roledescription') ?? '')) return true;
   const live = element.getAttribute('aria-live');
   if (live && live !== 'off' && element.textContent.length < 200) return true;

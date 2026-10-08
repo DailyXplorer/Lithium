@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en" data-color-mode="auto">
+<head>
+<meta charset="utf-8">
+<title>GitHub - example/lithium-cells: Battery cell models in Swift</title>
+<meta property="og:type" content="object">
+<meta property="og:site_name" content="GitHub">
+<style>
+  body { font: 14px sans-serif; margin: 0; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .show-on-focus { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip: rect(1px, 1px, 1px, 1px); }
+  .Layout { display: grid; grid-template-columns: 1fr 296px; gap: 24px; }
+</style>
+</head>
+<body class="logged-out env-production page-responsive">
+<!-- Modeled on a repository's main page on GitHub, its README's markup (headings wrapped with their
+     permalink, code blocks with a copy button), without its scripts, fonts or images. Served with
+     GitHub's policy: inline styles allowed, fonts from its own host alone. -->
+<a href="#start-of-content" class="show-on-focus">Skip to content</a>
+<header class="HeaderMktg header-logged-out" role="banner">
+  <a href="/" aria-label="Homepage">GitHub</a>
+  <nav aria-label="Global"><ul><li><button>Product</button></li><li><button>Solutions</button></li><li><a href="/pricing">Pricing</a></li></ul></nav>
+  <a href="/login">Sign in</a> <a href="/signup">Sign up</a>
+</header>
+<div id="start-of-content"></div>
+<main id="js-repo-pjax-container">
+  <div id="repository-container-header">
+    <strong itemprop="name"><a href="/example/lithium-cells">lithium-cells</a></strong> <span class="Label">Public</span>
+    <nav aria-label="Repository" class="UnderlineNav"><ul role="list"><li><a href="/example/lithium-cells" aria-current="page">Code</a></li><li><a href="/example/lithium-cells/issues">Issues <span class="Counter">12</span></a></li><li><a href="/example/lithium-cells/pulls">Pull requests <span class="Counter">3</span></a></li></ul></nav>
+  </div>
+  <div class="Layout">
+    <div class="Layout-main">
+      <table aria-labelledby="folders-and-files"><h2 id="folders-and-files" class="sr-only">Folders and files</h2>
+        <tr><th>Name</th><th>Last commit message</th><th>Last commit date</th></tr>
+        <tr><td><a href="/example/lithium-cells/tree/main/Sources">Sources</a></td><td>Model the dry room</td><td>last week</td></tr>
+        <tr><td><a href="/example/lithium-cells/blob/main/Package.swift">Package.swift</a></td><td>Swift 6</td><td>last month</td></tr>
+      </table>
+      <div id="readme" class="Box MD js-code-block-container js-code-nav-container js-tagsearch-container Box--responsive">
+        <div class="Box-header"><h2 class="Box-title"><a href="#readme">README</a></h2></div>
+        <article class="markdown-body entry-content container-lg" itemprop="text">
+          <div class="markdown-heading" dir="auto"><h1 tabindex="-1" class="heading-element" dir="auto">lithium-cells</h1><a id="user-content-lithium-cells" class="anchor" aria-label="Permalink: lithium-cells" href="#lithium-cells"><svg class="octicon octicon-link" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 0h16v16H0z"></path></svg></a></div>
+          <p dir="auto">Paragraph 01: lithium-cells models the life of a battery cell in Swift, from the coating line to the last charge, so that you can test a pack's software against cells that age, swell and fail the way real ones do. Each model is fitted to months of measurements from a test lab.</p>
+          <div class="markdown-heading" dir="auto"><h2 tabindex="-1" class="heading-element" dir="auto">Getting started</h2><a id="user-content-getting-started" class="anchor" aria-label="Permalink: Getting started" href="#getting-started"><svg class="octicon octicon-link" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 0h16v16H0z"></path></svg></a></div>
+          <p dir="auto">Paragraph 02: add the package to your manifest's dependencies, then to the target that runs your pack's tests. It has no dependencies of its own and builds on macOS, Linux and Windows with any Swift 6 toolchain.</p>
+          <div class="highlight highlight-source-swift notranslate position-relative overflow-auto" dir="auto"><pre>.package(url: "https://github.com/example/lithium-cells", from: "2.0.0")</pre><div class="zeroclipboard-container"><clipboard-copy aria-label="Copy" class="ClipboardButton btn" value=".package(url: ...)" tabindex="0" role="button"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" width="16"><path d="M0 0h16v16H0z"></path></svg></clipboard-copy></div></div>
+          <p dir="auto">Paragraph 03: a cell starts fresh, at the capacity you give it, and loses some of it with every cycle, faster when it is charged hot or quickly, slower when it rests at half charge, as the measurements in the docs folder show. Every model also has a seed, so a failing test fails the same way twice.</p>
+          <div class="markdown-heading" dir="auto"><h2 tabindex="-1" class="heading-element" dir="auto">Ageing a cell</h2><a id="user-content-ageing-a-cell" class="anchor" aria-label="Permalink: Ageing a cell" href="#ageing-a-cell"><svg class="octicon octicon-link" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 0h16v16H0z"></path></svg></a></div>
+          <p dir="auto">Paragraph 04: call <code>age(cycles:temperature:)</code> to move a cell through time. It returns the capacity left and the internal resistance, which rises as the layer on the anode thickens, the way formation predicted it would.</p>
+          <div class="highlight highlight-source-swift notranslate position-relative overflow-auto" dir="auto"><pre>let cell = Cell(chemistry: .lfp, capacity: 280)
+let aged = cell.age(cycles: 3000, temperature: 35)</pre><div class="zeroclipboard-container"><clipboard-copy aria-label="Copy" class="ClipboardButton btn" value="let cell = ..." tabindex="0" role="button"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" width="16"><path d="M0 0h16v16H0z"></path></svg></clipboard-copy></div></div>
+          <p dir="auto">Paragraph 05: contributions are welcome. Open an issue first for anything larger than a fix, so that we can agree on the model before you spend a weekend on it, and run the whole test suite before you open a pull request. New chemistries need measurements to fit, not just a guess at the curve.</p>
+        </article>
+      </div>
+    </div>
+    <div class="Layout-sidebar">
+      <div class="BorderGrid about-margin"><h2 class="mb-3 h4">About</h2><p class="f4 my-3">Battery cell models in Swift</p>
+        <h3 class="sr-only">Resources</h3><a href="#readme-ov-file">Readme</a>
+        <h3 class="sr-only">Stars</h3><a href="/example/lithium-cells/stargazers"><strong>1.2k</strong> stars</a>
+      </div>
+    </div>
+  </div>
+</main>
+<footer class="footer" role="contentinfo"><p>© 2026 GitHub, Inc.</p><nav aria-label="Footer"><a href="/site/terms">Terms</a> <a href="/site/privacy">Privacy</a></nav></footer>
+</body>
+</html>

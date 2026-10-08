@@ -150,11 +150,24 @@ struct FingerprintingTests {
     }
 
     /// A protected window carries no marker a page could list: the window property it once had
-    /// said "Lithium" on every site.
+    /// said "Lithium" on every site. Nor does a frame's, listed every way from either realm.
     @Test func windowCarriesNoMarker() async throws {
         let bare: [String] = try await run(Self.namesProbe, farbling: nil)
         let protected: [String] = try await run(Self.namesProbe, farbling: Self.farbling())
         #expect(protected == bare)
+
+        let frameProbe = """
+            (() => {
+              const w = document.body.appendChild(document.createElement('iframe')).contentWindow;
+              const names = (keys) => keys.map(String).join(',');
+              return JSON.stringify([names(Object.getOwnPropertyNames(w)), names(Reflect.ownKeys(w)),
+                names(Object.keys(Object.getOwnPropertyDescriptors(w))), names(w.Object.getOwnPropertyNames(w)),
+                names(Object.getOwnPropertyNames(new Proxy(w, {}))), names(Object.getOwnPropertyNames(new Proxy(w, { ownKeys: (t) => Reflect.ownKeys(t) })))]);
+            })()
+            """
+        let bareFrame: [String] = try await run(frameProbe, farbling: nil)
+        let protectedFrame: [String] = try await run(frameProbe, farbling: Self.farbling())
+        #expect(protectedFrame == bareFrame)
     }
 
     /// The seed is an HMAC of the registrable site under the launch's key: a page that recovers

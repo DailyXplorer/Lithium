@@ -16,8 +16,9 @@
   // trusted then: a `CustomEvent` or `Reflect.apply` left there once read the marker, and with it
   // the native functions. The copy that protected the window left this function on it (see
   // `protect`), and looks after the new document with what it took while its own was clean.
-  // `window` and `document` can't be replaced, nor can the function, once defined.
-  const ADOPT = '__lithiumAdopt';
+  // `window` and `document` can't be replaced. The function's name is keyed per launch (see
+  // Privacy.farbling), so a page can't guess it, and `protect` leaves it out of every listing.
+  const ADOPT = '__LITHIUM_ADOPT__';
   const adopter = window[ADOPT];
   if (typeof adopter === 'function') { adopter(document); return; }
   // Keyed hashes of the top page's site under a key of the launch (see Privacy.farbling): every
@@ -414,10 +415,10 @@
     watchLoads(win.document);
     // For the copy in this window's next page, should that page keep the window (see the top),
     // and for the Trusted Types flag there (see Privacy.trustedTypesScript). Not on the copy's
-    // own window, which keeps no name a page could list.
+    // own window. Configurable: a proxy of the window whose keys left out a fixed one would throw.
     if (win !== window) {
       try {
-        defineProperty(win, ADOPT, { __proto__: null, value: (doc, mode) => {
+        defineProperty(win, ADOPT, { __proto__: null, configurable: true, value: (doc, mode) => {
           const view = read(documentView, doc);
           if (!view || sameOrigin(view) !== realm) return;
           if (mode === 'enforce' || mode === 'report') { apply(weakMapSet, trustedTypesModes, [realm, mode]); return; }
@@ -464,6 +465,29 @@
       const set = disguise(getOwnPropertyDescriptor({ set [name](value) { handler(original, this, value); } }, name).set, original);
       defineProperty(proto, name, { ...descriptor, set });
     };
+
+    // The adopter (above) is on frames and popups, listed from any realm: each leaves it out, for
+    // a window or a proxy of one. The keys are scanned, not asked about, which would hand its name
+    // to a proxy's traps.
+    try {
+      const unlisted = (keys) => {
+        const count = keys.length;
+        for (let i = 0; i < count; i++) {
+          if (keys[i] !== ADOPT) continue;
+          for (let j = i + 1; j < count; j++) keys[j - 1] = keys[j];
+          keys.length = count - 1;
+          break;
+        }
+        return keys;
+      };
+      patch(win.Object, 'getOwnPropertyNames', (target, self, args) => unlisted(apply(target, self, args)));
+      patch(win.Reflect, 'ownKeys', (target, self, args) => unlisted(apply(target, self, args)));
+      patch(win.Object, 'getOwnPropertyDescriptors', (target, self, args) => {
+        const all = apply(target, self, args);
+        delete all[ADOPT];
+        return all;
+      });
+    } catch (_) {}
 
     try {
       const getImageData = patch(win.CanvasRenderingContext2D.prototype, 'getImageData', readImage);

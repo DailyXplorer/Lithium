@@ -159,10 +159,13 @@ final class Privacy {
     }
 
     /// Whether the hourly check updates the filters: they are a day old, built from other
-    /// sources, or incomplete, and the wait after the last failed update is over.
+    /// sources, or incomplete, and the wait after the last failed update is over. Filters dated
+    /// in the future (built with the clock set ahead) count as stale: they would otherwise stop
+    /// updates until the clock caught up.
     static func needsUpdate(updated: Date?, matchesSources: Bool, complete: Bool, notBefore: Date, now: Date = Date()) -> Bool {
         guard now >= notBefore else { return false }
-        return !matchesSources || !complete || now.timeIntervalSince(updated ?? .distantPast) > updateInterval
+        let age = now.timeIntervalSince(updated ?? .distantPast)
+        return !matchesSources || !complete || age > updateInterval || age < 0
     }
 
     /// The wait before the next automatic update after `failures` failed ones in a row.
@@ -217,15 +220,14 @@ final class Privacy {
 
     /// The newer of the lists shipped in the app and the last downloaded ones.
     private static func currentFilters() -> (folder: URL, manifest: Manifest)? {
-        [Resources.bundle.url(forResource: "Filters", withExtension: nil), downloadedFilters]
+        let now = Date()
+        return [Resources.bundle.url(forResource: "Filters", withExtension: nil), downloadedFilters]
             .compactMap { folder -> (URL, Manifest)? in
-                guard let folder,
-                      let data = try? Data(contentsOf: folder.appending(path: "manifest.json")),
-                      let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+                guard let folder, let manifest = Manifest.read(in: folder),
                       manifest.format ?? 1 >= Manifest.currentFormat else { return nil }
                 return (folder, manifest)
             }
-            .max { ($0.1.date ?? .distantPast) < ($1.1.date ?? .distantPast) }
+            .max { $0.1.comparableDate(now: now) < $1.1.comparableDate(now: now) }
     }
 
     func waitUntilReady() async {

@@ -160,6 +160,51 @@ struct FilterUpdateTests {
         #expect(try read("ads.json") == rules)
     }
 
+    /// After an upgrade the bundled set can be newer than the downloaded one: a failing list then
+    /// keeps the bundled copy, not the older download.
+    @Test func aFailingListKeepsTheNewerCopy() async throws {
+        let bundled = FileManager.default.temporaryDirectory.appending(path: "bundled-filters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: destination); try? FileManager.default.removeItem(at: bundled) }
+        let updater = updater(["ads": ["steady", "flaky"]], bundledFilters: bundled)
+        StubLists.serve("||steady.example^", at: url("steady"))
+        StubLists.serve("||downloaded-flaky.example^", at: url("flaky"))
+        try await updater.update(into: destination)
+
+        func write(_ updated: String, to folder: URL) throws {
+            let manifest = Manifest(updated: updated, groups: [:], advancedRules: nil)
+            try JSONEncoder().encode(manifest).write(to: folder.appending(path: "manifest.json"))
+        }
+        try write("2025-01-01T00:00:00Z", to: destination)
+        try FileManager.default.createDirectory(at: bundled.appending(path: "lists"), withIntermediateDirectories: true)
+        try "||bundled-flaky.example^".write(to: bundled.appending(path: "lists/flaky.txt"), atomically: false, encoding: .utf8)
+        try write(ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60)), to: bundled)
+
+        StubLists.serve(nil, at: url("flaky"))
+        try await updater.update(into: destination)
+        let rules = try read("ads.json")
+        #expect(rules.contains("bundled-flaky") && !rules.contains("downloaded-flaky"))
+    }
+
+    /// A set dated in the future (built with the clock set ahead) neither outranks the sets built
+    /// after it nor stops the automatic updates.
+    @MainActor
+    @Test func aSetDatedInTheFutureIsUpdated() throws {
+        let now = Date()
+        let folder = FileManager.default.temporaryDirectory.appending(path: "dated-filters-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (future, past) = (folder.appending(path: "future"), folder.appending(path: "past"))
+        for (set, date) in [(future, now.addingTimeInterval(30 * 24 * 60 * 60)), (past, now.addingTimeInterval(-60))] {
+            try FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
+            let manifest = Manifest(updated: ISO8601DateFormatter().string(from: date), groups: [:], advancedRules: nil)
+            try JSONEncoder().encode(manifest).write(to: set.appending(path: "manifest.json"))
+        }
+        #expect(FilterUpdater.newestFirst([future, past], now: now) == [past, future])
+
+        let ahead = now.addingTimeInterval(60 * 60)
+        #expect(Privacy.needsUpdate(updated: ahead, matchesSources: true, complete: true, notBefore: .distantPast, now: now))
+        #expect(!Privacy.needsUpdate(updated: ahead, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
+    }
+
     /// A 200 answer that isn't a filter list (empty, an HTML page, a handful of lines) counts as
     /// failed and keeps the last good copy, so the next update retries it soon.
     @Test func aBodyThatIsNotAListKeepsTheLastGoodCopy() async throws {

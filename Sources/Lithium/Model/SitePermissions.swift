@@ -50,16 +50,27 @@ final class SitePermissions {
     @ObservationIgnored private var waiting: [PermissionRequest.ID: [CheckedContinuation<Bool, Never>]] = [:]
     private var privateDecisions: [ObjectIdentifier: [String: [PermissionKind: PermissionDecision]]] = [:]
 
+    /// Saved answers this build doesn't know (a newer build's kind or decision), written back as
+    /// they were, so running an older build doesn't erase them.
+    @ObservationIgnored private var unknown: [String: [String: String]] = [:]
+    @ObservationIgnored private let defaults: UserDefaults
+
     private static let storageKey = "sitePermissions"
 
-    init() {
-        let stored = UserDefaults.standard.dictionary(forKey: Self.storageKey) as? [String: [String: String]] ?? [:]
-        decisions = stored.mapValues { entries in
-            Dictionary(uniqueKeysWithValues: entries.compactMap { key, value in
-                guard let kind = PermissionKind(rawValue: key), let decision = PermissionDecision(rawValue: value) else { return nil }
-                return (kind, decision)
-            })
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let stored = defaults.dictionary(forKey: Self.storageKey) as? [String: [String: String]] ?? [:]
+        var decisions: [String: [PermissionKind: PermissionDecision]] = [:]
+        for (host, entries) in stored {
+            for (key, value) in entries {
+                if let kind = PermissionKind(rawValue: key), let decision = PermissionDecision(rawValue: value) {
+                    decisions[host, default: [:]][kind] = decision
+                } else {
+                    unknown[host, default: [:]][key] = value
+                }
+            }
         }
+        self.decisions = decisions
     }
 
     /// The answers that count for `host`: a private session's own, or the saved ones.
@@ -120,6 +131,8 @@ final class SitePermissions {
         var entries = decisions[host] ?? [:]
         entries[kind] = decision
         decisions[host] = entries.isEmpty ? nil : entries
+        // A newer build's decision for this kind gives way to the user's answer here.
+        unknown[host]?[kind.rawValue] = nil
         save()
     }
 
@@ -129,9 +142,10 @@ final class SitePermissions {
     }
 
     private func save() {
-        let stored = decisions.mapValues { entries in
-            Dictionary(uniqueKeysWithValues: entries.map { ($0.key.rawValue, $0.value.rawValue) })
+        var stored = unknown
+        for (host, entries) in decisions {
+            for (kind, decision) in entries { stored[host, default: [:]][kind.rawValue] = decision.rawValue }
         }
-        UserDefaults.standard.set(stored, forKey: Self.storageKey)
+        defaults.set(stored, forKey: Self.storageKey)
     }
 }

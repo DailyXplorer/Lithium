@@ -227,6 +227,15 @@ extension AgentHub {
         }
         let ownTab = arguments["tab"] == nil || arguments["tab"] == tab.map { .string($0) }
         if name == "tab_close", ownTab { throw Arguments.invalid("\(place): a batch can’t close its own tab\(tab.map { " \($0)" } ?? "").") }
+        // Times checked in the tool's own ranges before planning adds to them: an absurd one
+        // (Int.max) would otherwise overflow there, before the tool ever saw it.
+        do {
+            let given = Arguments(value: .object(arguments))
+            if name == "wait_for", (arguments["time"] ?? .null) != .null { arguments["time"] = .int(try given.int("time", default: 1, in: 1...59_000)) }
+            if tool.takes("timeoutMs"), (arguments["timeoutMs"] ?? .null) != .null { arguments["timeoutMs"] = .int(Int(try given.timeout(default: 1) / .milliseconds(1))) }
+        } catch let error as AgentToolError {
+            throw Arguments.invalid("\(place).args: \(error.message)")
+        }
         // Only the batch's one diff is read; a tab a step opens is read by snapshot when needed.
         for key in ["diff", "snapshot"] where tool.takes(key) { arguments[key] = false }
         return BatchStep(tool: name, arguments: arguments, takesTab: tool.takes("tab"))

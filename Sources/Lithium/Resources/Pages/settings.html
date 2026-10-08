@@ -211,12 +211,18 @@
     <h2>Site permissions</h2>
     <p class="lead">What each site may use. Sites ask the first time.</p>
     <div id="permission-list" style="margin-top: 32px"></div>
+    <h3>Links to other apps</h3>
+    <div class="rows" id="app-link-list"></div>
   </section>
 
   <section id="site" class="page">
     <h2 id="site-host"></h2>
     <h3>Permissions</h3>
     <div class="rows" id="site-permissions"></div>
+    <div id="site-app-links-section">
+      <h3>Links to other apps</h3>
+      <div class="rows" id="site-app-links"></div>
+    </div>
     <h3>Data</h3>
     <div class="row">
       <div><div class="title">Cookies</div><div class="hint" id="site-cookies"></div></div>
@@ -305,7 +311,7 @@
 
   const render = (state) => {
     lastState = state;
-    const { appearance, search, protections, permissions, about } = state;
+    const { appearance, search, protections, permissions, appLinks, about } = state;
 
     document.querySelectorAll('#style button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarStyle));
     $('#color-row').style.display = appearance.sidebarStyle === 'solid' ? '' : 'none';
@@ -376,6 +382,21 @@
       ]))),
     ]) : el('div', { className: 'empty', textContent: 'No site has asked yet.' }));
 
+    // Only "Always allow" is remembered; removing it asks again next time.
+    const appLinkRow = (entry, withHost) => {
+      const button = el('button', { className: 'button', textContent: 'Ask first' });
+      button.onclick = () => call('removeAppLink', { host: entry.host, scheme: entry.scheme }).then(render);
+      return el('div', { className: 'row' }, [
+        el('div', {}, [
+          el('div', { className: 'title' }, [withHost ? el('a', { href: `#site/${entry.host}`, textContent: entry.host }) : (entry.app || entry.scheme)]),
+          el('div', { className: 'hint', textContent: `Opens ${entry.scheme}: links${entry.app ? ` in ${entry.app}` : ''} without asking` }),
+        ]),
+        button,
+      ]);
+    };
+    $('#app-link-list').replaceChildren(...(appLinks.length ? appLinks.map((entry) => appLinkRow(entry, true))
+      : [el('div', { className: 'empty', textContent: 'No site opens other apps without asking.' })]));
+
     const host = siteHost();
     if (host) {
       const entry = permissions.find((e) => e.host === host) || {};
@@ -384,6 +405,9 @@
         el('div', { className: 'title', textContent: label }),
         permissionSelect(host, kind, entry[kind]),
       ])));
+      const links = appLinks.filter((e) => e.host === host);
+      $('#site-app-links-section').hidden = links.length === 0;
+      $('#site-app-links').replaceChildren(...links.map((entry) => appLinkRow(entry, false)));
     }
 
     const { max } = state;

@@ -324,8 +324,14 @@ extension AgentHub {
                     if masks.isEmpty {
                         data = page
                     } else {
-                        guard let size = AgentScreenshot.pdfPageSize(page),
-                              let flat = AgentScreenshot.maskedPDF(page, masks: masks.map { AgentHub.scaled($0, by: size.width / max(1, layout.main.viewport.pw)) }) else {
+                        guard let size = AgentScreenshot.pdfPageSize(page) else {
+                            throw AgentToolError(code: "unsupported", message: "Lithium couldn’t make a PDF of \(named.id).")
+                        }
+                        guard size.height <= AgentScreenshot.maxPDFLength else {
+                            throw AgentToolError(code: "unsupported", message: "\(named.id) is too long to save as a PDF with its secret fields masked. Use screenshot instead.")
+                        }
+                        let inPoints = masks.map { AgentHub.scaled($0, by: size.width / max(1, layout.main.viewport.pw)) }
+                        guard let flat = await Task.detached(priority: .userInitiated, operation: { AgentScreenshot.maskedPDF(page, masks: inPoints) }).value else {
                             throw AgentToolError(code: "unsupported", message: "Lithium couldn’t make a PDF of \(named.id).")
                         }
                         data = flat.data
@@ -619,15 +625,20 @@ extension AgentHub {
         return try await read(true).0
     }
 
-    /// What `take` captures, with the layout its masks come from. Every frame's scroll is read
-    /// before and after it; a page that scrolled meanwhile is read and captured again, three
-    /// times at most, then refused: masks read at another scroll would miss the fields.
+    /// What `take` captures, with the layout its masks come from. Every frame's scroll and masks
+    /// are read before and after it; a page that scrolled meanwhile is read and captured again,
+    /// three times at most, then refused: masks read at another scroll would miss the fields. A
+    /// field that moved, showed or went meanwhile (an animation) is captured again too, and on
+    /// the last try painted over at both places and between.
     func masked<Value>(_ named: NamedTab, _ webView: WKWebView, from layout: FrameLayout, placing element: ElementAddress? = nil, until deadline: ContinuousClock.Instant, _ take: () async throws -> Value) async throws -> (layout: FrameLayout, value: Value) {
         var layout = layout
-        for _ in 0..<3 {
+        for attempt in 1...3 {
             let value = try await take()
             let after = try await self.layout(of: named, webView, until: deadline, placing: element)
-            if after.keepsScroll(of: layout) { return (layout, value) }
+            if after.keepsScroll(of: layout) {
+                if after.masks == layout.masks { return (layout, value) }
+                if attempt == 3 { return (layout.masking(after), value) }
+            }
             layout = after
         }
         throw AgentToolError(code: "frame_gone", message: "\(named.id)’s page kept scrolling while it was pictured, so its password and card fields couldn’t be painted over. Try again.")
@@ -815,14 +826,17 @@ extension AgentHub {
                 let masks = try AgentHub.masks(layout, of: named)
                 guard let size = AgentScreenshot.pdfPageSize(page) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
                 let points = size.width / max(1, viewport.pw)
-                let density = min(2, Double(maxWidth) / max(1, (element.map { Double($0.width) } ?? viewport.pw) * points))
-                guard let image = AgentScreenshot.rasterize(page, scale: density) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
-                let toPixels = { (css: CGRect) in AgentHub.scaled(css.offsetBy(dx: viewport.sx, dy: viewport.sy), by: points * density) }
-                guard let rendered = AgentScreenshot.render(image, crop: element.map { toPixels($0) }, masks: AgentHub.documentMasks(masks, viewport).map { AgentHub.scaled($0, by: points * density) }, maxWidth: maxWidth) else {
+                // Only the element's box is drawn, at a density for its own width.
+                let area = element.map { AgentHub.scaled($0.offsetBy(dx: viewport.sx, dy: viewport.sy), by: points) }
+                if let area, area.intersection(CGRect(origin: .zero, size: size)).isEmpty {
                     throw AgentToolError(code: "unsupported", message: "\(ref ?? named.id) has nothing to picture.")
                 }
+                let density = min(2, Double(maxWidth) / max(1, area?.width ?? size.width))
+                guard let rendered = await AgentScreenshot.picture(ofPDF: page, area: area, scale: density, masks: AgentHub.documentMasks(masks, viewport).map { AgentHub.scaled($0, by: points) }, maxWidth: maxWidth) else {
+                    throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).")
+                }
                 picture = (rendered.image, rendered.scale * points * density, rendered.masks)
-                if Double(image.height) * rendered.scale > Double(AgentScreenshot.maxHeight) { fields["truncated"] = true }
+                if rendered.cut { fields["truncated"] = true }
                 if fullPage { fields["fullPage"] = true }
             }
         }

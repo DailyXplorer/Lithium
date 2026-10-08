@@ -81,6 +81,11 @@ final class VideoPopout {
         Task { await Self.putBack(webView, pausing: true) }
     }
 
+    /// For tests: the player takes `tab`, as if its video had popped out.
+    func adopt(_ tab: Tab) {
+        self.tab = tab
+    }
+
     /// The tab went away or fell asleep.
     func discard(_ tab: Tab) {
         if tab === self.tab { hide() }

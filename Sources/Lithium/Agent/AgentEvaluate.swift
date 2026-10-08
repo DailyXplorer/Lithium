@@ -149,7 +149,7 @@ extension AgentHub {
                 fields["result"] = .string(text)
             } else {
                 // A number the card rule replaced is no longer JSON: the text stands.
-                fields["result"] = (try? JSONValue.decode(Data(text.utf8))) ?? .string(text)
+                fields["result"] = (try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text)
             }
             return AgentToolOutput(structured: .object(fields), text: truncated ? "\(text)\n(cut at \(Self.maxScriptResult / 1000) KB)" : text)
         }

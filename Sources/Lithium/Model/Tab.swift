@@ -41,13 +41,24 @@ final class Tab: NSObject, Identifiable {
     /// The icon address the page declares, as last fetched for this web view: the page's word
     /// wins over the icon cached for its site, which may be a day old.
     @ObservationIgnored private(set) var liveIcon: URL?
+    /// The tab's one icon fetch at a time: a page's next load replaces its last one's, and the
+    /// icon a pinned page names replaces both, so a page can't pile fetches up.
+    @ObservationIgnored private var faviconLoad: Task<Void, Never>?
+    @ObservationIgnored private var iconFollow: Task<Void, Never>?
+    /// A page that swaps its icon faster than this (an animation) has it fetched, shown and
+    /// saved at most this often.
+    static let iconInterval = Duration.seconds(2)
     /// Made on first use and dropped while the tab sleeps, which frees the page's memory. A tab
     /// restored asleep at launch holds no web view at all until it is selected.
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
-        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store.
-        if let privateStore { configuration.websiteDataStore = privateStore }
+        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store,
+        // and no extension runs in it (`Extensions.tabs`).
+        if let privateStore {
+            configuration.websiteDataStore = privateStore
+            configuration.webExtensionController = nil
+        }
         let webView = PageWebView(frame: .zero, configuration: configuration)
         webView.translation = browser?.translation
         webView.tab = self
@@ -120,6 +131,8 @@ final class Tab: NSObject, Identifiable {
     /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
+    /// Lithium's error page stands in for the page, from `showError` until the next load starts.
+    var isShowingError: Bool { failedURL != nil }
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
     /// another page commits.
@@ -211,6 +224,8 @@ final class Tab: NSObject, Identifiable {
     /// is never saved in the session, the history, the closed tabs or the favicon cache.
     @ObservationIgnored let privateStore: WKWebsiteDataStore?
     var isEphemeral: Bool { privateStore != nil }
+    /// Where a private tab's permission answers are kept, for its private session only.
+    var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
     /// Where visits are recorded; a private tab records none.
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
 
@@ -308,6 +323,9 @@ final class Tab: NSObject, Identifiable {
     }
 
     func reload() {
+        // A sleeping tab has no page to reload: reading `webView` would only make an empty one,
+        // left on the tab until it wakes. Waking loads its page, which is the reload.
+        if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
         if let failedURL { load(failedURL) } else { webView.reload() }
     }
@@ -502,7 +520,9 @@ final class Tab: NSObject, Identifiable {
         pdfHistory = [:]
         hasInternalBridge = false
         hasWebstoreBridge = false
-        liveIcon = nil
+        forgetLiveIcon()
+        faviconLoad?.cancel()
+        faviconLoad = nil
         isAsleep = true
         appliedProtections = nil
         canGoBack = false
@@ -530,8 +550,11 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep else { return }
                     self.title = webView.title ?? ""
-                    if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.tidyTitle = nil
+                    // Lithium's error page names itself, not the page: its title goes no further
+                    // than the tab (not the history, the session, the badge or extensions).
+                    guard !self.isShowingError else { return }
+                    if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.browser?.tidyTitles.update(self)
                     if let url = self.url { self.historyStore?.updateTitle(self.title, for: url) }
                     self.tellExtensions(.title)
@@ -675,12 +698,14 @@ final class Tab: NSObject, Identifiable {
             if favicon !== NSApp.applicationIconImage { favicon = NSApp.applicationIconImage }
             return
         }
+        // The icon the pinned page names wins anyway.
+        guard liveIcon == nil else { return }
         // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
         let host = url?.host()
         let favicons = browser?.favicons ?? .shared
         // A private tab shows an icon already cached, and fetches and stores none.
         let found = isEphemeral ? host.flatMap(favicons.cachedData(host:)) : await favicons.favicon(for: webView)
-        guard let data = found, url?.host() == host,
+        guard !Task.isCancelled, let data = found, url?.host() == host,
               liveIcon == nil, data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
@@ -694,11 +719,32 @@ final class Tab: NSObject, Identifiable {
         favicon = NSImage(data: data)
     }
 
-    /// Fetches the icon the page names, once per address for this web view.
+    /// Fetches the icon the page names, once per address for this web view. One fetch runs at a
+    /// time, then waits `iconInterval` before the address named last, so a page animating its
+    /// icon can't have the favorite and its file rewritten at every frame.
     private func followIcon(_ url: URL) {
         guard url != liveIcon else { return }
         liveIcon = url
-        Task { await browser?.refreshIcon(of: self, from: url) }
+        guard iconFollow == nil else { return }
+        faviconLoad?.cancel()
+        faviconLoad = nil
+        iconFollow = Task { [weak self] in
+            var fetched: URL?
+            while !Task.isCancelled, let tab = self, let next = tab.liveIcon, next != fetched {
+                fetched = next
+                await tab.browser?.refreshIcon(of: tab, from: next)
+                try? await Task.sleep(for: Self.iconInterval)
+            }
+            // A cancelled one may already have been replaced.
+            if !Task.isCancelled { self?.iconFollow = nil }
+        }
+    }
+
+    /// The page no longer names an icon of its own: a fetch for its last one stops.
+    private func forgetLiveIcon() {
+        liveIcon = nil
+        iconFollow?.cancel()
+        iconFollow = nil
     }
 
     /// Assigned only when the badge changes, so the sidebar doesn't redraw for nothing.
@@ -731,7 +777,7 @@ final class Tab: NSObject, Identifiable {
     private func pinnedChanged() {
         if pinID == nil {
             updateUnread { $0 = UnreadBadge() }
-            liveIcon = nil
+            forgetLiveIcon()
         }
         guard let browser, let webView = loadedWebView, !isAsleep else { return }
         browser.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
@@ -786,15 +832,23 @@ extension Tab: WKNavigationDelegate {
         if action.shouldPerformDownload {
             // A download the agent started waits for the user's Allow.
             let name = url.lastPathComponent
-            let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url)
-            return (allowed == false ? .cancel : .download, preferences)
+            if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url) {
+                return (allowed ? .download : .cancel, preferences)
+            }
+            // A frame's `<a download>` asks first, as its attachments do (see the response policy),
+            // whichever frame it names.
+            if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true { return (.download, preferences) }
+            guard let browser, let host = shownHost, !host.isEmpty else { return (.cancel, preferences) }
+            return (await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession) ? .download : .cancel, preferences)
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
             // Only the user's own click hands an address to another app, never an agent's, nor a
-            // script's `click()`: that does nothing.
+            // script's `click()`: that does nothing. The site whose frame has the link (an ad's,
+            // say) is the one asking.
             if action.navigationType == .linkActivated, Self.isPressed(action, in: webView), (webView as? PageWebView)?.agentPressedLast != true {
-                ExternalApps.open(url)
+                let host = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.host ?? shownHost ?? ""
+                openInApp(url, from: host)
             }
             // A load refused here ends without a word from WebKit.
             if isMainFrame, !goToAddressAfterWaking() { endedUnshown(.refused(scheme: url.scheme ?? "")) }
@@ -866,8 +920,11 @@ extension Tab: WKNavigationDelegate {
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
-        // A site the user turned protections off for keeps its parameters too.
-        if browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
+        // A site the user turned protections off for keeps its parameters too. Back, Forward and
+        // Reload return to an entry the history already has: cancelled for a new load, they would
+        // drop the forward list and keep the user from going back past that page.
+        if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
+           browser?.privacy.isEnabled(for: url) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             Task { webView.load(URLRequest(url: clean)) }
@@ -897,7 +954,7 @@ extension Tab: WKNavigationDelegate {
         // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
         // file) asks first, as in Safari: the site the user is on is allowed, or not, once.
         guard let browser, let host = shownHost, !host.isEmpty else { return .cancel }
-        return await browser.permissions.request([.downloads], host: host, tabID: id) ? .download : .cancel
+        return await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession) ? .download : .cancel
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -964,11 +1021,12 @@ extension Tab: WKNavigationDelegate {
         if !goToAddressAfterWaking() { commits += 1 }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
+        browser?.appLinks.cancel(tabID: id)
         // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
         if let old = shownHost, old != webView.url?.host() {
             updateUnread { $0.leaveSite() }
-            liveIcon = nil
+            forgetLiveIcon()
         }
         shownHost = webView.url?.host()
         let list = webView.backForwardList
@@ -989,6 +1047,7 @@ extension Tab: WKNavigationDelegate {
         // Like a website's links: never Lithium's own pages, local files only from a local PDF
         // (a file opens with read access to its folder), and other apps' schemes (mailto:) go to those apps.
         let isLocal = url.isFileURL
+        let site = url.host() ?? ""
         reader.onOpenLink = { [weak self] url, inNewTab in
             guard let self else { return }
             let scheme = url.scheme?.lowercased()
@@ -1000,7 +1059,7 @@ extension Tab: WKNavigationDelegate {
                 break
             default:
                 // As in a page: an agent's click never hands an address to another app.
-                if NSApp.currentEvent.map(NativeInput.isAgents) != true { ExternalApps.open(url) }
+                if NSApp.currentEvent.map(NativeInput.isAgents) != true { self.openInApp(url, from: site) }
             }
         }
         pdf = reader
@@ -1017,7 +1076,8 @@ extension Tab: WKNavigationDelegate {
         guard failedURL == nil else { return }
         if let url = webView.url { historyStore?.record(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)
-        Task { await refreshFavicon() }
+        faviconLoad?.cancel()
+        faviconLoad = Task { await refreshFavicon() }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1039,6 +1099,12 @@ extension Tab: WKNavigationDelegate {
     private static func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
         if action.responds(to: NSSelectorFromString("_isUserInitiated")), action.value(forKey: "_isUserInitiated") as? Bool == true { return true }
         return (webView as? PageWebView)?.pressedRecently == true
+    }
+
+    /// Another app's address, from a click in this tab's page or PDF: asked first (`AppLinks`).
+    private func openInApp(_ url: URL, from host: String) {
+        guard let browser else { return }
+        Task { await browser.appLinks.open(url, from: host, tabID: id, isPrivate: isEphemeral) }
     }
 
     /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
@@ -1159,7 +1225,7 @@ extension Tab: WKUIDelegate {
 
     private func askPermission(_ kinds: [PermissionKind], origin: WKSecurityOrigin) async -> Bool {
         guard let browser, !origin.host.isEmpty else { return false }
-        return await browser.permissions.request(kinds, host: origin.host, tabID: id)
+        return await browser.permissions.request(kinds, host: origin.host, tabID: id, privateSession: privateSession)
     }
 
     func webViewDidClose(_ webView: WKWebView) {
@@ -1298,7 +1364,7 @@ extension Tab: WKWebExtensionTab {
     }
 
     func indexInWindow(for context: WKWebExtensionContext) -> Int {
-        browser?.navigationOrder.firstIndex(of: self) ?? NSNotFound
+        browser?.extensions.tabs.firstIndex(of: self) ?? NSNotFound
     }
 
     func webView(for context: WKWebExtensionContext) -> WKWebView? {

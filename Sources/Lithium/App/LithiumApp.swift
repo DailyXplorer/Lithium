@@ -68,7 +68,7 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("l")
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Close Tab") { browser.closeSelectedTab() }
+            Button("Close Tab") { browser.closeTabOrWindow() }
                 .keyboardShortcut("w")
             Button("Reopen Closed Tab") { browser.reopenClosedTab() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])

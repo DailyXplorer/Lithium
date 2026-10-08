@@ -54,4 +54,23 @@ struct HistoryStoreTests {
         store.updateTitle("(21) Inbox", for: url)
         #expect(store.visits(matching: "").map(\.title) == ["(21) Inbox"])
     }
+
+    /// The History page's search reads on the background connection, titles still waiting
+    /// included, and never cancels the address bar's (nor the other way round).
+    @Test func historyPageSearchesInTheBackground() async {
+        let store = makeStore()
+        let swift = URL(string: "https://swift.org/")!
+        store.record(swift, title: "Swift")
+        store.record(URL(string: "https://webkit.org/")!, title: "WebKit")
+        store.updateTitle("Swift.org", for: swift)
+
+        #expect(await store.visitsInBackground(matching: "swift")?.map(\.title) == ["Swift.org"])
+        #expect(await store.visitsInBackground(matching: "")?.map(\.title) == ["WebKit", "Swift.org"])
+        #expect(await store.visitsInBackground(matching: "nothing") == [])
+
+        async let page = store.visitsInBackground(matching: "webkit")
+        async let addressBar = store.topSitesInBackground(matching: "swift", limit: 5)
+        #expect(await page?.map(\.url.absoluteString) == ["https://webkit.org/"])
+        #expect(await addressBar?.map(\.url.absoluteString) == ["https://swift.org/"])
+    }
 }

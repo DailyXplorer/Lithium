@@ -41,6 +41,7 @@ final class Browser {
     let find = FindInPage()
     let suggestions = AddressSuggestions()
     let permissions = SitePermissions()
+    let appLinks = AppLinks()
     let tidyTitles = TidyTitles()
     let summaries = PageSummaries()
     let extensions = Extensions()
@@ -349,6 +350,12 @@ final class Browser {
             permissions.dismiss(request)
             return true
         }
+        // Likewise "Open <App>?", cancelled.
+        if agent?.confirmations.front(selected: selectedTabID) == nil,
+           let request = appLinks.pending.first(where: { $0.tabID == selectedTabID }) {
+            appLinks.answer(request, open: false)
+            return true
+        }
         return false
     }
 
@@ -450,12 +457,20 @@ final class Browser {
     }
 
     func open(_ input: String) {
-        guard let url = AddressInput.url(for: input) else { return }
-        open(url)
+        open(input, in: selectedTab)
     }
 
-    private func open(_ url: URL) {
-        if let tab = selectedTab {
+    /// Into `tab`, brought to the front if it no longer is; a new tab when nil.
+    private func open(_ input: String, in tab: Tab?) {
+        guard let url = AddressInput.url(for: input) else { return }
+        open(url, in: tab)
+    }
+
+    private func open(_ url: URL, in tab: Tab?) {
+        // A typed `mailto:` goes to Mail; the tab, which can't show it, stays on its page.
+        if url.scheme?.lowercased() == "mailto" { return ExternalApps.open(url) }
+        if let tab {
+            if tab !== selectedTab { select(tab) }
             navigate(tab, .open(url))
         } else {
             newTab(url: url)
@@ -485,21 +500,32 @@ final class Browser {
         suggestions.update(query: text, tabs: tabs, pins: pins, history: history)
     }
 
-    /// Return in the address bar: the highlighted suggestion, or the typed text as is.
     func submitAddress(_ text: String) {
+        submitAddress(text, editing: selectedTabID)
+    }
+
+    /// Return in the address bar: the highlighted suggestion, or the typed text as is. It goes to
+    /// `tabID`, the tab shown when editing began, even if the selection moved on its own since (a
+    /// download-only tab closing hands it back to its opener); to a new tab once that one is gone.
+    func submitAddress(_ text: String, editing tabID: Tab.ID?) {
+        let tab = tabID.flatMap { id in tabs.first { $0.id == id } }
         if let suggestion = suggestions.selected, suggestions.selectedIndex > 0 {
-            accept(suggestion)
+            accept(suggestion, in: tab)
         } else {
-            open(text)
+            open(text, in: tab)
         }
         suggestions.clear()
     }
 
     func accept(_ suggestion: Suggestion) {
+        accept(suggestion, in: selectedTab)
+    }
+
+    private func accept(_ suggestion: Suggestion, in tab: Tab?) {
         suggestions.clear()
         switch suggestion {
-        case .search(let query): open(query)
-        case .address(let url), .history(_, let url): open(url)
+        case .search(let query): open(query, in: tab)
+        case .address(let url), .history(_, let url): open(url, in: tab)
         case .openTab(let id, _, _): if let tab = tabs.first(where: { $0.id == id }) { select(tab) }
         case .pin(let id, _, _): if let pin = pins.first(where: { $0.id == id }) { activate(pin) }
         }
@@ -558,6 +584,9 @@ final class Browser {
         tab.dialogOwner?.answerDialog(in: tab)
         agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
+        appLinks.cancel(tabID: tab.id)
+        // A name field gone with its row would never end the rename, which holds Escape and the agent.
+        if renamingTabID == tab.id { renamingTabID = nil }
         summaries.discard(tab)
         tab.tearDown()
         tabs.remove(at: index)
@@ -568,14 +597,26 @@ final class Browser {
     }
 
     /// The last open tab of a private store gone, its cookies and storage go at once, rather
-    /// than whenever WebKit frees the store.
+    /// than whenever WebKit frees the store, and so do its permission answers.
     private func dropPrivateData(of tab: Tab) {
         guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
+        permissions.forget(privateSession: ObjectIdentifier(store))
     }
 
     func closeSelectedTab() {
         if let tab = selectedTab { close(tab) }
+    }
+
+    /// ⌘W, which the menu sends whichever window is key: the selected tab only when that is the
+    /// browser's window. Another one in front (a detached Web Inspector, a sheet) closes instead.
+    /// A video in full screen is in WebKit's own window, holding the page: that is the tab's too.
+    func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
+        guard let keyWindow else { return }
+        let page = selectedTab?.loadedWebView
+        let isTabs = keyWindow === page?.window || page.map { $0.fullscreenState != .notInFullscreen } == true
+        // Before the browser's window is known, it is the one in front.
+        if window == nil || keyWindow === window || isTabs { closeSelectedTab() } else { keyWindow.performClose(nil) }
     }
 
     /// The others of its group: favorites' pages stay open, as Chrome keeps pinned tabs, and so
@@ -703,13 +744,17 @@ final class Browser {
         select(tab)
     }
 
-    /// ⌘1…⌘9 walk the favorites grid, then the tab list and the Agent group, as the sidebar reads.
+    /// ⌘1…⌘9 walk the favorites grid, then the rows of the tab list and the Agent group, as the
+    /// sidebar shows them: a split pair is one row, and its number shows the pair.
     func selectItem(at index: Int) {
-        let list = regularTabs + agentTabs
+        let rows = tabListEntries.map(\.tab) + agentTabs
         if index < pins.count {
             activate(pins[index])
-        } else if index - pins.count < list.count {
-            select(list[index - pins.count])
+        } else if index - pins.count < rows.count {
+            let tab = rows[index - pins.count]
+            // The pair already shown keeps its focused side.
+            if let selectedTab, split(of: tab)?.contains(selectedTab.id) == true { return }
+            select(tab)
         }
     }
 
@@ -722,7 +767,9 @@ final class Browser {
             guard let url = tab.url, !tab.isEphemeral else { continue }
             if tab.id == selectedTabID { session.selectedIndex = session.tabs.count }
             places[tab.id] = session.tabs.count
-            session.tabs.append(Session.Tab(url: url, title: tab.title, customTitle: tab.customTitle, pinID: tab.pinID))
+            // Not the error page's own title: the tab comes back named after its site.
+            let title = tab.isShowingError ? "" : tab.title
+            session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID))
         }
         session.splits = savedSplits(at: places)
         return session
@@ -805,6 +852,8 @@ final class Browser {
         tab.pinID = pin.id
         // The user's from now on: unpinned, it goes to the tab list.
         tab.openedByAgent = nil
+        // Its name field was in the list, which no longer shows it.
+        if renamingTabID == tab.id { renamingTabID = nil }
     }
 
     func pinTab(withID id: String, at index: Int? = nil) {
@@ -839,11 +888,13 @@ final class Browser {
         storeIcon(data, from: nil, inPinAt: index)
     }
 
-    /// Saved once, and only when something changed. `url` is where the page said its icon is.
+    /// Saved once, and only when something changed. `url` is where the page said its icon is;
+    /// only an http(s) one is kept, the only kind fetched again later: a `data:` icon the page
+    /// redraws would otherwise rewrite the favorites at each new address, pixels unchanged.
     private func storeIcon(_ data: Data, from url: URL?, inPinAt index: Int) {
         var pin = pins[index]
         pin.favicon = data
-        if let url { pin.iconURL = url }
+        if let url { pin.iconURL = ["http", "https"].contains(url.scheme?.lowercased()) ? url : nil }
         guard pin != pins[index] else { return }
         if pin.favicon != pins[index].favicon { pinIcons[pin.id] = nil }
         pins[index] = pin

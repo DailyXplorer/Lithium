@@ -110,6 +110,14 @@ final class AgentTab {
             capture?.newPage(restored: restored)
             switchPage(to: token)
         } else {
+            // A frame that navigated has one document, so one token: the last one's refs are
+            // stale already, and keeping it would grow `frames` and run capture's scripts twice
+            // there. Without WebKit's frame id, nothing is dropped.
+            if let id = ResourceLoadSpy.frameID(of: frame),
+               let old = frames.first(where: { $0.key != token && ResourceLoadSpy.frameID(of: $0.value) == id })?.key {
+                frames[old] = nil
+                reports[old] = nil
+            }
             frames[token] = frame
         }
     }
@@ -167,14 +175,28 @@ final class AgentTab {
 
     // MARK: Refs
 
+    /// Element refs held for the page shown before the oldest half goes: a long-lived page that
+    /// keeps changing would otherwise get new refs forever. A dropped ref answers `stale_ref`.
+    static let maxRefs = 40_000
+
     func ref(for address: ElementAddress) -> String {
         if let ref = table.issued[address] { return ref }
+        if table.issued.count >= Self.maxRefs { dropOldestRefs() }
         let element = "e\(nextElement)"
         nextElement += 1
         let ref = address.document == mainDocument ? element : "\(frameRef(for: address.document)):\(element)"
         table.issued[address] = ref
         table.refs[ref] = address
         return ref
+    }
+
+    /// Numbers count up, so the lowest are the oldest; frame refs stay.
+    private func dropOldestRefs() {
+        let oldest = nextElement - Self.maxRefs / 2
+        for (address, ref) in table.issued where Int(ref.split(separator: "e").last ?? "") ?? 0 < oldest {
+            table.issued[address] = nil
+            table.refs[ref] = nil
+        }
     }
 
     /// `f1`, `f2`: one per frame document.

@@ -16,6 +16,9 @@
   // Refs: a number per element, never reused within the document, held weakly.
   const ids = new WeakMap();
   const elements = new Map();
+  // An element collected takes its entry with it, so a long-lived document's map doesn't keep
+  // one per element ever numbered. Ids aren't reused: a live ref is never the one removed.
+  const collected = new FinalizationRegistry((id) => elements.delete(id));
   let nextID = 1;
   const idOf = (element) => {
     let id = ids.get(element);
@@ -23,6 +26,7 @@
       id = nextID++;
       ids.set(element, id);
       elements.set(id, new WeakRef(element));
+      collected.register(element, id);
     }
     return id;
   };
@@ -46,6 +50,11 @@
   for (const type of ['scroll', 'resize', 'input', 'change', 'focusin', 'focusout', 'toggle', 'transitionend', 'animationend', 'load']) {
     addEventListener(type, dirty, { capture: true, passive: true });
   }
+  // A menu that CSS :hover alone reveals changes no node, rule or box the checks below see;
+  // only the real pointer moves :hover.
+  for (const type of ['pointerover', 'pointerout']) {
+    addEventListener(type, (event) => { if (event.isTrusted) dirty(); }, { capture: true, passive: true });
+  }
   // Layout also changes with no mutation: a web font arriving, the page growing.
   document.fonts?.addEventListener('loadingdone', dirty);
   const resizes = new ResizeObserver(dirty);
@@ -53,7 +62,11 @@
   if (document.body) resizes.observe(document.body);
 
   const collapse = (text) => (text || '').replace(/\s+/g, ' ').trim();
-  const cut = (text, length) => (text.length > length ? `${text.slice(0, length - 1)}…` : text);
+  // Slices on code points: half of an emoji's surrogate pair isn't text, and Swift's JSON
+  // decoder refuses an answer that holds one.
+  const head = (text, length) => text.slice(0, /[\uD800-\uDBFF]/.test(text[length - 1] ?? '') ? length - 1 : length);
+  const tail = (text, start) => text.slice(/[\uDC00-\uDFFF]/.test(text[start] ?? '') ? start + 1 : start);
+  const cut = (text, length) => (text.length > length ? `${head(text, length - 1)}…` : text);
   const plain = (text) => (text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[_.[\]]/g, ' ');
   const round = (rect) => [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)];
 
@@ -397,7 +410,8 @@
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
     // Focus going into a frame fires no focusin in its parent, whose activeElement still changes.
-    if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates
+    // Nor does pushState fire anything, so the address is compared too.
+    if (since === generation && key === frame.lastKey && of === frame.token && location.href === frame.url && controlStates() === frame.controlStates
       && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates && deepFocus() === frame.focused) {
       return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
     }
@@ -447,7 +461,11 @@
     const describe = (element, role, box, name) => {
       const node = { id: idOf(element), role, box };
       if (name) node.name = name;
-      if (role === 'heading') node.level = Number(element.getAttribute('aria-level')) || Number(element.localName[1]) || 2;
+      if (role === 'heading') {
+        // An integer from 1 to 9, as Swift decodes it: aria-level="2.5" or "1e30" fails the whole snapshot.
+        const level = Math.trunc(Number(element.getAttribute('aria-level')));
+        node.level = level >= 1 ? Math.min(level, 9) : Number(element.localName[1]) || 2;
+      }
       if (role === 'link' && element.getAttribute('href')) node.href = cut(element.getAttribute('href'), 160);
       const value = valueOf(element, role);
       if (value?.value) node.value = value.value;
@@ -548,8 +566,9 @@
     frame.shown = nodes.map((node) => elementOf(node.id));
     frame.boxStates = boxStates();
     frame.sheetStates = sheetStates();
+    frame.url = location.href;
     return {
-      token: frame.token, gen: generation, path: framePath(), url: location.href, title: document.title, viewport: view,
+      token: frame.token, gen: generation, path: framePath(), url: frame.url, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit, pay,
     };
   };
@@ -705,7 +724,7 @@
       if (size(found) < size(everything) * 0.2) found = everything;
     }
     const text = found.map((item) => item.text).join('\n');
-    return { token: frame.token, title: document.title, url: location.href, text: text.slice(0, maxChars), truncated: text.length > maxChars };
+    return { token: frame.token, title: document.title, url: location.href, text: head(text, maxChars), truncated: text.length > maxChars };
   };
 
   const links = ({ filter }) => {
@@ -776,22 +795,25 @@
     return null;
   };
   const find = ({ text, caseSensitive, limit }) => {
-    const needle = caseSensitive ? text : text.toLowerCase();
     const matches = [];
     let count = 0;
-    if (document.body && needle) {
+    if (document.body && text) {
+      // Matched in the line's own text, never a lowercased copy: 'İ' lowercases to two units,
+      // which would shift every index after it onto the wrong node.
+      const pattern = new RegExp(text.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&'), caseSensitive ? 'gu' : 'giu');
       for (const line of lines(document.body, { sources: true })) {
-        const haystack = caseSensitive ? line.text : line.text.toLowerCase();
-        for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
+        for (const found of line.text.matchAll(pattern)) {
+          const at = found.index;
+          const length = found[0].length;
           count++;
           if (matches.length < limit) {
             // About 80 characters around the match, and the whole match with 10 on each side when it is longer.
-            const around = Math.max(10, Math.floor((80 - needle.length) / 2));
+            const around = Math.max(10, Math.floor((80 - length) / 2));
             const start = Math.max(0, at - around);
             // Nil for a match outside a control, or across two.
             const first = controlOf(line.nodes[at], line.element);
-            const control = first === controlOf(line.nodes[at + needle.length - 1], line.element) ? first : null;
-            const match = { id: idOf(control ?? line.element), context: line.text.slice(start, Math.max(start + 80, at + needle.length + around)) };
+            const control = first === controlOf(line.nodes[at + length - 1], line.element) ? first : null;
+            const match = { id: idOf(control ?? line.element), context: head(tail(line.text, start), Math.max(start + 80, at + length + around) - start) };
             if (control) match.role = roleOf(control);
             matches.push(match);
           }
@@ -1160,7 +1182,9 @@
         case 'detached': return !element;
         case 'visible': return Boolean(element) && isShown(element);
         case 'hidden': return !element || !isShown(element);
-        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+        // As click judges it: a control in a disabled fieldset is :disabled, not .disabled.
+        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true'
+          && !safeMatches(element, ':disabled');
       }
       return false;
     };
@@ -1274,7 +1298,8 @@
     run: async (operation, args) => {
       // An element call for a document that is no longer the one shown.
       if (args.token && args.token !== frame.token) return JSON.stringify({ token: frame.token, gone: true });
-      return JSON.stringify(await operations[operation](args));
+      // A lone surrogate the page wrote itself comes back replaced, not in an answer Swift refuses.
+      return JSON.stringify(await operations[operation](args), (key, value) => (typeof value === 'string' && !value.isWellFormed() ? value.toWellFormed() : value));
     },
   };
 })();

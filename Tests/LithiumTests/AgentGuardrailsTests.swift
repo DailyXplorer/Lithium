@@ -196,6 +196,32 @@ struct AgentGuardrailsTests {
         #expect(confirmations.grants.isEmpty)
     }
 
+    /// The next prompt in the queue takes the place of the one answered, Allow once where it was:
+    /// a click that lands before it stayed in place a moment (a double click's second) answers nothing.
+    @Test func theBannerTakesClicksOnlyOnceItStayedInPlace() {
+        let confirmations = AgentConfirmations()
+        let first = confirmation(.payment, site: "shop.example")
+        let second = confirmation(.payment, site: "shop.example")
+        confirmations.ask(first)
+        confirmations.ask(second)
+        let shown = ContinuousClock.now
+        var protection = ClickProtection(at: shown)
+        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown)
+        #expect(confirmations.pending.map(\.id) == [first.id, second.id])
+        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown + ClickProtection.delay)
+        #expect(confirmations.answers[first.id] == .allowOnce)
+
+        // The next prompt takes its place: the banner is armed again from there.
+        let replaced = shown + ClickProtection.delay
+        protection.rearm(at: replaced)
+        AgentConfirmationBanner.answer(.allowOnce, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(100))
+        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(499))
+        #expect(confirmations.pending.map(\.id) == [second.id])
+        #expect(confirmations.answers[second.id] == nil)
+        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + ClickProtection.delay)
+        #expect(confirmations.answers[second.id] == .deny)
+    }
+
     @Test func paymentsAndFilesAreNeverGranted() {
         let confirmations = AgentConfirmations()
         for kind in [ConfirmationKind.payment, .file] {

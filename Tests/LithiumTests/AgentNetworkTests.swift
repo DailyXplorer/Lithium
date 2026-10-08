@@ -37,6 +37,29 @@ struct AgentRedactionTests {
         #expect(AgentRedaction.isLuhn("4242424242424242"))
         #expect(!AgentRedaction.isLuhn("4242424242424241"))
     }
+
+    /// Header values and redirect addresses are cut as request addresses are, before they are kept.
+    @Test @MainActor func cutsLongHeaderValuesAndRedirectAddresses() throws {
+        let long = String(repeating: "a", count: 100_000)
+        #expect(AgentRedaction.headers(["X-Long": long])["X-Long"]?.count == AgentRedaction.maxValue)
+
+        let capture = TabCapture()
+        let load = try #require(ResourceLoadSpy.Load(LoadInfo()))
+        let start = try #require(URL(string: "https://a.example/start"))
+        let next = try #require(URL(string: "https://a.example/\(long)"))
+        capture.requestStarted(load, method: "GET", url: start, headers: [:])
+        let response = try #require(HTTPURLResponse(url: start, statusCode: 302, httpVersion: nil, headerFields: ["Location": next.absoluteString]))
+        capture.redirected(load, response: response, to: URLRequest(url: next))
+        let entry = try #require(capture.entries.first)
+        #expect(entry.redirectedTo.map { $0.count <= AgentRedaction.maxValue && $0.hasPrefix("https://a.example/aaa") } == true)
+        #expect(entry.responseHeaders?["Location"].map { $0.count <= AgentRedaction.maxValue } == true)
+        #expect(capture.entries.allSatisfy { $0.url.count <= AgentRedaction.maxValue })
+    }
+
+    /// What `_WKResourceLoadInfo` gives a load, as far as `ResourceLoadSpy.Load` reads it.
+    private final class LoadInfo: NSObject {
+        @objc let resourceLoadID: NSNumber = 7
+    }
 }
 
 /// The network log, the console and network idle waits on a whole Browser, called through the

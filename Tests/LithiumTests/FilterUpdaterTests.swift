@@ -80,11 +80,15 @@ struct FilterUpdateTests {
 
     private func url(_ list: String) -> URL { URL(string: "https://\(host)/\(list).txt")! }
 
-    private func updater(_ groups: [String: [String]], bundledFilters: URL? = nil) -> FilterUpdater {
+    /// Lists of a rule or two pass with `minimumRules` at 1.
+    private func updater(_ groups: [String: [String]], bundledFilters: URL? = nil, minimumRules: Int = 1) -> FilterUpdater {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubLists.self]
         let lists = Dictionary(uniqueKeysWithValues: Set(groups.values.joined()).map { ($0, url($0)) })
-        return FilterUpdater(sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration), bundledFilters: bundledFilters)
+        return FilterUpdater(
+            sources: .init(lists: lists, groups: groups, trueTokens: []), session: URLSession(configuration: configuration),
+            bundledFilters: bundledFilters, minimumRules: minimumRules
+        )
     }
 
     private func read(_ file: String) throws -> String {
@@ -156,6 +160,35 @@ struct FilterUpdateTests {
         #expect(try read("ads.json") == rules)
     }
 
+    /// A 200 answer that isn't a filter list (empty, an HTML page, a handful of lines) counts as
+    /// failed and keeps the last good copy, so the next update retries it soon.
+    @Test func aBodyThatIsNotAListKeepsTheLastGoodCopy() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let updater = updater(["ads": ["steady", "flaky"]], minimumRules: 10)
+        func list(_ prefix: String) -> String { (1...12).map { "||\(prefix)-\($0).example^" }.joined(separator: "\n") }
+        StubLists.serve(list("steady"), at: url("steady"))
+        StubLists.serve(list("good"), at: url("flaky"))
+        try await updater.update(into: destination)
+        #expect(try manifest().failedLists == nil)
+        let goodCopy = try read("lists/flaky.txt")
+
+        for body in ["", "\n  \n! Title: empty\n", "\u{FEFF}  <!DOCTYPE html>\n<html><body>Sign in</body></html>", "||few-1.example^\n||few-2.example^"] {
+            StubLists.serve(body, at: url("flaky"))
+            try await updater.update(into: destination)
+            #expect(try manifest().failedLists == ["flaky"])
+            #expect(try read("lists/flaky.txt") == goodCopy)
+            let rules = try read("ads.json")
+            #expect(rules.contains("good-12") && rules.contains("steady-12") && !rules.contains("few-1") && !rules.contains("Sign in"))
+        }
+
+        // An HTML page behind an include fails the list too.
+        StubLists.serve("!#include \(url("portal").absoluteString)\n" + list("included"), at: url("flaky"))
+        StubLists.serve("<html><body>Sign in</body></html>", at: url("portal"))
+        try await updater.update(into: destination)
+        #expect(try manifest().failedLists == ["flaky"])
+        #expect(try read("lists/flaky.txt") == goodCopy)
+    }
+
     /// Automatic updates after a failure wait longer each time, up to a day, instead of fetching every list each hour.
     @MainActor
     @Test func failedUpdatesAreRetriedWithABackoff() {
@@ -170,6 +203,74 @@ struct FilterUpdateTests {
         #expect(!Privacy.needsUpdate(updated: recent, matchesSources: true, complete: false, notBefore: now.addingTimeInterval(60), now: now))
         #expect(!Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
         #expect(Privacy.needsUpdate(updated: .distantPast, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(-1), now: now))
+    }
+
+    /// The backoff outlives a relaunch: a list that stays down doesn't bring a full update at every launch.
+    @MainActor
+    @Test func theBackoffSurvivesARelaunch() throws {
+        let suite = "filter-backoff-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date()
+        #expect(Privacy.savedBackoff(in: defaults, now: now).notBefore == .distantPast)
+
+        _ = Privacy.saveBackoff(afterFailures: 3, in: defaults, now: now)
+        let relaunched = Privacy.savedBackoff(in: defaults, now: now.addingTimeInterval(60))
+        #expect(relaunched.failures == 3)
+        #expect(relaunched.notBefore == now.addingTimeInterval(4 * 60 * 60))
+        #expect(!Privacy.needsUpdate(updated: now, matchesSources: true, complete: false, notBefore: relaunched.notBefore, now: now.addingTimeInterval(60)))
+
+        // A clock turned back doesn't hold updates off for more than a day.
+        #expect(Privacy.savedBackoff(in: defaults, now: now.addingTimeInterval(-7 * 24 * 60 * 60)).notBefore
+            == now.addingTimeInterval(-6 * 24 * 60 * 60))
+
+        _ = Privacy.saveBackoff(afterFailures: 0, in: defaults, now: now)
+        let succeeded = Privacy.savedBackoff(in: defaults, now: now)
+        #expect(succeeded.failures == 0 && succeeded.notBefore == .distantPast)
+    }
+
+    /// scripts/update-filters.py fails a list the app's updater would refuse, so the app never
+    /// ships an HTML page or an empty file as the copy it falls back to.
+    @Test func updateScriptRefusesWhatTheUpdaterRefuses() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        func list(_ prefix: String) -> String { (1...12).map { "||\(prefix)-\($0).example^" }.joined(separator: "\n") }
+        let bodies = [
+            "good": list("good"),
+            "empty": "\n  \n! Title: empty\n",
+            "html": "\u{FEFF}  <!DOCTYPE html>\n<html><body>Sign in</body></html>",
+            "few": "||few-1.example^\n||few-2.example^",
+            "portal": "!#include html.txt\n" + list("included"),
+        ]
+        for (name, body) in bodies {
+            try body.write(to: folder.appending(path: "\(name).txt"), atomically: false, encoding: .utf8)
+        }
+        // Loads the script as a module and downloads each list from a file URL.
+        let check = """
+            import importlib.util, pathlib, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            folder = pathlib.Path(sys.argv[2])
+            script.LISTS = {path.stem: path.as_uri() for path in folder.glob("*.txt")}
+            for name in sorted(script.LISTS):
+                try:
+                    print(name, len(script.download(name)))
+                except SystemExit:
+                    print(name, "failed")
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.path]
+        let output = Pipe()
+        python.standardOutput = output
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == "empty failed\nfew failed\ngood 12\nhtml failed\nportal failed\n")
     }
 }
 

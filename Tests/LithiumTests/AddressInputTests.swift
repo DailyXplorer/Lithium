@@ -15,6 +15,10 @@ struct AddressInputTests {
         ("c++ tutorial", "https://search.brave.com/search?q=c%2B%2B%20tutorial"),
         ("swift", "https://search.brave.com/search?q=swift"),
         ("1.5", "https://search.brave.com/search?q=1.5"),
+        ("mailto:alice@example.com", "mailto:alice@example.com"),
+        ("[::1]", "http://[::1]"),
+        ("[2001:db8::1]/admin", "http://[2001:db8::1]/admin"),
+        ("[::1]:8080", "http://[::1]:8080"),
     ])
     func resolves(input: String, expected: String) {
         #expect(AddressInput.url(for: input, engine: .brave)?.absoluteString == expected)
@@ -43,6 +47,13 @@ struct TrackingParametersTests {
     @Test func keepsTheOtherParametersExactlyAsSent() {
         let url = URL(string: "https://example.com/login?token=a%2Bb%2Fc%3D&utm_source=mail&q=c%2B%2B")!
         #expect(TrackingParameters.stripped(url)?.absoluteString == "https://example.com/login?token=a%2Bb%2Fc%3D&q=c%2B%2B")
+    }
+
+    /// Values Foundation's query items may refuse when set back (a literal "=" in a token, a
+    /// bare flag, an empty pair, an address in a value) are kept as sent, without stopping the app.
+    @Test func keepsOddValuesAsSent() {
+        let url = URL(string: "https://example.com/?token=abc==&utm_source=x&flag&&next=/a?b=c&UTM_Medium=y")!
+        #expect(TrackingParameters.stripped(url)?.absoluteString == "https://example.com/?token=abc==&flag&&next=/a?b=c")
     }
 }
 

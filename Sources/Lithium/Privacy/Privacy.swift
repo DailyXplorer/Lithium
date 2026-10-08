@@ -30,8 +30,10 @@ final class Privacy {
     @ObservationIgnored private var filtersComplete = true
     /// Automatic updates that failed in a row, and when the next may start: a list that stays
     /// down is retried after 1, 2, 4… hours, up to a day, not with every other list each hour.
-    @ObservationIgnored private var failedUpdates = 0
-    @ObservationIgnored private var nextUpdate = Date.distantPast
+    /// Kept across launches, or a list that stays down would bring a full download and rebuild
+    /// at every launch.
+    @ObservationIgnored private var failedUpdates: Int
+    @ObservationIgnored private var nextUpdate: Date
     @ObservationIgnored private let farblingTemplate: String
     /// Drawn at launch, so the noise of a site changes from launch to launch.
     @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
@@ -41,6 +43,8 @@ final class Privacy {
     @ObservationIgnored private let userAgentSuffix: String
 
     private static let disabledHostsKey = "disabledProtectionHosts"
+    private static let failedUpdatesKey = "failedFilterUpdates"
+    private static let nextUpdateKey = "nextFilterUpdate"
     /// Part of each compiled list's name: bumped when `prepared(_:)` changes, so lists compiled
     /// the old way are rebuilt once instead of waiting for the next filter update.
     private static let preparation = 4
@@ -49,6 +53,7 @@ final class Privacy {
 
     init() {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
+        (failedUpdates, nextUpdate) = Self.savedBackoff(in: .standard)
 
         farblingTemplate = Resources.bundle.url(forResource: "farbling", withExtension: "js")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
@@ -179,13 +184,24 @@ final class Privacy {
         } catch {
             NSLog("Lithium: filter update failed: %@", error.localizedDescription)
         }
-        if updated {
-            failedUpdates = 0
-            nextUpdate = .distantPast
-        } else {
-            failedUpdates += 1
-            nextUpdate = Date().addingTimeInterval(Self.retryDelay(afterFailures: failedUpdates))
-        }
+        (failedUpdates, nextUpdate) = Self.saveBackoff(afterFailures: updated ? 0 : failedUpdates + 1, in: .standard)
+    }
+
+    /// Stores the backoff after `failures` failed updates in a row and returns it.
+    static func saveBackoff(afterFailures failures: Int, in defaults: UserDefaults, now: Date = Date())
+        -> (failures: Int, notBefore: Date) {
+        let notBefore = failures == 0 ? Date.distantPast : now.addingTimeInterval(retryDelay(afterFailures: failures))
+        defaults.set(failures, forKey: failedUpdatesKey)
+        defaults.set(notBefore.timeIntervalSinceReferenceDate, forKey: nextUpdateKey)
+        return (failures, notBefore)
+    }
+
+    /// The backoff the last launch left. A wait more than a day away (the clock was turned back)
+    /// is cut to a day, the longest `retryDelay` gives.
+    static func savedBackoff(in defaults: UserDefaults, now: Date = Date()) -> (failures: Int, notBefore: Date) {
+        guard defaults.object(forKey: nextUpdateKey) != nil else { return (0, .distantPast) }
+        let saved = Date(timeIntervalSinceReferenceDate: defaults.double(forKey: nextUpdateKey))
+        return (defaults.integer(forKey: failedUpdatesKey), min(saved, now.addingTimeInterval(updateInterval)))
     }
 
     /// Loads the current filters once every load queued before has finished.
@@ -242,6 +258,12 @@ final class Privacy {
 
     func setEnabled(_ enabled: Bool, for url: URL?) {
         guard let host = Self.siteHost(url) else { return }
+        setEnabled(enabled, host: host)
+    }
+
+    /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,
+    /// an IPv6 one may not parse back to the same host.
+    func setEnabled(_ enabled: Bool, host: String) {
         if enabled { disabledHosts.remove(host) } else { disabledHosts.insert(host) }
         UserDefaults.standard.set(disabledHosts.sorted(), forKey: Self.disabledHostsKey)
     }

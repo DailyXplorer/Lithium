@@ -35,6 +35,48 @@ struct BrowserTests {
         #expect(tab.favicon != nil)
     }
 
+    /// Return in the address bar sends the text to the tab it was typed for, even once the
+    /// selection moved on its own (a download-only tab closing, a popup closed by its page); to a
+    /// new tab once that tab is gone, never to the one now shown.
+    @Test func typedAddressGoesToTheTabBeingEdited() throws {
+        let browser = Browser()
+        let opener = browser.newTab(url: URL(string: "data:text/html,opener")!)
+        let edited = browser.newTab(url: URL(string: "data:text/html,edited")!)
+        defer { browser.tabs.forEach(browser.close) }
+        let typed = URL(string: "data:text/html,typed")!
+
+        browser.select(opener)
+        browser.submitAddress(typed.absoluteString, editing: edited.id)
+        #expect(edited.url == typed)
+        #expect(opener.url == URL(string: "data:text/html,opener"))
+        #expect(browser.selectedTab === edited)
+
+        let gone = edited.id
+        browser.close(edited)
+        #expect(browser.selectedTab === opener)
+        let count = browser.tabs.count
+        browser.submitAddress(typed.absoluteString, editing: gone)
+        #expect(browser.tabs.count == count + 1)
+        #expect(opener.url == URL(string: "data:text/html,opener"))
+        let opened = try #require(browser.selectedTab)
+        #expect(opened !== opener)
+        #expect(opened.url == typed)
+    }
+
+    /// A typed `mailto:` address goes to Mail (only recorded in tests); the tab stays on its page.
+    @Test func typedMailtoGoesToMail() {
+        let browser = Browser()
+        let page = URL(string: "data:text/html,page")!
+        let tab = browser.newTab(url: page)
+        defer { browser.close(tab) }
+        let mail = URL(string: "mailto:alice@example.com")!
+        let (before, count) = (ExternalApps.recorded, browser.tabs.count)
+        browser.submitAddress(mail.absoluteString)
+        #expect(ExternalApps.recorded == before + [.open(mail)])
+        #expect(tab.url == page)
+        #expect(browser.tabs.count == count)
+    }
+
     /// A tab out of sight waits to be selected; the visible one reloads once, then stops.
     @Test func crashedTabs() async throws {
         let browser = Browser()
@@ -164,6 +206,219 @@ struct BrowserTests {
         browser.newTab(url: base.appending(path: "file"))
         #expect(await waitUntil(30) { Downloads.shared.items.count == before + 3 })
         #expect(browser.permissions.pending.isEmpty, "the page itself downloads without asking")
+    }
+
+    /// A frame's `<a download>` asks too, like its attachments: it isn't the page the user is on.
+    @Test func aFramesDownloadLinkAsksFirst() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<iframe src="/frame"></iframe>"#),
+            "/frame": ("Content-Type: text/html", #"<a id="file" href="/note.txt" download>Note</a><script>document.getElementById('file').click()</script>"#),
+            "/note.txt": ("Content-Type: text/plain", "Lithium"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let host = try #require(base.host())
+        let before = Downloads.shared.items.count
+        let page = browser.newTab(url: base)
+        defer { browser.close(page) }
+        #expect(await waitUntil(30) { browser.permissions.pending.contains { $0.tabID == page.id } })
+        let request = try #require(browser.permissions.pending.first { $0.tabID == page.id })
+        #expect(request.kinds == [.downloads] && request.host == host)
+        #expect(Downloads.shared.items.count == before)
+
+        browser.permissions.dismiss(request)
+        try await Task.sleep(for: .seconds(1))
+        #expect(Downloads.shared.items.count == before)
+    }
+
+    /// A private tab's answer holds for its private session only, in memory: nothing is saved,
+    /// normal tabs still ask, and it goes when the session's last tab closes.
+    @Test func privateTabPermissionsStayInTheirSession() async throws {
+        let browser = Browser()
+        let store = WKWebsiteDataStore.nonPersistent()
+        let tab = browser.newTab(url: URL(string: "data:text/html,private")!, selecting: false, privateStore: store)
+        let session = try #require(tab.privateSession)
+        // Asked by the page shown: its commit would cancel a prompt asked before.
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+        let host = "private-\(UUID().uuidString.lowercased()).example"
+        let permissions = browser.permissions
+        func ask(_ privateSession: ObjectIdentifier?, tabID: Tab.ID) -> Task<Bool, Never> {
+            Task { await permissions.request([.camera], host: host, tabID: tabID, privateSession: privateSession) }
+        }
+        func prompt(for tabID: Tab.ID) async -> PermissionRequest? {
+            _ = await waitUntil(10) { permissions.pending.contains { $0.tabID == tabID } }
+            return permissions.pending.first { $0.tabID == tabID }
+        }
+
+        let first = ask(session, tabID: tab.id)
+        permissions.answer(try #require(await prompt(for: tab.id)), allow: true)
+        #expect(await first.value)
+        #expect(permissions.decisions[host] == nil)
+        let saved = UserDefaults.standard.dictionary(forKey: "sitePermissions") ?? [:]
+        #expect(saved[host] == nil, "nothing written to disk")
+        #expect(await ask(session, tabID: tab.id).value, "remembered in the session")
+
+        let normalTab = UUID()
+        let normal = ask(nil, tabID: normalTab)
+        permissions.dismiss(try #require(await prompt(for: normalTab)))
+        #expect(await normal.value == false)
+
+        browser.close(tab)
+        let again = ask(session, tabID: tab.id)
+        permissions.dismiss(try #require(await prompt(for: tab.id)))
+        #expect(await again.value == false, "forgotten with its last tab")
+    }
+
+    /// Settings' exceptions list turns protections back on by the host it shows, an IPv6 one too.
+    @Test func protectionsComeBackOnForAnIPv6Host() throws {
+        let privacy = Privacy()
+        let url = try #require(URL(string: "http://[::1]:8080/page"))
+        privacy.setEnabled(false, for: url)
+        defer { privacy.setEnabled(true, for: url) }
+        #expect(!privacy.isEnabled(for: url))
+        let host = try #require(privacy.disabledHosts.first { $0.contains("::1") })
+
+        privacy.setEnabled(true, host: host)
+        #expect(privacy.isEnabled(for: url))
+        #expect(!privacy.disabledHosts.contains(host))
+        #expect(Privacy().isEnabled(for: url), "saved")
+    }
+
+    /// Lithium's error page names itself "Can’t open this page": that title stays on the tab, and
+    /// never replaces the page's in the history or in the saved session.
+    @Test func errorPageTitleStaysOutOfHistoryAndSession() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "about:blank")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+        let host = "error-\(UUID().uuidString.lowercased()).example"
+        let url = try #require(URL(string: "https://\(host)/"))
+        tab.webView.loadHTMLString("<title>Real</title>", baseURL: url)
+        #expect(await waitUntil(10) { browser.history.visits(matching: host).first?.title == "Real" })
+
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost, userInfo: [NSURLErrorFailingURLErrorKey: url])
+        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" })
+        browser.saveNow()
+        #expect(browser.history.visits(matching: host).map(\.title) == ["Real"])
+        #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "")
+
+        // The next page's title is the page's again.
+        tab.webView.loadHTMLString("<title>Fine</title>", baseURL: url)
+        #expect(await waitUntil(10) { tab.title == "Fine" })
+        browser.saveNow()
+        #expect(browser.history.visits(matching: host).map(\.title) == ["Fine"])
+        #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "Fine")
+    }
+
+    /// Lithium's error page gets no history entry of its own (`loadHTMLString`): Back from the
+    /// next page goes to the page before the error, and that page is the page, not the error.
+    @Test func pageBeforeTheErrorIsNotTheErrorOnBack() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Home</title>"),
+            "/next": ("Content-Type: text/html", "<title>Next</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        tab.load(URL(string: "http://127.0.0.1:1/")!)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.isShowingError)
+
+        tab.load(base.appending(path: "next"))
+        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.url == base)
+        #expect(!tab.isShowingError)
+        #expect(tab.loadError == nil)
+    }
+
+    /// Reload on the error page loads the address as a page of its own: that page, then left and
+    /// come back to with Back, is the page, not the error.
+    @Test func pageReloadedOverTheErrorPageIsNotTheErrorOnBack() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Back up</title>"),
+            "/next": ("Content-Type: text/html", "<title>Next</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "about:blank")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false })
+
+        let error = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost, userInfo: [NSURLErrorFailingURLErrorKey: base])
+        tab.webView(tab.webView, didFailProvisionalNavigation: nil, withError: error)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        tab.reload()
+        #expect(await waitUntil(10) { tab.title == "Back up" && tab.loadedWebView?.isLoading == false })
+        #expect(!tab.isShowingError)
+
+        tab.load(base.appending(path: "next"))
+        #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.url == base && tab.loadedWebView?.isLoading == false })
+        #expect(!tab.isShowingError)
+        #expect(tab.title == "Back up")
+    }
+
+    /// Private tabs (an agent's ephemeral tab, its popups and copies) are kept from extensions,
+    /// as Chrome keeps incognito from extensions not allowed there: no tab list, no active tab,
+    /// and no extension running in their pages.
+    @Test func privateTabsAreHiddenFromExtensions() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data(#"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#.utf8).write(to: folder.appending(path: "manifest.json"))
+        let context = WKWebExtensionContext(for: try await WKWebExtension(resourceBaseURL: folder))
+
+        let browser = Browser()
+        let normal = browser.newTab(url: URL(string: "data:text/html,normal")!)
+        let agentTab = browser.newAgentTab(session: "s1", privateStore: .nonPersistent())
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, privateStore: agentTab.privateStore, openedFrom: agentTab)
+        defer { [normal, agentTab, popup].forEach(browser.close) }
+        let window = browser.extensions.window
+        let listed = window.tabs(for: context).compactMap { $0 as? Lithium.Tab }
+
+        #expect(listed.contains { $0 === normal })
+        #expect(!listed.contains { $0 === agentTab || $0 === popup })
+        #expect(popup.indexInWindow(for: context) == NSNotFound)
+        #expect(browser.selectedTab === popup)
+        #expect(window.activeTab(for: context) == nil, "a private tab shown is no extension's active tab")
+        #expect(popup.webView.configuration.webExtensionController == nil)
+        #expect(agentTab.webView.configuration.webExtensionController == nil)
+        #expect(normal.webView.configuration.webExtensionController === browser.extensions.controller)
+
+        browser.select(normal)
+        #expect(window.activeTab(for: context) as? Lithium.Tab === normal)
+    }
+
+    /// A tab closed or pinned while its name was being edited ends the rename: its field went
+    /// with its row, and the rename would otherwise hold Escape and the agent.
+    @Test func closingOrPinningARenamedTabEndsTheRename() {
+        let browser = Browser()
+        let closed = browser.newTab(url: URL(string: "data:text/html,closed")!, selecting: false)
+        browser.renamingTabID = closed.id
+        browser.close(closed)
+        #expect(browser.renamingTabID == nil)
+
+        let pinned = browser.newTab(url: URL(string: "data:text/html,pinned")!, selecting: false)
+        defer { browser.pins.filter { $0.id == pinned.pinID }.forEach(browser.unpin) }
+        browser.renamingTabID = pinned.id
+        browser.pin(pinned)
+        #expect(pinned.pinID != nil)
+        #expect(browser.renamingTabID == nil)
+
+        // Another tab's rename goes on.
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!, selecting: false)
+        let renamed = browser.newTab(url: URL(string: "data:text/html,renamed")!, selecting: false)
+        browser.renamingTabID = renamed.id
+        browser.close(other)
+        #expect(browser.renamingTabID == renamed.id)
+        browser.renamingTabID = nil
+        browser.close(renamed)
     }
 
     /// A prompt left unanswered goes away with its page: answered over the next one, it would be

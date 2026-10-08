@@ -318,10 +318,13 @@ struct AgentTabsTests {
             let id = try #require(opened["tab"]?.string)
             let tab = try #require(client.tab(id))
             tab.sleep(configuration: client.browser.makeConfiguration())
+            let picks = client.browser.tabPickToken
             let selected = await client.call("tab_select", ["tab": .string(id)])
             #expect(!selected.isError)
             #expect(client.browser.selectedTabID == tab.id)
             #expect(!tab.isAsleep)
+            // Not the user's pick: their address-bar typing goes on, and stays out of the page.
+            #expect(client.browser.tabPickToken == picks)
         }
     }
 

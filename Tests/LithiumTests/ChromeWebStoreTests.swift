@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WebKit
@@ -202,6 +203,31 @@ struct ChromeWebStoreTests {
               .then(() => 'answered', (error) => error.message);
             """, contentWorld: .page) as? String
         #expect(denied == "Not allowed")
+    }
+
+    /// An approval the store leaves unused lapses: a `completeInstall` much later doesn't add the
+    /// extension without asking again. (The approval's own install would fetch from Google.)
+    @Test func anApprovalLeftUnusedLapses() async throws {
+        let extensions = Extensions(folder: .temporaryDirectory.appending(path: "extensions-\(UUID())"), configuration: .nonPersistent())
+        let bridge = extensions.webstoreBridge
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        let id = "mnjggcdmjocbbbhaepdhchncahnbgone"
+        let begin = Task {
+            await bridge.answer("webstorePrivate.beginInstallWithManifest3", arguments: [[
+                "id": id, "manifest": #"{"name":"Blocker","manifest_version":3}"#,
+            ]], window: window).value as? String
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while window.attachedSheet == nil, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        let sheet = try #require(window.attachedSheet)
+        window.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        #expect(await begin.value == "", "approved")
+
+        let later = Date().addingTimeInterval(WebstoreBridge.approvalLifetime + 1)
+        bridge.now = { later }
+        let reply = await bridge.answer("webstorePrivate.completeInstall", arguments: [id], window: window)
+        #expect(reply.error?.hasSuffix("does not match a previous call to beginInstallWithManifest3") == true)
+        #expect(extensions.installed.isEmpty)
     }
 
     /// The tab takes the bridge away when another page shows and adds a new one when the store

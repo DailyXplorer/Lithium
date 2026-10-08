@@ -276,4 +276,75 @@ struct ExtensionCompatibilityTests {
         #expect(tab.webView.url == page)
         #expect(tab.url == page)
     }
+
+    private static let tabsFiles = [
+        "manifest.json": #"{"manifest_version": 3, "name": "Tabs", "version": "1.0", "permissions": ["tabs"]}"#,
+        "page.html": #"<!doctype html><title>Tabs page</title><script src="page.js"></script>"#,
+        "page.js": """
+            window.moves = [];
+            window.focuses = [];
+            chrome.tabs.onMoved.addListener((id, info) => moves.push(info.toIndex));
+            chrome.windows.onFocusChanged.addListener((id) => focuses.push(id));
+            """,
+    ]
+
+    /// The active tab extensions see is the one WebKit was told of: the start page (⌘T) and a
+    /// private tab leave the last normal tab active, and a closed tab is never left active.
+    /// Pinning a tab sends `onMoved`, and the app leaving the front `onFocusChanged`.
+    @Test func extensionsSeeTheActiveTabMovesAndFocusWebKitWasToldOf() async throws {
+        let id = "mmnnooppaabbccddeeffgghhiijjkkll"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.tabsFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let page = URL(string: "webkit-extension://\(id)/page.html")!
+        let pageTab = browser.newTab(url: page, configuration: browser.extensions.configuration(for: page))
+        #expect(try await waitForTitle("Tabs page", in: pageTab) == "Tabs page")
+        let run = { (script: String) async -> Any? in try? await pageTab.webView.callAsyncJavaScript(script, contentWorld: .page) }
+        // By place: extensions get no `data:` address.
+        let active = { await run("return (await chrome.tabs.query({active: true})).map((tab) => tab.index)") as? [Int] }
+        let place = { (tab: Lithium.Tab) in browser.extensions.tabs.firstIndex(of: tab) }
+
+        let a = browser.newTab(url: URL(string: "data:text/html,a")!)
+        let b = browser.newTab(url: URL(string: "data:text/html,b")!, selecting: false)
+        let p = browser.newTab(url: URL(string: "data:text/html,p")!, privateStore: .nonPersistent())
+        defer { [a, b, p, pageTab].forEach(browser.close) }
+        #expect(await active() == [try #require(place(a))], "a private tab shown leaves the last normal tab active")
+        browser.select(a)
+        browser.newTabFocusingAddress()
+        #expect(await active() == [try #require(place(a))], "so does the start page")
+        browser.close(a)
+        #expect(await active() == [], "a closed tab isn't left active")
+
+        browser.select(b)
+        #expect(await active() == [try #require(place(b))])
+        browser.close(b)
+        #expect(browser.extensions.activeTab !== b)
+        #expect(await active() == browser.extensions.activeTab.flatMap(place).map { [$0] } ?? [])
+
+        // Above the page's tab, which pinning moves ahead of it.
+        let c = browser.newTab(url: URL(string: "data:text/html,c")!, selecting: false)
+        defer { browser.close(c) }
+        browser.pin(pageTab)
+        defer { browser.pins.filter { $0.id == pageTab.pinID }.forEach(browser.unpin) }
+        let pinned = try #require(place(pageTab))
+        #expect(pinned < place(c) ?? 0)
+        var moves: [Int] = []
+        for _ in 0..<50 where moves.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+            moves = await run("return moves") as? [Int] ?? []
+        }
+        #expect(moves == [pinned])
+
+        defer { browser.extensions.appDidChangeActive(true) }
+        browser.extensions.appDidChangeActive(false)
+        let context = try #require(browser.extensions.contexts[id])
+        #expect(browser.extensions.webExtensionController(browser.extensions.controller, focusedWindowFor: context) == nil)
+        var focuses: [Int] = []
+        for _ in 0..<50 where focuses.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+            focuses = await run("return focuses") as? [Int] ?? []
+        }
+        #expect(focuses.contains(-1), "no window focused: \(focuses)")
+    }
 }

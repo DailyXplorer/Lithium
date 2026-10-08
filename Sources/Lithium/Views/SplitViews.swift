@@ -208,7 +208,7 @@ struct SplitDropLayer: View {
     var body: some View {
         if let dragged = browser.splits.draggedTabID, let selected = browser.selectedTab,
            selected.id != dragged, selected.isInTabList {
-            SplitDropZone(isDragging: { browser.splits.draggedTabID != nil }) { item, side in
+            SplitDropZone(isDragging: { browser.splits.draggedTabID != nil }, carries: { browser.carriesDraggedTab($0) }) { item, side in
                 withAnimation(.snappy(duration: 0.2)) { browser.dropForSplit(item, on: side) }
             }
         }
@@ -219,12 +219,14 @@ struct SplitDropLayer: View {
 /// only a view above it in hit-testing order sees the drag first.
 struct SplitDropZone: NSViewRepresentable {
     let isDragging: () -> Bool
+    let carries: (String?) -> Bool
     let drop: (String, TabSplit.Side) -> Bool
 
     func makeNSView(context: Context) -> DropView { DropView() }
 
     func updateNSView(_ view: DropView, context: Context) {
         view.isDragging = isDragging
+        view.carries = carries
         view.drop = drop
     }
 
@@ -233,6 +235,9 @@ struct SplitDropZone: NSViewRepresentable {
         /// Escape) is over once the click monitor has seen the next click, though SwiftUI has
         /// yet to take this view away.
         var isDragging: () -> Bool = { false }
+        /// Whether the drag's text is the dragged tab's; anything else (a file, an image, a link
+        /// from another app) ends that drag, and the view lets it through to the page.
+        var carries: (String?) -> Bool = { _ in false }
         var drop: (String, TabSplit.Side) -> Bool = { _, _ in false }
         private let highlight = CALayer()
 
@@ -250,13 +255,15 @@ struct SplitDropZone: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Clicks go on to the page; only a drag, with the button down, lands here.
+        /// Clicks go on to the page; only the dragged tab, with the button down, lands here. Asked
+        /// here rather than once the drag enters: the view only registers for text, so a drag
+        /// without any (a file from Finder) would never reach it, yet never reach the page either.
         override func hitTest(_ point: NSPoint) -> NSView? {
             takesMouse(buttons: NSEvent.pressedMouseButtons) ? super.hitTest(point) : nil
         }
 
-        func takesMouse(buttons: Int) -> Bool {
-            buttons & 1 != 0 && isDragging()
+        func takesMouse(buttons: Int, drag: @autoclosure () -> String? = NSPasteboard(name: .drag).string(forType: .string)) -> Bool {
+            buttons & 1 != 0 && isDragging() && carries(drag())
         }
 
         /// The outer two fifths of each side; the middle drops nothing.
@@ -276,11 +283,11 @@ struct SplitDropZone: NSViewRepresentable {
         }
 
         override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-            show(side(at: sender.draggingLocation))
+            show(carries(sender.draggingPasteboard.string(forType: .string)) ? side(at: sender.draggingLocation) : nil)
         }
 
         override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-            show(side(at: sender.draggingLocation))
+            show(isDragging() ? side(at: sender.draggingLocation) : nil)
         }
 
         override func draggingExited(_ sender: (any NSDraggingInfo)?) {
@@ -289,8 +296,8 @@ struct SplitDropZone: NSViewRepresentable {
 
         override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
             _ = show(nil)
-            guard let side = side(at: sender.draggingLocation),
-                  let item = sender.draggingPasteboard.string(forType: .string) else { return false }
+            let item = sender.draggingPasteboard.string(forType: .string)
+            guard carries(item), let item, let side = side(at: sender.draggingLocation) else { return false }
             return drop(item, side)
         }
     }

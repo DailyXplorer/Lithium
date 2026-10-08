@@ -128,8 +128,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         items.removeAll { $0.state != .downloading }
     }
 
-    /// Bytes Lithium already has (a PDF it shows), saved like a download.
-    func save(_ data: Data, suggestedFilename: String) {
+    /// Bytes Lithium already has (a PDF it shows), saved like a download, from `source`.
+    func save(_ data: Data, suggestedFilename: String, from source: URL?) {
         let destination = destination(for: suggestedFilename)
         reserved.insert(destination)
         let item = DownloadItem(filename: destination.lastPathComponent, size: data.count)
@@ -138,7 +138,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         // Off the main thread: a large file on a slow disk would freeze the window.
         Task {
             let written = await Task.detached {
-                Result { try Self.write(data, to: destination) }
+                Result { try Self.write(data, to: destination, from: source) }
             }.value
             reserved.remove(destination)
             switch written {
@@ -153,16 +153,46 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     /// Into a hidden file beside the destination, moved into place once complete: a disk that
     /// fills up or a crash midway never leaves a truncated file under the real name. The move
-    /// never replaces a file that appeared there meanwhile.
-    nonisolated static func write(_ data: Data, to destination: URL) throws {
-        let partial = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
+    /// never replaces a file that appeared there meanwhile. Quarantined like WebKit's downloads.
+    nonisolated static func write(_ data: Data, to destination: URL, from source: URL?) throws {
+        let partial = partialFile(for: destination)
         do {
             try data.write(to: partial, options: .withoutOverwriting)
+            quarantine(partial, from: source)
             try FileManager.default.moveItem(at: partial, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: partial)
             throw error
         }
+    }
+
+    /// A hidden file beside `destination`, of a short fixed length: one named after the file
+    /// would pass the 255 bytes a file name can have when the file's own name nearly does.
+    nonisolated private static func partialFile(for destination: URL) -> URL {
+        destination.deletingLastPathComponent().appending(path: ".\(UUID().uuidString).lithium-download")
+    }
+
+    /// Marks a file made of what a page sent as downloaded from the web, as WebKit does its
+    /// downloads: macOS asks before it first opens. The address is kept only for the web's: a
+    /// `data:` one would be the whole file again. Best effort, like WebKit's: a disk that keeps
+    /// no attributes still gets the file.
+    nonisolated static func quarantine(_ file: URL, from source: URL?) {
+        var properties: [String: Any] = [kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String]
+        if let source, ["http", "https"].contains(source.scheme?.lowercased()) {
+            properties[kLSQuarantineDataURLKey as String] = source
+        }
+        var values = URLResourceValues()
+        values.quarantineProperties = properties
+        var file = file
+        try? file.setResourceValues(values)
+    }
+
+    /// At most 255 bytes, the most a file name can have: a longer name is cut short before
+    /// `tail` (its number and extension), which stays whole.
+    nonisolated static func fileName(_ name: String, _ tail: String = "") -> String {
+        var name = name
+        while name.utf8.count + tail.utf8.count > 255, !name.isEmpty { name.removeLast() }
+        return name + tail
     }
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
@@ -187,7 +217,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
             // over it, and the old one must stay until the new one is complete: the download goes
             // to a hidden file beside it, swapped in when it finishes.
             if FileManager.default.fileExists(atPath: destination.path) {
-                let partial = destination.deletingLastPathComponent().appending(path: ".\(destination.lastPathComponent).\(UUID().uuidString.prefix(8)).lithium-download")
+                let partial = Self.partialFile(for: destination)
                 partials[id] = partial
                 take(destination, for: id)
                 return partial
@@ -213,13 +243,14 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// In ~/Downloads unless another folder is given, numbered when the name is taken.
     private func destination(for suggestedFilename: String, in folder: URL = .downloadsDirectory) -> URL {
         let name = (suggestedFilename as NSString).deletingPathExtension
-        let ext = (suggestedFilename as NSString).pathExtension
-        var destination = folder.appending(path: suggestedFilename)
+        let pathExtension = (suggestedFilename as NSString).pathExtension
+        let ext = pathExtension.isEmpty ? "" : ".\(pathExtension)"
+        var destination = folder.appending(path: suggestedFilename.utf8.count > 255 ? Self.fileName(name, ext) : suggestedFilename)
         var counter = 1
         let taken = takenDestinations()
         while FileManager.default.fileExists(atPath: destination.path) || taken.contains(destination) {
             counter += 1
-            destination = folder.appending(path: ext.isEmpty ? "\(name) \(counter)" : "\(name) \(counter).\(ext)")
+            destination = folder.appending(path: Self.fileName(name, " \(counter)\(ext)"))
         }
         return destination
     }

@@ -468,6 +468,14 @@ struct AgentServerTests {
         #expect(AgentLog.dayCalendar.identifier == .gregorian)
     }
 
+    /// The exported log and a saved screenshot are named after the local day and time, not UTC's.
+    @Test func exportedFilesAreNamedInLocalTime() throws {
+        let date = try #require(ISO8601DateFormatter().date(from: "2026-10-08T23:30:00Z"))
+        let paris = try #require(TimeZone(identifier: "Europe/Paris"))
+        #expect(AgentLog.exportName(for: date, timeZone: paris) == "Lithium agent log 2026-10-09.jsonl")
+        #expect(CapturePreview.fileName(for: date, timeZone: paris) == "Lithium 2026-10-09T013000.png")
+    }
+
     @Test func takesAnotherPortWhenTheLastOneIsTaken() async throws {
         let first = try await Fixture()
         defer { first.hub.shutdown() }

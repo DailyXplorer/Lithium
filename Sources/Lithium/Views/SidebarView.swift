@@ -138,6 +138,7 @@ private let pinDragPrefix = "pin:"
 private extension Browser {
     /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
     func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
+        endTabDrag()
         guard let item = items.first else { return false }
         withAnimation(.snappy(duration: 0.2)) {
             if item.hasPrefix(pinDragPrefix) {
@@ -351,6 +352,8 @@ private struct TabNameField: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
     @State private var name = ""
+    /// The title the field opened with: left as is, it doesn't become the tab's name.
+    @State private var shown: String?
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -359,6 +362,7 @@ private struct TabNameField: View {
             .focused($isFocused)
             .onSubmit { commit() }
             .onAppear {
+                shown = tab.displayTitle
                 name = browser.renameDraft ?? tab.displayTitle
                 claimFocus($isFocused)
             }
@@ -379,7 +383,7 @@ private struct TabNameField: View {
     /// On the next turn: moved while the field ends its own editing (Return), the keyboard left
     /// SwiftUI's focus behind, and the next rename's field couldn't take it.
     private func commit() {
-        browser.rename(tab, to: name)
+        browser.rename(tab, to: name, shown: shown)
         let hadKeyboard = isFocused
         DispatchQueue.main.async { [browser] in browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
     }

@@ -261,7 +261,8 @@ private struct AddressField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.onFocusChange = { editing in
             let coordinator = context.coordinator
-            if editing { coordinator.editedTabID = coordinator.parent.browser.selectedTabID }
+            let browser = coordinator.parent.browser
+            if editing { browser.suggestions.editedTabID = browser.selectedTabID }
             coordinator.parent.isEditing = editing
         }
         context.coordinator.focusToken = focusToken
@@ -297,8 +298,6 @@ private struct AddressField: NSViewRepresentable {
         var parent: AddressField
         var focusToken = 0
         var pickToken = 0
-        /// The tab shown when editing began: Return sends the text there.
-        var editedTabID: Tab.ID?
 
         init(_ parent: AddressField) { self.parent = parent }
 
@@ -308,7 +307,7 @@ private struct AddressField: NSViewRepresentable {
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 // Submit before resigning: ending the edit clears the suggestions being read.
-                parent.browser.submitAddress(field.stringValue, editing: editedTabID)
+                parent.browser.submitAddress(field.stringValue, editing: suggestions.editedTabID)
                 field.window?.makeFirstResponder(nil)
                 return true
             case #selector(NSResponder.moveDown(_:)) where !suggestions.items.isEmpty:

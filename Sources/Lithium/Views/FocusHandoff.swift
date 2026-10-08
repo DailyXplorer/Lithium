@@ -16,8 +16,13 @@ func claimFocus(_ focus: FocusState<Bool>.Binding) {
 /// text field of the window is being edited: the address bar after ⌘L, a tab being renamed.
 @MainActor
 func focusPage(_ view: NSView) {
-    guard let window = view.window else { return }
-    if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
-       (editor.delegate as? NSView)?.window === window { return }
+    guard let window = view.window, !isEditingText(in: window) else { return }
     window.makeFirstResponder(view)
+}
+
+/// Whether a text field of the window is being edited (the address bar, the find bar, a tab's name).
+@MainActor
+func isEditingText(in window: NSWindow?) -> Bool {
+    guard let window, let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return false }
+    return (editor.delegate as? NSView)?.window === window
 }

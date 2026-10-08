@@ -148,13 +148,13 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "chooseStartImage":
             _ = await StartImage.choose()
         case "setWebsiteFont":
-            PageStyle.usesDMSansEverywhere = value as? Bool ?? true
+            browser.changePageFont { PageStyle.usesDMSansEverywhere = value as? Bool ?? true }
         case "setSiteFont":
             // Typed in by the user: a bare domain, or anything with one in it.
             guard let entry = value as? [String: Any], let text = (entry["site"] as? String)?.trimmingCharacters(in: .whitespaces),
                   let host = URL(string: text.contains("://") ? text : "https://\(text)")?.host()?.lowercased(),
                   !host.isEmpty, !host.contains(" ") else { return (nil, "No site") }
-            PageStyle.setKeepsSiteFont(entry["keep"] as? Bool ?? true, for: host)
+            browser.changePageFont { PageStyle.setKeepsSiteFont(entry["keep"] as? Bool ?? true, for: host) }
         case "setSearchEngine":
             if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { defaults.set(engine.rawValue, forKey: SearchEngine.preferenceKey) }
         case "updateFilters":
@@ -272,7 +272,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "jsonl") ?? .json]
         panel.directoryURL = .downloadsDirectory
-        panel.nameFieldStringValue = "Lithium agent log \(Date.now.formatted(.iso8601.year().month().day())).jsonl"
+        panel.nameFieldStringValue = AgentLog.exportName(for: .now)
         let response = if let window { await panel.beginSheetModal(for: window) } else { panel.runModal() }
         guard response == .OK, let url = panel.url else { return false }
         do {

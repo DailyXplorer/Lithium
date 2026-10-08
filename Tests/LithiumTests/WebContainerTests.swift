@@ -69,6 +69,12 @@ struct WebContainerTests {
 
         focusPage(page)
         #expect((window.firstResponder as? NSTextView)?.delegate === field)
+        // A locked PDF's password prompt, coming up meanwhile, leaves it there too.
+        #expect(isEditingText(in: window))
+
+        window.makeFirstResponder(page)
+        #expect(!isEditingText(in: window))
+        #expect(!isEditingText(in: nil))
     }
 }
 

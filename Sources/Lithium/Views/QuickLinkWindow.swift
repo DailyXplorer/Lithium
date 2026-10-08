@@ -11,7 +11,11 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
 
     static func open(_ tab: Tab, browser: Browser) -> NSWindow? {
         let window = QuickLinkWindow(tab: tab, browser: browser)
-        window.makeKeyAndOrderFront(nil)
+        // The link comes while another app is in front, and macOS may decline to activate Lithium
+        // for it (cooperative activation): the window would open behind that app, unseen. Put it in
+        // front of every app's windows first, then ask to become active so it takes the keyboard.
+        window.orderFrontRegardless()
+        window.makeKey()
         NSApp.activate()
         return window
     }

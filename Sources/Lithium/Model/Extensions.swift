@@ -50,6 +50,18 @@ final class Extensions: NSObject {
     @ObservationIgnored private(set) var nativeHosts: [String: [NativeMessaging.Host]] = [:]
     /// Where hosts are looked up; tests use their own folder.
     @ObservationIgnored var nativeHostFolders = NativeMessaging.folders
+    /// The ports `chrome.idle` listens on (`extension-compat.js`), for each extension. Password
+    /// managers lock when the Mac's screen does, which only this tells them; the screen is watched
+    /// only while one is open.
+    @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
+    @ObservationIgnored nonisolated(unsafe) private var lockObservers: [any NSObjectProtocol] = []
+    /// Whether the screen is locked now; tests answer for the Mac.
+    @ObservationIgnored var isScreenLocked: () -> Bool = {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// The name `extension-compat.js` connects to for `chrome.idle`, answered by Lithium itself.
+    static let idleHost = "lithium.idle"
 
     static let scheme = "webkit-extension"
 
@@ -66,6 +78,7 @@ final class Extensions: NSObject {
 
     deinit {
         activeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lockObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
     }
 
     func start() {
@@ -278,6 +291,8 @@ final class Extensions: NSObject {
     private func unload(_ id: String) {
         if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
         nativeHosts.removeValue(forKey: id)?.forEach { $0.stop() }
+        idlePorts.removeValue(forKey: id)?.forEach { $0.disconnect() }
+        watchScreenLock()
     }
 
     // MARK: Pages
@@ -478,6 +493,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
         connectUsing port: WKWebExtension.MessagePort,
         for extensionContext: WKWebExtensionContext
     ) async throws {
+        if port.applicationIdentifier == Self.idleHost { return listenForIdle(on: port, for: extensionContext.uniqueIdentifier) }
         let host = try startHost(port.applicationIdentifier, for: extensionContext.uniqueIdentifier, onMessage: { message in
             port.sendMessage(message) { _ in }
         }, onExit: { error in
@@ -488,6 +504,47 @@ extension Extensions: WKWebExtensionControllerDelegate {
             do { try host?.send(message) } catch { host?.stop() }
         }
         port.disconnectHandler = { [weak host] _ in host?.stop() }
+    }
+
+    /// `chrome.idle`: the port gets the state once connected, then `locked` and `active` as the
+    /// screen locks and unlocks, until the extension disconnects or is turned off.
+    private func listenForIdle(on port: WKWebExtension.MessagePort, for id: String) {
+        idlePorts[id, default: []].append(port)
+        port.disconnectHandler = { [weak self, weak port] _ in
+            self?.idlePorts[id]?.removeAll { $0 === port }
+            if self?.idlePorts[id]?.isEmpty == true { self?.idlePorts[id] = nil }
+            self?.watchScreenLock()
+        }
+        // Once WebKit has connected the port, after this call: sent before, the state was lost.
+        DispatchQueue.main.async { [weak self, weak port] in
+            MainActor.assumeIsolated {
+                guard let self, let port else { return }
+                port.sendMessage(["state": self.isScreenLocked() ? "locked" : "active"]) { _ in }
+            }
+        }
+        watchScreenLock()
+    }
+
+    /// Watches the screen while a `chrome.idle` port is open, and only then.
+    private func watchScreenLock() {
+        let center = DistributedNotificationCenter.default()
+        if idlePorts.isEmpty {
+            lockObservers.forEach { center.removeObserver($0) }
+            lockObservers = []
+            return
+        }
+        guard lockObservers.isEmpty else { return }
+        lockObservers = [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)].map { name, locked in
+            center.addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.screenLockChanged(locked: locked) }
+            }
+        }
+    }
+
+    func screenLockChanged(locked: Bool) {
+        for port in idlePorts.values.joined() {
+            port.sendMessage(["state": locked ? "locked" : "active"]) { _ in }
+        }
     }
 
     /// The host holds the port its messages go to until it ends; the port only points back at it.

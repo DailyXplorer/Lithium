@@ -3,8 +3,8 @@
 // them: 1Password's background stopped at chrome.notifications.onClicked, and nothing answered
 // its content scripts. These are added as Chrome has them for an extension that gets nothing
 // from them: notifications never show, no managed policy, no window opened from a page reported,
-// the user always active, no browser password saving to turn off (Lithium has none), no other
-// extension. Only what is missing is added, so WebKit's own APIs win once it has them.
+// no browser password saving to turn off (Lithium has none), no other extension. Only what is
+// missing is added, so WebKit's own APIs win once it has them.
 
 (() => {
   const event = () => ({ addListener() {}, removeListener() {}, hasListener() { return false; }, hasListeners() { return false; } });
@@ -30,7 +30,7 @@
     get: answer({ value, levelOfControl: 'controllable_by_this_extension' }), set: answer(undefined), clear: answer(undefined), onChange: event(),
   });
   // Chrome has these only for an extension that asks for them. Password managers turn the
-  // browser's password saving off (`privacy`) and lock when the Mac idles (`idle`) as they start.
+  // browser's password saving off (`privacy`) and lock with the Mac's screen (`idle`) as they start.
   const byPermission = {
     notifications: () => ({
       onClicked: event(), onButtonClicked: event(), onClosed: event(), onPermissionLevelChanged: event(), onShowSettings: event(),
@@ -41,7 +41,44 @@
       network: { networkPredictionEnabled: setting(false), webRTCIPHandlingPolicy: setting('default') },
       websites: { thirdPartyCookiesAllowed: setting(false), hyperlinkAuditingEnabled: setting(false), doNotTrackEnabled: setting(false) },
     }),
-    idle: () => ({ onStateChanged: event(), queryState: answer('active'), setDetectionInterval() {}, getAutoLockDelay: answer(0) }),
+    // Lithium tells `locked` and `active` through a port (Extensions.listenForIdle), opened once the
+    // extension asks; `idle` (no input for a while) is never told. Without native messaging there
+    // is no port, and the state stays `active`.
+    idle: (api) => {
+      const listeners = new Set();
+      let state = 'active';
+      let connected;
+      const connect = () => connected ??= new Promise((resolve) => {
+        let port;
+        try { port = api.runtime.connectNative('lithium.idle'); } catch { return resolve(); }
+        port.onMessage.addListener((message) => {
+          if (typeof message?.state !== 'string') return;
+          const changed = message.state !== state;
+          state = message.state;
+          resolve();
+          if (changed) for (const listener of [...listeners]) listener(state);
+        });
+        port.onDisconnect.addListener(() => {
+          connected = undefined;
+          resolve();
+        });
+      });
+      return {
+        onStateChanged: {
+          addListener(listener) { listeners.add(listener); connect(); },
+          removeListener(listener) { listeners.delete(listener); },
+          hasListener(listener) { return listeners.has(listener); },
+          hasListeners() { return listeners.size > 0; },
+        },
+        queryState: (...args) => {
+          const result = connect().then(() => state);
+          const callback = args.findLast((arg) => typeof arg === 'function');
+          if (!callback) return result;
+          result.then(callback);
+        },
+        setDetectionInterval() {}, getAutoLockDelay: answer(0),
+      };
+    },
     management: (api) => {
       const manifest = api.runtime.getManifest();
       const self = { id: api.runtime.id, name: manifest.name, shortName: manifest.short_name ?? manifest.name, version: manifest.version, enabled: true, type: 'extension', installType: 'normal', mayDisable: true };

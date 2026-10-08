@@ -92,6 +92,31 @@ struct NativeMessagingTests {
         #expect(throws: NativeMessaging.HostError.failed) { try oversize.read(Data(bytes: &tooLong, count: 4)) }
     }
 
+    /// A host whose handler holds it, as `sendNativeMessage`'s does, is freed once it ends: kept,
+    /// each call left its pipes open until Lithium ran out of descriptors.
+    @Test(.timeLimit(.minutes(1))) func anEndedHostIsFreed() async throws {
+        let hosts = try folder()
+        defer { try? FileManager.default.removeItem(at: hosts) }
+        try register("com.example.echo", in: hosts, allowed: [id], log: hosts.appending(path: "log"))
+        weak var freed: NativeMessaging.Host?
+        var reply: Any?
+        do {
+            var host: NativeMessaging.Host? = NativeMessaging.Host(executable: try NativeMessaging.executable(of: "com.example.echo", for: id, in: [hosts]), extensionID: id)
+            host?.onMessage = { message in
+                reply = message
+                host?.stop()
+            }
+            try host?.start()
+            try host?.send(["step": "send"])
+            freed = host
+        }
+        for _ in 0..<50 where reply == nil || freed != nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect((reply as? [String: String]) == ["step": "send"])
+        #expect(freed == nil)
+    }
+
     /// One message with its reply (`sendNativeMessage`), then a port (`connectNative`) that stays
     /// open until the extension is turned off. A host that doesn't list it is refused.
     @Test(.timeLimit(.minutes(1))) func anExtensionTalksToTheHostsThatAllowIt() async throws {
@@ -147,6 +172,7 @@ struct NativeMessagingTests {
         try register("com.example.echo", in: hosts, allowed: [id], log: log)
         let extensions = Extensions(folder: folder, configuration: .nonPersistent())
         extensions.nativeHostFolders = [hosts]
+        extensions.isScreenLocked = { false }
 
         try await extensions.install(archive: try archive([
             "manifest.json": #"""
@@ -167,5 +193,41 @@ struct NativeMessagingTests {
 
         let content = try await waitForLog(log, toContain: "{\"")
         #expect(content.contains(#"{"idle":"active","name":"Shims","saving":false}"#), "got: \(content)")
+    }
+
+    /// `chrome.idle` reports the Mac's screen locking and unlocking, which password managers lock
+    /// on: always `active`, a vault set to lock with the screen stayed open.
+    @Test(.timeLimit(.minutes(1))) func idleTellsAnExtensionTheScreenLocked() async throws {
+        let id = "ddeeffgghhiijjkkllmmnnooppaabbcc"
+        let hosts = try folder()
+        let folder = FileManager.default.temporaryDirectory.appending(path: "extensions-\(UUID())")
+        defer { [hosts, folder].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let log = hosts.appending(path: "log")
+        try register("com.example.echo", in: hosts, allowed: [id], log: log)
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        extensions.nativeHostFolders = [hosts]
+        extensions.isScreenLocked = { true }
+
+        try await extensions.install(archive: try archive([
+            "manifest.json": #"""
+                {"manifest_version": 3, "name": "Idle", "version": "1.0", "permissions": ["nativeMessaging", "idle"],
+                 "background": {"service_worker": "background.js"}}
+                """#,
+            "background.js": """
+                chrome.idle.onStateChanged.addListener((state) => chrome.runtime.sendNativeMessage('com.example.echo', { changed: state }));
+                chrome.idle.queryState(60).then((state) => chrome.runtime.sendNativeMessage('com.example.echo', { queried: state }));
+                """,
+        ]), id: id)
+
+        var content = try await waitForLog(log, toContain: #"{"queried":"locked"}"#)
+        #expect(content.contains(#"{"queried":"locked"}"#), "got: \(content)")
+        #expect(extensions.idlePorts[id]?.count == 1)
+        extensions.screenLockChanged(locked: false)
+        content = try await waitForLog(log, toContain: #"{"changed":"active"}"#)
+        #expect(content.contains(#"{"changed":"locked"}"#), "got: \(content)")
+        #expect(content.contains(#"{"changed":"active"}"#), "got: \(content)")
+
+        await extensions.setEnabled(false, id: id)
+        #expect(extensions.idlePorts[id] == nil)
     }
 }

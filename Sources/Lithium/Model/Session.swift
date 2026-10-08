@@ -12,6 +12,8 @@ struct Session: Codable, Equatable {
         /// The tab last shown in its space, another than the one shown at quit: switching back
         /// brings it back.
         var lastShown: Bool? = nil
+        /// The sidebar folder it is in (`TabFolder`); nil outside folders.
+        var folderID: TabFolder.ID? = nil
     }
 
     var tabs: [Tab] = []
@@ -21,6 +23,8 @@ struct Session: Codable, Equatable {
     var spaces: [Space]? = nil
     /// The space shown at quit; nil for the main one.
     var spaceID: Space.ID? = nil
+    /// Nil until the user makes a folder, so files written without folders stay as they were.
+    var folders: [TabFolder]? = nil
 }
 
 enum SessionStore {

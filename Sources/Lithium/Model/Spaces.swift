@@ -119,9 +119,16 @@ extension Browser {
         spaces.isEmpty ? pins : pins.filter { $0.space == space }
     }
 
-    /// A space's tab list, in order.
+    /// A space's tab list, in order: each folder's tabs, then those outside folders (`TabFolder`).
     func tabList(in space: Space.ID) -> [Tab] {
-        tabs.filter { $0.isInTabList && $0.spaceID == space }
+        let spaceFolders = folders(in: space)
+        guard !spaceFolders.isEmpty else { return tabs.filter { $0.isInTabList && $0.spaceID == space } }
+        return spaceFolders.flatMap { tabList(in: space, folder: $0.id) } + tabList(in: space, folder: nil)
+    }
+
+    /// The tabs of a folder, or with nil those outside folders, in order.
+    func tabList(in space: Space.ID, folder: TabFolder.ID?) -> [Tab] {
+        tabs.filter { $0.isInTabList && $0.spaceID == space && $0.folderID == folder }
     }
 
     func agentGroup(in space: Space.ID) -> [Tab] {

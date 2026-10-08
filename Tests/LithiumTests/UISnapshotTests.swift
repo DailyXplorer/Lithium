@@ -362,6 +362,51 @@ struct UISnapshotTests {
         }
     }
 
+    /// The sidebar with two folders: one open with its tabs, the selected one among them, and one
+    /// collapsed with its count; a tab outside folders below them.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func tabFolderSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        SessionStore.save(Session())
+        PinStore.save([])
+        let browser = Browser()
+        defer {
+            browser.tabs.forEach { browser.close($0, remembering: false) }
+            SessionStore.save(Session())
+        }
+        func tab(_ title: String, _ host: String) -> Lithium.Tab {
+            let tab = browser.newTab(selecting: false)
+            tab.restore(url: URL(string: "https://\(host)/")!, title: title)
+            return tab
+        }
+        _ = tab("Weather · Paris", "weather.example")
+        let article = tab("How tab folders work", "news.example")
+        // Selected, so without an address: a restored tab would wake and load its page.
+        let docs = browser.newTab(selecting: false)
+        docs.customTitle = "Design notes"
+        let issue = tab("Issue tracker", "code.example")
+        let work = browser.newFolder(with: issue)
+        browser.renameFolder(work.id, to: "Work")
+        browser.moveTab(docs, toFolder: work.id)
+        let reading = browser.newFolder(with: article)
+        browser.renameFolder(reading.id, to: "Reading")
+        browser.toggleFolder(reading.id)
+        browser.select(docs)
+        for isDark in [false, true] {
+            let hex = isDark ? "#2B2D42" : Theme.defaultSidebarHex
+            let palette = SidebarPalette(style: .solid, colorHex: hex, scheme: isDark ? .dark : .light)
+            let sidebar = SidebarView()
+                .environment(browser)
+                .environment(\.sidebarPalette, palette)
+                .foregroundStyle(palette.ink)
+                .font(Theme.font(13))
+                .frame(width: Layout.sidebarWidth, height: 400)
+                .background(Color(hex: hex))
+            try render(sidebar, isDark: isDark).write(to: directory.appending(path: "tab-folders-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))

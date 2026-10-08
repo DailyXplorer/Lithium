@@ -48,8 +48,8 @@ extension Session {
     }
 }
 
-/// One row of the tab list: a tab alone, or the pair it leads. `index` is the tab's place in
-/// `regularTabs`, which drops are measured against.
+/// One row of the tab list: a tab alone, or the pair it leads. `index` is the tab's place in its
+/// folder, or among the tabs outside folders, which drops are measured against.
 struct TabListEntry: Identifiable {
     let index: Int
     let tab: Tab
@@ -78,13 +78,16 @@ extension Browser {
     /// The pair shows once, where its first tab in the list is.
     var tabListEntries: [TabListEntry] {
         let list = regularTabs
-        guard !splits.pairs.isEmpty else { return list.enumerated().map { TabListEntry(index: $0, tab: $1, split: nil) } }
+        guard !splits.pairs.isEmpty || !folders.all.isEmpty else { return list.enumerated().map { TabListEntry(index: $0, tab: $1, split: nil) } }
         var seen: Set<Tab.ID> = []
-        return list.enumerated().compactMap { index, tab in
+        // Where the tab's folder (or the tabs outside folders) starts: the list keeps each together.
+        var start = 0
+        return list.enumerated().compactMap { offset, tab in
+            if offset > 0, tab.folderID != list[offset - 1].folderID { start = offset }
             let split = split(of: tab)
             if let split, seen.contains(split.first) || seen.contains(split.second) { return nil }
             seen.insert(tab.id)
-            return TabListEntry(index: index, tab: tab, split: split)
+            return TabListEntry(index: offset - start, tab: tab, split: split)
         }
     }
 
@@ -121,6 +124,8 @@ extension Browser {
         var split = split(of: partner) ?? TabSplit(first: partner.id, second: tab.id)
         splits.pairs.removeAll { $0.contains(tab.id) || $0.contains(partner.id) }
         (split.first, split.second) = side == .first ? (tab.id, partner.id) : (partner.id, tab.id)
+        // A pair is one row, so in one place: the partner's folder, or outside folders with it.
+        if tab.folderID != partner.folderID { tab.folderID = partner.folderID }
         splits.pairs.append(split)
         select(tab)
     }

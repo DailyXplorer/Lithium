@@ -246,9 +246,9 @@ private struct SidebarPeek: View {
             }
         }
         .onChange(of: zone) { update() }
-        .onChange(of: browser.renamingTabID) { update() }
+        .onChange(of: browser.isRenaming) { update() }
         .onChange(of: browser.tabPickToken) {
-            guard browser.renamingTabID == nil else { return }
+            guard !browser.isRenaming else { return }
             pending?.cancel()
             setShown(false)
         }
@@ -261,7 +261,7 @@ private struct SidebarPeek: View {
     /// name is in. Anything else opened from the panel keeps it too (`Browser.holdsPeek`).
     private func update() {
         pending?.cancel()
-        let renaming = browser.renamingTabID != nil
+        let renaming = browser.isRenaming
         let wanted = renaming || (isShown ? zone != .outside : zone == .edge)
         guard wanted != isShown else { return }
         if renaming {

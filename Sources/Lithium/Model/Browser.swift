@@ -74,6 +74,7 @@ final class Browser {
     let nowPlaying = NowPlaying()
     let pinnedPages = PinnedPages()
     let splits = TabSplits()
+    let folders = TabFolders()
     let recentTabs = RecentTabs()
     let quickLinks = QuickLinks()
     let energy = EnergySaver()
@@ -96,8 +97,11 @@ final class Browser {
     /// The panel stays out meanwhile, as they would go with it. Read only as the panel would go,
     /// so nothing watches for them.
     var holdsPeek: Bool {
-        renamingTabID != nil || window.map(Self.hasOpenUI(in:)) == true
+        isRenaming || window.map(Self.hasOpenUI(in:)) == true
     }
+
+    /// A tab's or a folder's name is being typed in the sidebar.
+    var isRenaming: Bool { renamingTabID != nil || folders.renamingID != nil }
 
     /// Popovers are the window's child windows and alerts its sheets; menus and drags run the
     /// event tracking loop until they end.
@@ -124,8 +128,9 @@ final class Browser {
         let pinID: Pin.ID?
         let spaceID: Space.ID
         let customTitle: String?
-        /// Its place in the tab list; nil for a favorite's page.
+        /// Its place in its folder, or among the tabs outside folders; nil for a favorite's page.
         let index: Int?
+        let folderID: TabFolder.ID?
         /// From `Tab.history`.
         let history: Any?
     }
@@ -443,7 +448,7 @@ final class Browser {
     func ownsEscape(in window: NSWindow?) -> Bool {
         guard let window, window === self.window, window.attachedSheet == nil else { return false }
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return true }
-        return find.isFieldFocused || renamingTabID != nil
+        return find.isFieldFocused || isRenaming
     }
 
     /// Closes the topmost Lithium overlay. Returns false when there was none.
@@ -452,8 +457,9 @@ final class Browser {
             endTabCycle(commit: false)
             return true
         }
-        if renamingTabID != nil {
+        if isRenaming {
             renamingTabID = nil
+            folders.renamingID = nil
             // The name field, when a field has it: Escape comes here only for find's or that one.
             let nameHadKeyboard = (selectedTab?.contentView.window?.firstResponder as? NSTextView)?.isFieldEditor == true
             returnKeyboardToPage(fieldHadKeyboard: nameHadKeyboard && !find.isFieldFocused)
@@ -563,17 +569,19 @@ final class Browser {
         select(tab)
     }
 
-    /// `index` is a place in the space's tab list, clamped to it. `tabs` also holds favorites'
-    /// pages and other spaces' tabs, so the new tab goes just before the one it pushes down.
-    private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID) -> Tab {
+    /// `index` is a place in the space's tab list (in `folder`, or outside folders), clamped to it.
+    /// `tabs` also holds favorites' pages and other spaces' tabs, so the new tab goes just before
+    /// the one it pushes down.
+    private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID, folder: TabFolder.ID? = nil) -> Tab {
         let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore, space: space)
-        tabs.insert(tab, at: Self.position(inTabList: index, of: tabs, space: space))
+        tab.folderID = folder
+        tabs.insert(tab, at: Self.position(inTabList: index, of: tabs, space: space, folder: folder))
         extensions.didOpen(tab)
         return tab
     }
 
-    private static func position(inTabList index: Int, of tabs: [Tab], space: Space.ID) -> Int {
-        let list = tabs.filter { $0.isInTabList && $0.spaceID == space }
+    private static func position(inTabList index: Int, of tabs: [Tab], space: Space.ID, folder: TabFolder.ID? = nil) -> Int {
+        let list = tabs.filter { $0.isInTabList && $0.spaceID == space && $0.folderID == folder }
         return index <= 0 ? 0 : index >= list.count ? tabs.count : tabs.firstIndex { $0 === list[index] } ?? tabs.count
     }
 
@@ -603,19 +611,84 @@ final class Browser {
     }
 
     enum TabDropTarget {
-        /// Before the tab at this place in the tab list; nil past its end.
+        /// Before the tab at this place among the tabs outside folders; nil past their end.
         case tabList(Int?)
+        /// Before the tab at this place in the folder; nil past its end.
+        case folder(TabFolder.ID, Int?)
         case agentGroup
     }
 
-    /// A tab from the Agent group dropped on the tab list joins it there. Dropped among the
-    /// Agent group, it stays: the group has no order of its own to change.
+    /// A tab from the Agent group dropped on the tab list joins it there, and one from a folder
+    /// leaves it for that place. Dropped on a folder, a tab goes in, or moves within it. The tab
+    /// list outside folders has no drag order of its own: a tab already there stays, as one
+    /// dropped among the Agent group does.
     func dropTab(_ items: [String], on target: TabDropTarget) -> Bool {
         endTabDrag()
-        guard case .tabList(let index) = target,
-              let tab = agentTabs.first(where: { $0.id.uuidString == items.first }) else { return false }
-        keep(tab, at: index)
+        guard let tab = (regularTabs + agentTabs).first(where: { $0.id.uuidString == items.first }) else { return false }
+        switch target {
+        case .tabList(let index):
+            guard tab.isInAgentGroup || tab.folderID != nil else { return false }
+            moveTab(tab, toFolder: nil, at: index)
+        case .folder(let id, let index):
+            guard folderExists(id, in: tab.spaceID) else { return false }
+            moveTab(tab, toFolder: id, at: index)
+        case .agentGroup:
+            return false
+        }
         return true
+    }
+
+    /// Into a folder of its space, or out of folders with nil: before the tab at `index` of that
+    /// folder (or of the tabs outside folders), at its end without one. An agent's tab becomes
+    /// the user's, as with `keep`; a split's other side comes along, so the pair stays one row.
+    func moveTab(_ tab: Tab, toFolder folder: TabFolder.ID?, at index: Int? = nil) {
+        guard tab.pinID == nil, folder.map({ folderExists($0, in: tab.spaceID) }) ?? true else { return }
+        let partner = split(of: tab)?.partner(of: tab.id).flatMap { id in tabs.first { $0.id == id } }
+        let moving = [tab] + (partner.map { [$0] } ?? [])
+        // Measured against the folder as shown, the moving tabs still in it.
+        let anchor = index.flatMap { index in
+            tabList(in: tab.spaceID, folder: folder).dropFirst(index).first { listed in !moving.contains { $0 === listed } }
+        }
+        place(moving, inFolder: folder, before: anchor)
+    }
+
+    /// Its tabs close (Reopen Closed Tab brings them back), or stay, at the top of the tabs
+    /// outside folders, where the folder was. Either way the selection stays put when it can.
+    func deleteFolder(_ id: TabFolder.ID, closingTabs: Bool) {
+        let members = tabs.filter { $0.folderID == id && $0.isInTabList }
+        if closingTabs, let selected = selectedTab, members.contains(where: { $0 === selected }) {
+            // Off the folder first, so the selection doesn't walk through (and wake) its tabs.
+            let list = tabList(in: selected.spaceID)
+            let first = list.firstIndex { $0.folderID == id } ?? 0
+            let next = list[first...].first { $0.folderID != id } ?? list[..<first].last
+            if let next { select(next, picked: false) } else { showStartPage(picked: false) }
+        }
+        if closingTabs {
+            members.reversed().forEach(close)
+        } else if !members.isEmpty {
+            place(members, inFolder: nil, before: tabList(in: members[0].spaceID, folder: nil).first)
+        }
+        removeFolder(id)
+    }
+
+    /// Moves `moving` into `folder` (nil: out of folders), just before `anchor`, or at the end.
+    private func place(_ moving: [Tab], inFolder folder: TabFolder.ID?, before anchor: Tab?) {
+        reportingMoves(of: moving[...]) {
+            var reordered = tabs.filter { listed in !moving.contains { $0 === listed } }
+            for tab in moving {
+                tab.folderID = folder
+                tab.openedByAgent = nil
+            }
+            let at = anchor.flatMap { anchor in reordered.firstIndex { $0 === anchor } } ?? reordered.count
+            reordered.insert(contentsOf: moving, at: at)
+            tabs = reordered
+        }
+    }
+
+    /// `Extensions.moving` for each tab, each place read before the change and after it.
+    private func reportingMoves(of moving: ArraySlice<Tab>, _ change: () -> Void) {
+        guard let tab = moving.first else { return change() }
+        extensions.moving(tab) { reportingMoves(of: moving.dropFirst(), change) }
     }
 
     func newTabFocusingAddress() {
@@ -753,8 +826,10 @@ final class Browser {
         nowPlaying.discard(tab)
         if remembering, let url = tab.url, !tab.isEphemeral {
             // An agent's tab comes back the user's, at the bottom of the list, next to where it was.
-            let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? tabList(in: tab.spaceID).count : order.firstIndex { $0 === tab }
-            let closed = ClosedTab(url: url, pinID: tab.pinID, spaceID: tab.spaceID, customTitle: tab.customTitle, index: place, history: tab.history)
+            let group = tabList(in: tab.spaceID, folder: tab.folderID)
+            let place = tab.pinID != nil ? nil : tab.isInAgentGroup ? group.count : group.firstIndex { $0 === tab }
+            let closed = ClosedTab(url: url, pinID: tab.pinID, spaceID: tab.spaceID, customTitle: tab.customTitle, index: place,
+                                   folderID: tab.folderID, history: tab.history)
             closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
@@ -854,26 +929,28 @@ final class Browser {
 
     /// Like Chrome: back in its place, with its history. A favorite's page goes back to its
     /// favorite if that has no page open, or else to the top of the list. In its own space,
-    /// which comes back with it.
+    /// which comes back with it, and its folder; at the top of the list if that is gone.
     func reopenClosedTab() {
         guard let closed = closedTabs.popLast() else { return }
         let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
-        let tab = insertTab(at: pin == nil ? closed.index ?? 0 : 0, configuration: makeConfiguration(for: closed.url), space: closed.spaceID)
+        let folder = closed.folderID.flatMap { folderExists($0, in: closed.spaceID) ? $0 : nil }
+        let index = pin != nil || closed.folderID != folder ? 0 : closed.index ?? 0
+        let tab = insertTab(at: index, configuration: makeConfiguration(for: closed.url), space: closed.spaceID, folder: pin == nil ? folder : nil)
         extensions.moving(tab) { tab.pinID = pin?.id }
         tab.customTitle = closed.customTitle
         tab.load(closed.url, history: closed.history)
         select(tab)
     }
 
-    /// Just below the original, with its history and name; a favorite's page has its copy at the
-    /// top of the list. The copy is never a favorite, nor an agent's: an agent's tab has its copy
-    /// at the bottom of the list, next to it.
+    /// Just below the original, with its history and name, in its folder; a favorite's page has
+    /// its copy at the top of the list. The copy is never a favorite, nor an agent's: an agent's
+    /// tab has its copy at the bottom of the list, next to it.
     func duplicate(_ tab: Tab) {
         guard let url = tab.url else { return }
-        let list = tabList(in: tab.spaceID)
+        let list = tabList(in: tab.spaceID, folder: tab.folderID)
         let index = tab.isInAgentGroup ? list.count : list.firstIndex { $0 === tab }.map { $0 + 1 } ?? 0
         // A private tab's copy shares its store, and is private too; any copy stays in its space.
-        let copy = insertTab(at: index, configuration: makeConfiguration(for: url), privateStore: tab.privateStore, space: tab.spaceID)
+        let copy = insertTab(at: index, configuration: makeConfiguration(for: url), privateStore: tab.privateStore, space: tab.spaceID, folder: tab.folderID)
         copy.customTitle = tab.customTitle
         copy.load(url, history: tab.history)
         select(copy)
@@ -946,9 +1023,10 @@ final class Browser {
     }
 
     /// ⌘1…⌘9 walk the favorites grid, then the rows of the tab list and the Agent group, as the
-    /// sidebar shows them: a split pair is one row, and its number shows the pair.
+    /// sidebar shows them: a split pair is one row, and its number shows the pair. Folder headers
+    /// and the tabs of a collapsed folder have none.
     func selectItem(at index: Int) {
-        let rows = tabListEntries.map(\.tab) + agentTabs
+        let rows = tabListRows.compactMap(\.entry?.tab) + agentTabs
         let pins = spacePins
         if index < pins.count {
             activate(pins[index])
@@ -973,9 +1051,10 @@ final class Browser {
             let title = tab.isShowingError ? "" : tab.title
             let lastShown = tab.spaceID != currentSpaceID && spaceSelections[tab.spaceID] == tab.id
             session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID,
-                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil))
+                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID))
         }
         session.splits = savedSplits(at: places)
+        session.folders = savedFolders
         if !spaces.isEmpty {
             session.spaces = spaces
             session.spaceID = Space.saved(currentSpaceID)
@@ -987,6 +1066,7 @@ final class Browser {
     /// finishes loading before its web view is in a window stays blank.
     private func restore(_ session: Session) {
         restoreSpaces(session)
+        restoreFolders(session.folders)
         var selected: Tab?
         var restored: [Int: Tab] = [:]
         for (index, saved) in session.tabs.enumerated() {
@@ -997,6 +1077,7 @@ final class Browser {
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { id in pins.contains { $0.id == id && $0.space == space } ? id : nil }
+            tab.folderID = saved.folderID.flatMap { id in tab.pinID == nil && folderExists(id, in: space) ? id : nil }
             if saved.lastShown == true { spaceSelections[space] = tab.id }
             // Asleep, it loads nothing that would tidy its title.
             tidyTitles.update(tab, askingModel: false)
@@ -1113,8 +1194,9 @@ final class Browser {
     /// pick (`tabPickToken`): a peeked sidebar stays out on the space switched to.
     func switchToSpace(_ id: Space.ID) {
         guard id != currentSpaceID, spaces.contains(where: { $0.id == id }) else { return }
-        if isEditingAddress || renamingTabID != nil { window?.makeFirstResponder(nil) }
+        if isEditingAddress || isRenaming { window?.makeFirstResponder(nil) }
         renamingTabID = nil
+        folders.renamingID = nil
         let order = spaces.map(\.id)
         spaceStepsForward = (order.firstIndex(of: id) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
         if let last = spaceSelections[id], let tab = tabs.first(where: { $0.id == last && $0.spaceID == id }) {
@@ -1142,6 +1224,7 @@ final class Browser {
         closedTabs.removeAll { $0.spaceID == id }
         for pin in pins where pin.space == id { pinIcons[pin.id] = nil }
         pins.removeAll { $0.space == id }
+        removeFolders(in: id)
         spaces.remove(at: index)
         spaceSelections[id] = nil
         if space.separatesData { removeStore(of: id) }
@@ -1195,8 +1278,9 @@ final class Browser {
             pins.insert(pin, at: pinsIndex(forSlot: index ?? .max, in: tab.spaceID, of: pins))
             leaveSplit(tab)
             tab.pinID = pin.id
-            // The user's from now on: unpinned, it goes to the tab list.
+            // The user's from now on: unpinned, it goes to the tab list, outside folders.
             tab.openedByAgent = nil
+            tab.folderID = nil
         }
         // Its name field was in the list, which no longer shows it.
         if renamingTabID == tab.id { renamingTabID = nil }

@@ -212,6 +212,16 @@ struct BrowserCommands: Commands {
                 .disabled(browser.selectedTab == nil)
             }
             Divider()
+            Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            // A favorite's page stays in the grid: only the tab list has folders.
+            if let tab = browser.selectedTab, tab.pinID == nil {
+                MoveToFolderMenu(browser: browser, tab: tab, title: "Move Tab to Folder", showsShortcut: true)
+            } else {
+                Menu("Move Tab to Folder") {}
+                    .disabled(true)
+            }
+            Divider()
             ForEach(1..<10) { number in
                 Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")))

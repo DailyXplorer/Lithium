@@ -17,7 +17,8 @@
   // the native functions. The copy that protected the window left this function on it (see
   // `protect`), and looks after the new document with what it took while its own was clean.
   // `window` and `document` can't be replaced. The function's name is keyed per launch (see
-  // Privacy.farbling), so a page can't guess it, and `protect` leaves it out of every listing.
+  // Privacy.farbling), so a page can't guess it (nor put its own function there), and `protect`
+  // keeps it from every listing and from a proxy's traps.
   const ADOPT = '__LITHIUM_ADOPT__';
   const adopter = window[ADOPT];
   if (typeof adopter === 'function') { adopter(document); return; }
@@ -42,6 +43,13 @@
   const weakMapSet = WeakMap.prototype.set;
   const weakSetHas = WeakSet.prototype.has;
   const weakSetAdd = WeakSet.prototype.add;
+  // What a proxy of a window does without a trap of the page's (see `shield`). Not `apply` and
+  // `construct`: a window can't be called.
+  const TRAPS = ['getPrototypeOf', 'setPrototypeOf', 'isExtensible', 'preventExtensions', 'getOwnPropertyDescriptor',
+    'defineProperty', 'has', 'get', 'set', 'deleteProperty', 'ownKeys'];
+  const reflect = { __proto__: null };
+  for (let i = 0; i < TRAPS.length; i++) reflect[TRAPS[i]] = Reflect[TRAPS[i]];
+  const construct = Reflect.construct;
   // The canvas and array members the noise goes through, likewise: a canvas `width` that reads
   // 0, an empty `putImageData` or an array `length` past the limit once left every read clean.
   // They work on objects of any same-origin realm, so these serve the frames and popups too.
@@ -356,11 +364,15 @@
   // tells the window's realm whether its policy enforces them or only reports. Shared like the
   // disguises, so a frame's copy finds its parent's.
   let trustedTypesModes = new WeakMapCtor();
+  // The windows that carry the adopter (see `protect`), shared likewise: a page reaches the
+  // frames a frame's copy protected too, and makes its proxies of them with its own `Proxy`.
+  let adopting = new WeakSetCtor();
   const answer = (event) => {
     apply(preventDefault, event, []);
     const box = read(eventDetail, event);
     if (box && !hasOwn(box, 'disguises')) defineProperty(box, 'disguises', { __proto__: null, value: disguises });
     if (box && !hasOwn(box, 'modes')) defineProperty(box, 'modes', { __proto__: null, value: trustedTypesModes });
+    if (box && !hasOwn(box, 'adopting')) defineProperty(box, 'adopting', { __proto__: null, value: adopting });
     if (box && hasOwn(box, 'trustedTypes')) {
       const realm = sameOrigin(read(eventTarget, event));
       if (realm) apply(weakMapSet, trustedTypesModes, [realm, box.trustedTypes]);
@@ -377,9 +389,44 @@
     const others = [parent, top, opener];
     for (let i = 0; i < others.length; i++) {
       const box = others[i] && others[i] !== window && sameOrigin(others[i]) ? ask(others[i]) : null;
-      if (box && box.disguises) { disguises = box.disguises; trustedTypesModes = box.modes || trustedTypesModes; break; }
+      if (box && box.disguises) {
+        disguises = box.disguises; trustedTypesModes = box.modes || trustedTypesModes; adopting = box.adopting || adopting;
+        break;
+      }
     }
   } catch (_) {}
+
+  // The adopter is left out of every listing (see `protect`), and so must never reach a proxy's
+  // traps: `Object.keys`, `for…in` or spread of a proxy of a window ask its
+  // `getOwnPropertyDescriptor` trap about each of the window's keys. A proxy of such a window
+  // gets traps of this copy's instead, which call the page's with every other key and list the
+  // window's keys without it.
+  const unlisted = (keys) => {
+    const count = keys.length;
+    for (let i = 0; i < count; i++) {
+      if (keys[i] !== ADOPT) continue;
+      for (let j = i + 1; j < count; j++) keys[j - 1] = keys[j];
+      keys.length = count - 1;
+      break;
+    }
+    return keys;
+  };
+  const shield = (target, handler) => {
+    if (!apply(weakSetHas, adopting, [target]) || handler === null || (typeof handler !== 'object' && typeof handler !== 'function')) return handler;
+    const traps = { __proto__: null };
+    for (let i = 0; i < TRAPS.length; i++) {
+      const name = TRAPS[i], forward = reflect[name];
+      traps[name] = (...args) => {
+        if (args[1] === ADOPT) return apply(forward, undefined, args);
+        // Looked up on each call, as the browser does: the page may change its handler.
+        const trap = handler[name];
+        if (trap != null) return apply(trap, handler, args);
+        const result = apply(forward, undefined, args);
+        return name === 'ownKeys' ? unlisted(result) : result;
+      };
+    }
+    return traps;
+  };
 
   // A frame without a `src` fires `load` while it is being inserted: inside the native call, before
   // the hooks below or the observer at the end run, and a handler there reaches it through
@@ -425,6 +472,7 @@
           watchLoads(doc);
           try { watchParsing(doc); } catch (_) {}
         } });
+        apply(weakSetAdd, adopting, [win]);
       } catch (_) {}
     }
 
@@ -466,20 +514,16 @@
       defineProperty(proto, name, { ...descriptor, set });
     };
 
-    // The adopter (above) is on frames and popups, listed from any realm: each leaves it out, for
-    // a window or a proxy of one. The keys are scanned, not asked about, which would hand its name
-    // to a proxy's traps.
+    // The adopter (above) is on frames and popups, listed from any realm: each leaves it out, and
+    // its proxies of them keep it from the page's traps (see `shield`).
     try {
-      const unlisted = (keys) => {
-        const count = keys.length;
-        for (let i = 0; i < count; i++) {
-          if (keys[i] !== ADOPT) continue;
-          for (let j = i + 1; j < count; j++) keys[j - 1] = keys[j];
-          keys.length = count - 1;
-          break;
-        }
-        return keys;
-      };
+      const NativeProxy = win.Proxy;
+      patch(NativeProxy, 'revocable', (target, self, args) => apply(target, self, [args[0], shield(args[0], args[1])]));
+      // A proxy of the native one, which has no `prototype` a function would add.
+      const ProxyShield = new NativeProxy(NativeProxy, { __proto__: null,
+        construct: (target, args, newTarget) => construct(target, [args[0], shield(args[0], args[1])], newTarget) });
+      disguises.add(ProxyShield, NativeProxy);
+      defineProperty(win, 'Proxy', { ...getOwnPropertyDescriptor(win, 'Proxy'), value: ProxyShield });
       patch(win.Object, 'getOwnPropertyNames', (target, self, args) => unlisted(apply(target, self, args)));
       patch(win.Reflect, 'ownKeys', (target, self, args) => unlisted(apply(target, self, args)));
       patch(win.Object, 'getOwnPropertyDescriptors', (target, self, args) => {

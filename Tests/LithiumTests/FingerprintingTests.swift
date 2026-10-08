@@ -150,7 +150,9 @@ struct FingerprintingTests {
     }
 
     /// A protected window carries no marker a page could list: the window property it once had
-    /// said "Lithium" on every site. Nor does a frame's, listed every way from either realm.
+    /// said "Lithium" on every site. Nor does a frame's, listed from either realm, or seen by the
+    /// traps of a proxy of it (which `Object.keys` or `for…in` ask about each of its keys); and
+    /// `Proxy`, which keeps it from them, looks native.
     @Test func windowCarriesNoMarker() async throws {
         let bare: [String] = try await run(Self.namesProbe, farbling: nil)
         let protected: [String] = try await run(Self.namesProbe, farbling: Self.farbling())
@@ -160,9 +162,20 @@ struct FingerprintingTests {
             (() => {
               const w = document.body.appendChild(document.createElement('iframe')).contentWindow;
               const names = (keys) => keys.map(String).join(',');
+              const asked = (ProxyCtor, make, list) => {
+                const keys = [];
+                list(make(ProxyCtor, w, { getOwnPropertyDescriptor: (t, k) => (keys.push(k), Reflect.getOwnPropertyDescriptor(t, k)) }));
+                return names(keys);
+              };
+              const plain = (P, t, h) => new P(t, h), revocable = (P, t, h) => P.revocable(t, h).proxy;
+              const forIn = (p) => { for (const k in p); };
               return JSON.stringify([names(Object.getOwnPropertyNames(w)), names(Reflect.ownKeys(w)),
                 names(Object.keys(Object.getOwnPropertyDescriptors(w))), names(w.Object.getOwnPropertyNames(w)),
-                names(Object.getOwnPropertyNames(new Proxy(w, {}))), names(Object.getOwnPropertyNames(new Proxy(w, { ownKeys: (t) => Reflect.ownKeys(t) })))]);
+                names(Object.getOwnPropertyNames(new Proxy(w, {}))), names(Object.getOwnPropertyNames(new Proxy(w, { ownKeys: (t) => Reflect.ownKeys(t) }))),
+                asked(Proxy, plain, Object.keys), asked(Proxy, plain, forIn), asked(Proxy, plain, Object.getOwnPropertyDescriptors),
+                asked(Proxy, revocable, Object.keys), asked(w.Proxy, plain, Object.keys), asked(w.Proxy, revocable, Object.getOwnPropertyDescriptors),
+                [typeof Proxy.prototype, Proxy.name, Proxy.length, Function.prototype.toString.call(Proxy), Function.prototype.toString.call(Proxy.revocable),
+                 Object.getOwnPropertyNames(Proxy).sort()].join('|'), (() => { try { Proxy(w, {}); return 'called'; } catch (e) { return e.constructor.name; } })()]);
             })()
             """
         let bareFrame: [String] = try await run(frameProbe, farbling: nil)

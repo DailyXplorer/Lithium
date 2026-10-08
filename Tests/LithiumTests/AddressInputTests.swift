@@ -19,6 +19,16 @@ struct AddressInputTests {
         ("[::1]", "http://[::1]"),
         ("[2001:db8::1]/admin", "http://[2001:db8::1]/admin"),
         ("[::1]:8080", "http://[::1]:8080"),
+        ("node.js", "https://search.brave.com/search?q=node.js"),
+        ("config.json", "https://search.brave.com/search?q=config.json"),
+        ("16:9", "https://search.brave.com/search?q=16:9"),
+        ("10:30", "https://search.brave.com/search?q=10:30"),
+        ("john3:16", "https://search.brave.com/search?q=john3:16"),
+        ("example.com:8080/admin", "http://example.com:8080/admin"),
+        ("docs.github.io", "https://docs.github.io"),
+        ("www.bbc.co.uk", "https://www.bbc.co.uk"),
+        ("mac-mini.local", "https://mac-mini.local"),
+        ("router.lan:8080", "http://router.lan:8080"),
     ])
     func resolves(input: String, expected: String) {
         #expect(AddressInput.url(for: input, engine: .brave)?.absoluteString == expected)

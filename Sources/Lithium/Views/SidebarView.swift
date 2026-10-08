@@ -357,15 +357,30 @@ private struct TabNameField: View {
         TextField(tab.title.isEmpty ? "Tab name" : tab.title, text: $name)
             .textFieldStyle(.plain)
             .focused($isFocused)
-            .onSubmit { browser.rename(tab, to: name) }
+            .onSubmit { commit() }
             .onAppear {
                 name = tab.displayTitle
                 claimFocus($isFocused)
             }
             .onChange(of: isFocused) { _, focused in
                 // Clicking elsewhere keeps the new name, like renaming in Finder.
-                if !focused, browser.renamingTabID == tab.id { browser.rename(tab, to: name) }
+                if !focused, browser.renamingTabID == tab.id { commit() }
             }
+            // Gone with the sidebar (⌘B): the rename would otherwise stay open, holding Escape,
+            // the agent's input and the sidebar's peek. Not when the row only scrolls out of the
+            // lazy list: the rename goes on there.
+            .onDisappear {
+                if browser.renamingTabID == tab.id, !browser.isSidebarVisible { commit() }
+            }
+    }
+
+    /// Keeps the name and hands the keyboard back to the page, unless it moved to another field.
+    /// On the next turn: moved while the field ends its own editing (Return), the keyboard left
+    /// SwiftUI's focus behind, and the next rename's field couldn't take it.
+    private func commit() {
+        browser.rename(tab, to: name)
+        let hadKeyboard = isFocused
+        DispatchQueue.main.async { [browser] in browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
     }
 }
 

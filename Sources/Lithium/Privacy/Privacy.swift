@@ -9,6 +9,8 @@ import WebKit
 @Observable
 final class Privacy {
     private(set) var disabledHosts: Set<String>
+    /// Protections turned on or off in private tabs, by private session, then host; never saved.
+    private var privateExceptions: [ObjectIdentifier: [String: Bool]] = [:]
     private(set) var ruleCount = 0
     private(set) var filtersUpdated: Date?
     private(set) var isUpdatingFilters = false
@@ -98,29 +100,70 @@ final class Privacy {
     /// The script that hands `trustedTypes(of:)` to the farbling of the response's document, and
     /// of no other: it goes to every frame and runs only in documents at the response's address.
     static func trustedTypesScript(for response: URLResponse, key: SymmetricKey) -> String? {
-        guard let mode = trustedTypes(of: response), let url = response.url,
-              let address = try? String(decoding: JSONEncoder().encode(String(url.absoluteString.prefix { $0 != "#" })), as: UTF8.self) else { return nil }
+        guard let mode = trustedTypes(of: response), let url = response.url else { return nil }
+        return trustedTypesScript(modes: [trustedTypesAddress(url): mode], key: key)
+    }
+
+    /// The same for several documents, by address (without the fragment).
+    static func trustedTypesScript(modes: [String: String], key: SymmetricKey) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let json = try? String(decoding: encoder.encode(modes), as: UTF8.self) else { return nil }
         return """
             (() => {
-              const href = location.href, at = href.indexOf('#');
-              if ((at < 0 ? href : href.slice(0, at)) !== \(address)) return;
-              dispatchEvent(new CustomEvent('m\(farblingValue("mark", key: key))', { cancelable: true, detail: { __proto__: null, trustedTypes: '\(mode)' } }));
+              const modes = { __proto__: null, ...\(json) }, href = location.href, at = href.indexOf('#');
+              const mode = modes[at < 0 ? href : href.slice(0, at)];
+              if (!mode) return;
+              dispatchEvent(new CustomEvent('m\(farblingValue("mark", key: key))', { cancelable: true, detail: { __proto__: null, trustedTypes: mode } }));
             })();
             """
     }
 
+    private static func trustedTypesAddress(_ url: URL) -> String {
+        String(url.absoluteString.prefix { $0 != "#" })
+    }
+
+    /// The Trusted Types script last added to a page's content controller, and every address it was asked for.
+    private final class TrustedTypesScript {
+        let script: WKUserScript
+        let modes: [String: String]
+        init(script: WKUserScript, modes: [String: String]) { self.script = script; self.modes = modes }
+    }
+    @ObservationIgnored private let trustedTypesScripts = NSMapTable<WKUserContentController, TrustedTypesScript>.weakToStrongObjects()
+    private static let removeUserScript = Selector(("_removeUserScript:"))
+
     /// Adds `trustedTypesScript` for a page's document or frame, keyed as that page's farbling is.
-    /// Once per address: a frame that reloads, or several frames of one address, don't pile up
-    /// copies until the next main-frame navigation drops them.
+    /// One script holds every address of the page and replaces the one before: a script per
+    /// address piled up for the page's life as frames of new addresses came. Without WebKit's
+    /// private call to remove one, each address still gets a script of its own, once.
     func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, isPrivate: Bool = false, to controller: WKUserContentController) {
-        guard enabled, let source = Self.trustedTypesScript(for: response, key: isPrivate ? privateFarblingKey : farblingKey),
-              !controller.userScripts.contains(where: { $0.source == source }) else { return }
-        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        guard enabled, let mode = Self.trustedTypes(of: response), let url = response.url else { return }
+        // Gone with the rest of the scripts at a main-frame navigation: the new page starts afresh.
+        let last = trustedTypesScripts.object(forKey: controller).flatMap { last in
+            controller.userScripts.contains { $0.source == last.script.source } ? last : nil
+        }
+        let address = Self.trustedTypesAddress(url)
+        var modes = last?.modes ?? [:]
+        guard modes[address] != mode else { return }
+        modes[address] = mode
+        let replaces = controller.responds(to: Self.removeUserScript)
+        guard let source = Self.trustedTypesScript(modes: replaces ? modes : [address: mode], key: isPrivate ? privateFarblingKey : farblingKey) else { return }
+        let script = WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
+        // Added before the old one goes, so no document starts with neither.
+        controller.addUserScript(script)
+        if replaces, let last { _ = controller.perform(Self.removeUserScript, with: last.script) }
+        trustedTypesScripts.setObject(TrustedTypesScript(script: script, modes: modes), forKey: controller)
     }
 
     /// The site farbling is keyed on: the registrable domain from the public suffix list (so
     /// `alice.github.io` and `bob.github.io` differ), or the address itself for an IP host.
+    /// A blob's address has no host but holds its creator's origin, whose site it takes; one of an
+    /// opaque origin ("blob:null/…") gets a site of its own, not the "" that every site's would share.
     nonisolated static func farblingSite(_ url: URL) -> String {
+        if url.scheme?.lowercased() == "blob" {
+            let site = URL(string: String(url.absoluteString.dropFirst(5))).map(farblingSite) ?? ""
+            return site.isEmpty ? UUID().uuidString : site
+        }
         guard let host = url.host()?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")), !host.isEmpty else { return "" }
         var address = in6_addr()
         if host.contains(":") ? inet_pton(AF_INET6, host, &address) == 1 : inet_pton(AF_INET, host, &address) == 1 { return host }
@@ -159,10 +202,13 @@ final class Privacy {
     }
 
     /// Whether the hourly check updates the filters: they are a day old, built from other
-    /// sources, or incomplete, and the wait after the last failed update is over.
+    /// sources, or incomplete, and the wait after the last failed update is over. Filters dated
+    /// in the future (built with the clock set ahead) count as stale: they would otherwise stop
+    /// updates until the clock caught up.
     static func needsUpdate(updated: Date?, matchesSources: Bool, complete: Bool, notBefore: Date, now: Date = Date()) -> Bool {
         guard now >= notBefore else { return false }
-        return !matchesSources || !complete || now.timeIntervalSince(updated ?? .distantPast) > updateInterval
+        let age = now.timeIntervalSince(updated ?? .distantPast)
+        return !matchesSources || !complete || age > updateInterval || age < 0
     }
 
     /// The wait before the next automatic update after `failures` failed ones in a row.
@@ -217,15 +263,14 @@ final class Privacy {
 
     /// The newer of the lists shipped in the app and the last downloaded ones.
     private static func currentFilters() -> (folder: URL, manifest: Manifest)? {
-        [Resources.bundle.url(forResource: "Filters", withExtension: nil), downloadedFilters]
+        let now = Date()
+        return [Resources.bundle.url(forResource: "Filters", withExtension: nil), downloadedFilters]
             .compactMap { folder -> (URL, Manifest)? in
-                guard let folder,
-                      let data = try? Data(contentsOf: folder.appending(path: "manifest.json")),
-                      let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+                guard let folder, let manifest = Manifest.read(in: folder),
                       manifest.format ?? 1 >= Manifest.currentFormat else { return nil }
                 return (folder, manifest)
             }
-            .max { ($0.1.date ?? .distantPast) < ($1.1.date ?? .distantPast) }
+            .max { $0.1.comparableDate(now: now) < $1.1.comparableDate(now: now) }
     }
 
     func waitUntilReady() async {
@@ -251,14 +296,27 @@ final class Privacy {
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
     }
 
-    func isEnabled(for url: URL?) -> Bool {
+    /// `privateSession` is set for a private tab: its session's own choice wins, then the saved one.
+    func isEnabled(for url: URL?, privateSession: ObjectIdentifier? = nil) -> Bool {
         guard let host = Self.siteHost(url) else { return true }
+        if let privateSession, let enabled = privateExceptions[privateSession]?[host] { return enabled }
         return !disabledHosts.contains(host)
     }
 
-    func setEnabled(_ enabled: Bool, for url: URL?) {
+    /// A private tab's choice stays in memory for its private session only: saved, it would
+    /// record the site it visited.
+    func setEnabled(_ enabled: Bool, for url: URL?, privateSession: ObjectIdentifier? = nil) {
         guard let host = Self.siteHost(url) else { return }
-        setEnabled(enabled, host: host)
+        if let privateSession {
+            privateExceptions[privateSession, default: [:]][host] = enabled
+        } else {
+            setEnabled(enabled, host: host)
+        }
+    }
+
+    /// The private session's last tab closed: its choices go with its cookies.
+    func forget(privateSession: ObjectIdentifier) {
+        privateExceptions[privateSession] = nil
     }
 
     /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,

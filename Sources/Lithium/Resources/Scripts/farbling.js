@@ -25,7 +25,8 @@
   // the noise itself (a `Math.floor` that returned a huge gap once left every pixel clean).
   const apply = Reflect.apply;
   const { hasOwn, defineProperty, getOwnPropertyDescriptor } = Object;
-  const { imul, floor, ceil, max, min } = Math;
+  const { imul, floor, ceil, max, min, trunc } = Math;
+  const BigIntCtor = BigInt, { asIntN } = BigInt, NumberCtor = Number, { isFinite } = Number;
   const WeakMapCtor = WeakMap, WeakSetCtor = WeakSet;
   const weakMapGet = WeakMap.prototype.get;
   const weakMapSet = WeakMap.prototype.set;
@@ -36,12 +37,14 @@
   // They work on objects of any same-origin realm, so these serve the frames and popups too.
   const member = (proto, name) => (proto && getOwnPropertyDescriptor(proto, name)) || {};
   const read = (getter, self) => { try { return apply(getter, self, []); } catch (_) { return 0; } };
+  const Uint8ArrayCtor = Uint8Array, { isView } = ArrayBuffer;
   const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
   const typedLength = member(typedArray, 'length').get;
   const typedKind = member(typedArray, Symbol.toStringTag).get;
   const imageWidth = member(ImageData.prototype, 'width').get;
   const imageHeight = member(ImageData.prototype, 'height').get;
   const imageData = member(ImageData.prototype, 'data').get;
+  const audioBufferLength = member(globalThis.AudioBuffer && AudioBuffer.prototype, 'length').get;
   const createElement = member(Document.prototype, 'createElement').value;
   const canvasWidth = member(HTMLCanvasElement.prototype, 'width');
   const canvasHeight = member(HTMLCanvasElement.prototype, 'height');
@@ -60,7 +63,9 @@
     const proto = context && context.prototype;
     return { __proto__: null, getParameter: member(proto, 'getParameter').value,
       isContextLost: member(proto, 'isContextLost').value, checkFramebufferStatus: member(proto, 'checkFramebufferStatus').value,
-      drawingBufferWidth: member(proto, 'drawingBufferWidth').get, drawingBufferHeight: member(proto, 'drawingBufferHeight').get };
+      drawingBufferWidth: member(proto, 'drawingBufferWidth').get, drawingBufferHeight: member(proto, 'drawingBufferHeight').get,
+      getBufferParameter: member(proto, 'getBufferParameter').value, getBufferSubData: member(proto, 'getBufferSubData').value,
+      bufferSubData: member(proto, 'bufferSubData').value };
   };
   const gl1 = glMembers(globalThis.WebGLRenderingContext), gl2 = glMembers(globalThis.WebGL2RenderingContext);
   // And the members the voice filter reads: an `Array` `filter` that keeps everything or a voice
@@ -79,6 +84,8 @@
   const preventDefault = member(Event.prototype, 'preventDefault').value;
   const eventTarget = member(Event.prototype, 'target').get;
   const elementName = member(Element.prototype, 'localName').get;
+  const firstElementChild = member(Element.prototype, 'firstElementChild').get;
+  const querySelector = member(Element.prototype, 'querySelector').value;
   const addEventListener = member(EventTarget.prototype, 'addEventListener').value;
   const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
   const nodeType = member(Node.prototype, 'nodeType').get;
@@ -162,14 +169,16 @@
   // and noising a noised pixel changes nothing, so pixels the page puts back and reads again (an
   // editor's canvas, a data URL drawn back) keep the values they were given, and never drift
   // further than one. Clearing low bits doesn't undo it: for half the spots the pair straddles them.
-  // Rows are `stride` bytes apart (WebGL can pad them).
-  const noisePixels = (data, left, top, width, height, start, stride = width * 4) => {
+  // Rows are `stride` bytes apart (WebGL can pad them). With a `step`, for reads past the limit,
+  // only one pixel in `step` along a row is decided, picked by its spot and so staggered by row.
+  const noisePixels = (data, left, top, width, height, start, stride = width * 4, step = 1) => {
     const kind = apply(typedKind, data, []);
     if (kind !== 'Uint8ClampedArray' && kind !== 'Uint8Array') return;
     for (let row = 0; row < height; row++) {
-      let at = start + row * stride;
+      const first = (step - (left + top + row) % step) % step;
+      let at = start + row * stride + first * 4;
       const rowKey = fmix((top + row) ^ seedWords[1]) ^ seedWords[3];
-      for (let column = 0; column < width; column++, at += 4) {
+      for (let column = first; column < width; column += step, at += 4 * step) {
         const spot = fmix(imul((left + column) ^ seedWords[0], 0x9e3779b1) ^ rowKey);
         const channel = (spot >>> 1) % 3, shift = spot >>> 31;
         const value = data[at + channel], pair = (value + shift) >> 1, low = 2 * pair - shift;
@@ -202,31 +211,40 @@
   // are most likely GPU picking, which reads an object's id back from its color, where a step of
   // one picks another object. A page could read a scene that way pixel by pixel, unnoised: the
   // price of not breaking picking. The canvas's `toDataURL` and `toBlob` are still noised.
-  // A read that writes nothing (a lost context, a bound pack buffer, an incomplete framebuffer)
-  // gets no noise either: the array holds the page's own data then, as it does for the pixels of a
-  // read past the edges, which WebGL leaves alone. The canvas's edges are known; a bound
-  // framebuffer's are not (WebGL can't tell a texture's size), so only the bottom left ones count
-  // there. Rarer errors (a float framebuffer read as bytes) are page bugs, and not checked for.
+  // A read that writes nothing (a lost context, into an array while a pack buffer is bound, an
+  // incomplete framebuffer) gets no noise either: the array holds the page's own data then, as it
+  // does for the pixels of a read past the edges, which WebGL leaves alone. The canvas's edges are
+  // known; a bound framebuffer's are not (WebGL can't tell a texture's size), so only the bottom
+  // left ones count there. Rarer errors (a float framebuffer read as bytes) are page bugs, and not
+  // checked for. WebGL2 can read into a bound pack buffer instead, at an offset: see below.
   const GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401;
   const GL_PACK_ROW_LENGTH = 0x0D02, GL_PACK_SKIP_ROWS = 0x0D03, GL_PACK_SKIP_PIXELS = 0x0D04, GL_PACK_ALIGNMENT = 0x0D05;
   const GL_PIXEL_PACK_BUFFER_BINDING = 0x88ED, GL_FRAMEBUFFER = 0x8D40, GL_READ_FRAMEBUFFER = 0x8CA8, GL_FRAMEBUFFER_COMPLETE = 0x8CD5;
-  const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA;
+  const GL_FRAMEBUFFER_BINDING = 0x8CA6, GL_READ_FRAMEBUFFER_BINDING = 0x8CAA, GL_PIXEL_PACK_BUFFER = 0x88EB, GL_BUFFER_SIZE = 0x8764;
   // The arguments are converted here, once, as the native call would (see `readImage`): a format
-  // given as '6408' read the same to it, and skipped the noise.
-  const readPixelsArguments = (args) => {
+  // given as '6408' read the same to it, and skipped the noise. The offsets too, a GLuint and a
+  // GLintptr: NaN or Infinity read at 0 natively, and once skipped the noise here. To WebGL2 an
+  // object that isn't a typed array or DataView ([], {}, an ArrayBuffer) is an offset too.
+  const readPixelsArguments = (args, webgl2) => {
     if (args.length < 7) return;
     for (let i = 0; i < 6; i++) args[i] = i < 4 ? args[i] | 0 : args[i] >>> 0;
-    if (args.length > 7 && args[6] && typeof args[6] === 'object') args[7] = +args[7];
+    if (args[6] && typeof args[6] === 'object' && (!webgl2 || isView(args[6]))) { if (args.length > 7) args[7] = args[7] >>> 0; }
+    else if (webgl2 && args[6] != null) {
+      const offset = +args[6];
+      args[6] = NumberCtor(apply(asIntN, BigIntCtor, [64, BigIntCtor(isFinite(offset) ? trunc(offset) : 0)]));
+    }
   };
   const readPixelsNoise = (gl, webgl2, self, args) => {
     const pixels = args[6], width = args[2], height = args[3];
-    if (args[4] !== GL_RGBA || args[5] !== GL_UNSIGNED_BYTE || !pixels || typeof pixels !== 'object') return;
-    if (width <= 0 || height <= 0 || width * height <= 16 || width * height > MAX_PIXELS) return;
+    const packed = webgl2 && typeof pixels === 'number';
+    if (args[4] !== GL_RGBA || args[5] !== GL_UNSIGNED_BYTE || !packed && (!pixels || typeof pixels !== 'object')) return;
+    if (width <= 0 || height <= 0 || width * height <= 16) return;
     const parameter = (name) => apply(gl.getParameter, self, [name]);
     // WebGL1 has no offset: it ignores an 8th argument.
-    let start = webgl2 && args.length > 7 ? floor(args[7]) || 0 : 0, stride, right = width, top = height;
+    let start = packed ? floor(pixels) : webgl2 && args.length > 7 ? floor(args[7]) || 0 : 0, stride, right = width, top = height, length;
     try {
-      if (apply(gl.isContextLost, self, []) || (webgl2 && parameter(GL_PIXEL_PACK_BUFFER_BINDING))) return;
+      // A read into an array while a pack buffer is bound, or at an offset while none is, is an error.
+      if (apply(gl.isContextLost, self, []) || (webgl2 && !parameter(GL_PIXEL_PACK_BUFFER_BINDING) !== !packed)) return;
       if (apply(gl.checkFramebufferStatus, self, [webgl2 ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER]) !== GL_FRAMEBUFFER_COMPLETE) return;
       const alignment = parameter(GL_PACK_ALIGNMENT), rowLength = webgl2 ? parameter(GL_PACK_ROW_LENGTH) : 0;
       const skipPixels = webgl2 ? parameter(GL_PACK_SKIP_PIXELS) : 0;
@@ -238,18 +256,60 @@
         right = min(width, apply(gl.drawingBufferWidth, self, []) - args[0]);
         top = min(height, apply(gl.drawingBufferHeight, self, []) - args[1]);
       }
+      length = packed ? apply(gl.getBufferParameter, self, [GL_PIXEL_PACK_BUFFER, GL_BUFFER_SIZE]) : read(typedLength, pixels);
     } catch (_) { return; }
-    if (!(start >= 0) || start + (height - 1) * stride + width * 4 > read(typedLength, pixels)) return;
+    if (!(start >= 0) || start + (height - 1) * stride + width * 4 > length) return;
     const left = max(0, -args[0]), bottom = max(0, -args[1]);
     if (right <= left || top <= bottom) return;
-    noisePixels(pixels, args[0] + left, args[1] + bottom, right - left, top - bottom, start + bottom * stride + left * 4, stride);
+    // Past the limit, a share of the pixels, so the cost stays the same. Counted on what the read
+    // covers of the canvas, not the size asked for: a huge read of a small canvas noises it all.
+    const x = args[0] + left, y = args[1] + bottom, columns = right - left, rows = top - bottom;
+    const step = ceil(columns * rows / MAX_PIXELS);
+    start += bottom * stride + left * 4;
+    if (!packed) { noisePixels(pixels, x, y, columns, rows, start, stride, step); return; }
+    // Pixels read into a pack buffer are read back and written over with the same noise: noising
+    // `getBufferSubData` instead would miss the page reading the buffer through another binding.
+    try {
+      const copy = new Uint8ArrayCtor((rows - 1) * stride + columns * 4);
+      apply(gl.getBufferSubData, self, [GL_PIXEL_PACK_BUFFER, start, copy]);
+      noisePixels(copy, x, y, columns, rows, 0, stride, step);
+      apply(gl.bufferSubData, self, [GL_PIXEL_PACK_BUFFER, start, copy]);
+    } catch (_) {}
   };
 
-  const noiseSamples = (samples) => {
-    const length = samples ? apply(typedLength, samples, []) : 0;
-    if (length > MAX_SAMPLES) return;
-    const next = prng(0x9e3779b9);
-    for (let i = 0; i < length; i++) samples[i] += (next() - 0.5) * 1e-7;
+  // Samples get the pixels' kind of noise (see noisePixels): each moves within a pair of
+  // neighboring float32 values picked by its index in the buffer, and is decided on that pair. Noise
+  // read off a silent buffer is that of silence only, so it can't be taken off another; noising
+  // twice changes nothing (`getChannelData` noises the buffer itself, which `copyFromChannel` then
+  // reads); and a window copied from the middle gets what the whole buffer has there. `samples`
+  // holds the buffer's samples from `offset` on, of `total`. Every sample, however long the
+  // buffer: noising one in a few left the others exact, at places the page could predict. The cost
+  // follows what the page has rendered or copied, and `getChannelData` noises a buffer once.
+  const sampleFloat = new Float32Array(1), sampleBits = new Uint32Array(sampleFloat.buffer);
+  const noiseSamples = (samples, offset, total) => {
+    if (read(typedKind, samples) !== 'Float32Array') return;
+    const count = min(read(typedLength, samples), total - offset);
+    for (let i = 0; i < count; i++) {
+      const spot = fmix(imul((offset + i) ^ seedWords[2], 0x9e3779b1) ^ seedWords[0]), shift = spot >>> 31;
+      sampleFloat[0] = samples[i];
+      const pair = floor((sampleBits[0] + shift) / 2), low = 2 * pair - shift;
+      // Pairs across a sign or exponent, or into infinities and NaN, are left alone.
+      if (low < 0 || ((low ^ (low + 1)) & 0xff800000) !== 0 || (low & 0x7f800000) === 0x7f800000) continue;
+      sampleBits[0] = low + (fmix(pair ^ spot ^ seedWords[3]) & 1);
+      samples[i] = sampleFloat[0];
+    }
+  };
+
+  // An analyser's bytes the same way, each in a pair of neighboring values picked by its index.
+  const noiseBytes = (values) => {
+    if (read(typedKind, values) !== 'Uint8Array') return;
+    const length = read(typedLength, values);
+    for (let i = 0; i < length; i++) {
+      const spot = fmix(imul(i ^ seedWords[1], 0x9e3779b1) ^ seedWords[2]), shift = spot >>> 31;
+      const pair = (values[i] + shift) >> 1, low = 2 * pair - shift;
+      if (low < 0 || low > 254) continue;
+      values[i] = low + (fmix(pair ^ spot ^ seedWords[3]) & 1);
+    }
   };
 
   // Frequencies are decibels, around -30 to -100: an offset as small as the samples' rounds away
@@ -411,7 +471,7 @@
       for (let i = 0; i < contexts.length; i++) {
         const gl = members[i], webgl2 = i === 1;
         patch(contexts[i] && contexts[i].prototype, 'readPixels', (target, self, args) => {
-          readPixelsArguments(args);
+          readPixelsArguments(args, webgl2);
           const result = apply(target, self, args);
           readPixelsNoise(gl, webgl2, self, args);
           return result;
@@ -425,13 +485,16 @@
         const samples = apply(target, self, args);
         if (!apply(weakSetHas, farbled, [samples])) {
           apply(weakSetAdd, farbled, [samples]);
-          noiseSamples(samples);
+          noiseSamples(samples, 0, read(typedLength, samples));
         }
         return samples;
       });
+      // The offset is converted once, as the native call would (see readImage): the copy's noise
+      // is keyed on where it starts in the buffer, and covers only what it copied.
       patch(win.AudioBuffer.prototype, 'copyFromChannel', (target, self, args) => {
+        if (args.length > 2) args[2] = args[2] >>> 0;
         const result = apply(target, self, args);
-        noiseSamples(args[0]);
+        noiseSamples(args[0], args.length > 2 ? args[2] : 0, read(audioBufferLength, self));
         return result;
       });
       patch(win.AnalyserNode.prototype, 'getFloatFrequencyData', (target, self, args) => {
@@ -439,6 +502,19 @@
         noiseFrequencies(args[0]);
         return result;
       });
+      patch(win.AnalyserNode.prototype, 'getFloatTimeDomainData', (target, self, args) => {
+        const result = apply(target, self, args);
+        noiseSamples(args[0], 0, read(typedLength, args[0]));
+        return result;
+      });
+      const bytes = ['getByteFrequencyData', 'getByteTimeDomainData'];
+      for (let i = 0; i < bytes.length; i++) {
+        patch(win.AnalyserNode.prototype, bytes[i], (target, self, args) => {
+          const result = apply(target, self, args);
+          noiseBytes(args[0]);
+          return result;
+        });
+      }
     } catch (_) {}
 
     try {
@@ -480,15 +556,16 @@
       for (let i = 0; i < count; i++) protectFrame(found[i]);
     };
     // Runs on every DOM insertion of the page, so it does as little as it can: most nodes
-    // are elements without children, which cannot hold a frame.
+    // are elements without children, which cannot hold a frame. Through the saved members, as
+    // everywhere: a frame given an own `nodeType` of 3 once went in unprotected.
     const protectInserted = (node) => {
-      if (node === null || typeof node !== 'object' || node.nodeType !== 1) return;
-      const name = node.localName;
+      if (node === null || typeof node !== 'object' || read(nodeType, node) !== 1) return;
+      const name = read(elementName, node);
       if (name === 'iframe' || name === 'frame') protectFrame(node);
-      else if (node.firstElementChild !== null && node.querySelector('iframe, frame') !== null) protectAll(framesIn(node));
+      else if (read(firstElementChild, node) && apply(querySelector, node, ['iframe, frame']) !== null) protectAll(framesIn(node));
     };
     // A fragment hands its children over on insertion, so its frames are listed before.
-    const framesBefore = (node) => node !== null && typeof node === 'object' && node.nodeType === 11 ? framesIn(node) : null;
+    const framesBefore = (node) => node !== null && typeof node === 'object' && read(nodeType, node) === 11 ? framesIn(node) : null;
     const protectAfter = (fragmentFrames, node) => {
       if (fragmentFrames === null) protectInserted(node); else protectAll(fragmentFrames);
     };
@@ -697,8 +774,6 @@
     const disconnect = MutationObserver.prototype.disconnect;
     const takeRecords = MutationObserver.prototype.takeRecords;
     const addedNodes = member(MutationRecord.prototype, 'addedNodes').get;
-    const localName = member(Element.prototype, 'localName').get;
-    const firstElementChild = member(Element.prototype, 'firstElementChild').get;
     const protectFrame = (frame) => {
       try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
     };
@@ -714,7 +789,7 @@
           const node = added[j];
           if (read(nodeType, node) !== 1) continue;
           if (pass === 0) { apply(weakSetAdd, batch, [node]); continue; }
-          const name = read(localName, node);
+          const name = read(elementName, node);
           if (name === 'iframe' || name === 'frame') protectFrame(node);
           else if (read(firstElementChild, node) && !apply(weakSetHas, batch, [read(parentNode, node)])) {
             const found = apply(queryAll[1], node, ['iframe, frame']);

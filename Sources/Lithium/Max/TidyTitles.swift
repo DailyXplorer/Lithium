@@ -17,6 +17,8 @@ final class TidyTitles {
     /// Tabs waiting for the model's answer, by key: every tab that showed the title while it was
     /// asked gets the answer, not only the one that asked.
     @ObservationIgnored private var pending: [String: [WaitingTab]] = [:]
+    /// The last request for the model: each waits for the one before, one at a time.
+    @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private let model: AnyObject?
     /// Stands in for Apple's model in tests.
     @ObservationIgnored var shortener: (@MainActor (_ title: String, _ host: String) async -> TitleOutcome)?
@@ -91,9 +93,14 @@ final class TidyTitles {
             return
         }
         pending[key] = [waiting]
-        Task {
+        let previous = queue
+        queue = Task {
             // Wait for the title to settle: pages that animate or rewrite it shouldn't reach the model.
             try? await Task.sleep(for: .milliseconds(800))
+            // Then for the requests before it, and look again: a title that changed meanwhile (a
+            // live count, a clock) never reaches the model, so a tab has at most one request
+            // there, for the title it shows, and other tabs' titles don't wait behind old ones.
+            await previous?.value
             guard pending[key]?.contains(where: { $0.isCurrent }) == true else {
                 pending[key] = nil
                 return

@@ -99,7 +99,7 @@ final class TabCapture {
         }
         if let frame = load.frameID, extensionFrames.contains(frame) { return }
         if load.isMainFrame, load.type == "document", askedMethod == nil { pageMark = (nextEntry, nextMessage) }
-        let address = String((url?.absoluteString ?? "").prefix(2048))
+        let address = String((url?.absoluteString ?? "").prefix(AgentRedaction.maxValue))
         append(NetworkEntry(id: nextEntry, loadID: load.id, frameID: load.frameID, type: load.type, method: method, askedMethod: askedMethod ?? method, url: AgentURLs.redacted(address), requestHeaders: AgentRedaction.headers(headers), started: .now))
         inFlight[load.id] = nextEntry - 1
         lastActivity = .now
@@ -109,7 +109,7 @@ final class TabCapture {
     func redirected(_ load: ResourceLoadSpy.Load, response: URLResponse, to request: URLRequest) {
         guard let index = index(of: load.id), let next = request.url else { return }
         responded(at: index, response, fromCache: false)
-        entries[index].redirectedTo = AgentURLs.redacted(next.absoluteString)
+        entries[index].redirectedTo = AgentURLs.redacted(String(next.absoluteString.prefix(AgentRedaction.maxValue)))
         entries[index].ended = .now
         inFlight[load.id] = nil
         requestStarted(load, method: request.httpMethod ?? entries[index].method, url: next, headers: request.allHTTPHeaderFields ?? [:], askedMethod: entries[index].askedMethod)

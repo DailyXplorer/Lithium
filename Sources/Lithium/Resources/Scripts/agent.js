@@ -50,6 +50,11 @@
   for (const type of ['scroll', 'resize', 'input', 'change', 'focusin', 'focusout', 'toggle', 'transitionend', 'animationend', 'load']) {
     addEventListener(type, dirty, { capture: true, passive: true });
   }
+  // A menu that CSS :hover alone reveals changes no node, rule or box the checks below see;
+  // only the real pointer moves :hover.
+  for (const type of ['pointerover', 'pointerout']) {
+    addEventListener(type, (event) => { if (event.isTrusted) dirty(); }, { capture: true, passive: true });
+  }
   // Layout also changes with no mutation: a web font arriving, the page growing.
   document.fonts?.addEventListener('loadingdone', dirty);
   const resizes = new ResizeObserver(dirty);
@@ -405,7 +410,8 @@
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
     // Focus going into a frame fires no focusin in its parent, whose activeElement still changes.
-    if (since === generation && key === frame.lastKey && of === frame.token && controlStates() === frame.controlStates
+    // Nor does pushState fire anything, so the address is compared too.
+    if (since === generation && key === frame.lastKey && of === frame.token && location.href === frame.url && controlStates() === frame.controlStates
       && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates && deepFocus() === frame.focused) {
       return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
     }
@@ -560,8 +566,9 @@
     frame.shown = nodes.map((node) => elementOf(node.id));
     frame.boxStates = boxStates();
     frame.sheetStates = sheetStates();
+    frame.url = location.href;
     return {
-      token: frame.token, gen: generation, path: framePath(), url: location.href, title: document.title, viewport: view,
+      token: frame.token, gen: generation, path: framePath(), url: frame.url, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit, pay,
     };
   };
@@ -1175,7 +1182,9 @@
         case 'detached': return !element;
         case 'visible': return Boolean(element) && isShown(element);
         case 'hidden': return !element || !isShown(element);
-        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+        // As click judges it: a control in a disabled fieldset is :disabled, not .disabled.
+        case 'enabled': return Boolean(element) && !element.disabled && element.getAttribute('aria-disabled') !== 'true'
+          && !safeMatches(element, ':disabled');
       }
       return false;
     };

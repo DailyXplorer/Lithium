@@ -642,6 +642,28 @@ struct AgentServerTests {
         #expect(try await fixture.post(["jsonrpc": "2.0", "id": 2, "method": "ping"], session: session).status == 200)
     }
 
+    /// Clients still post the old token to the old port, which anyone may hold once the server
+    /// left it: a relisten on another port comes with a new token, and the old one is refused.
+    @Test func aRelistenOnAnotherPortChangesTheToken() async throws {
+        let fixture = try await Fixture()
+        defer { fixture.hub.shutdown() }
+        let session = try await fixture.initialize()
+        let old = fixture.port
+        let oldToken = fixture.endpoint.token
+        let server = try #require(fixture.hub.server)
+        server.listenerDidStart = { server, listener in
+            guard case .hostPort(_, let port) = listener.parameters.requiredLocalEndpoint, port.rawValue == old else { return }
+            server.listener(listener, changedTo: .failed(.posix(.EADDRINUSE)), port: old)
+        }
+        server.failListener(.posix(.ENETDOWN))
+        #expect(await Self.eventually { fixture.hub.state == .listening && fixture.hub.port.map { $0 != old } == true })
+
+        #expect(fixture.endpoint.token != oldToken)
+        let ping: JSONValue = ["jsonrpc": "2.0", "id": 1, "method": "ping"]
+        #expect(try await fixture.post(ping, session: session, headers: ["Authorization": "Bearer \(oldToken)"]).status == 401)
+        #expect(try await fixture.post(ping, session: session).status == 200)
+    }
+
     @Test func failsWhenListeningAgainKeepsFailing() async throws {
         let fixture = try await Fixture()
         defer { fixture.hub.shutdown() }

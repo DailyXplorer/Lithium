@@ -12,8 +12,6 @@ struct AppLinkRequest: Identifiable, Equatable {
     let app: URL
     /// Not in a private tab, nor for a page with no host: nothing to remember it by.
     let canRemember: Bool
-    /// A click landing sooner was meant for the page: the prompt appeared under it.
-    let shown = Date()
 
     var appName: String { AppLinks.name(ofApp: app) }
     var scheme: String { url.scheme?.lowercased() ?? "" }

@@ -356,6 +356,17 @@ struct AgentReadTests {
             <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10000px;width:400px;height:100px;background:rgb(0,0,255);border:0">
             <div style="position:absolute;left:0;top:11900px;width:1280px;height:100px;background:rgb(255,0,0)"></div>
             """),
+        "/deep": (Self.html, """
+            <title>Deep</title><style>body { margin: 0; background: white }</style>
+            <div role="button" aria-label="Deep" style="position:absolute;left:0;top:20000px;width:400px;height:200px;background:rgb(255,0,0)"></div>
+            <input type="password" value="hunter2secret" style="position:absolute;left:200px;top:20020px;width:150px;height:40px;background:rgb(0,0,255);border:0">
+            """),
+        "/fieldset": (Self.html, "<title>Fieldset</title><fieldset id=\"set\" disabled><button>Send</button></fieldset>"),
+        "/endless": (Self.html, """
+            <title>Endless</title><style>body { margin: 0 }</style>
+            <input type="password" value="hunter2secret" style="position:absolute;left:0;top:10px;width:400px;height:40px">
+            <div style="position:absolute;left:0;top:80000px;width:10px;height:10px"></div>
+            """),
         "/chart": (Self.html, """
             <title>Chart</title>
             <svg width="300" height="100"><a href="one"><rect width="100" height="40" fill="red"></rect><text x="10" y="30">Bar one</text></a></svg>
@@ -763,6 +774,18 @@ struct AgentReadTests {
             let arrived = await client.call("wait_for", ["tab": .string(moving), "text": "Welcome aboard"])
             #expect(!arrived.isError, "\(arrived.message)")
             #expect(arrived["title"] == "Arrived")
+        }
+    }
+
+    /// A control in a disabled fieldset is disabled to click, so it isn't enabled to wait for either.
+    @Test func aControlInADisabledFieldsetIsntEnabled() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/fieldset")
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            let send = try #require(node(snapshot, role: "button", name: "Send")?["ref"])
+            #expect(await client.call("wait_for", ["tab": .string(tab), "ref": send, "state": "enabled", "timeoutMs": 300]).code == "timeout")
+            _ = try await client.tab(tab)?.webView.callAsyncJavaScript("document.getElementById('set').disabled = false", contentWorld: .page)
+            #expect(await client.call("wait_for", ["tab": .string(tab), "ref": send, "state": "enabled", "timeoutMs": 3000])["met"] == true)
         }
     }
 
@@ -1253,6 +1276,20 @@ struct AgentReadTests {
         }
     }
 
+    /// pushState changes the address with no event or mutation; the next snapshot names the new one.
+    /// (Hover-revealed menus dirty the cache on the real pointer's events, which a test can't send.)
+    @Test func aSnapshotSeesAnAddressPushedWithoutNavigating() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/one")
+            let webView = try #require(client.tab(tab)?.webView)
+            let first = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(first["url"]?.string?.hasSuffix("/one") == true, "\(first.content)")
+            _ = try await webView.callAsyncJavaScript("history.pushState(null, '', '/pushed')", contentWorld: .page)
+            let second = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
+            #expect(second["url"]?.string?.hasSuffix("/pushed") == true, "\(second.content)")
+        }
+    }
+
     /// Back twice after nine pages: the last eight pages left keep their refs, the oldest goes first.
     @Test func theLastEightPagesLeftKeepTheirRefs() async throws {
         try await withAgent { client, base in
@@ -1284,6 +1321,22 @@ struct AgentReadTests {
             #expect(state.address(of: refs[0]) == ElementAddress(document: "p1", id: 1))
             #expect(state.mainFrameAnswered("p9", asked: state.hellos))
             #expect(state.address(of: refs[8]) == ElementAddress(document: "p9", id: 1))
+        }
+    }
+
+    /// A page that keeps changing gets new refs forever: past the cap, the oldest half goes.
+    @Test func aLongLivedPageKeepsItsNewestRefs() async throws {
+        try await withAgent { client, base in
+            let state = AgentTab(tab: try #require(client.tab(try await open(client, base, "/one"))))
+            #expect(state.mainFrameAnswered("p1", asked: state.hellos))
+            let frame = state.frameRef(for: "c1")
+            state.setFrameElement(frame, ElementAddress(document: "p1", id: 0))
+            let refs = (1...AgentTab.maxRefs + 1).map { state.ref(for: ElementAddress(document: "p1", id: $0)) }
+            #expect(state.refCounts.shown <= AgentTab.maxRefs / 2 + 2, "\(state.refCounts)")
+            #expect(state.address(of: refs[0]) == nil)
+            #expect(state.address(of: refs[AgentTab.maxRefs]) == ElementAddress(document: "p1", id: AgentTab.maxRefs + 1))
+            #expect(state.address(of: refs[AgentTab.maxRefs - 1]) == ElementAddress(document: "p1", id: AgentTab.maxRefs))
+            #expect(state.address(of: frame) == ElementAddress(document: "p1", id: 0))
         }
     }
 
@@ -1753,6 +1806,34 @@ struct AgentReadTests {
             #expect(Self.near(Self.color(fifth, x: 200 * points, y: (10050 - 4 * 2048) * points), [128, 128, 128]))
             let last = try #require(Self.picture(pages[5]))
             #expect(Self.near(Self.color(last, x: 200 * points, y: (11950 - 5 * 2048) * points), [255, 0, 0]))
+        }
+    }
+
+    /// An element far down a long page: only its box is drawn, at its own density, with its masks.
+    @Test func elementsFarDownALongPageArePictured() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/deep")
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json", "scope": "page"])
+            let deep = try #require(node(snapshot, role: "button", name: "Deep")?["ref"])
+            let shot = await client.call("screenshot", ["tab": .string(tab), "ref": deep])
+            #expect(!shot.isError, "\(shot.message)")
+            let scale = Self.number(shot["scale"])
+            #expect(scale > 1.5, "\(shot.content)")
+            #expect(shot["width"] == .int(Int((400 * scale).rounded())))
+            let image = try #require(Self.image(shot))
+            #expect(Self.near(Self.color(image, x: 20 * scale, y: 20 * scale), [255, 0, 0]))
+            #expect(Self.near(Self.color(image, x: 275 * scale, y: 40 * scale), [128, 128, 128]))
+            #expect(items(shot["masked"]).count == 1)
+        }
+    }
+
+    /// Flattening a page this long would draw a bitmap per 2048 points: the PDF is refused, clearly.
+    @Test func aPageTooLongToMaskIsRefused() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/endless")
+            let pdf = await client.call("pdf", ["tab": .string(tab)])
+            #expect(pdf.code == "unsupported")
+            #expect(pdf.message.contains("too long"), "\(pdf.message)")
         }
     }
 

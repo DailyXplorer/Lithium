@@ -24,16 +24,20 @@ enum AgentRedaction {
     private static let credentialLine = try! NSRegularExpression(pattern: #"^(\s*(?:proxy-)?authorization|\s*(?:set-)?cookie)[ \t]*:.*$"#, options: [.caseInsensitive, .anchorsMatchLines])
 
     /// Every value of a secret-looking header is redacted; the others keep their value, with any
-    /// address in it (`Location`, `Referer`) written as the log writes addresses.
+    /// address in it (`Location`, `Referer`) written as the log writes addresses. Values are cut at
+    /// `maxValue` first, as addresses are: the log keeps up to a thousand requests.
     @MainActor
     static func headers(_ fields: [AnyHashable: Any]) -> [String: String] {
         var redacted: [String: String] = [:]
         for (name, value) in fields {
             let name = "\(name)"
-            redacted[name] = matches(secretHeader, name) ? mark : AgentURLs.redacted("\(value)")
+            redacted[name] = matches(secretHeader, name) ? mark : AgentURLs.redacted(String("\(value)".prefix(maxValue)))
         }
         return redacted
     }
+
+    /// The longest header value or address the network log keeps, in characters.
+    static let maxValue = 2048
 
     /// A response body: secret JSON fields, form fields and query parameters, and hidden or
     /// password inputs' values, then what `text` takes out.

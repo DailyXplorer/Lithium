@@ -11,6 +11,9 @@ struct AgentConfirmationBanner: View {
     /// Prompts waiting behind this one.
     var queued = 0
     @Environment(Browser.self) private var browser
+    /// The next prompt in the queue takes this one's place, with Allow once where it was: the
+    /// second click of a double click, or one more quick click, must not answer it.
+    @State private var protection = ClickProtection()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -29,13 +32,13 @@ struct AgentConfirmationBanner: View {
             if let otherTab {
                 Button("Show Tab") { browser.select(otherTab) }
             }
-            Button("Deny") { confirmations.answer(confirmation.id, .deny) }
+            Button("Deny") { answer(.deny) }
                 .keyboardShortcut(.cancelAction)
             if confirmation.offersSiteGrant, let site = confirmation.site {
-                Button("Allow on \(site)") { confirmations.answer(confirmation.id, .allowOnSite) }
+                Button("Allow on \(site)") { answer(.allowOnSite) }
                     .help("Allows this agent session to \(confirmation.kind.verb) on \(site) without asking, until the agent stops")
             }
-            Button("Allow once") { confirmations.answer(confirmation.id, .allowOnce) }
+            Button("Allow once") { answer(.allowOnce) }
         }
         .font(Theme.font(13))
         .padding(.horizontal, 16)
@@ -43,6 +46,20 @@ struct AgentConfirmationBanner: View {
         .frame(minHeight: 46)
         .background(Color(nsColor: .textBackgroundColor))
         .overlay(alignment: .bottom) { Rectangle().fill(.primary.opacity(0.08)).frame(height: 1) }
+        .onAppear { protection.rearm() }
+        .onChange(of: confirmation.id) { protection.rearm() }
+        // Sliding in, or moved by a strip above it or its own text changing size.
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in protection.rearm() }
+    }
+
+    private func answer(_ answer: ConfirmationAnswer) {
+        Self.answer(answer, to: confirmation.id, in: confirmations, protection: protection)
+    }
+
+    /// Answers only once the banner has stayed in place (see `protection`).
+    static func answer(_ answer: ConfirmationAnswer, to id: AgentConfirmation.ID, in confirmations: AgentConfirmations, protection: ClickProtection, at now: ContinuousClock.Instant = .now) {
+        guard protection.accepts(at: now) else { return }
+        confirmations.answer(id, answer)
     }
 
     /// Who asks (a name the agent gave itself), where, and what a site grant would mean.

@@ -6,6 +6,7 @@ struct AppLinkPrompt: View {
     let request: AppLinkRequest
     @Environment(Browser.self) private var browser
     @State private var always = false
+    @State private var protection = ClickProtection()
 
     var body: some View {
         HStack(spacing: 12) {
@@ -30,14 +31,15 @@ struct AppLinkPrompt: View {
         .frame(height: 46)
         .background(Color(nsColor: .textBackgroundColor))
         .overlay(alignment: .bottom) { Rectangle().fill(.primary.opacity(0.08)).frame(height: 1) }
+        .onAppear { protection.rearm() }
+        // Sliding in, or moved up under the pointer when a strip above it goes.
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in protection.rearm() }
     }
 
-    /// A click within half a second of the prompt appearing was aimed at the page (the second
-    /// click of a double click on the link): it does nothing.
+    /// A click within half a second of the prompt appearing or moving was aimed at the page or at
+    /// the strip that was there (the second click of a double click): it does nothing.
     private func answer(open: Bool) {
-        guard Date().timeIntervalSince(request.shown) > Self.armingDelay else { return }
+        guard protection.accepts() else { return }
         browser.appLinks.answer(request, open: open, always: always)
     }
-
-    static let armingDelay: TimeInterval = 0.5
 }

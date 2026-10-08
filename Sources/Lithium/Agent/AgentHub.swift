@@ -242,7 +242,8 @@ final class AgentHub {
 
     /// Listens on the port of the last run when it is free, else on a new one, and writes the
     /// endpoint file. The token is new on every start: a file left by a quit names a port anyone
-    /// may have taken since, so its token must not open the next run. Only `relisten` keeps it.
+    /// may have taken since, so its token must not open the next run. Only `relisten` keeps it,
+    /// and only on the same port.
     func start() async {
         if keyGuard == nil { keyGuard = NativeInput.installKeyGuard() }
         token = AgentEndpoint.makeToken()
@@ -274,7 +275,9 @@ final class AgentHub {
     }
 
     /// Listens on `preferred`, else on a free port, and records the port in the endpoint file.
-    private func listen(on server: AgentServer, preferring preferred: UInt16) async throws {
+    /// The token stays only when the server lands on `tokenPort` again: clients still post to
+    /// that port, so on any other whoever took it would get the token from them.
+    private func listen(on server: AgentServer, preferring preferred: UInt16, keepingTokenOn tokenPort: UInt16? = nil) async throws {
         let port: UInt16
         do {
             port = try await server.start(port: preferred)
@@ -283,6 +286,10 @@ final class AgentHub {
             port = try await server.start(port: 0)
         }
         guard !isShutDown else { return }
+        if let tokenPort, port != tokenPort {
+            token = AgentEndpoint.makeToken()
+            server.setToken(token)
+        }
         defaults.set(Int(port), forKey: Preference.agentPort)
         self.port = port
         try AgentEndpoint(port: port, token: token).write(in: folder)
@@ -306,7 +313,8 @@ final class AgentHub {
     }
 
     /// The listener died after it was ready, typically across sleep or a network change: listen
-    /// again with the same token, on the same port when it is free. Sessions and open
+    /// again with the same token on the same port when it is free, else with a new token on
+    /// another (clients read the file again after a 401). Sessions and open
     /// connections are unaffected. A listener that dies again, before or after it was ready,
     /// takes another attempt; after `relistenAttempts`, access shows as failed.
     private func relisten() async {
@@ -326,7 +334,7 @@ final class AgentHub {
             guard !isShutDown, self.server === server else { return }
             listenerIsDead = false
             do {
-                try await listen(on: server, preferring: port ?? 0)
+                try await listen(on: server, preferring: port ?? 0, keepingTokenOn: port ?? 0)
             } catch {
                 listenerError = error
                 listenerIsDead = true

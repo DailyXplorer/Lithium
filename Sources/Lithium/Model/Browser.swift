@@ -530,6 +530,9 @@ final class Browser {
     /// waiting on that tab. What Lithium or an extension does on its own doesn't come here.
     func navigate(_ tab: Tab?, _ step: Step) {
         guard let tab else { return }
+        // Back or Forward with nowhere to go does nothing: an agent waiting on the tab goes on.
+        if case .back = step, !tab.canGoBack { return }
+        if case .forward = step, !tab.canGoForward { return }
         agent?.userNavigated(tab)
         tab.dialogOwner?.answerDialog(in: tab)
         tab.answerHiddenDialog()

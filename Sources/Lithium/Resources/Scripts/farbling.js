@@ -114,10 +114,11 @@
   const seedWords = [0, 8, 16, 24].map((at) => parseInt(SEED.slice(at, at + 8), 16) | 0);
   // A frame of another origin than the top page's mixes that origin in: a tracker framed on a site
   // farbles apart from the site's own pages, not only from one site to the next. Blank and srcdoc
-  // frames have their creator's origin, and its noise. Read from `ancestorOrigins`, as touching a
+  // frames have their creator's origin, and its noise: hence the document's `origin`, as
+  // `location.origin` is their address's, "null". Read from `ancestorOrigins`, as touching a
   // cross-origin `top` would log an error in every such frame.
   try {
-    const ancestors = location.ancestorOrigins, origin = location.origin;
+    const ancestors = location.ancestorOrigins, origin = globalThis.origin;
     if (ancestors && ancestors.length && ancestors[ancestors.length - 1] !== origin) {
       let frame = 0x811c9dc5;
       for (let i = 0; i < origin.length; i++) frame = imul(frame ^ origin.charCodeAt(i), 0x01000193);

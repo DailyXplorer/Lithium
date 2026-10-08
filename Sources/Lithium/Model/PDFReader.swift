@@ -428,9 +428,33 @@ extension PDFReader: FindTarget {
         }
         currentMatch = index
         guard let selection = highlight(current: index) else { return .none }
-        view.go(to: selection)
+        reveal(selection)
         return .shown(position: index + 1)
     }
+
+    /// Scrolls the match to the middle of the view unless it is well in view already, as Preview
+    /// does: `go(to:)` with a selection leaves the view where it is when the match is pages away.
+    private func reveal(_ selection: PDFSelection) {
+        guard let page = selection.pages.first, let document = view.documentView,
+              let scrollView = document.enclosingScrollView else {
+            view.go(to: selection)
+            return
+        }
+        view.layoutDocumentView()
+        let clip = scrollView.contentView
+        let match = view.convert(view.convert(selection.bounds(for: page), from: page), to: document)
+        let visible = clip.documentVisibleRect
+        // Clear of the edges, where the find bar floats over the top.
+        guard !visible.insetBy(dx: 0, dy: min(Self.revealMargin, visible.height / 4)).contains(match) else { return }
+        // Midpoints come out the same whether the document view is flipped or not.
+        var shown = visible
+        shown.origin.y = match.midY - visible.height / 2
+        if match.minX < visible.minX || match.maxX > visible.maxX { shown.origin.x = match.midX - visible.width / 2 }
+        clip.scroll(to: clip.constrainBoundsRect(shown).origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    private static let revealMargin: CGFloat = 56
 
     /// The current match is drawn on top of the others.
     @discardableResult

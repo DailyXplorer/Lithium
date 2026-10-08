@@ -10,14 +10,21 @@ struct AgentTabIDs {
     private var tabs: [String: Tab.ID] = [:]
     /// When each closed tab went, for the error a later call gets.
     private(set) var closed: [String: Date] = [:]
+    /// Private tabs' ids, kept once they close: the log never says where they went.
+    private var ephemeral: Set<String> = []
 
-    mutating func id(for tab: Tab.ID) -> String {
+    mutating func id(for tab: Tab.ID, isEphemeral: Bool = false) -> String {
         if let id = ids[tab] { return id }
         let id = "t\(next)"
         next += 1
         ids[tab] = id
         tabs[id] = tab
+        if isEphemeral { ephemeral.insert(id) }
         return id
+    }
+
+    func isEphemeral(_ id: String) -> Bool {
+        ephemeral.contains(id)
     }
 
     func tabID(for id: String) -> Tab.ID? {

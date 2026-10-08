@@ -629,11 +629,18 @@ final class AgentHub {
         var entry: [String: JSONValue] = [
             "session": Self.logged(session),
             "tool": .string(name),
-            "params": AgentURLs.redacted(notes.logged(arguments, tool: name)),
             "result": .object(logged),
             "ms": .int(ms),
         ]
-        let tab = tabID.map(loggedTab)
+        // A private tab saves nothing: its calls are logged without their arguments (an address,
+        // a search typed) nor the tab's address and host, marked instead.
+        let isPrivate = tabID.map { tabIDs.isEphemeral($0) } == true || (name == "tab_open" && arguments["ephemeral"] == .bool(true))
+        if isPrivate {
+            entry["ephemeral"] = true
+        } else {
+            entry["params"] = AgentURLs.redacted(notes.logged(arguments, tool: name))
+        }
+        let tab: JSONValue? = tabID.map { isPrivate ? ["id": .string($0)] : loggedTab($0) }
         if let tab { entry["tab"] = tab }
         noteInPanel(AgentLogLine(date: started, session: session.label, tool: name, tab: tabID, host: tab?["host"]?.string, error: logged["error"]?.string))
         await log.append(entry, at: started)
@@ -665,7 +672,7 @@ final class AgentHub {
     /// The id agents know `tab` by, given the first time any agent sees it. Only for open tabs
     /// (listing, opening): a call already holding a tab names it by the `NamedTab` it started with.
     func id(for tab: Tab) -> String {
-        tabIDs.id(for: tab.id)
+        tabIDs.id(for: tab.id, isEphemeral: tab.isEphemeral)
     }
 
     /// The open tab an agent named, or the reason it can't be used.

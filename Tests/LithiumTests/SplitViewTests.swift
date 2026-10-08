@@ -152,6 +152,25 @@ struct SplitViewTests {
         #expect(!zone.takesMouse(buttons: 1))
     }
 
+    /// A tab dragged to the sidebar and a drag from another app, with no click in between: the
+    /// drop zone stands down for the outside drag, which goes on to the page.
+    @Test func aDragFromAnotherAppAfterATabDragReachesThePage() {
+        let browser = browser(with: ["a", "b"])
+        browser.select(tab("a", in: browser))
+        let item = browser.startDragging(tab("b", in: browser))
+        #expect(browser.carriesDraggedTab(item))
+        #expect(browser.splits.draggedTabID != nil)
+
+        #expect(!browser.carriesDraggedTab("https://example.com/"))
+        #expect(browser.splits.draggedTabID == nil)
+        #expect(!browser.carriesDraggedTab(nil))
+
+        // Dropped in the sidebar, the tab's drag is over.
+        _ = browser.startDragging(tab("b", in: browser))
+        #expect(!browser.dropTab([item], on: .agentGroup))
+        #expect(browser.splits.draggedTabID == nil)
+    }
+
     /// The address bar, Reload and the rest act on the selected tab: in split view the focused
     /// side, which a click in the other side moves.
     @Test func addressBarActsOnTheFocusedSideAndAClickMovesIt() async throws {

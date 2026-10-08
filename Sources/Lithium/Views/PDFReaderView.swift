@@ -381,8 +381,9 @@ private struct PasswordPrompt: View {
                 .fill(Color(nsColor: .textBackgroundColor))
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         )
-        // The document locks only once loaded, maybe while the user types on the other split side.
-        .onAppear { if takesKeyboard { claimFocus($isFocused) } }
+        // The document locks only once loaded, maybe while the user types on the other split side,
+        // or in a field of the window (the address bar, the find bar, a tab's name): that keeps the keyboard.
+        .onAppear { if takesKeyboard, !isEditingText(in: NSApp.keyWindow) { claimFocus($isFocused) } }
         .onChange(of: takesKeyboard) { if takesKeyboard { claimFocus($isFocused) } }
     }
 }

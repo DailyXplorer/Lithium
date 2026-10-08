@@ -476,8 +476,8 @@ struct BrowserTests {
     }
 
     /// Private tabs (an agent's ephemeral tab, its popups and copies) are kept from extensions,
-    /// as Chrome keeps incognito from extensions not allowed there: no tab list, no active tab,
-    /// and no extension running in their pages.
+    /// as Chrome keeps incognito from extensions not allowed there: not in the tab list, never the
+    /// active tab (the last normal tab stays it), and no extension running in their pages.
     @Test func privateTabsAreHiddenFromExtensions() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -497,13 +497,83 @@ struct BrowserTests {
         #expect(!listed.contains { $0 === agentTab || $0 === popup })
         #expect(popup.indexInWindow(for: context) == NSNotFound)
         #expect(browser.selectedTab === popup)
-        #expect(window.activeTab(for: context) == nil, "a private tab shown is no extension's active tab")
+        #expect(window.activeTab(for: context) as? Lithium.Tab === normal, "a private tab shown is no extension's active tab")
         #expect(popup.webView.configuration.webExtensionController == nil)
         #expect(agentTab.webView.configuration.webExtensionController == nil)
         #expect(normal.webView.configuration.webExtensionController === browser.extensions.controller)
 
         browser.select(normal)
         #expect(window.activeTab(for: context) as? Lithium.Tab === normal)
+
+        // An extension showing a tab isn't the user's pick: their address-bar typing goes on.
+        let picks = browser.tabPickToken
+        try await popup.activate(for: context)
+        #expect(browser.selectedTab === popup)
+        #expect(browser.tabPickToken == picks)
+    }
+
+    /// Double-clicking a tab and clicking away leaves it without a name of its own: its page's
+    /// later titles still show.
+    @Test func aRenameLeftAsShownKeepsThePageTitle() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.displayTitle == "First" })
+
+        browser.renamingTabID = tab.id
+        browser.rename(tab, to: "First", shown: tab.displayTitle)
+        #expect(tab.customTitle == nil)
+        #expect(browser.renamingTabID == nil)
+        browser.rename(tab, to: " Mine ", shown: "First")
+        #expect(tab.customTitle == "Mine")
+        // A name of its own, left as shown, stays.
+        browser.rename(tab, to: "Mine", shown: "Mine")
+        #expect(tab.customTitle == "Mine")
+        browser.rename(tab, to: "", shown: "Mine")
+        #expect(tab.customTitle == nil)
+    }
+
+    /// A click on a suggestion goes to the tab being edited, as Return does: to a new tab once
+    /// that one is gone, never to the one now shown.
+    @Test func clickedSuggestionGoesToTheTabBeingEdited() throws {
+        let browser = Browser()
+        let opener = browser.newTab(url: URL(string: "data:text/html,opener")!)
+        let edited = browser.newTab(url: URL(string: "data:text/html,edited")!)
+        defer { browser.tabs.forEach(browser.close) }
+        let typed = URL(string: "data:text/html,typed")!
+
+        browser.suggestions.editedTabID = edited.id
+        browser.close(edited)
+        #expect(browser.selectedTab === opener)
+        let count = browser.tabs.count
+        browser.accept(.address(typed))
+        #expect(browser.tabs.count == count + 1)
+        #expect(opener.url == URL(string: "data:text/html,opener"))
+        #expect(browser.selectedTab?.url == typed)
+    }
+
+    /// Settings' "Use DM Sans on websites" reloads the open pages it changes, not Lithium's own.
+    @Test func websiteFontSettingReloadsOpenPages() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        let settings = browser.newTab(url: Internal.settingsURL, selecting: false)
+        defer { [tab, settings].forEach(browser.close) }
+        let original = PageStyle.usesDMSansEverywhere
+        defer { PageStyle.usesDMSansEverywhere = original }
+        #expect(await waitUntil(10) { tab.loadedWebView?.isLoading == false && settings.loadedWebView?.isLoading == false })
+        for webView in [tab.webView, settings.webView] {
+            _ = try await webView.callAsyncJavaScript("window.marked = true", contentWorld: .page)
+        }
+        let marked = { (tab: Tab) async in (try? await tab.webView.callAsyncJavaScript("return window.marked === true", contentWorld: .page)) as? Bool }
+
+        browser.changePageFont { PageStyle.usesDMSansEverywhere = !original }
+        var reloaded = false
+        for _ in 0..<50 where !reloaded {
+            try await Task.sleep(for: .milliseconds(100))
+            reloaded = await marked(tab) == false
+        }
+        #expect(reloaded)
+        #expect(await marked(settings) == true)
     }
 
     /// A tab closed or pinned while its name was being edited ends the rename: its field went

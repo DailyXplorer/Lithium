@@ -33,6 +33,8 @@ enum Suggestion: Hashable, Identifiable {
 final class AddressSuggestions {
     private(set) var items: [Suggestion] = []
     private(set) var selectedIndex = 0
+    /// The tab shown when the address bar's editing began: Return or a click on a row goes there.
+    @ObservationIgnored var editedTabID: Tab.ID?
     /// Visited pages arrive a moment after the rest, from a query that runs off the main thread.
     @ObservationIgnored private(set) var historyQuery: Task<Void, Never>?
     /// Where the pointer was when the rows last changed. A row that comes up under a resting

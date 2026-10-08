@@ -66,7 +66,7 @@ actor AgentLog {
 
     /// Deletes day files older than the retention period.
     func prune(now: Date = Date()) {
-        guard let cutoff = Calendar.current.date(byAdding: .day, value: -Self.retentionDays, to: now) else { return }
+        guard let cutoff = Self.dayCalendar.date(byAdding: .day, value: -Self.retentionDays, to: now) else { return }
         let oldest = Self.fileName(for: cutoff)
         let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         for name in files where name.hasSuffix(".jsonl") && name < oldest {
@@ -74,10 +74,22 @@ actor AgentLog {
         }
     }
 
-    /// The local calendar day, so a day's file holds what the user did that day.
-    static func fileName(for date: Date) -> String {
-        let day = Calendar.current.dateComponents([.year, .month, .day], from: date)
+    /// The local day, so a day's file holds what the user did that day, as a Gregorian date
+    /// whatever the user's calendar: names are sorted and compared as text, which a Buddhist
+    /// year (2569) or a Japanese era's (0008) would put out of order.
+    static func fileName(for date: Date, timeZone: TimeZone = .current) -> String {
+        var calendar = dayCalendar
+        calendar.timeZone = timeZone
+        let day = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d.jsonl", day.year ?? 0, day.month ?? 0, day.day ?? 0)
+    }
+
+    /// Gregorian, in the user's time zone.
+    static var dayCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = .current
+        return calendar
     }
 
     /// Where the log lives, also while access is off: the page still shows and clears it.

@@ -407,6 +407,26 @@ struct AgentReadTests {
         // Each İ lowercases to two code units, so a lowercased copy's indexes run past the link.
         "/turkish": (Self.html, "<title>Turkish</title><p>İİİİİİİİ <a href=\"/one\">target</a> words after it</p>"),
         "/one": (Self.html, "<title>One</title><p>one</p>"),
+        // Elements of another namespace named as HTML controls, with none of their properties,
+        // and a real field inside such a "form".
+        "/foreign": (Self.html, """
+            <title>Foreign</title><p>Real text</p><button>Real</button><div id="host"></div>
+            <script>
+              const ns = 'https://example.com/ns';
+              const host = document.getElementById('host');
+              for (const [name, role] of [['input', null], ['input', 'textbox'], ['select', 'combobox'], ['select', null], ['textarea', null], ['tr', null]]) {
+                const element = document.createElementNS(ns, name);
+                if (role) element.setAttribute('role', role);
+                element.textContent = `Foreign ${name} ${role ?? ''}`;
+                host.append(element);
+              }
+              const form = document.createElementNS(ns, 'form');
+              const field = document.createElement('input');
+              field.setAttribute('aria-label', 'Inside');
+              form.append(field);
+              host.append(form);
+            </script>
+            """),
     ]
 
     private func withAgent(_ body: (Client, URL) async throws -> Void) async throws {
@@ -1708,6 +1728,70 @@ struct AgentReadTests {
             }
             let json = await client.call("snapshot", ["tab": .string(tab), "format": "json"])
             #expect(node(json, role: "button", name: "New") != nil, "\(text(json["nodes"]))")
+        }
+    }
+
+    /// Frames a page keeps swapping in and out don't pile up: once `framesBeforeSweep` are held,
+    /// those WebKit no longer has are swept out, the live ones kept. A page gone takes them all.
+    @Test func framesTakenAwayDontPileUp() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try #require(client.tab(tab))
+            let state = try #require(client.hub.agentTab(for: named))
+            #expect(await waitUntil(10) { state.frames.count == 2 })
+            let first = Set(state.frames.keys)
+            // The last hello brings the count to the sweep's.
+            for round in 0..<(AgentTab.framesBeforeSweep - 2) {
+                let before = Set(state.frames.keys)
+                _ = try await named.webView.callAsyncJavaScript("""
+                    document.querySelectorAll('.swapped').forEach((frame) => frame.remove());
+                    const frame = document.createElement('iframe');
+                    frame.className = 'swapped';
+                    frame.src = '/child?new';
+                    document.body.append(frame);
+                    """, contentWorld: .page)
+                #expect(await waitUntil(10) { !Set(state.frames.keys).subtracting(before).isEmpty }, "\(round)")
+            }
+            #expect(await waitUntil(10) { state.frames.count == 3 }, "\(state.frames.count)")
+            #expect(first.isSubset(of: state.frames.keys))
+            client.hub.pageGone(named)
+            #expect(state.frames.isEmpty)
+        }
+    }
+
+    /// A text wait reads the same-origin frames too: text shown only there is present, and isn't
+    /// gone while it shows. Text gone says how many frames of another origin it couldn't check.
+    @Test func textWaitsReadSameOriginFrames() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/frames")
+            let named = try #require(client.tab(tab))
+            let shown = await client.call("wait_for", ["tab": .string(tab), "text": "Same", "timeoutMs": 3000, "diff": false])
+            #expect(shown["met"] == true, "\(shown.message)")
+            let still = await client.call("wait_for", ["tab": .string(tab), "textGone": "Same", "timeoutMs": 500, "diff": false])
+            #expect(still.code == "timeout", "\(still.content)")
+            _ = try await named.webView.callAsyncJavaScript("document.getElementById('same').remove()", contentWorld: .page)
+            let gone = await client.call("wait_for", ["tab": .string(tab), "textGone": "Same", "timeoutMs": 3000, "diff": false])
+            #expect(gone["met"] == true, "\(gone.message)")
+            #expect(gone["note"]?.string?.hasPrefix("1 frame of another origin") == true, "\(gone.content)")
+        }
+    }
+
+    /// Elements of another namespace named `input`, `select`, `textarea`, `tr` or `form` have none
+    /// of those controls' properties: every read still answers, and a real field in such a
+    /// "form" is still typed into.
+    @Test func elementsOfAnotherNamespaceDontBreakReads() async throws {
+        try await withAgent { client, base in
+            let tab = try await open(client, base, "/foreign")
+            let snapshot = await client.call("snapshot", ["tab": .string(tab), "format": "json", "scope": "page"])
+            #expect(node(snapshot, role: "button", name: "Real") != nil, "\(snapshot.content)")
+            let inside = try #require(node(snapshot, role: "textbox", name: "Inside")?["ref"]?.string, "\(snapshot.content)")
+            let read = await client.call("read_text", ["tab": .string(tab), "main": false])
+            #expect(read["text"]?.string?.contains("Foreign tr") == true, "\(read.content)")
+            let forms = await client.call("forms", ["tab": .string(tab)])
+            #expect(!forms.isError, "\(forms.content)")
+            #expect(await client.call("find_text", ["tab": .string(tab), "text": "Real text"])["count"] == 1)
+            let typed = await client.call("type", ["tab": .string(tab), "ref": .string(inside), "text": "ok", "diff": false])
+            #expect(!typed.isError, "\(typed.content)")
         }
     }
 

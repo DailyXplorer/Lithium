@@ -307,6 +307,13 @@ struct AgentInputTests {
               account.addEventListener('click', () => setTimeout(() => document.getElementById(account.dataset.next).focus(), 0));
             </script>
             """),
+        "/script-login": (html, """
+            <title>Script sign-in</title><style>body { margin: 0 } input, button { position: absolute; left: 40px; width: 160px }</style>
+            <input id="who" aria-label="Who" style="top: 40px"><input type="password" id="secret" aria-label="Secret" style="top: 100px">
+            <button type="button" id="go" style="top: 160px" onclick="location = '/done'">Sign in</button>
+            <script>document.getElementById('who').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });</script>
+            \(logger)
+            """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
         "/pay": (html, """
             <title>Shop</title><style>body { margin: 0 }</style>
@@ -1339,6 +1346,31 @@ struct AgentInputTests {
             let submitted = try await call(client, "press", ["tab": .string(id), "keys": "Enter", "wait": "load"], answering: .allowOnce, expecting: .password)
             #expect(submitted["navigated"] == true, "\(submitted.content)")
             #expect(tab.url?.path() == "/done")
+        }
+    }
+
+    /// A sign-in a script sends, with no form: once the password is filled (by the user or a
+    /// password manager), its plain button, a right click on it, and Enter in a field ask as a
+    /// form's submit does, and nothing denied reaches the page.
+    @Test func aSignInWithoutAFormAsksOnceItsPasswordIsFilled() async throws {
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "script-login"))
+            let button = try await ref(client, id, "button", "Sign in")
+            let who = try await ref(client, id, "textbox", "Who")
+            _ = try await page(tab, "document.getElementById('secret').value = 'filled'")
+            for (tool, arguments) in [
+                ("click", ["tab": .string(id), "ref": .string(button)]), ("click", ["tab": .string(id), "ref": .string(button), "button": "right"]),
+                ("type", ["tab": .string(id), "ref": .string(who), "text": "me", "submit": true]),
+            ] as [(String, JSONValue)] {
+                let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)
+                #expect(denied.code == "denied_by_user", "\(tool) \(arguments): \(denied.content)")
+            }
+            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(who)])).isError)
+            let entered = try await call(client, "press", ["tab": .string(id), "keys": "Enter"], answering: .deny, expecting: .password)
+            #expect(entered.code == "denied_by_user", "\(entered.content)")
+            #expect(try await log(tab, ["mousedown", "click", "contextmenu", "keydown"]).isEmpty)
+            #expect(tab.url?.path() == "/script-login")
+            #expect(try await page(tab, "return document.getElementById('who').value") as? String == "")
         }
     }
 

@@ -659,8 +659,11 @@ extension AgentHub {
     // MARK: Waiting
 
     /// Waits in the page for an element's state or for text, within the call's deadline. A text
-    /// wait goes on in the next document when the main frame navigates.
-    func wait(for condition: DOMCondition, in named: NamedTab, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
+    /// wait reads the main frame and the same-origin frames in it, and goes on in the next
+    /// document when the main frame navigates. Text gone answers a note when frames of another
+    /// origin, which it can't read, may still hold it.
+    @discardableResult
+    func wait(for condition: DOMCondition, in named: NamedTab, deadline: ContinuousClock.Instant, timeout: Duration) async throws -> String? {
         let tab = named.tab
         if tab.isAsleep { _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() } }
         if tab.pdf != nil { throw AgentHub.pdfShown(named, use: "wait_for load or url") }
@@ -674,7 +677,7 @@ extension AgentHub {
             do {
                 (address, target) = try await element(ref, in: named, webView, until: deadline)
             } catch let error as AgentToolError where gone && ["stale_ref", "frame_gone"].contains(error.code) {
-                return
+                return nil
             }
             let key = Self.waitKey()
             let pending = start(webView, target, "wait", ["id": address.id, "token": address.document, "state": state, "timeoutMs": remaining(), "key": key])
@@ -710,7 +713,7 @@ extension AgentHub {
                     return tab.commits != commits ? gone : nil
                 }
             } while met == nil && ContinuousClock.now < deadline
-            if met == true { return }
+            if met == true { return nil }
             if met == false, !gone {
                 // A frame of the page left can still answer after the main frame committed, before
                 // the next page says hello: the element is gone whatever it says.
@@ -730,17 +733,21 @@ extension AgentHub {
                 let commits = tab.commits
                 let pending = start(webView, .main, "wait", ["text": text, "present": present, "timeoutMs": remaining(), "key": key])
                 current = pending
-                let outcome = try await watch(named, until: deadline) { () -> Bool? in
+                let outcome = try await watch(named, until: deadline) { () -> (met: Bool, unread: Int)? in
                     try self.checkPageShown(named, before: event)
                     if let result = pending.result {
                         // A document between pages fails at once: ask the next one.
-                        guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data) else { return false }
-                        return wait.met == true ? true : nil
+                        guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data) else { return (false, 0) }
+                        return wait.met == true ? (true, wait.unread ?? 0) : nil
                     }
-                    return tab.commits != commits ? false : nil
+                    return tab.commits != commits ? (false, 0) : nil
                 }
-                if outcome == true { return }
-                if outcome == nil { break }
+                guard let outcome else { break }
+                if outcome.met {
+                    // Gone from what Lithium could read, maybe not from a frame it couldn't.
+                    guard !present, outcome.unread > 0 else { return nil }
+                    return "\(outcome.unread == 1 ? "1 frame" : "\(outcome.unread) frames") of another origin couldn’t be checked: find_text reads every frame."
+                }
                 // The main frame moved on: wait until the next document shows, then ask it.
                 _ = try await watch(named, until: deadline) { tab.isAwaitingCommit ? nil : true }
                 guard tab.commits == commits else {
@@ -1006,4 +1013,6 @@ struct WaitReport: Decodable {
     let token: String
     var gone: Bool?
     var met: Bool?
+    /// A text wait: the shown frames of other origins it couldn't read.
+    var unread: Int?
 }

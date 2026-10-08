@@ -83,6 +83,11 @@ struct AgentGuardrailsTests {
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: true), .password, "submitting a filled password"),
             (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: false), nil, "submitting an empty password field"),
             (.activate, button("Pay €42.00"), Self.shop, Guardrails.Form(filledPassword: true), .payment, "a payment wins over a password"),
+            (.activate, Element(role: "button", name: "Sign in", passwordFilled: true), Self.shop, nil, .password, "a plain button beside a filled password, no form"),
+            (.activate, Element(role: "clickable", name: "Continue", passwordFilled: true), Self.shop, nil, .password, "a clickable beside a filled password"),
+            (.activate, Element(role: "checkbox", name: "Remember me", passwordFilled: true), Self.shop, nil, nil, "a checkbox beside a filled password"),
+            (.press(enter: true), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, .password, "Enter in a field beside a filled password, no form"),
+            (.press(enter: false), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, nil, "Tab beside a filled password"),
             (.type, email, Self.checkout, nil, nil, "an email field on a checkout page"),
         ]
         for test in cases {

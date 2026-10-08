@@ -260,6 +260,18 @@ struct AgentEvaluateTests {
         #expect(scrubbed == #"{"a":"[redacted]","b":"[redacted]","c":"ab","d":"[redacted]"}"#)
     }
 
+    /// A result of up to a megabyte is scrubbed, cut and decoded off the main actor: here from
+    /// a detached task, which only a nonisolated function allows.
+    @Test func scriptResultsAreShownOffTheMainActor() async {
+        let whole = await Task.detached { AgentHub.shown(#"{"a":"abcdefg","n":1}"#, cut: false, secrets: ["abcdefg"], cookies: []) }.value
+        #expect(whole.result == ["a": "[redacted]", "n": 1])
+        #expect(!whole.truncated)
+        let long = "\"" + String(repeating: "x", count: AgentHub.maxScriptResult + 10) + "\""
+        let cut = await Task.detached { AgentHub.shown(long, cut: false, secrets: [], cookies: []) }.value
+        #expect(cut.truncated && cut.text.count == AgentHub.maxScriptResult && cut.result == .string(cut.text))
+        #expect(await Task.detached { AgentHub.shown("1", cut: true, secrets: [], cookies: []) }.value.truncated)
+    }
+
     // MARK: Where it never runs
 
     @Test func neverRunsOnLithiumLocalOrPaymentPages() async throws {

@@ -111,11 +111,16 @@ final class CallNotes {
             return .object(fields)
         }
         // Its fields go through `type`, `select_option` and `set_checked` in one call, so none of
-        // its values is logged, whatever field it went to.
-        if tool == "fill_form", var fields = arguments.object, case .array(let list)? = fields["fields"] {
+        // its values is logged, whatever field it went to. A malformed list (a string, an item
+        // that isn't an object) fails the call but is logged all the same: it goes too.
+        if tool == "fill_form", var fields = arguments.object, let given = fields["fields"] {
+            guard case .array(let list) = given else {
+                fields["fields"] = "[redacted]"
+                return .object(fields)
+            }
             fields["fields"] = .array(list.map { field in
-                guard var entry = field.object, entry["value"] != nil else { return field }
-                entry["value"] = "[redacted]"
+                guard var entry = field.object else { return "[redacted]" }
+                if entry["value"] != nil { entry["value"] = "[redacted]" }
                 return .object(entry)
             })
             return .object(fields)
@@ -792,6 +797,7 @@ final class AgentHub {
     func pageGone(_ tab: Tab) {
         tabs[tab.id]?.drive = nil
         tabs[tab.id]?.capture?.reset()
+        tabs[tab.id]?.pageGone()
     }
 
     /// The agent's navigation still under way in `tab`, for a session still connected.

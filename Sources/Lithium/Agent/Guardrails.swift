@@ -43,6 +43,9 @@ enum Guardrails {
         var field: String?
         /// An Apple Pay or Google Pay button.
         var wallet = false
+        /// A password field that isn't empty is in its document, whoever filled it: a sign-in
+        /// may send it without a form, from a plain button or link or on Enter.
+        var passwordFilled = false
         /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
         /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
@@ -92,10 +95,12 @@ enum Guardrails {
             if element.field == "password", action == .type { return .password }
         case .press(let enter):
             if element.field == "payment" { return .payment }
-            if element.field == "password", enter { return .password }
+            if enter, element.field == "password" || element.passwordFilled { return .password }
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
+            // A script can send the filled password from any of them, form or not.
+            if element.passwordFilled, ["button", "link", "clickable"].contains(element.role) { return .password }
         }
         return form?.filledPassword == true ? .password : nil
     }

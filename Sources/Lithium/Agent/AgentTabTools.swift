@@ -395,7 +395,7 @@ extension AgentHub {
 
     static let waitFor = AgentTool(
         name: "wait_for",
-        description: "Wait for one condition: load, url, ref in a state, text, textGone, networkIdle or time.",
+        description: "Wait for one condition: load, url, ref in a state, text or textGone (in the page and its same-origin frames), networkIdle or time.",
         inputSchema: schema([
             "tab": AgentParam.tab,
             "load": ["type": "string", "enum": ["domcontentloaded", "load"]],
@@ -442,6 +442,7 @@ extension AgentHub {
         let started = ContinuousClock.now
         let deadline = started + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
+            var note: String?
             try hub.checkDrivable(named)
             try await hub.checkWakeable(named, until: deadline)
             if let pattern, let matches {
@@ -458,7 +459,7 @@ extension AgentHub {
                     try await hub.waitForLoad(of: named, state, deadline: deadline, timeout: timeout)
                 }
             } else if let condition {
-                try await hub.wait(for: condition, in: named, deadline: deadline, timeout: timeout)
+                note = try await hub.wait(for: condition, in: named, deadline: deadline, timeout: timeout)
             } else if let idle {
                 // A sleeping tab has sent nothing yet: the quiet counts from its page's load.
                 var loaded: ContinuousClock.Instant?
@@ -475,6 +476,7 @@ extension AgentHub {
             }
             var result = hub.page(named, reached: nil).object ?? [:]
             result["met"] = true
+            if let note { result["note"] = .string(note) }
             result["elapsedMs"] = .int(Int((ContinuousClock.now - started) / .milliseconds(1)))
             return try await hub.addingDiff(to: .object(result), of: named, for: session, if: diff, until: deadline)
         }

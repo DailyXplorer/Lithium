@@ -5,6 +5,7 @@ Each group becomes one WKContentRuleList. Exceptions only apply inside their own
 so uBO's unbreak list is added to every group whose rules it may need to relax.
 """
 
+import hashlib
 import json
 import re
 import shutil
@@ -23,7 +24,11 @@ CONVERTER_REPO = "https://github.com/AdguardTeam/SafariConverterLib.git"
 CONVERTER_TAG = "v4.3.0"
 CONVERTER_BIN = TOOLS / "SafariConverterLib/.build/release/ConverterTool"
 
-SOURCES = json.loads((ROOT / "Sources/Lithium/Resources/FilterSources.json").read_text())
+SOURCES_FILE = (ROOT / "Sources/Lithium/Resources/FilterSources.json").read_bytes()
+SOURCES = json.loads(SOURCES_FILE)
+# In the manifest, as the app's updater writes it (FilterUpdater.Sources.digest): a list's new
+# address or a changed token changes no group, and must still rebuild the set.
+SOURCES_DIGEST = hashlib.sha256(SOURCES_FILE).hexdigest()
 LISTS = SOURCES["lists"]
 GROUPS = SOURCES["groups"]
 # uBO preprocessor tokens that hold for a WebKit content blocker.
@@ -57,9 +62,13 @@ def download(name: str) -> list[str]:
 def eval_condition(expr: str) -> bool:
     py = re.sub(r"!(?!=)", " not ", expr).replace("&&", " and ").replace("||", " or ")
     py = re.sub(r"[A-Za-z_][A-Za-z0-9_]*", lambda m: m.group(0) if m.group(0) in ("not", "and", "or") else str(m.group(0) in TRUE_TOKENS), py)
+    # Anything but tokens, operators and parentheses (digits, `**`, a call) is no condition: it
+    # could otherwise raise and stop the build, or hang it (`9**9**9`).
+    if not re.fullmatch(r"(\s|True|False|not|and|or|\(|\))*", py):
+        return False
     try:
         return bool(eval(py, {"__builtins__": {}}))
-    except SyntaxError:
+    except Exception:
         return False
 
 
@@ -80,7 +89,11 @@ def expand(url: str, seen: set[str]) -> list[str]:
         elif not all(stack):
             continue
         elif stripped.startswith("!#include "):
-            lines += expand(urllib.parse.urljoin(url, stripped[10:].strip()), seen)
+            # Only from the list's own server, as in the app's updater.
+            included = urllib.parse.urljoin(url, stripped[10:].strip())
+            here, there = urllib.parse.urlsplit(url), urllib.parse.urlsplit(included)
+            if (there.scheme, there.netloc.lower()) == (here.scheme, here.netloc.lower()):
+                lines += expand(included, seen)
         elif stripped and not stripped.startswith(("!", "[Adblock")):
             lines.append(stripped)
     return lines
@@ -120,7 +133,7 @@ def build(out: Path) -> None:
     # lists/ keeps each list as downloaded: the app's updater falls back to it when a list fails.
     (out / "lists").mkdir(parents=True, exist_ok=True)
     cache: dict[str, list[str]] = {}
-    manifest = {"format": FORMAT, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": {}}
+    manifest = {"format": FORMAT, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": {}, "sources": SOURCES_DIGEST}
     advanced: list[str] = []
     scriptlets: list[str] = []
     for group, names in GROUPS.items():
@@ -167,7 +180,7 @@ def complete(folder: Path) -> bool:
         return False
     names = {name for names in GROUPS.values() for name in names}
     files = [f"{group}.json" for group in GROUPS] + ["advanced.txt", "scriptlets.txt"] + [f"lists/{name}.txt" for name in names]
-    return manifest.get("format") == FORMAT and lists == GROUPS and all((folder / file).is_file() for file in files)
+    return manifest.get("format") == FORMAT and manifest.get("sources") == SOURCES_DIGEST and lists == GROUPS and all((folder / file).is_file() for file in files)
 
 
 def main() -> int:

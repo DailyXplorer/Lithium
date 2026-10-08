@@ -194,7 +194,8 @@ final class VideoPopout {
         try await webView.callAsyncJavaScript(script, arguments: ["command": command, "value": value], contentWorld: .defaultClient)
     }
 
-    private static func playback(from state: Any?) -> Playback? {
+    /// The page says what size its video is: past 4:1 either way, the player keeps 4:1.
+    static func playback(from state: Any?) -> Playback? {
         guard let state = state as? [String: Any],
               let width = state["width"] as? Double, let height = state["height"] as? Double,
               width > 0, height > 0 else { return nil }
@@ -203,7 +204,7 @@ final class VideoPopout {
             time: state["time"] as? Double ?? 0,
             duration: state["duration"] as? Double,
             isMuted: state["muted"] as? Bool ?? false,
-            aspectRatio: width / height
+            aspectRatio: min(max(width / height, 0.25), 4)
         )
     }
 }

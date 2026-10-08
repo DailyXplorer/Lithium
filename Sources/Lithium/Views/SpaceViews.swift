@@ -46,7 +46,8 @@ struct SpaceBar: View {
     }
 }
 
-/// A space's icon, on its color when it is the one shown.
+/// A space's icon. The one shown sits on the current tab row's light surface, the others on
+/// nothing and dimmed: one space is always current, so it needs marking, not a strong fill.
 struct SpaceButton: View {
     let space: Space
     let number: Int
@@ -62,7 +63,7 @@ struct SpaceButton: View {
                 .frame(height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isCurrent ? palette.selection : isHovered ? palette.hover : .clear)
+                        .fill(Self.fill(palette, isCurrent: isCurrent, isHovered: isHovered))
                 )
                 .contentShape(Rectangle())
         }
@@ -72,6 +73,11 @@ struct SpaceButton: View {
         .help("\(space.name) (⌃\(number))")
         .accessibilityLabel(space.name)
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
+    }
+
+    /// The tab rows' fills: a hovered space gets half the current one's, so it never looks current.
+    static func fill(_ palette: SidebarPalette, isCurrent: Bool, isHovered: Bool) -> Color {
+        palette.rowFill(isSelected: isCurrent, isHovered: isHovered)
     }
 }
 

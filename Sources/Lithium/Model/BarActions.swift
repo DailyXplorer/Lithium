@@ -37,8 +37,8 @@ enum BarAction: Hashable, CaseIterable {
         case .unpinTab: ["Remove from favorites"]
         case .openSplitView: ["Split view", "Side by side"]
         case .exitSplitView: ["Close split view"]
-        case .enterZenMode, .exitZenMode: ["Zen mode", "Focus mode"]
-        case .clearSiteData: ["Clear cookies", "Clear cache", "Delete cookies"]
+        case .enterZenMode, .exitZenMode: ["Zen", "Zen mode", "Focus mode"]
+        case .clearSiteData: ["Clear cookies", "Delete cookies"]
         case .settings: ["Preferences"]
         }
     }
@@ -60,13 +60,16 @@ enum BarAction: Hashable, CaseIterable {
 
     /// The actions among `available` the query clearly names, best first, at most `shownLimit`.
     /// Each typed word starts a word of the name, in order, with at most one small typo in
-    /// the whole query. Three letters at least, and four to match past a name's first word, so
-    /// everyday searches ("new", "tab") don't bring actions up.
+    /// the whole query. Four letters at least, three only for a whole name ("zen"), and four to
+    /// match past a name's first word, so the start of everyday searches ("new", "pin", "tab")
+    /// doesn't bring actions up.
     static func matches(_ query: String, among available: [BarAction]) -> [(action: BarAction, match: Match)] {
         let typed = words(query)
-        guard typed.joined().count >= 3 else { return [] }
+        let letters = typed.joined().count
+        guard letters >= 3 else { return [] }
         let found = available.compactMap { action -> (BarAction, Match)? in
-            let best = ([action.title] + action.aliases).compactMap { match(typed, words($0)) }.min()
+            let best = ([action.title] + action.aliases).compactMap { match(typed, words($0)) }
+                .filter { letters >= 4 || $0.isWhole }.min()
             return best.map { (action, $0) }
         }
         // Stable: equal matches keep the catalogue's order.
@@ -101,10 +104,11 @@ enum BarAction: Hashable, CaseIterable {
     }
 
     /// Whether `typed` starts `word`, or would with one letter wrong, missing, extra or swapped
-    /// (words of four letters or more, first letter right). Nil when it doesn't.
+    /// (five letters typed or more, first letter right, so "deli" or "clou" stay searches). Nil
+    /// when it doesn't.
     private static func wordMatch(_ typed: String, _ word: String) -> (typo: Bool, whole: Bool)? {
         if word.hasPrefix(typed) { return (false, typed.count == word.count) }
-        guard typed.count >= 4, word.count >= max(4, typed.count - 1), typed.first == word.first else { return nil }
+        guard typed.count >= 5, word.count >= max(4, typed.count - 1), typed.first == word.first else { return nil }
         let letters = Array(word)
         for length in max(1, typed.count - 1)...min(word.count, typed.count + 1)
         where editDistance(Array(typed), Array(letters[..<length])) <= 1 {

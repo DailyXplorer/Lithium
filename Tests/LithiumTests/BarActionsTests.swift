@@ -25,17 +25,20 @@ struct BarActionMatchTests {
         #expect(named("Settings") == [.settings])
         #expect(named("dupl") == [.duplicateTab])
         #expect(named("private") == [.newPrivateTab])
-        #expect(named("zen", among: [.enterZenMode]) == [.enterZenMode], "through its alias Zen mode")
+        #expect(named("zen", among: [.enterZenMode]) == [.enterZenMode], "through its alias Zen")
+        #expect(BarAction.matches("zen", among: [.enterZenMode]).first?.match.isWhole == true)
         #expect(named("cookies") == [.clearSiteData])
         #expect(named("incognito") == [.newPrivateTab])
         #expect(named("reopen tab") == [.reopenClosedTab], "words may skip words of the name")
         #expect(named("Paramètres").isEmpty)
     }
 
-    /// Everyday searches stay searches: too short, past a name's first word with three letters,
-    /// out of order, or more than one typo.
+    /// Everyday searches stay searches: too short, three letters that aren't a whole name, past a
+    /// name's first word with three letters, a typo under five letters, out of order, or more
+    /// than one typo.
     @Test func everydaySearchesBringNoAction() {
-        for query in ["", "co", "tab", "new york", "news", "link copy", "weather", "stuff", "setigns x", "pin code"] {
+        for query in ["", "co", "tab", "new", "res", "pin", "del", "set", "deli", "clou", "pres", "clear cache",
+                      "new york", "news", "link copy", "weather", "stuff", "setigns x", "pin code"] {
             #expect(named(query).isEmpty, "\(query)")
         }
     }
@@ -217,8 +220,8 @@ struct BarActionsTests {
         #expect(browser.selectedTab?.url?.absoluteString.hasPrefix(Internal.settingsURL.absoluteString) == true)
     }
 
-    /// Clear site data removes the site's cookies from the tab's own store, here a private one,
-    /// so nothing of the user's is touched.
+    /// Clear site data removes the site's cookies from the tab's own store, here a private one;
+    /// the same cookie in the default store stays.
     @Test func clearSiteDataEmptiesTheTabsStore() async throws {
         let (listener, url) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<p>shop</p>")])
         defer { listener.cancel() }
@@ -229,10 +232,14 @@ struct BarActionsTests {
         #expect(browser.barActions(for: tab).contains(.clearSiteData))
         let cookie = try #require(HTTPCookie(properties: [.domain: "127.0.0.1", .path: "/", .name: "cart", .value: "1"]))
         await tab.dataStore.httpCookieStore.setCookie(cookie)
+        let mine = WKWebsiteDataStore.default().httpCookieStore
+        await mine.setCookie(cookie)
 
         await browser.clearSiteData(of: tab)?.value
         let left = await tab.dataStore.httpCookieStore.allCookies()
         #expect(!left.contains { $0.name == "cart" })
+        #expect(await mine.allCookies().contains { $0.name == "cart" }, "the default store is untouched")
+        await mine.deleteCookie(cookie)
     }
 
     private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {

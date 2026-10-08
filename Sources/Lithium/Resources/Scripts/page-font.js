@@ -1,6 +1,7 @@
-// DM Sans on every element of the page, except where the site's own font does a job DM Sans
-// can't: icon fonts (Font Awesome, Material Symbols, fontello…), code and math.
-// A layered !important rule sets DM Sans everywhere; elements to leave alone get KEEP and are
+// The user's font (DM Sans unless they picked another) on every element of the page, except where
+// the site's own font does a job a text font can't: icon fonts (Font Awesome, Material Symbols,
+// fontello…), code and math.
+// A layered !important rule sets the font everywhere; elements to leave alone get KEEP and are
 // excluded, with everything inside them. Deciding needs the font the site chose, so new content
 // briefly gets PROBE, which lifts the rule for it alone, while it is checked: at most once per
 // frame, before it paints, and without restyling the rest of the page. A class or style change
@@ -11,7 +12,16 @@
 // on any attribute change in their content, whose new nodes were probed again, forever.
 (() => {
   'use strict';
-  const FAMILY = 'Lithium DM Sans';
+  // The user's font; DM Sans goes by a name of its own, with its bytes in BASE64.
+  const FAMILY = __LITHIUM_FAMILY__;
+  const BUNDLED = 'Lithium DM Sans';
+  // Empty for any other family: it is installed on the Mac, where the page finds it by name.
+  const BASE64 = '__LITHIUM_FONT__';
+  // Run again in an open page when the font changes in Settings: the running copy takes it.
+  if (window.__lithiumFont) {
+    window.__lithiumFont.use(FAMILY, BASE64);
+    return;
+  }
   const KEEP = 'data-lithium-font-keep';
   const PROBE = 'data-lithium-font-probe';
   // Lifts the rule for the element alone, not its subtree.
@@ -26,21 +36,27 @@
   const EDITABLE = '[contenteditable]:not([contenteditable="false" i])';
   const inEditor = (node) => Boolean((node.host ?? node).closest?.(EDITABLE));
 
-  const base64 = '__LITHIUM_FONT__';
-  const bytes = Uint8Array.fromBase64
-    ? Uint8Array.fromBase64(base64)
-    : Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-  // Built from bytes rather than a url() so the page's Content-Security-Policy can't block it.
-  document.fonts.add(new FontFace(FAMILY, bytes, { weight: '100 1000' }));
+  let bundled = false;
+  const addBundled = (base64) => {
+    if (!base64 || bundled) return;
+    bundled = true;
+    const bytes = Uint8Array.fromBase64
+      ? Uint8Array.fromBase64(base64)
+      : Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    // Built from bytes rather than a url() so the page's Content-Security-Policy can't block it.
+    document.fonts.add(new FontFace(BUNDLED, bytes, { weight: '100 1000' }));
+  };
+  addBundled(BASE64);
 
   const sheet = new CSSStyleSheet();
   // A layer's !important beats every unlayered !important of the site, whatever its specificity.
-  sheet.replaceSync(`@layer lithium-font {
+  const rule = (family) => `@layer lithium-font {
     :not(code, pre, kbd, samp, svg, math, code *, pre *, kbd *, samp *, svg *, math *,
       [${KEEP}], [${KEEP}] *, [${PROBE}], [${PROBE}] *, [${PROBE_SELF}]) {
-      font-family: "${FAMILY}", -apple-system, sans-serif !important;
+      font-family: "${family.replace(/["\\]/g, '\\$&')}", -apple-system, sans-serif !important;
     }
-  }`);
+  }`;
+  sheet.replaceSync(rule(FAMILY));
 
   // A page uses a handful of font stacks: each one is classified once.
   const specialStacks = new Map();
@@ -69,7 +85,9 @@
   };
 
   const OPTIONS = { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'], attributeOldValue: true };
-  const shadowRoots = new WeakSet();
+  let shadowRoots = new WeakSet();
+  // Off while Settings has the font off: nothing is watched or checked.
+  let running = true;
   const probed = [];
   let observer;
 
@@ -223,12 +241,13 @@
   };
 
   const queue = (node) => {
-    if (!node) return;
+    if (!node || !running) return;
     pending.add(node);
     schedule();
   };
 
   const queueChange = (element) => {
+    if (!running) return;
     changed.add(element);
     schedule();
   };
@@ -351,4 +370,31 @@
   };
   addEventListener('load', () => findLateShadowRoots(document));
   queue(document.documentElement);
+
+  // Settings' font changes reach open pages without a reload.
+  window.__lithiumFont = {
+    use(family, base64) {
+      addBundled(base64);
+      sheet.replaceSync(rule(family));
+      if (running) return;
+      running = true;
+      shadowRoots = new WeakSet();
+      observer.observe(document, OPTIONS);
+      queue(document.documentElement);
+    },
+    // The page gets its own fonts back. Its marks stay; the next start checks them all again.
+    stop() {
+      if (!running) return;
+      running = false;
+      observer.disconnect();
+      sheet.replaceSync('');
+      scheduled = false;
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      pending.clear();
+      changed.clear();
+      settling.forEach((id) => clearTimeout(id));
+      settling.clear();
+    },
+  };
 })();

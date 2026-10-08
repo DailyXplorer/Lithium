@@ -35,11 +35,10 @@ private struct LiveSiteInfo: View {
             usesSiteFont: url.flatMap { url in
                 guard PageStyle.offersSiteFont(url) else { return nil }
                 return Binding(
-                    get: { usesSiteFont ?? !PageStyle.usesDMSans(url, privateSession: tab.privateSession) },
-                    set: {
-                        usesSiteFont = $0
-                        PageStyle.setKeepsSiteFont($0, for: info.host, privateSession: tab.privateSession)
-                        browser.navigate(tab, .reload)
+                    get: { usesSiteFont ?? !PageStyle.usesPageFont(url, privateSession: tab.privateSession) },
+                    set: { keeps in
+                        usesSiteFont = keeps
+                        browser.changePageFont { PageStyle.setKeepsSiteFont(keeps, for: info.host, privateSession: tab.privateSession) }
                     }
                 )
             },
@@ -73,7 +72,7 @@ struct SiteInfoView: View {
     let cookieCount: Int?
     let canClear: Bool
     let permissions: [PermissionKind: PermissionDecision]
-    /// Nil where DM Sans wouldn't apply anyway.
+    /// Nil where the website font wouldn't apply anyway.
     var usesSiteFont: Binding<Bool>?
     var siteFontIsFixed = false
     @Binding var showsCertificate: Bool
@@ -147,7 +146,7 @@ struct SiteInfoView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .disabled(siteFontIsFixed)
-                    .help(siteFontIsFixed ? "Pages on this Mac keep their font" : "Instead of DM Sans")
+                    .help(siteFontIsFixed ? "Pages on this Mac keep their font" : "Instead of your font")
                 }
             }
 

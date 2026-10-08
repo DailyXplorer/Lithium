@@ -163,6 +163,8 @@ struct UISnapshotTests {
             ("extensions", "extensions", nil),
             ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
+            // Last: the page keeps the interface font it picked.
+            ("appearance-interface-font", "appearance", "render({ ...lastState, appearance: { ...lastState.appearance, interfaceFont: 'Avenir Next' } })"),
         ]
         for section in sections {
             _ = try await webView.evaluateJavaScript("location.hash = '\(section.hash)'; \(section.script ?? ""); 0")
@@ -438,6 +440,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
         let action = (message.body as? [String: Any])?["action"] as? String
         if action == "site" { return (["cookies": 14, "hasData": true], nil) }
+        if action == "fonts" { return (["DM Sans", "Avenir Next", "Georgia", "Helvetica Neue", "Menlo", "New York"], nil) }
         return (Self.state, nil)
     }
 
@@ -445,6 +448,7 @@ private final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         "appearance": [
             "sidebarStyle": "solid", "sidebarColor": "#D5DAF5", "defaultColor": "#D5DAF5", "sidebarReveal": "normal",
             "miniPlayer": true, "tabUsage": true, "websiteFont": true, "readerButton": true,
+            "interfaceFont": "DM Sans", "websiteFamily": "Georgia", "websiteFontName": "Georgia", "siteFontDomains": ["example.org"],
             "startPage": ["background": "gradient", "color": "#2B2D42", "gradientFrom": "#1F3A5F", "gradientTo": "#3D2C4E", "hasImage": false] as [String: Any],
         ] as [String: Any],
         "search": [

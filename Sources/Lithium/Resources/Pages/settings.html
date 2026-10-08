@@ -42,6 +42,8 @@
   #site-font-site { flex: 1; min-width: 0; border: 0; border-bottom: 1px solid var(--line); background: none;
     padding: 6px 0; font: inherit; color: inherit; outline: none; transition: border .12s; }
   #site-font-site:focus { border-color: var(--accent); }
+  .font-picker { max-width: 220px; }
+  .sample { font-size: 13px; }
   .snippet > div { min-width: 0; }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -91,11 +93,20 @@
       <div><div class="title">Picture</div></div>
       <button class="button" id="start-image">Choose…</button>
     </div>
-    <h3>Websites</h3>
+    <h3>Font</h3>
     <div class="row">
-      <div><div class="title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
+      <div><div class="title">Interface</div><div class="hint sample" id="interface-sample">The quick brown fox jumps over the lazy dog.</div></div>
+      <select class="font-picker" id="interface-font"></select>
+    </div>
+    <div class="row">
+      <div><div class="title" id="website-font-title">Use DM Sans on websites</div><div class="hint">Icons and code keep their fonts.</div></div>
       <label class="switch" for="website-font"><input type="checkbox" id="website-font" role="switch"><span></span></label>
     </div>
+    <div class="row" id="website-family-row">
+      <div><div class="title">Website font</div><div class="hint sample" id="website-sample">The quick brown fox jumps over the lazy dog.</div></div>
+      <select class="font-picker" id="website-family"><option value="">Same as interface</option></select>
+    </div>
+    <h3>Websites</h3>
     <div class="row">
       <div><div class="title">Show the reader button</div><div class="hint">On pages that look like articles. ⇧⌘R opens the reader on any page.</div></div>
       <label class="switch" for="reader-button"><input type="checkbox" id="reader-button" role="switch"><span></span></label>
@@ -339,6 +350,27 @@
     return `Updated ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
   };
 
+  const DM_SANS = 'DM Sans';
+  const fontStack = (family) => family === DM_SANS ? `"${DM_SANS}"` : `"${family.replace(/"/g, '')}", "${DM_SANS}", sans-serif`;
+  const fontOption = (value, label = value) => {
+    const option = el('option', { value, textContent: label });
+    if (value) option.style.fontFamily = fontStack(value);
+    return option;
+  };
+  // `shown` is the family the choice stands for, the interface's for "Same as interface".
+  // A family no longer on the Mac is still listed while it is the choice.
+  const pickFont = (select, value, shown) => {
+    if (![...select.options].some((option) => option.value === value)) select.append(fontOption(value));
+    select.value = value;
+    select.style.fontFamily = fontStack(shown);
+  };
+  // Hundreds of families, each in its own face: listed once, when the page opens.
+  const listFonts = (families) => {
+    $('#interface-font').replaceChildren(...families.map((family) => fontOption(family)));
+    $('#website-family').replaceChildren(fontOption('', 'Same as interface'), ...families.map((family) => fontOption(family)));
+    if (lastState) render(lastState);
+  };
+
   const render = (state) => {
     lastState = state;
     const { appearance, search, protections, permissions, appLinks, about } = state;
@@ -349,6 +381,14 @@
     document.querySelectorAll('#reveal button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarReveal));
     $('#mini-player').checked = appearance.miniPlayer;
     $('#tab-usage').checked = appearance.tabUsage;
+    // This page is Lithium's interface too: it takes the interface font as soon as it is picked.
+    document.body.style.fontFamily = appearance.interfaceFont === DM_SANS ? '' : fontStack(appearance.interfaceFont);
+    pickFont($('#interface-font'), appearance.interfaceFont, appearance.interfaceFont);
+    pickFont($('#website-family'), appearance.websiteFamily, appearance.websiteFontName);
+    $('#interface-sample').style.fontFamily = fontStack(appearance.interfaceFont);
+    $('#website-sample').style.fontFamily = fontStack(appearance.websiteFontName);
+    $('#website-font-title').textContent = `Use ${appearance.websiteFontName} on websites`;
+    $('#website-family-row').style.display = appearance.websiteFont ? '' : 'none';
     $('#website-font').checked = appearance.websiteFont;
     $('#reader-button').checked = appearance.readerButton;
     $('#site-fonts').replaceChildren(...(appearance.siteFontDomains.length ? appearance.siteFontDomains.map((site) => {
@@ -521,6 +561,8 @@
   $('#mini-player').onchange = (event) => call('setMiniPlayer', event.target.checked).then(render);
   $('#tab-usage').onchange = (event) => call('setTabUsage', event.target.checked).then(render);
   $('#website-font').onchange = (event) => call('setWebsiteFont', event.target.checked).then(render);
+  $('#interface-font').onchange = (event) => call('setInterfaceFont', event.target.value).then(render);
+  $('#website-family').onchange = (event) => call('setWebsiteFamily', event.target.value).then(render);
   $('#reader-button').onchange = (event) => call('setReaderButton', event.target.checked).then(render);
   $('#site-font-form').onsubmit = (event) => {
     event.preventDefault();
@@ -562,6 +604,7 @@
 
   showSection();
   call('state').then(render);
+  call('fonts').then(listFonts);
 </script>
 </body>
 </html>

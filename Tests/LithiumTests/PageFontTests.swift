@@ -272,4 +272,69 @@ struct PageFontTests {
         #expect(fonts["icon"] == "Font Awesome 6 Free")
         #expect(fonts["lateShadow"] == "Lithium DM Sans")
     }
+
+    /// A font the user picked from the Mac's: named, not shipped, and icons and code keep theirs.
+    @Test func pickedFontReplacesTextFontsButNotIconsCodeOrMath() async throws {
+        let script = PageStyle.fontScript(family: "Helvetica Neue")
+        #expect(script.source.count < PageStyle.fontScript(family: "DM Sans").source.count, "no DM Sans bytes")
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(script)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+
+        let fonts = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String: String])
+        #expect(fonts["loaded"] == "no")
+        #expect(fonts["text"] == "Helvetica Neue")
+        #expect(fonts["important"] == "Helvetica Neue")
+        #expect(fonts["shadowText"] == "Helvetica Neue")
+        #expect(fonts["fa"] == "Font Awesome 6 Free")
+        #expect(fonts["material"] == "Material Symbols Outlined")
+        #expect(fonts["code"] == "Menlo")
+    }
+
+    /// Settings changes the font of an open page, turns it off and on again, without a reload.
+    /// While off, the page's changes are left alone.
+    @Test func openPageChangesFontWithoutReload() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript(family: "DM Sans"))
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(Self.page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+        _ = try await webView.callAsyncJavaScript("window.marked = true", contentWorld: .page)
+
+        let run = { (source: String) async in _ = try? await webView.evaluateJavaScript(source, in: nil, contentWorld: .defaultClient) }
+        let font = { (id: String) async throws -> String? in
+            try await webView.callAsyncJavaScript("""
+                await new Promise((resolve) => setTimeout(resolve, 300));
+                return getComputedStyle(document.getElementById(id)).fontFamily.split(',')[0].replace(/"/g, '').trim();
+                """, arguments: ["id": id], contentWorld: .page) as? String
+        }
+        #expect(try await font("text") == "Lithium DM Sans")
+
+        await run(PageStyle.fontScript(family: "Helvetica Neue").source)
+        #expect(try await font("text") == "Helvetica Neue")
+        #expect(try await font("fa") == "Font Awesome 6 Free")
+
+        await run(PageStyle.fontOffSource)
+        #expect(try await font("text") != "Helvetica Neue")
+        _ = try await webView.callAsyncJavaScript("""
+            const late = document.createElement('i');
+            late.id = 'late';
+            late.className = 'fa fa-user';
+            document.body.append(late);
+            """, contentWorld: .page)
+        #expect(try await font("late") == "Font Awesome 6 Free")
+        let checked = try await webView.callAsyncJavaScript("return document.getElementById('late').hasAttribute('data-lithium-font-keep')", contentWorld: .page) as? Bool
+        #expect(checked == false, "nothing watched while off")
+
+        await run(PageStyle.fontScript(family: "DM Sans").source)
+        #expect(try await font("text") == "Lithium DM Sans")
+        #expect(try await font("late") == "Font Awesome 6 Free")
+        #expect(try await webView.callAsyncJavaScript("return window.marked === true", contentWorld: .page) as? Bool == true)
+    }
 }

@@ -47,7 +47,14 @@ struct AgentParityTests {
             document.addEventListener('input', show); document.addEventListener('change', show);
             </script>
             """),
-        "/vanish": (html, "<title>Vanish</title><p id='note'>Saving…</p><script>setTimeout(() => note.remove(), 300)</script>"),
+        // A field that takes 200 characters, on a page that takes its time over every key.
+        "/capped": (html, """
+            <title>Capped</title><style>body { margin: 0; font: 16px sans-serif } textarea { display: block; margin: 8px; width: 400px; height: 60px }</style>
+            <textarea aria-label="Pitch" id="pitch" maxlength="200"></textarea>
+            <textarea aria-label="Team" id="team"></textarea>
+            <script>pitch.addEventListener('keydown', () => { const end = Date.now() + 10; while (Date.now() < end) {} });</script>
+            """),
+        "/vanish": (html,"<title>Vanish</title><p id='note'>Saving…</p><script>setTimeout(() => note.remove(), 300)</script>"),
         "/wide": (html, "<title>Wide</title><style>body { margin: 0 } button { position: absolute; left: 1450px; top: 900px }</style><button onclick=\"document.title = 'clicked ' + innerWidth\">Far</button>"),
     ]
 
@@ -202,6 +209,23 @@ struct AgentParityTests {
             ]])
             #expect(stopped.code == "navigation_failed", "\(stopped.content)")
             #expect(stopped.message == "Field 1 of 2 (\(goTo)) made \(jump) load another page: the fields after it weren’t filled.", "\(stopped.content)")
+        }
+    }
+
+    /// More than a field takes, on a page slow to handle each key: the field keeps what it takes,
+    /// and none of the rest reaches the next field, which the next click focuses.
+    @Test func aFieldThatTakesLessKeepsTheRestOutOfTheNextField() async throws {
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "capped"))
+            let long = String(repeating: "abcdefghij", count: 26)
+            let filled = await client.call("fill_form", ["tab": .string(id), "fields": [
+                ["ref": .string(try await ref(client, id, "Pitch")), "type": "textbox", "value": .string(long)],
+                ["ref": .string(try await ref(client, id, "Team")), "type": "textbox", "value": "two"],
+            ]])
+            #expect(!filled.isError, "\(filled.content)")
+            let webView = try #require(client.tab(id)?.webView)
+            #expect(try await webView.callAsyncJavaScript("return pitch.value", contentWorld: .page) as? String == String(long.prefix(200)))
+            #expect(try await webView.callAsyncJavaScript("return team.value", contentWorld: .page) as? String == "two")
         }
     }
 

@@ -1136,6 +1136,11 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
+        // The find bar's count was the page before's: the new page is searched again.
+        if let browser, browser.find.isVisible, !browser.find.query.isEmpty, browser.selectedTab === self {
+            let find = browser.find
+            Task { await find.update(query: find.query, in: findTarget) }
+        }
         guard failedURL == nil else { return }
         if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
         browser?.tidyTitles.update(self)

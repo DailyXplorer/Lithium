@@ -306,6 +306,29 @@ struct NavigationTests {
         #expect(browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").count == 1)
     }
 
+    /// Once the tab goes to another page, the open find bar counts that page's matches, not the
+    /// last page's.
+    @Test func findCountsTheNewPageAfterANavigation() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/many": ("Content-Type: text/html", Data("<title>Many</title><p>lithium lithium lithium</p>".utf8)),
+            "/one": ("Content-Type: text/html", Data("<title>One</title><p>lithium</p>".utf8)),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "many"))
+        defer {
+            browser.find.hide()
+            browser.close(tab)
+        }
+        #expect(await waitUntil(30) { tab.webView.title == "Many" && !tab.webView.isLoading })
+        browser.find.show(focusingField: false)
+        await browser.find.update(query: "lithium", in: tab.findTarget)
+        #expect(browser.find.matchCount == 3)
+
+        tab.load(base.appending(path: "one"))
+        #expect(await waitUntil(15) { tab.webView.title == "One" && browser.find.matchCount == 1 })
+    }
+
     /// Closing the selected tab tells extensions (`chrome.tabs.onActivated`) which tab took over.
     @Test func closingTheSelectedTabTellsExtensionsWhichIsActive() async throws {
         let id = "ppoonnmmllkkjjiihhggffeeddccbbaa"

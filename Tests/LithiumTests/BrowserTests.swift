@@ -102,6 +102,25 @@ struct BrowserTests {
         #expect(background.webView.title == "Background")
     }
 
+    /// A tab whose first page never committed loads its address on Reload, and after its process
+    /// ends, rather than staying blank.
+    @Test func aTabThatNeverShowedItsPageLoadsItAgain() async {
+        let browser = Browser()
+        let first = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first")!)
+        defer { browser.close(first) }
+        first.stopLoading()
+        #expect(first.webView.backForwardList.currentItem == nil)
+        first.reload()
+        #expect(await waitUntil(120) { loaded(first) && first.webView.title == "First" })
+
+        let second = browser.newTab(url: URL(string: "data:text/html,<title>Second</title>second")!)
+        defer { browser.close(second) }
+        second.stopLoading()
+        #expect(second.webView.backForwardList.currentItem == nil)
+        second.webViewWebContentProcessDidTerminate(second.webView)
+        #expect(await waitUntil(120) { loaded(second) && second.webView.title == "Second" })
+    }
+
     /// The sidebar opens as the user left it, and a screenshot's passing flip is not remembered.
     @Test func sidebarVisibilitySurvivesRelaunch() {
         UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible)
@@ -829,6 +848,34 @@ struct BrowserTests {
         #expect(await waitUntil(10) { tab.title == "Final" })
         browser.saveNow()
         #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
+    }
+
+    /// Clearing the history leaves no closed tab for ⇧⌘T to bring back with its pages.
+    @Test func clearingTheHistoryForgetsClosedTabs() async {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Closed</title>")!)
+        browser.close(tab)
+        #expect(browser.canReopenClosedTab)
+        await browser.clearHistory()
+        #expect(!browser.canReopenClosedTab)
+    }
+
+    /// A session write that failed is tried again at the next save, though nothing changed since.
+    @Test func aFailedSessionWriteIsTriedAgain() throws {
+        let browser = Browser()
+        browser.saveNow()
+        // A folder where the file goes: the write fails.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try FileManager.default.createDirectory(at: SessionStore.fileURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: SessionStore.fileURL) }
+        let url = URL(string: "data:text/html,<title>\(UUID().uuidString)</title>")!
+        let tab = browser.newTab(url: url)
+        defer { browser.close(tab) }
+        browser.saveNow()
+
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.contains { $0.url == url })
     }
 
     /// The real Chrome Web Store, YouTube and SponsorBlock:

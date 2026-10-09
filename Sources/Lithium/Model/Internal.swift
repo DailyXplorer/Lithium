@@ -181,9 +181,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.setReaderButton(value as? Bool ?? true)
         case "setSiteFont":
             // Typed in by the user: a bare domain, or anything with one in it.
-            guard let entry = value as? [String: Any], let text = (entry["site"] as? String)?.trimmingCharacters(in: .whitespaces),
-                  let host = URL(string: text.contains("://") ? text : "https://\(text)")?.host()?.lowercased(),
-                  !host.isEmpty, !host.contains(" ") else { return (nil, "No site") }
+            guard let entry = value as? [String: Any], let text = entry["site"] as? String,
+                  let host = Self.siteFontHost(text) else { return (nil, "No site") }
             browser.changePageFont { PageStyle.setKeepsSiteFont(entry["keep"] as? Bool ?? true, for: host) }
         case "setSearchEngine":
             if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { defaults.set(engine.rawValue, forKey: SearchEngine.preferenceKey) }
@@ -273,8 +272,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "openPasswords":
             Passwords.open()
         case "clearHistory":
-            await browser.history.clear()
-            await browser.clearIcons()
+            await browser.clearHistory()
             return (await visits(browser, matching: ""), nil)
         case "history":
             return (await visits(browser, matching: value as? String ?? ""), nil)
@@ -285,6 +283,17 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             return (nil, "Unknown action")
         }
         return (state(browser), nil)
+    }
+
+    /// The host of a site typed in, or sent back by a Remove button. The list shows an IPv6
+    /// address bare, which reads as no host once in a URL without its brackets.
+    static func siteFontHost(_ text: String) -> String? {
+        let text = text.trimmingCharacters(in: .whitespaces)
+        var address = in6_addr()
+        if inet_pton(AF_INET6, text, &address) == 1 { return text.lowercased() }
+        guard let host = URL(string: text.contains("://") ? text : "https://\(text)")?.host()?.lowercased(),
+              !host.isEmpty, !host.contains(" ") else { return nil }
+        return host
     }
 
     /// A "#RRGGBB" color from a page, uppercased; nil for anything else.
@@ -331,10 +340,25 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
+    /// Every settings action answers with the whole state, many a second while a color is dragged:
+    /// what can't change meanwhile is read once. The WebKit Lithium runs is the one it launched
+    /// with, whatever Safari update comes after.
+    private static let safariVersion = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")?["CFBundleShortVersionString"] as? String ?? ""
+    /// Extension icons as PNG data URLs, by extension and version.
+    private var icons: [String: String] = [:]
+
+    private func icon(of entry: InstalledExtension, context: WKWebExtensionContext?) -> String {
+        guard let context else { return "" }
+        let key = "\(entry.id) \(entry.version)"
+        if let icon = icons[key] { return icon }
+        let icon = context.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? ""
+        icons[key] = icon
+        return icon
+    }
+
     private func state(_ browser: Browser) -> [String: Any] {
         let defaults = UserDefaults.standard
         let info = Bundle.main.infoDictionary ?? [:]
-        let safari = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
         return [
             "appearance": [
                 "sidebarStyle": defaults.string(forKey: Preference.sidebarStyle) ?? SidebarStyle.solid.rawValue,
@@ -408,12 +432,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 return [
                     "id": entry.id, "name": entry.name, "version": entry.version, "enabled": entry.isEnabled,
                     "hasOptions": context?.optionsPageURL != nil,
-                    "icon": context?.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? "",
+                    "icon": icon(of: entry, context: context),
                 ] as [String: Any]
             },
             "about": [
                 "version": info["CFBundleShortVersionString"] as? String ?? "dev",
-                "safari": safari?["CFBundleShortVersionString"] as? String ?? "",
+                "safari": Self.safariVersion,
                 "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             ],
         ]

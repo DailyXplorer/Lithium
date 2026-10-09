@@ -220,6 +220,11 @@ struct FingerprintingTests {
         let opaque = site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c")
         #expect(!opaque.isEmpty)
         #expect(opaque != site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c"))
+        // A blob inside a blob, however deep, is opaque too, and read at once.
+        let nested = site("blob:blob:https://www.example.co.uk/6f1c0a52")
+        #expect(!nested.isEmpty && nested != "example.co.uk")
+        let deep = site(String(repeating: "blob:", count: 30_000) + "https://www.example.co.uk/6f1c0a52")
+        #expect(!deep.isEmpty && deep != "example.co.uk")
 
         let privacy = Privacy()
         let script = { (address: String) in privacy.scripts(true, for: URL(string: address)!).first?.source }
@@ -232,10 +237,21 @@ struct FingerprintingTests {
         let privacy = Privacy()
         let url = URL(string: "https://news.example/")!
         let normal = try #require(privacy.scripts(true, for: url).first?.source)
-        let ephemeral = try #require(privacy.scripts(true, for: url, isPrivate: true).first?.source)
+        // Held, so the second store can't take the first one's identity.
+        let stores = [WKWebsiteDataStore.nonPersistent(), WKWebsiteDataStore.nonPersistent()]
+        let session = ObjectIdentifier(stores[0])
+        let ephemeral = try #require(privacy.scripts(true, for: url, privateSession: session).first?.source)
         #expect(!normal.contains("__LITHIUM_") && !ephemeral.contains("__LITHIUM_"))
         #expect(normal != ephemeral)
         #expect(try await canvasHash(normal, at: url.absoluteString) != canvasHash(ephemeral, at: url.absoluteString))
+
+        // The same session keeps its key; another one, or the next once it is forgotten, has its own.
+        #expect(privacy.scripts(true, for: url, privateSession: session).first?.source == ephemeral)
+        let other = ObjectIdentifier(stores[1])
+        let second = try #require(privacy.scripts(true, for: url, privateSession: other).first?.source)
+        #expect(second != ephemeral && second != normal)
+        privacy.forget(privateSession: session)
+        #expect(privacy.scripts(true, for: url, privateSession: session).first?.source != ephemeral)
     }
 
     /// Built-ins the page replaced before adding a frame don't keep the frame unprotected: a

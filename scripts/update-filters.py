@@ -133,7 +133,8 @@ def build(out: Path) -> None:
     # lists/ keeps each list as downloaded: the app's updater falls back to it when a list fails.
     (out / "lists").mkdir(parents=True, exist_ok=True)
     cache: dict[str, list[str]] = {}
-    manifest = {"format": FORMAT, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": {}, "sources": SOURCES_DIGEST}
+    # "converter" lets --check rebuild a set an older converter built (see complete()).
+    manifest = {"format": FORMAT, "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "groups": {}, "sources": SOURCES_DIGEST, "converter": CONVERTER_TAG}
     advanced: list[str] = []
     scriptlets: list[str] = []
     for group, names in GROUPS.items():
@@ -172,7 +173,7 @@ def build(out: Path) -> None:
 
 
 def complete(folder: Path) -> bool:
-    """Whether folder holds a whole set built from FilterSources.json: a manifest that parses, and every file it names."""
+    """Whether folder holds a whole set built from FilterSources.json with CONVERTER_TAG: a manifest that parses, and every file it names."""
     try:
         manifest = json.loads((folder / "manifest.json").read_text())
         lists = {group: entry["lists"] for group, entry in manifest["groups"].items()}
@@ -180,7 +181,7 @@ def complete(folder: Path) -> bool:
         return False
     names = {name for names in GROUPS.values() for name in names}
     files = [f"{group}.json" for group in GROUPS] + ["advanced.txt", "scriptlets.txt"] + [f"lists/{name}.txt" for name in names]
-    return manifest.get("format") == FORMAT and manifest.get("sources") == SOURCES_DIGEST and lists == GROUPS and all((folder / file).is_file() for file in files)
+    return manifest.get("format") == FORMAT and manifest.get("sources") == SOURCES_DIGEST and manifest.get("converter") == CONVERTER_TAG and lists == GROUPS and all((folder / file).is_file() for file in files)
 
 
 def main() -> int:

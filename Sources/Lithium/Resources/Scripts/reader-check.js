@@ -4,6 +4,11 @@
 
 if (window.__lithiumReader) return 'reading';
 if (!document.body) return 'none';
+// Asked when the page has nothing else to do, after its own work: its layout is done by then, so
+// the visibility checks below read it rather than force it. WebKit without requestIdleCallback
+// waits for the tasks already queued.
+await new Promise((resolve) => window.requestIdleCallback ? requestIdleCallback(resolve, { timeout: 1000 }) : setTimeout(resolve));
+if (!document.body) return 'none';
 const unlikely = /comment|sidebar|related|share|social|promo|newsletter|subscribe|sponsor|advert|cookie|footer|menu/i;
 const likely = /article|content|story|post|entry|main|body|text/i;
 // A page that says it is something else (a website, a product) needs twice the text: a landing

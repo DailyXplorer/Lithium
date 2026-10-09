@@ -579,6 +579,21 @@ struct NavigationTests {
         #expect(requests["/result"] == 1, "the form isn't sent again")
     }
 
+    /// A tab closed by an extension or an agent while its page's dialog is up takes the dialog
+    /// with it.
+    @Test func closingATabEndsItsPagesDialog() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Asks</title>")!)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = tab.webView
+        defer { window.contentView = nil }
+        #expect(await waitUntil(30) { tab.webView.title == "Asks" && !tab.webView.isLoading })
+        _ = try await tab.webView.evaluateJavaScript("setTimeout(() => confirm('Sure?')); 0")
+        #expect(await waitUntil(10) { window.attachedSheet != nil })
+        browser.close(tab)
+        #expect(await waitUntil(10) { window.attachedSheet == nil })
+    }
+
     /// A ZIP of `files` at its root, like a store package.
     private static func archive(_ files: [String: String]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")

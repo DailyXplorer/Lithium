@@ -190,6 +190,28 @@ struct ExtensionCompatibilityTests {
         #expect(title == "Extension page")
     }
 
+    /// But never to a file on the Mac, which would load with its folder, or to Lithium's own pages.
+    @Test func anExtensionCannotOpenFilesOrLithiumsPages() async throws {
+        let id = "llmmnnooppaabbccddeeffgghhiijjkk"
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(Self.pageFiles), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let context = try #require(browser.extensions.contexts[id])
+        let site = URL(string: "data:text/html,<title>Page</title>")!
+        let tab = browser.newTab(url: site)
+        defer { browser.close(tab) }
+
+        // `tabs.create` (`openNewTabUsing`) asks the same.
+        for url in [URL(filePath: "/etc/hosts"), Internal.settingsURL] {
+            await #expect(throws: Extensions.RefusedAddress.self) { try await tab.loadURL(url, for: context) }
+            #expect(tab.url == site)
+            #expect(!Extensions.mayOpen(url))
+        }
+        #expect(Extensions.mayOpen(URL(string: "https://example.com/")) && Extensions.mayOpen(nil))
+        #expect(Extensions.mayOpen(URL(string: "webkit-extension://\(id)/page.html")))
+    }
+
     private func waitForTitle(_ expected: String, in tab: Tab) async throws -> String? {
         var title: String?
         for _ in 0..<50 where title != expected {

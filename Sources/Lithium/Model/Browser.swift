@@ -1193,8 +1193,9 @@ final class Browser {
             Task { @MainActor in self?.sessionChanged() }
         }
         guard session != savedSession else { return }
-        SessionStore.save(session)
-        savedSession = session
+        // A failed write (a full disk) leaves the old file: the next save, the one at quit
+        // included, tries again rather than taking it as written.
+        if SessionStore.save(session) { savedSession = session }
     }
 
     private func sessionChanged() {
@@ -1212,6 +1213,14 @@ final class Browser {
     func saveNow() {
         saveSession()
         history.writeTitles()
+    }
+
+    /// "Clear history": the visits, their icons, and the closed tabs ⇧⌘T would bring back with
+    /// their back and forward lists.
+    func clearHistory() async {
+        await history.clear()
+        await clearIcons()
+        closedTabs.removeAll()
     }
 
     /// With the history cleared, the icons kept for the sites in it; favorites and open tabs

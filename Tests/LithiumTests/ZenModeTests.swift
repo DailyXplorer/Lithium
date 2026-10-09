@@ -127,6 +127,32 @@ struct ZenModeTests {
         #expect(await waitUntil(5) { addressField(in: window) == nil })
     }
 
+    /// Out of Zen mode too, Escape, Return and a click outside the address bar leave the keyboard
+    /// on the page, not on the window where keys beep.
+    @Test func endingAnAddressEditGivesTheKeyboardToThePage() async throws {
+        let (browser, tab, window) = try await shownBrowser(zen: false)
+        defer { window.orderOut(nil) }
+        let url = try #require(tab.webView.url)
+
+        for command in [#selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.insertNewline(_:))] {
+            browser.requestAddressFocus()
+            #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+            let editor = try #require(addressEditor(in: window))
+            editor.string = url.absoluteString
+            editor.doCommand(by: command)
+            #expect(window.firstResponder === tab.contentView, "\(command): \(String(describing: window.firstResponder))")
+        }
+
+        browser.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+        let click = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 640, y: 300), modifierFlags: [],
+                                                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        browser.endEditingIfOutside(click)
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+        browser.tabs.forEach(browser.close)
+    }
+
     /// ⇧⌘S in Zen mode brings the top bar, whose button the summary hangs from, and holds it while
     /// the summary is open. The summary is one page's: another tab shown, or the page moving on,
     /// closes it, even with no button there to see the change.

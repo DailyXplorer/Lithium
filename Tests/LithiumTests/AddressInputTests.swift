@@ -74,6 +74,15 @@ struct TrackingParametersTests {
         let url = URL(string: "https://example.com/?token=abc==&utm_source=x&flag&&next=/a?b=c&UTM_Medium=y")!
         #expect(TrackingParameters.stripped(url)?.absoluteString == "https://example.com/?token=abc==&flag&&next=/a?b=c")
     }
+
+    /// Marketo's unsubscribe and web-view pages find the recipient by `mkt_tok`.
+    @Test func keepsTheMarketoTokenWhereUnsubscribingNeedsIt() {
+        let unsubscribe = URL(string: "https://pages.example.com/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=abc&utm_source=mail")!
+        #expect(TrackingParameters.stripped(unsubscribe)?.absoluteString == "https://pages.example.com/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=abc")
+        #expect(TrackingParameters.stripped(URL(string: "https://na-ab12.marketo.com/m/emailWebview?mkt_tok=abc")!) == nil)
+        #expect(TrackingParameters.stripped(URL(string: "https://example.com/prefs?mkt_unsubscribe=1&mkt_tok=abc")!) == nil)
+        #expect(TrackingParameters.stripped(URL(string: "https://shop.example/p?id=1&mkt_tok=abc")!)?.absoluteString == "https://shop.example/p?id=1")
+    }
 }
 
 struct FilterPreprocessorTests {

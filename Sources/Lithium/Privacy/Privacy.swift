@@ -37,6 +37,14 @@ final class Privacy {
     @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
     /// Per private session, so nothing in it matches the same site in another session or a normal tab.
     @ObservationIgnored private var privateFarblingKeys: [ObjectIdentifier: SymmetricKey] = [:]
+    /// Farbling as built for a site (and private session): each main-frame navigation needs it,
+    /// and building it means three passes over a 46 KB template and three HMACs.
+    @ObservationIgnored private var farblingSources: [FarblingSite: String] = [:]
+    private struct FarblingSite: Hashable {
+        let privateSession: ObjectIdentifier?
+        let site: String
+    }
+    private static let farblingSourcesLimit = 8
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
 
@@ -309,6 +317,8 @@ final class Privacy {
     func forget(privateSession: ObjectIdentifier) {
         privateExceptions[privateSession] = nil
         privateFarblingKeys[privateSession] = nil
+        // A later session may reuse the identifier: it mustn't get this one's seeds.
+        farblingSources = farblingSources.filter { $0.key.privateSession != privateSession }
     }
 
     private func farblingKey(for privateSession: ObjectIdentifier?) -> SymmetricKey {
@@ -344,10 +354,19 @@ final class Privacy {
         guard enabled else { return [] }
         // Every frame gets the top page's site, as in Brave: a frame embedded on many sites
         // farbles differently on each.
-        let farbling = WKUserScript(source: Self.farbling(farblingTemplate, key: farblingKey(for: privateSession), site: Self.farblingSite(url)),
+        let farbling = WKUserScript(source: farblingSource(for: url, privateSession: privateSession),
                                     injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
+    }
+
+    func farblingSource(for url: URL, privateSession: ObjectIdentifier? = nil) -> String {
+        let site = FarblingSite(privateSession: privateSession, site: Self.farblingSite(url))
+        if let source = farblingSources[site] { return source }
+        let source = Self.farbling(farblingTemplate, key: farblingKey(for: privateSession), site: site.site)
+        if farblingSources.count >= Self.farblingSourcesLimit { farblingSources.removeAll(keepingCapacity: true) }
+        farblingSources[site] = source
+        return source
     }
 
     /// Advanced rules looked up for the frame's own site; the script runs only in frames of that host.

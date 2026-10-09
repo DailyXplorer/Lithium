@@ -278,7 +278,10 @@ private struct AddressField: NSViewRepresentable {
         field.onFocusChange = { editing in
             let coordinator = context.coordinator
             let browser = coordinator.parent.browser
-            if editing { browser.suggestions.editedTabID = browser.selectedTabID }
+            if editing {
+                browser.suggestions.editedTabID = browser.selectedTabID
+                browser.suggestions.editingBegan()
+            }
             coordinator.parent.isEditing = editing
             browser.isEditingAddress = editing
         }
@@ -358,7 +361,8 @@ private struct AddressField: NSViewRepresentable {
             if NSEvent.pressedMouseButtons == 0 {
                 suggestions.clear()
             } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { suggestions.clear() }
+                suggestions.clearAfterMouseUp()
+                DispatchQueue.main.async { [weak field] in suggestions.focusSettled(on: field?.window?.firstResponder) }
             }
         }
     }

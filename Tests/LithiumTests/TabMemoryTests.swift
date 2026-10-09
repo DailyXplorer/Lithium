@@ -75,6 +75,32 @@ struct TabMemoryTests {
         #expect(await waitUntil(10) { !isRunning(process) }, "its page's process exits")
     }
 
+    /// A prompt left unanswered holds the page's delegate call and its web view: sleep answers it
+    /// no, as closing the tab does.
+    @Test func sleepingTabCancelsItsPendingPrompts() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil })
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!)
+        defer { browser.close(other) }
+        let host = "camera.example"
+        defer { browser.permissions.set(nil, for: .camera, host: host) }
+        browser.appLinks.appOpening = { _ in URL(fileURLWithPath: "/Applications/Example.app") }
+        let asked = Task { await browser.permissions.request([.camera], host: host, tabID: tab.id) }
+        let linked = Task { await browser.appLinks.open(URL(string: "example-app:join")!, from: host, tabID: tab.id, isPrivate: false) }
+        #expect(await waitUntil(10) {
+            browser.permissions.pending.contains { $0.tabID == tab.id } && browser.appLinks.pending.contains { $0.tabID == tab.id }
+        })
+
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        #expect(tab.isAsleep)
+        #expect(await asked.value == false)
+        await linked.value
+        #expect(!browser.permissions.pending.contains { $0.tabID == tab.id })
+        #expect(!browser.appLinks.pending.contains { $0.tabID == tab.id })
+    }
+
     /// Reload on a sleeping tab (its sidebar menu) wakes it on its page, rather than leaving an
     /// empty web view on a tab that stays asleep.
     @Test func reloadingASleepingTabWakesIt() async throws {

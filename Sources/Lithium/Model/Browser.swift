@@ -1167,8 +1167,9 @@ final class Browser {
             Task { @MainActor in self?.sessionChanged() }
         }
         guard session != savedSession else { return }
-        SessionStore.save(session)
-        savedSession = session
+        // A failed write (a full disk) leaves the old file: the next save, the one at quit
+        // included, tries again rather than taking it as written.
+        if SessionStore.save(session) { savedSession = session }
     }
 
     private func sessionChanged() {

@@ -41,13 +41,17 @@ enum SessionStore {
         StoredFile.read(Session.self, at: url) ?? Session()
     }
 
-    static func save(_ session: Session) {
+    /// Whether the session was written: one that wasn't is tried again at the next save.
+    @discardableResult
+    static func save(_ session: Session) -> Bool {
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(session).write(to: fileURL, options: .atomic)
             writes += 1
+            return true
         } catch {
             NSLog("Lithium: failed to save the session: %@", error.localizedDescription)
+            return false
         }
     }
 }

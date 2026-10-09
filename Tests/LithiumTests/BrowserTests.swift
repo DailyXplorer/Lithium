@@ -831,6 +831,24 @@ struct BrowserTests {
         #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
     }
 
+    /// A session write that failed is tried again at the next save, though nothing changed since.
+    @Test func aFailedSessionWriteIsTriedAgain() throws {
+        let browser = Browser()
+        browser.saveNow()
+        // A folder where the file goes: the write fails.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try FileManager.default.createDirectory(at: SessionStore.fileURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: SessionStore.fileURL) }
+        let url = URL(string: "data:text/html,<title>\(UUID().uuidString)</title>")!
+        let tab = browser.newTab(url: url)
+        defer { browser.close(tab) }
+        browser.saveNow()
+
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.contains { $0.url == url })
+    }
+
     /// The real Chrome Web Store, YouTube and SponsorBlock:
     /// `LITHIUM_LIVE_TESTS=1 CFFIXED_USER_HOME=$(mktemp -d) swift test --filter BrowserTests/addsAnExtension`.
     /// Adds SponsorBlock with the store's own button and Lithium's confirmation, then watches it skip a sponsor.

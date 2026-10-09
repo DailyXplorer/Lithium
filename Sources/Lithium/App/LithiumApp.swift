@@ -67,9 +67,9 @@ struct BrowserCommands: Commands {
                 .disabled(browser.agent?.state != .listening)
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") { browser.newTabFocusingAddress() }
+            Button("New Tab") { browser.focusAddressFromMenu(newTab: true) }
                 .keyboardShortcut("t")
-            Button("Open Location…") { browser.requestAddressFocus() }
+            Button("Open Location…") { browser.focusAddressFromMenu(newTab: false) }
                 .keyboardShortcut("l")
             Button("Move to Main Window") {
                 guard let tab = browser.quickLinks.keyTab else { return }

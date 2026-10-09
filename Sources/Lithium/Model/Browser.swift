@@ -1015,6 +1015,13 @@ final class Browser {
         addressFocusToken &+= 1
     }
 
+    /// The menu's New Tab and Open Location: the address field is the main window's, which comes
+    /// forward first, or from a link's window the keys typed next would go on to the link's page.
+    func focusAddressFromMenu(newTab: Bool) {
+        window?.makeKeyAndOrderFront(nil)
+        if newTab { newTabFocusingAddress() } else { requestAddressFocus() }
+    }
+
     /// The sidebar's order, top to bottom, space after space. Extensions and agents see every space.
     var navigationOrder: [Tab] {
         spaces.isEmpty ? navigationOrder(in: Space.mainID) : spaces.flatMap { navigationOrder(in: $0.id) }

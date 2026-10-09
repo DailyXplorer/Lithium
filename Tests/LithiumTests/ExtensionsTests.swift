@@ -337,6 +337,32 @@ struct ExtensionsTests {
         #expect(extensions.contexts[id] != nil)
     }
 
+    /// The day's check was recorded before the download, so one that failed (offline) left the
+    /// update for the next day. It's tried again on the next check; once installed, it waits a day.
+    @Test(.timeLimit(.minutes(1))) func aFailedUpdateDownloadIsTriedAgain() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        var asked = 0
+        extensions.latestVersions = { _ in
+            asked += 1
+            return [self.id: "1.10"]
+        }
+        extensions.downloadArchive = { _ in throw URLError(.notConnectedToInternet) }
+
+        await extensions.updateIfDue()
+        #expect(extensions.installed.first?.version == "1.0")
+
+        let newer = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.10"}"#)
+        extensions.downloadArchive = { _ in newer }
+        await extensions.updateIfDue()
+        #expect(asked == 2)
+        #expect(extensions.installed.first?.version == "1.10")
+        await extensions.updateIfDue()
+        #expect(asked == 2)
+    }
+
     /// Only launch checked for updates, so a Lithium left running never got any. Coming back to
     /// it checks too, once a day at most, and checks overlapping ask the store once.
     @Test(.timeLimit(.minutes(1))) func comingBackToLithiumChecksForUpdates() async throws {

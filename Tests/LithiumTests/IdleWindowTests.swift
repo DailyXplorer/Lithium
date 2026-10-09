@@ -12,9 +12,10 @@ import WebKit
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil
     && ProcessInfo.processInfo.environment["LITHIUM_LIVE_TESTS"] == "1"))
 struct IdleWindowTests {
-    /// With amazon.fr idle, Lithium's main thread runs no SwiftUI repeating animation, and wakes up
-    /// only for the page's own endless animations: once those are paused, it rests.
-    @Test func amazonIdleWakesOnlyForItsOwnAnimations() async throws {
+    /// With amazon.fr idle, Lithium's main thread runs no SwiftUI repeating animation, and rests once
+    /// the page's own endless animations are paused. A diagnostic: it passes on main too, and only
+    /// shows the wakeups follow the page's animations, not what they cost on screen.
+    @Test func amazonIdleRunsNoRepeatingAnimation() async throws {
         let wakeups = WindowWakeups()
         defer { wakeups.stop() }
 

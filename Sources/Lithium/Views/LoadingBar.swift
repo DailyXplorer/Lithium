@@ -59,35 +59,40 @@ struct LoadingBar: View {
             let glowStart = max(0, glowHead - Self.headWidth)
             let glowOpacity = fade * (0.5 + 0.38 * pulse)
 
-            ZStack(alignment: .bottomLeading) {
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.45 + 0.19 * fade))
-                    .frame(width: head, height: 1.5)
-                    .mask(alignment: .leading) {
-                        let fadeStart = -Self.exitFeather + exit * (head + Self.exitFeather)
-                        LinearGradient(
-                            stops: [.init(color: .clear, location: 0), .init(color: .black, location: 1)],
-                            startPoint: .init(x: fadeStart / max(head, 1), y: 0),
-                            endPoint: .init(x: (fadeStart + Self.exitFeather) / max(head, 1), y: 0)
-                        )
-                    }
+            // Only while a load shows, one line per load: removing the views that read `pulse` is
+            // what ends its `repeatForever`; a later animation on `pulse` doesn't cancel it.
+            if load.isVisible {
+                ZStack(alignment: .bottomLeading) {
+                    Capsule()
+                        .fill(Color.accentColor.opacity(0.45 + 0.19 * fade))
+                        .frame(width: head, height: 1.5)
+                        .mask(alignment: .leading) {
+                            let fadeStart = -Self.exitFeather + exit * (head + Self.exitFeather)
+                            LinearGradient(
+                                stops: [.init(color: .clear, location: 0), .init(color: .black, location: 1)],
+                                startPoint: .init(x: fadeStart / max(head, 1), y: 0),
+                                endPoint: .init(x: (fadeStart + Self.exitFeather) / max(head, 1), y: 0)
+                            )
+                        }
 
-                glow(width: min(width, glowHead) - glowStart, opacity: glowOpacity)
-                    .frame(height: 4)
-                    .blur(radius: 3)
-                    .offset(x: glowStart)
+                    glow(width: min(width, glowHead) - glowStart, opacity: glowOpacity)
+                        .frame(height: 4)
+                        .blur(radius: 3)
+                        .offset(x: glowStart)
 
-                glow(width: min(width, glowHead) - glowStart, opacity: glowOpacity)
-                    .frame(height: 1.5)
-                    .offset(x: glowStart)
+                    glow(width: min(width, glowHead) - glowStart, opacity: glowOpacity)
+                        .frame(height: 1.5)
+                        .offset(x: glowStart)
 
-                Circle()
-                    .fill(Color.white.opacity(0.85 * glowOpacity))
-                    .frame(width: 4, height: 4)
-                    .blur(radius: 0.8)
-                    .offset(x: min(width, glowHead) - 2, y: 1.25)
+                    Circle()
+                        .fill(Color.white.opacity(0.85 * glowOpacity))
+                        .frame(width: 4, height: 4)
+                        .blur(radius: 0.8)
+                        .offset(x: min(width, glowHead) - 2, y: 1.25)
+                }
+                .frame(width: width, height: proxy.size.height, alignment: .bottomLeading)
+                .id(load.generation)
             }
-            .frame(width: width, height: proxy.size.height, alignment: .bottomLeading)
         }
         .opacity(load.isVisible ? (reduceMotion ? fade : 1) : 0)
         .allowsHitTesting(false)

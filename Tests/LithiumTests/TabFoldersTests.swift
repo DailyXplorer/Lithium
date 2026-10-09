@@ -194,9 +194,12 @@ struct TabFoldersTests {
         #expect(browser.regularTabs.map(\.id) == [b.id])
         #expect(browser.selectedTab === b)
         browser.reopenClosedTab()
-        #expect(browser.selectedTab?.url == page("a"))
+        #expect(browser.selectedTab?.url == page("c"))
         #expect(browser.selectedTab?.folderID == nil)
         #expect(browser.regularTabs.first === browser.selectedTab)
+        // The rest come back above, in the folder's order.
+        browser.reopenClosedTab()
+        #expect(browser.regularTabs.map(\.url) == [page("a"), page("c"), page("b")])
     }
 
     /// A closed tab reopens in its folder, in its place; a copy stays in the folder, just below.

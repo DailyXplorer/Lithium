@@ -57,6 +57,18 @@ struct EnergySavingTests {
         #expect(browser.idleInterval == Browser.shortIdleInterval)
     }
 
+    /// Off stays off in Low Power Mode or when the Mac runs hot; On battery follows the Mac.
+    @Test func offIgnoresTheMacSavingEnergy() {
+        UserDefaults.standard.removeObject(forKey: "tabIdleSeconds")
+        defer { UserDefaults.standard.removeObject(forKey: Preference.energySaving) }
+        let browser = Browser()
+        browser.energy.isOnLimitedPower = { false }
+        browser.energy.mode = .off
+        #expect(browser.idleInterval(macSavesEnergy: true) == 10 * 60)
+        browser.energy.mode = .onBattery
+        #expect(browser.idleInterval(macSavesEnergy: true) == Browser.shortIdleInterval)
+    }
+
     /// Only a background tab WebKit hears nothing from pauses: never the tab shown, its split
     /// partner, a tab playing sound or muted by the user, one in a call, or one WebKit can't tell
     /// about. Nothing pauses with energy saving off.
@@ -116,9 +128,15 @@ struct EnergySavingTests {
         #expect(BackgroundThrottling.increases(in: open.webView) == true)
         let later = browser.newTab(url: URL(string: "data:text/html,later")!)
         #expect(BackgroundThrottling.increases(in: later.webView) == true)
+        // A link's own window, made while it is on, never shown.
+        browser.quickLinks.showWindow = { _, _ in nil }
+        let link = try #require(browser.quickLinks.open(URL(string: "data:text/html,link")!))
+        defer { browser.quickLinks.close(link) }
+        #expect(BackgroundThrottling.increases(in: link.webView) == true)
 
         browser.energy.mode = .off
         #expect(BackgroundThrottling.increases(in: open.webView) == standard)
         #expect(BackgroundThrottling.increases(in: later.webView) == standard)
+        #expect(BackgroundThrottling.increases(in: link.webView) == standard)
     }
 }

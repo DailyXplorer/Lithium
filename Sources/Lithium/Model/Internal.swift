@@ -265,7 +265,10 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             await browser.clearHistory()
             return (await visits(browser, matching: ""), nil)
         case "history":
-            return (await visits(browser, matching: value as? String ?? ""), nil)
+            // A search, or the next page of one: `{ query, before }`, the id of the last visit shown.
+            let more = value as? [String: Any]
+            let before = more?["before"] as? Int64 ?? (more?["before"] as? NSNumber)?.int64Value
+            return (await visits(browser, matching: more?["query"] as? String ?? value as? String ?? "", before: before), nil)
         case "deleteVisit":
             if let id = value as? Int64 ?? (value as? NSNumber)?.int64Value { browser.history.delete(id: id) }
             return (nil, nil)
@@ -298,6 +301,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     static let agentLogPageLength = 500
+    /// `history.html` asks for the next page once it has shown a full one.
+    static let historyPageLength = 500
 
     /// The hub's while access is on, so the page never writes over a line being added.
     private func agentLog(_ browser: Browser) -> AgentLog {
@@ -323,8 +328,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     /// Read off the main thread; nil for a query the page already replaced with a newer one.
-    private func visits(_ browser: Browser, matching query: String) async -> [[String: Any]]? {
-        await browser.history.visitsInBackground(matching: query)?.map {
+    private func visits(_ browser: Browser, matching query: String, before: Int64? = nil) async -> [[String: Any]]? {
+        await browser.history.visitsInBackground(matching: query, before: before, limit: Self.historyPageLength)?.map {
             ["id": $0.id, "url": $0.url.absoluteString, "title": $0.title, "time": $0.date.timeIntervalSince1970 * 1000]
         }
     }

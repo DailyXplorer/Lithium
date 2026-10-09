@@ -181,9 +181,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.setReaderButton(value as? Bool ?? true)
         case "setSiteFont":
             // Typed in by the user: a bare domain, or anything with one in it.
-            guard let entry = value as? [String: Any], let text = (entry["site"] as? String)?.trimmingCharacters(in: .whitespaces),
-                  let host = URL(string: text.contains("://") ? text : "https://\(text)")?.host()?.lowercased(),
-                  !host.isEmpty, !host.contains(" ") else { return (nil, "No site") }
+            guard let entry = value as? [String: Any], let text = entry["site"] as? String,
+                  let host = Self.siteFontHost(text) else { return (nil, "No site") }
             browser.changePageFont { PageStyle.setKeepsSiteFont(entry["keep"] as? Bool ?? true, for: host) }
         case "setSearchEngine":
             if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { defaults.set(engine.rawValue, forKey: SearchEngine.preferenceKey) }
@@ -284,6 +283,17 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             return (nil, "Unknown action")
         }
         return (state(browser), nil)
+    }
+
+    /// The host of a site typed in, or sent back by a Remove button. The list shows an IPv6
+    /// address bare, which reads as no host once in a URL without its brackets.
+    static func siteFontHost(_ text: String) -> String? {
+        let text = text.trimmingCharacters(in: .whitespaces)
+        var address = in6_addr()
+        if inet_pton(AF_INET6, text, &address) == 1 { return text.lowercased() }
+        guard let host = URL(string: text.contains("://") ? text : "https://\(text)")?.host()?.lowercased(),
+              !host.isEmpty, !host.contains(" ") else { return nil }
+        return host
     }
 
     /// A "#RRGGBB" color from a page, uppercased; nil for anything else.

@@ -44,6 +44,17 @@ struct PageFontTests {
         return fonts;
         """
 
+    /// A site exception for an IPv6 address is listed bare, and its Remove button sends that back:
+    /// it names the same site as the address typed in with brackets.
+    @Test func anIPv6SiteFontExceptionCanBeRemoved() {
+        #expect(InternalBridge.siteFontHost("2001:db8::1") == "2001:db8::1")
+        #expect(InternalBridge.siteFontHost(" [2001:DB8::1] ").map(SiteInfo.registrable) == "2001:db8::1")
+        #expect(InternalBridge.siteFontHost("https://Example.com/page") == "example.com")
+        #expect(InternalBridge.siteFontHost("example.com") == "example.com")
+        #expect(InternalBridge.siteFontHost("192.168.0.1") == "192.168.0.1")
+        #expect(InternalBridge.siteFontHost("") == nil)
+    }
+
     @Test func dmSansReplacesTextFontsButNotIconsCodeOrMath() async throws {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addUserScript(PageStyle.fontScript)

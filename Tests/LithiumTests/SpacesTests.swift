@@ -243,6 +243,93 @@ struct SpacesTests {
         #expect(lost.selectedTab?.spaceID == Space.mainID)
     }
 
+    /// A file with more spaces than any build saves (edited by hand) brings back the first
+    /// `Space.limit`, the others' tabs in the main space, rather than trap in the Tabs menu.
+    @Test func extraSavedSpacesAreLeftOut() {
+        let extra = (0..<Space.limit + 1).map { Space(id: UUID(), name: "Space \($0)", color: nil, icon: Space.main.icon) }
+        let last = extra[extra.count - 1]
+        SessionStore.save(Session(tabs: [.init(url: page("last"), title: "Last", customTitle: nil, pinID: nil, spaceID: last.id)],
+                                  selectedIndex: 0, spaces: [.main] + extra, spaceID: last.id))
+        PinStore.save([])
+        let browser = Browser()
+        defer { reset(browser) }
+        #expect(browser.spaces.count == Space.limit)
+        #expect(browser.spaces.first == .main)
+        #expect(!browser.spaces.contains { $0.id == last.id })
+        #expect(browser.currentSpaceID == Space.mainID)
+        #expect(browser.regularTabs.map(\.url) == [page("last")])
+    }
+
+    /// The address bar suggests another space's tabs and favorites only while neither space keeps
+    /// its cookies apart: a separate space's are another identity's.
+    @Test func suggestionsStayInsideSpacesWithTheirOwnCookies() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        browser.newTab(url: page("home-mail"))
+        browser.addSpace(browser.newSpaceDraft())
+        browser.newTab(url: page("side-mail"))
+        var work = browser.newSpaceDraft()
+        work.separatesData = true
+        browser.addSpace(work)
+        browser.newTab(url: page("work-mail"))
+        browser.pin(browser.newTab(url: page("work-favorite-mail")))
+        defer { browser.suggestions.clear() }
+        func suggested() -> Set<URL> { Set(browser.suggestions.items.compactMap(\.url)) }
+
+        browser.addressTextChanged("mail")
+        #expect(suggested() == [page("work-mail"), page("work-favorite-mail")])
+
+        browser.switchToSpace(Space.mainID)
+        browser.addressTextChanged("mail")
+        #expect(suggested() == [page("home-mail"), page("side-mail")], "spaces sharing cookies still suggest each other's")
+    }
+
+    /// A space keeping its cookies apart has its own permission answers, protections and site
+    /// fonts: another account there isn't granted what the main one was. They go with the space.
+    @Test func spacesWithTheirOwnCookiesKeepTheirOwnSiteChoices() async {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let host = "choices-\(UUID().uuidString.prefix(8).lowercased()).example"
+        let url = URL(string: "https://\(host)/")!
+        defer {
+            browser.permissions.set(nil, for: .camera, host: host)
+            browser.privacy.setEnabled(true, host: host)
+        }
+        let home = browser.newTab(url: page("home"))
+        browser.addSpace(browser.newSpaceDraft())
+        let side = browser.newTab(url: page("side"))
+        var work = browser.newSpaceDraft()
+        work.separatesData = true
+        browser.addSpace(work)
+        let tab = browser.newTab(url: page("work"))
+        let secret = browser.newTab(url: page("private"), privateStore: .nonPersistent(), openedFrom: tab)
+        #expect(home.siteSpace == nil && side.siteSpace == nil && secret.siteSpace == nil)
+        #expect(tab.siteSpace == work.id)
+
+        // Allowed in the main space, the camera is asked for again in Work; denied there, it
+        // stays allowed in the main space.
+        browser.permissions.answer(PermissionRequest(tabID: home.id, host: host, kinds: [.camera]), allow: true)
+        #expect(await browser.permissions.request([.camera], host: host, tabID: home.id))
+        #expect(browser.permissions.decisions(for: host, privateSession: nil, space: work.id).isEmpty)
+        browser.permissions.answer(PermissionRequest(tabID: tab.id, host: host, kinds: [.camera], space: work.id), allow: false)
+        #expect(await !browser.permissions.request([.camera], host: host, tabID: tab.id, space: work.id))
+        #expect(browser.permissions.decisions(for: host, privateSession: nil) == [.camera: .allow])
+
+        // Protections and the site's font: the space's own choice wins, then the shared one.
+        browser.privacy.setEnabled(true, for: url, space: work.id)
+        browser.privacy.setEnabled(false, host: host)
+        #expect(!browser.privacy.isEnabled(for: url))
+        #expect(browser.privacy.isEnabled(for: url, space: work.id))
+        PageStyle.setKeepsSiteFont(true, for: host, space: work.id)
+        #expect(PageStyle.keepsSiteFont(host, space: work.id))
+        #expect(!PageStyle.keepsSiteFont(host))
+
+        browser.deleteSpace(work.id)
+        #expect(browser.permissions.decisions(for: host, privateSession: nil, space: work.id).isEmpty)
+        #expect(!browser.privacy.isEnabled(for: url, space: work.id), "back to the shared choice")
+        #expect(!PageStyle.keepsSiteFont(host, space: work.id))
+    }
+
     /// A link from another app opens in the space shown; a closed tab reopens in its own space,
     /// which comes back with it; a copy stays in its space.
     @Test func linksFromOtherAppsOpenInTheSpaceShown() throws {

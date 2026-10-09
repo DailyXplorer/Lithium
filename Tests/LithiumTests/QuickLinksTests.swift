@@ -96,6 +96,35 @@ struct QuickLinksTests {
         #expect(SessionStore.load().tabs.contains { $0.url == base })
     }
 
+    /// With a link's window in front, the menu's protections and inspector act on the link's page,
+    /// not the main window's tab out of sight; popping out a video waits for the main window.
+    @Test func pageCommandsFollowTheLinksWindow() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": Self.page])
+        defer { listener.cancel() }
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let host = try #require(Privacy.siteHost(base))
+        defer { browser.privacy.setEnabled(true, host: host) }
+        browser.tabs.forEach(browser.close)
+
+        let tab = try #require(browser.quickLinks.open(base))
+        defer { browser.quickLinks.close(tab) }
+        browser.quickLinks.windowBecameKey(tab)
+        #expect(browser.selectedTab == nil)
+        #expect(browser.canShowWebInspector)
+        browser.setProtections(false, for: browser.commandTab)
+        #expect(!browser.privacy.isEnabled(for: base))
+        browser.setProtections(true, for: browser.commandTab)
+
+        let main = browser.newTab(url: URL(string: "data:text/html,main")!)
+        defer { browser.tabs.forEach(browser.close) }
+        #expect(browser.selectedTab === main)
+        #expect(browser.commandTab === tab)
+        #expect(!browser.videoPopout.canShowSelected)
+        browser.quickLinks.windowResignedKey(tab)
+        #expect(browser.videoPopout.canShowSelected)
+    }
+
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
     /// steps through that page's matches, and Escape there closes the bar.
     @Test func findWorksInALinksWindow() async throws {

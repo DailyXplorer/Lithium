@@ -221,10 +221,12 @@ final class Browser {
         }
         let partner = shownPartner
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
+        // Unsaved input is spared for one more idle interval: typed on screen, it is never newer than the
+        // tab's going idle, so `interval` alone would never spare it. "Sleep Other Tabs" (none) is the user's own choice.
         return tabs.filter { tab in
             candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
                 && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
-                && !(sparingPopups && tab.hasUnsavedInput)
+                && !(sparingPopups && tab.hasUnsavedInput(within: 2 * interval))
                 && tab.canSleep(idleFor: interval)
         }
     }

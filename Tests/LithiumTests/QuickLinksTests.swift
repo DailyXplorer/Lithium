@@ -60,6 +60,30 @@ struct QuickLinksTests {
         #expect(!tab.isAsleep)
     }
 
+    /// A font setting changed in the main window reaches pages in links' windows at once, as it
+    /// does the main window's tabs.
+    @Test func fontSettingsReachLinksWindows() async throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let previous = UserDefaults.standard.object(forKey: Preference.websiteFont)
+        defer { UserDefaults.standard.set(previous, forKey: Preference.websiteFont) }
+        PageStyle.usesFontEverywhere = true
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        tab.webView.loadHTMLString("<p>Text</p>", baseURL: URL(string: "https://example.com/")!)
+        #expect(await waitUntil(15) { tab.url?.host() == "example.com" && !tab.isLoading })
+        // Stands in for the font script, to tell whether it was stopped.
+        _ = try await tab.webView.callAsyncJavaScript("window.__lithiumFont = { stop() { window.stopped = true; } };", contentWorld: .defaultClient)
+
+        browser.changePageFont { PageStyle.usesFontEverywhere = false }
+        var stopped = false
+        for _ in 0..<100 where !stopped {
+            stopped = try await tab.webView.callAsyncJavaScript("return window.stopped === true;", contentWorld: .defaultClient) as? Bool == true
+            if !stopped { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(stopped)
+    }
+
     /// Moved in, it is a normal tab at the top of the list, selected, in the same web view: the
     /// page doesn't reload and keeps what was typed in it. The menu's page commands follow the
     /// window in front.

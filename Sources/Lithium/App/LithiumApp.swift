@@ -30,6 +30,7 @@ struct LithiumApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         LithiumApp.sharedBrowser.saveNow()
+        LithiumApp.sharedBrowser.history.close()
     }
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {

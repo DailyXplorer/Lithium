@@ -22,6 +22,25 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: URL(string: "https://example.com/")!) == nil)
     }
 
+    /// Made at launch, it reads nothing: the scriptlet library is read by the first load, off the
+    /// main thread, and serves every load after.
+    @Test func theLibraryIsReadByTheFirstLoad() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try #"example.org#%#//scriptlet("set-constant", "lithiumProbe", "42")"#.write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        let blocking = AdvancedBlocking(container: folder.appending(path: "engine"))
+        #expect(!blocking.hasReadLibrary)
+        #expect(blocking.script(for: URL(string: "https://example.org/")!) == nil)
+
+        await blocking.load(folder: folder, stamp: "one")
+        #expect(blocking.hasReadLibrary)
+        #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
+        await blocking.load(folder: folder, stamp: "two")
+        #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.appending(path: "engine").path).allSatisfy { $0.hasPrefix("two") })
+    }
+
     @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
         let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))

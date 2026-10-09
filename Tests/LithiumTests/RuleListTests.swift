@@ -92,4 +92,34 @@ struct RuleListTests {
         #expect(reloaded.ruleCount == 5 && !reloaded.complete)
         #expect((await store.availableIdentifiers() ?? []).sorted() == identifiers.sorted())
     }
+
+    /// Groups compile together, and come back in their names' order, from the cache too.
+    @MainActor
+    @Test func groupsCompiledTogetherKeepTheirOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "rule-lists-\(UUID())")
+        let folder = root.appending(path: "filters")
+        try FileManager.default.createDirectory(at: root.appending(path: "store"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let created: WKContentRuleListStore? = WKContentRuleListStore(url: root.appending(path: "store"))
+        let store = try #require(created)
+
+        let names = ["security", "ads", "privacy", "cookies", "extra"]
+        var groups: [String: Manifest.Group] = [:]
+        for (index, name) in names.enumerated() {
+            let rules = (0...index * 200).map { #"{"trigger":{"url-filter":"\#(name)-\#($0)"},"action":{"type":"block"}}"# }
+            try "[\(rules.joined(separator: ","))]".write(to: folder.appending(path: "\(name).json"), atomically: true, encoding: .utf8)
+            groups[name] = Manifest.Group(webkitRules: index + 1)
+        }
+        let manifest = Manifest(updated: "2026-10-01T00:00:00Z", groups: groups, advancedRules: nil)
+
+        let expected = names.sorted().map { "lithium-\($0)-20261001000000-p" }
+        for _ in 0..<2 {
+            let loaded = await Privacy.loadGroups(from: folder, manifest: manifest, into: store)
+            #expect(loaded.complete && loaded.ruleCount == 15)
+            let identifiers = loaded.lists.compactMap(\.identifier)
+            #expect(identifiers.count == names.count)
+            #expect(zip(identifiers, expected).allSatisfy { $0.hasPrefix($1) })
+        }
+    }
 }

@@ -178,6 +178,19 @@ struct ContextMenuDownloadTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == "original")
     }
 
+    /// A download finishing while the list is open is seen already: the button gets no dot.
+    @Test func aDownloadFinishingWhileTheListShowsLeavesNoDot() {
+        let downloads = Downloads()
+        downloads.isListShown = true
+        downloads.didFinish(DownloadItem(filename: "seen.pdf", size: 1))
+        #expect(!downloads.hasUnseen)
+        downloads.isListShown = false
+        downloads.didFinish(DownloadItem(filename: "unseen.pdf", size: 1))
+        #expect(downloads.hasUnseen)
+        downloads.isListShown = true
+        #expect(!downloads.hasUnseen)
+    }
+
     /// Sizes come from the servers: two near Int64.max add up past it.
     @Test func overallProgressSurvivesHugeSizes() async throws {
         let silent = try await serve { _ in }

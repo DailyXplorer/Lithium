@@ -217,6 +217,15 @@ final class HistoryStore {
         for write in held { run(write.sql, values: write.values) }
     }
 
+    /// At quit: closing the last connection folds the write-ahead log into the file, which the
+    /// next launch would otherwise replay. Nothing is written after.
+    func close() {
+        writeTitles()
+        search.close()
+        sqlite3_close(db)
+        db = nil
+    }
+
     private func execute(_ sql: String) {
         if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
             NSLog("Lithium: history database error: %@", String(cString: sqlite3_errmsg(db)))
@@ -232,6 +241,7 @@ final class HistoryStore {
             heldWrites?.append((sql, values))
             return
         }
+        guard db != nil else { return }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             NSLog("Lithium: couldn’t write history: %@", String(cString: sqlite3_errmsg(db)))
@@ -266,6 +276,14 @@ private final class HistorySearch: @unchecked Sendable {
 
     init(fileURL: URL) {
         self.fileURL = fileURL
+    }
+
+    /// After the query running, if any; a later one opens it again.
+    func close() {
+        queue.sync {
+            sqlite3_close(db)
+            db = nil
+        }
     }
 
     func topSites(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {

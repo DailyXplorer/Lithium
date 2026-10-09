@@ -130,7 +130,7 @@ private struct ShieldPanel: View {
         ShieldView(
             host: Privacy.siteHost(tab?.url) ?? "",
             isOn: Binding(
-                get: { privacy.isEnabled(for: tab?.url, privateSession: tab?.privateSession) },
+                get: { privacy.isEnabled(for: tab?.url, privateSession: tab?.privateSession, space: tab?.siteSpace) },
                 set: { browser.setProtections($0, for: tab) }
             ),
             updated: privacy.filtersUpdated,

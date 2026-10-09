@@ -70,13 +70,13 @@ enum PageStyle {
         set { UserDefaults.standard.set(newValue, forKey: Preference.websiteFont) }
     }
 
-    static func scripts(for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
-        usesPageFont(url, privateSession: privateSession) ? [baseScript, fontScript] : [baseScript]
+    static func scripts(for url: URL, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> [WKUserScript] {
+        usesPageFont(url, privateSession: privateSession, space: space) ? [baseScript, fontScript] : [baseScript]
     }
 
-    static func usesPageFont(_ url: URL, privateSession: ObjectIdentifier? = nil) -> Bool {
+    static func usesPageFont(_ url: URL, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> Bool {
         guard let host = url.host()?.lowercased() else { return usesFontEverywhere }
-        return choosesPageFont(host) && !keepsSiteFont(host, privateSession: privateSession)
+        return choosesPageFont(host) && !keepsSiteFont(host, privateSession: privateSession, space: space)
     }
 
     /// Whether the site menu offers "Use this site's font": the website font would apply but for it.
@@ -95,20 +95,28 @@ enum PageStyle {
         ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
     }
 
-    /// `privateSession` is set for a private tab: its session's own choice wins, then the saved one.
-    static func keepsSiteFont(_ host: String, privateSession: ObjectIdentifier? = nil) -> Bool {
+    /// `privateSession` is set for a private tab, `space` for a tab of a space that keeps its data
+    /// apart (`Tab.siteSpace`): their own choice wins, then the saved one.
+    static func keepsSiteFont(_ host: String, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> Bool {
         if isLoopback(host) { return true }
         let domain = SiteInfo.registrable(host)
         if let privateSession, let keeps = privateSiteFonts[privateSession]?[domain] { return keeps }
+        if let space, let keeps = spaceSiteFonts[space]?[domain] { return keeps }
         return siteFontDomains.contains(domain)
     }
 
     /// A private tab's choice stays in memory for its private session only: saved, it would
-    /// record the site it visited.
-    static func setKeepsSiteFont(_ keeps: Bool, for host: String, privateSession: ObjectIdentifier? = nil) {
+    /// record the site it visited. A separate space's is saved for that space.
+    static func setKeepsSiteFont(_ keeps: Bool, for host: String, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) {
         let domain = SiteInfo.registrable(host)
         if let privateSession {
             privateSiteFonts[privateSession, default: [:]][domain] = keeps
+            return
+        }
+        if let space {
+            var choices = spaceSiteFonts
+            choices[space, default: [:]][domain] = keeps
+            UserDefaults.standard.set(Space.stored(choices), forKey: spaceSiteFontKey)
             return
         }
         var domains = Set(siteFontDomains)
@@ -121,7 +129,20 @@ enum PageStyle {
         privateSiteFonts[privateSession] = nil
     }
 
+    /// The space was deleted, its store with it.
+    static func forget(space: Space.ID) {
+        var choices = spaceSiteFonts
+        guard choices.removeValue(forKey: space) != nil else { return }
+        UserDefaults.standard.set(Space.stored(choices), forKey: spaceSiteFontKey)
+    }
+
     private static let siteFontKey = "siteFontDomains"
+    private static let spaceSiteFontKey = "spaceSiteFontDomains"
+    /// Site fonts chosen in spaces that keep their data apart, by space, then registrable domain.
+    /// Read from the defaults, as `siteFontDomains` is.
+    private static var spaceSiteFonts: [Space.ID: [String: Bool]] {
+        Space.siteChoices(UserDefaults.standard.dictionary(forKey: spaceSiteFontKey))
+    }
     /// Site fonts chosen in private tabs, by private session, then registrable domain; never saved.
     private static var privateSiteFonts: [ObjectIdentifier: [String: Bool]] = [:]
 

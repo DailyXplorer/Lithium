@@ -16,7 +16,8 @@ struct PermissionPrompt: View {
             .foregroundStyle(Color.accentColor)
             (Text(request.host).fontWeight(.semibold) + Text(Self.asks(request.kinds)))
                 .lineLimit(1)
-            Text(request.privateSession == nil ? "Remembered in Settings" : "Remembered until the private tabs close")
+            Text(request.privateSession != nil ? "Remembered until the private tabs close"
+                 : request.space != nil ? "Remembered in this space until you quit" : "Remembered in Settings")
                 .font(Theme.font(12))
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 12)

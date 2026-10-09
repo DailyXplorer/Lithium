@@ -31,18 +31,18 @@ private struct LiveSiteInfo: View {
             certificate: info.certificate,
             cookieCount: info.cookieCount,
             canClear: info.hasData && !info.isClearing,
-            permissions: browser.permissions.decisions(for: info.host, privateSession: tab.privateSession),
+            permissions: browser.permissions.decisions(for: info.host, privateSession: tab.privateSession, space: tab.siteSpace),
             protections: Binding(
-                get: { browser.privacy.isEnabled(for: tab.url, privateSession: tab.privateSession) },
+                get: { browser.privacy.isEnabled(for: tab.url, privateSession: tab.privateSession, space: tab.siteSpace) },
                 set: { browser.setProtections($0, for: tab) }
             ),
             usesSiteFont: url.flatMap { url in
                 guard PageStyle.offersSiteFont(url) else { return nil }
                 return Binding(
-                    get: { usesSiteFont ?? !PageStyle.usesPageFont(url, privateSession: tab.privateSession) },
+                    get: { usesSiteFont ?? !PageStyle.usesPageFont(url, privateSession: tab.privateSession, space: tab.siteSpace) },
                     set: { keeps in
                         usesSiteFont = keeps
-                        browser.changePageFont { PageStyle.setKeepsSiteFont(keeps, for: info.host, privateSession: tab.privateSession) }
+                        browser.changePageFont { PageStyle.setKeepsSiteFont(keeps, for: info.host, privateSession: tab.privateSession, space: tab.siteSpace) }
                     }
                 )
             },

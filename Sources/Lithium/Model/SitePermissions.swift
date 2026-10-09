@@ -36,12 +36,16 @@ struct PermissionRequest: Identifiable, Equatable {
     let kinds: [PermissionKind]
     /// The private session (its tabs' data store) the request comes from; nil for a normal tab.
     var privateSession: ObjectIdentifier? = nil
+    /// The space keeping its data apart the request comes from (`Tab.siteSpace`).
+    var space: Space.ID? = nil
 }
 
 /// Per-site answers to camera, microphone, location and download prompts. Answers are remembered
 /// until the user changes them in Settings; pending prompts wait for the user in the tab.
 /// A private tab's answers stay in memory for its private session only: saved, they would
-/// record the site it visited, and carry its grant into normal browsing.
+/// record the site it visited, and carry its grant into normal browsing. A space that keeps its
+/// data apart has its own answers too, as another identity, kept until Lithium quits: Settings
+/// lists only the shared ones, so a saved grant there could never be taken back.
 @MainActor
 @Observable
 final class SitePermissions {
@@ -49,6 +53,7 @@ final class SitePermissions {
     private(set) var pending: [PermissionRequest] = []
     @ObservationIgnored private var waiting: [PermissionRequest.ID: [CheckedContinuation<Bool, Never>]] = [:]
     private var privateDecisions: [ObjectIdentifier: [String: [PermissionKind: PermissionDecision]]] = [:]
+    private var spaceDecisions: [Space.ID: [String: [PermissionKind: PermissionDecision]]] = [:]
 
     /// Saved answers this build doesn't know (a newer build's kind or decision), written back as
     /// they were, so running an older build doesn't erase them.
@@ -73,17 +78,24 @@ final class SitePermissions {
         self.decisions = decisions
     }
 
-    /// The answers that count for `host`: a private session's own, or the saved ones.
-    func decisions(for host: String, privateSession: ObjectIdentifier?) -> [PermissionKind: PermissionDecision] {
-        let stored = if let privateSession { privateDecisions[privateSession]?[host] } else { decisions[host] }
+    /// The answers that count for `host`: a private session's own, a separate space's own, or the
+    /// saved ones.
+    func decisions(for host: String, privateSession: ObjectIdentifier?, space: Space.ID? = nil) -> [PermissionKind: PermissionDecision] {
+        let stored = if let privateSession {
+            privateDecisions[privateSession]?[host]
+        } else if let space {
+            spaceDecisions[space]?[host]
+        } else {
+            decisions[host]
+        }
         return stored ?? [:]
     }
 
     /// Resolves from stored answers when every kind has one; otherwise asks in the tab.
     /// `privateSession` is set for a private tab: only that session's own answers count, as the
-    /// normal ones would tell the site who this is.
-    func request(_ kinds: [PermissionKind], host: String, tabID: Tab.ID, privateSession: ObjectIdentifier? = nil) async -> Bool {
-        let stored = decisions(for: host, privateSession: privateSession)
+    /// normal ones would tell the site who this is; likewise `space` for a separate space's tab.
+    func request(_ kinds: [PermissionKind], host: String, tabID: Tab.ID, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) async -> Bool {
+        let stored = decisions(for: host, privateSession: privateSession, space: space)
         let known = kinds.map { stored[$0] }
         if known.contains(.deny) { return false }
         if known.allSatisfy({ $0 == .allow }) { return true }
@@ -92,7 +104,7 @@ final class SitePermissions {
         if let shown = pending.first(where: { $0.tabID == tabID && $0.host == host && $0.kinds == kinds }) {
             return await withCheckedContinuation { waiting[shown.id, default: []].append($0) }
         }
-        let request = PermissionRequest(tabID: tabID, host: host, kinds: kinds, privateSession: privateSession)
+        let request = PermissionRequest(tabID: tabID, host: host, kinds: kinds, privateSession: privateSession, space: space)
         return await withCheckedContinuation { continuation in
             waiting[request.id] = [continuation]
             pending.append(request)
@@ -103,6 +115,10 @@ final class SitePermissions {
         if let session = request.privateSession {
             for kind in request.kinds {
                 privateDecisions[session, default: [:]][request.host, default: [:]][kind] = allow ? .allow : .deny
+            }
+        } else if let space = request.space {
+            for kind in request.kinds {
+                spaceDecisions[space, default: [:]][request.host, default: [:]][kind] = allow ? .allow : .deny
             }
         } else {
             for kind in request.kinds {
@@ -115,6 +131,11 @@ final class SitePermissions {
     /// The private session's last tab closed: its answers go with its cookies.
     func forget(privateSession: ObjectIdentifier) {
         privateDecisions[privateSession] = nil
+    }
+
+    /// The space was deleted, its store with it.
+    func forget(space: Space.ID) {
+        spaceDecisions[space] = nil
     }
 
     /// Denied this once, without remembering anything: the prompt dismissed with Escape.

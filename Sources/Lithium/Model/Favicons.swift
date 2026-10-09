@@ -24,7 +24,10 @@ final class Favicons {
     /// (Docs, Sheets), so an open page is never given its host's icon blindly, nor refetches its own.
     private var byAddress: [URL: Data] = [:]
     private static let byAddressLimit = 256
-    private var inFlight: [String: Task<Data?, Never>] = [:]
+    private var inFlight: [String: Task<(png: Data?, allAnswered: Bool), Never>] = [:]
+    /// When `refresh` last wrote each host's icon: an animated one changes every few seconds.
+    private var refreshed: [String: ContinuousClock.Instant] = [:]
+    private static let refreshStoreInterval = Duration.seconds(60)
     /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
     private var generation = 0
     private let session: URLSession = {
@@ -104,36 +107,45 @@ final class Favicons {
     }
 
     /// For pages not open in a tab (history): the stored icon, or one from well-known locations.
-    func icon(forHost host: String) async -> Data? {
+    /// The host is marked iconless only once every request got a real answer: a fetch that timed
+    /// out or found no network leaves it to be asked again. `scheme` is for tests' local servers.
+    func icon(forHost host: String, scheme: String = "https") async -> Data? {
         if let data = cachedData(host: host) { return data }
-        guard !missing.contains(host), let site = URL(string: "https://\(host)/") else { return nil }
-        if let running = inFlight[host] { return await running.value }
+        guard !missing.contains(host), let site = URL(string: "\(scheme)://\(host)/") else { return nil }
+        if let running = inFlight[host] { return await running.value.png }
 
         let generation = generation
         let session = session
-        let task = Task<Data?, Never> {
+        let task = Task<(png: Data?, allAnswered: Bool), Never> {
+            var allAnswered = true
+            var answered = false
             for path in ["/apple-touch-icon.png", "/favicon.ico", "/favicon.png"] {
-                if let url = URL(string: path, relativeTo: site), let png = await Self.fetch(url, with: session) { return png }
+                guard let url = URL(string: path, relativeTo: site) else { continue }
+                if let png = await Self.fetch(url, with: session, answered: &answered) { return (png, true) }
+                allAnswered = allAnswered && answered
             }
             // Some sites only declare their icons in the page, often on a CDN.
-            guard let html = await Self.download(site, limit: 200_000, keepingPrefix: true, with: session) else { return nil }
-            for url in Self.declaredIcons(in: String(decoding: html, as: UTF8.self), base: site) {
-                if let png = await Self.fetch(url, with: session) { return png }
+            guard let html = await Self.download(site, limit: 200_000, keepingPrefix: true, with: session, answered: &answered) else {
+                return (nil, allAnswered && answered)
             }
-            return nil
+            for url in Self.declaredIcons(in: String(decoding: html, as: UTF8.self), base: site) {
+                if let png = await Self.fetch(url, with: session, answered: &answered) { return (png, true) }
+                allAnswered = allAnswered && answered
+            }
+            return (nil, allAnswered)
         }
         inFlight[host] = task
         let result = await task.value
         // History was cleared meanwhile: `clear` already emptied `inFlight`, and the host is gone from the list.
         guard generation == self.generation else { return nil }
         inFlight[host] = nil
-        if let result {
-            store(result, for: host)
-        } else {
+        if let png = result.png {
+            store(png, for: host)
+        } else if result.allAnswered {
             if missing.count >= missingLimit { missing.removeAll(keepingCapacity: true) }
             missing.insert(host)
         }
-        return result
+        return result.png
     }
 
     /// `<link rel="…icon…" href="…">` targets in a page, raster formats first.
@@ -161,6 +173,7 @@ final class Favicons {
         inFlight = [:]
         missing = []
         iconless = []
+        refreshed = [:]
         byAddress = [:]
         cache = cache.filter { hosts.contains($0.key) }
         images = images.filter { hosts.contains($0.key) }
@@ -258,11 +271,18 @@ final class Favicons {
     }
 
     /// Fetched past the cache: a calendar's icon changes with the date, even at the same address.
-    /// Stored only when its pixels changed and `keeping` still holds once it came.
+    /// Stored only when its pixels changed and `keeping` still holds once it came, and at most once
+    /// a minute per host: an animated icon would rewrite the file every frame. Still returned, so
+    /// the tile follows it.
     func refresh(host: String, from url: URL, keeping: () -> Bool = { true }) async -> Data? {
         let generation = generation
         guard Self.isFetchable(url), let png = await Self.fetch(url, with: session) else { return nil }
-        if generation == self.generation, keeping(), cachedData(host: host) != png { store(png, for: host) }
+        let now = ContinuousClock.now
+        if generation == self.generation, keeping(), cachedData(host: host) != png,
+           refreshed[host].map({ now - $0 >= Self.refreshStoreInterval }) ?? true {
+            refreshed[host] = now
+            store(png, for: host)
+        }
         return png
     }
 

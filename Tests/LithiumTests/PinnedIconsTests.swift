@@ -288,7 +288,8 @@ struct PinnedIcons {
         let favicons = Self.favicons()
         let host = try #require(base.host())
         #expect(await favicons.icon(forHost: host) == nil)
-        #expect(favicons.missing.contains(host))
+        // No https server there: no answer, so history may ask again.
+        #expect(!favicons.missing.contains(host))
         #expect(await favicons.favicon(for: webView) == Favicons.normalized(Self.red))
     }
 
@@ -538,6 +539,59 @@ struct PinnedIcons {
         #expect(await fetch.value != nil)
         #expect(favicons.cachedData(host: "visited.example") == nil)
         #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "visited.example.png").path))
+    }
+
+    /// An animated icon refreshed every few seconds is returned each time, for the tile, but its
+    /// host's file is written at most once a minute.
+    @Test func refreshedIconsRewriteTheHostsFileAtMostOnceAMinute() async throws {
+        let (server, base) = try await Self.serveIcons()
+        defer { server.cancel() }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "pinned-icons-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder)
+        let red = try #require(Favicons.normalized(Self.red))
+        let blue = try #require(Favicons.normalized(Self.blue))
+        let file = folder.appending(path: "timer.example.png")
+
+        #expect(await favicons.refresh(host: "timer.example", from: base.appending(path: "red.png")) == red)
+        #expect(try Data(contentsOf: file) == red)
+        #expect(await favicons.refresh(host: "timer.example", from: base.appending(path: "blue.png")) == blue)
+        #expect(try Data(contentsOf: file) == red)
+        #expect(favicons.cachedData(host: "timer.example") == red)
+    }
+
+    /// Favorites restored asleep wake one by one once the window is up, unselected, so their
+    /// badge counts from launch; a favorite without a tab then fetches its icon, as at a new day.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func restoredFavoritesWakeAndFetchTheirIconsAtLaunch() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(page: "<!doctype html><title>(3) Chat</title>", requests: requests)
+        defer { server.cancel() }
+        let red = try #require(Favicons.normalized(Self.red))
+        let blue = try #require(Favicons.normalized(Self.blue))
+        let chat = Pin(id: UUID(), url: base, title: "Chat", favicon: red)
+        let calendar = Pin(id: UUID(), url: base.appending(path: "calendar"), title: "Calendar", favicon: red, iconURL: base.appending(path: "blue.png"))
+        PinStore.save([chat, calendar])
+        SessionStore.save(Session(tabs: [
+            .init(url: base.appending(path: "notes"), title: "Notes"),
+            .init(url: chat.url, title: "Chat", pinID: chat.id),
+        ], selectedIndex: 0))
+        defer {
+            PinStore.save([])
+            SessionStore.save(Session())
+        }
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.favoriteWakeDelay = .milliseconds(100)
+        let tab = try #require(browser.tabs.first { $0.pinID == chat.id })
+        #expect(tab.isAsleep && tab.loadedWebView == nil)
+
+        browser.windowDidAppear()
+        await browser.launchFavorites?.value
+        #expect(!tab.isAsleep && browser.selectedTab !== tab)
+        #expect(await waitUntil(30) { tab.unread.shown == .count(3) })
+        await browser.sleepingIconsRefresh?.value
+        #expect(requests["/blue.png"] == 1)
+        #expect(browser.pins.first { $0.id == calendar.id }?.favicon == blue)
     }
 
     /// An icon that keeps changing (a timer, a progress ring) shows at once on the favorite, but

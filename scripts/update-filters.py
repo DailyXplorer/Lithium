@@ -23,6 +23,10 @@ TOOLS = ROOT / ".tools"
 CONVERTER_REPO = "https://github.com/AdguardTeam/SafariConverterLib.git"
 CONVERTER_TAG = "v4.3.0"
 CONVERTER_BIN = TOOLS / "SafariConverterLib/.build/release/ConverterTool"
+# The Safari the bundled set is converted for: the one macOS 15.4 (Package.swift's minimum)
+# ships. The converter's own default is an older Safari, with a lower rule limit and fewer rule
+# features than the app's updater converts for (SafariVersion.autodetect()).
+SAFARI_VERSION = "18"
 
 SOURCES_FILE = (ROOT / "Sources/Lithium/Resources/FilterSources.json").read_bytes()
 SOURCES = json.loads(SOURCES_FILE)
@@ -121,7 +125,7 @@ def ensure_converter() -> None:
 
 def convert(rules: list[str], output: Path) -> dict:
     result = subprocess.run(
-        [str(CONVERTER_BIN), "convert", "--advanced-blocking", "true"],
+        [str(CONVERTER_BIN), "convert", "--safari-version", SAFARI_VERSION, "--advanced-blocking", "true"],
         input="\n".join(rules), capture_output=True, text=True, check=True,
     )
     stats = json.loads(result.stdout)
@@ -152,6 +156,10 @@ def build(out: Path) -> None:
             rules += [r for r in cache[name] if allowed(r) and not is_scriptlet(r)]
         rules = list(dict.fromkeys(rules))
         stats = convert(rules, out / f"{group}.json")
+        # Rules over WebKit's limit are dropped without a word: the set would block less than its
+        # lists say, and the app, finding it fresh, wouldn't rebuild it for a day.
+        if stats["discardedSafariRules"]:
+            raise SystemExit(f"update-filters.py: {group} is over WebKit's rule limit, {stats['discardedSafariRules']} rules discarded")
         advanced += (stats.get("advancedRulesText") or "").splitlines()
         manifest["groups"][group] = {
             "lists": names,

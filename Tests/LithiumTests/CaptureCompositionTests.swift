@@ -204,4 +204,20 @@ struct CaptureCompositionTests {
         #expect(CaptureBackdrop(rawValue: "#CDE7D6") == .color("#CDE7D6"))
         #expect(CaptureBackdrop.color("#CDE7D6").rawValue == "#CDE7D6")
     }
+
+    /// Each pick of another backdrop color renders the whole image again, so the color panel
+    /// picks once the mouse is let go, not at every move across the wheel. Never shown here.
+    @Test func theBackdropColorPanelPicksOnRelease() {
+        let panel = NSColorPanel.shared
+        defer {
+            panel.setTarget(nil)
+            panel.isContinuous = true
+        }
+        panel.isContinuous = true
+        let target = ColorPanelTarget()
+        target.take(panel, initial: .white)
+        #expect(!panel.isContinuous)
+        #expect(!panel.showsAlpha)
+        #expect(panel.isVisible == false)
+    }
 }

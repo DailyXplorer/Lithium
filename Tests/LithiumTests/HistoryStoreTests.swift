@@ -107,6 +107,7 @@ struct HistoryStoreTests {
     @Test func writesTitlesAMomentLater() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "history-\(UUID()).sqlite")
         let store = HistoryStore(fileURL: file)
+        store.titleDelay = .milliseconds(500)
         // Another connection, which sees only what was written.
         let reader = HistoryStore(fileURL: file)
         let url = URL(string: "https://mail.example.com/")!
@@ -122,6 +123,22 @@ struct HistoryStoreTests {
 
         store.updateTitle("(21) Inbox", for: url)
         #expect(store.visits(matching: "").map(\.title) == ["(21) Inbox"])
+    }
+
+    /// A background page ticking its title (a clock) doesn't write its history row every second:
+    /// the title waits, and the store's own reads still see it at once.
+    @Test func aTickingTitleIsNotWrittenEverySecond() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "history-\(UUID()).sqlite")
+        let store = HistoryStore(fileURL: file)
+        let reader = HistoryStore(fileURL: file)
+        let url = URL(string: "https://clock.example.com/")!
+        store.record(url, title: "Clock")
+        for second in 1...3 {
+            store.updateTitle("10:00:0\(second)", for: url)
+            try await Task.sleep(for: .milliseconds(600))
+        }
+        #expect(reader.visits(matching: "").map(\.title) == ["Clock"])
+        #expect(store.visits(matching: "").map(\.title) == ["10:00:03"])
     }
 
     /// The History page's search reads on the background connection, titles still waiting

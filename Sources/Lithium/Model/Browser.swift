@@ -110,6 +110,12 @@ final class Browser {
     /// The last one handed to a write off the main thread, which may not have ended.
     @ObservationIgnored private var queuedSession: Session?
     @ObservationIgnored private var sessionSave: Task<Void, Never>?
+    /// The write of a change of titles alone, held for `titleSaveDelay`.
+    @ObservationIgnored private var titleSave: Task<Void, Never>?
+    /// A page that retitles itself (an unread count, a clock) rewrites the session this often at
+    /// most: a title lost to a crash costs little, and quitting writes the last one. Other
+    /// changes still go out a moment later. Shorter in tests.
+    @ObservationIgnored var titleSaveDelay = Duration.seconds(30)
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
     @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
@@ -399,7 +405,7 @@ final class Browser {
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
         let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                Self.endEditingIfOutside(event)
+                self?.endEditingIfOutside(event)
                 self?.noteClick(event)
             }
             return event
@@ -423,7 +429,8 @@ final class Browser {
     }
 
     /// Ends text editing when a click lands outside the field being edited; the field commits on its own.
-    private static func endEditingIfOutside(_ event: NSEvent) {
+    /// The address bar hands the keyboard back to the page, as Return does: left on the window, keys beep.
+    func endEditingIfOutside(_ event: NSEvent) {
         guard let window = event.window,
               let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
               let field = editor.delegate as? NSView, field.window === window else { return }
@@ -431,6 +438,7 @@ final class Browser {
         let point = field.convert(event.locationInWindow, from: nil)
         guard !field.bounds.insetBy(dx: -10, dy: -8).contains(point) else { return }
         window.makeFirstResponder(nil)
+        if field is URLTextField { returnKeyboardToPage(fieldHadKeyboard: true) }
     }
 
     /// Not in another window or under a sheet, and not while a text field edits (the address bar
@@ -1105,10 +1113,10 @@ final class Browser {
         }
     }
 
-    /// Writes the session now, and again a moment after it changes: a page that retitles itself
-    /// (an unread count, a clock) costs one write a second at most. Encoded and written off the
-    /// main thread, except `now` (quitting), which waits for it.
-    private func saveSession(now: Bool = false) {
+    /// Writes the session now, and again a moment after it changes, or `titleSaveDelay` after
+    /// when only titles changed. Encoded and written off the main thread, except `now`
+    /// (quitting), which waits for it.
+    private func saveSession(now: Bool = false, titlesDue: Bool = false) {
         sessionSave?.cancel()
         sessionSave = nil
         let session = withObservationTracking { self.session } onChange: { [weak self] in
@@ -1118,11 +1126,26 @@ final class Browser {
         // Compared with the last session handed to the queue: one still being written would
         // otherwise land after a change back to the saved one, and stay.
         if now {
+            titleSave?.cancel()
+            titleSave = nil
             guard session != savedSession || queuedSession != session else { return }
             if SessionStore.save(session) { (savedSession, queuedSession) = (session, session) }
             return
         }
-        guard session != (queuedSession ?? savedSession) else { return }
+        let written = queuedSession ?? savedSession
+        guard session != written else { return }
+        if !titlesDue, let written, session.differsOnlyInTitles(from: written) {
+            guard titleSave == nil else { return }
+            titleSave = Task { [weak self, titleSaveDelay] in
+                try? await Task.sleep(for: titleSaveDelay)
+                guard !Task.isCancelled else { return }
+                self?.titleSave = nil
+                self?.saveSession(titlesDue: true)
+            }
+            return
+        }
+        titleSave?.cancel()
+        titleSave = nil
         queuedSession = session
         SessionStore.saveInBackground(session) { [weak self] written in
             guard let self else { return }

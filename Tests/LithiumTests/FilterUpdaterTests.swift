@@ -533,6 +533,51 @@ struct FilterUpdateTests {
         #expect(python.terminationStatus == 0)
         #expect(printed == "fresh clone build\nbuilt nothing\nraised clone build\nold clone left False\nunbuilt build\n")
     }
+
+    /// scripts/update-filters.py converts for the Safari the app supports, not the converter's
+    /// older default, and fails a group whose rules go over WebKit's limit instead of shipping
+    /// a set with rules silently dropped.
+    @Test func updateScriptConvertsForTheAppsSafariAndKeepsEveryRule() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "update-script-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // A converter stand-in that drops `discarded[0]` rules.
+        let check = """
+            import importlib.util, json, pathlib, subprocess, sys
+            spec = importlib.util.spec_from_file_location("update_filters", sys.argv[1])
+            script = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(script)
+            folder = pathlib.Path(sys.argv[2])
+            script.GROUPS = {"ads": ["main"]}
+            script.download = lambda name: [f"||{name}-{i}.example^" for i in range(12)]
+            discarded = [0]
+            def run(command, **options):
+                print("safari", command[command.index("--safari-version") + 1])
+                stats = {"safariRulesJSON": "[]", "sourceRulesCount": 12, "safariRulesCount": 12 - discarded[0],
+                         "discardedSafariRules": discarded[0], "errorsCount": 0, "advancedRulesText": ""}
+                return subprocess.CompletedProcess(command, 0, stdout=json.dumps(stats), stderr="")
+            script.subprocess.run = run
+            for count in [0, 3]:
+                discarded[0] = count
+                try:
+                    script.build(folder / f"set-{count}")
+                    print(count, "built")
+                except SystemExit:
+                    print(count, "failed")
+            """
+        let script = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../scripts/update-filters.py").standardized
+        let python = Process()
+        python.executableURL = URL(filePath: "/usr/bin/python3")
+        python.arguments = ["-I", "-c", check, script.path, folder.path]
+        let output = Pipe()
+        python.standardOutput = output
+        python.standardError = FileHandle.nullDevice
+        try python.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        python.waitUntilExit()
+        #expect(python.terminationStatus == 0)
+        #expect(printed == "safari 18\n0 built\nsafari 18\n3 failed\n")
+    }
 }
 
 /// Answers with the body served at a URL, or a 404 when there is none.

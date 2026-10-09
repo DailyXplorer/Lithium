@@ -292,6 +292,31 @@ struct PinnedIcons {
         #expect(await favicons.favicon(for: webView) == Favicons.normalized(Self.red))
     }
 
+    /// Pages of one host naming different icons (Docs and Sheets) each get their own, not the first
+    /// one seen on the host; an icon already kept is not fetched again.
+    @Test func pagesOfOneHostGetTheIconTheyName() async throws {
+        let requests = Requests()
+        let (server, base) = try await LocalHTTP.serve([
+            "/document": ("Content-Type: text/html", Data(#"<!doctype html><title>Doc</title><link rel="icon" href="/red.png">"#.utf8)),
+            "/sheet": ("Content-Type: text/html", Data(#"<!doctype html><title>Sheet</title><link rel="icon" href="/blue.png">"#.utf8)),
+            "/red.png": ("Content-Type: image/png", Self.red),
+            "/blue.png": ("Content-Type: image/png", Self.blue),
+        ], requested: { requests.record($0) })
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let favicons = Self.favicons()
+        let red = try #require(Favicons.normalized(Self.red))
+        let blue = try #require(Favicons.normalized(Self.blue))
+
+        for (path, icon) in [("document", red), ("sheet", blue), ("document", red)] {
+            let page = base.appending(path: path)
+            webView.load(URLRequest(url: page))
+            #expect(await waitUntil(30) { !webView.isLoading && webView.url == page })
+            #expect(await favicons.favicon(for: webView) == icon, "\(path)")
+        }
+        #expect(requests["/red.png"] == 1, "kept, not fetched again")
+    }
+
     /// A candidate whose server couldn't be reached may still be the site's icon: searched again.
     @Test func anUnreachableIconIsSearchedAgain() async throws {
         let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Offline</title><link rel="icon" href="http://127.0.0.1:1/icon.png">"#)

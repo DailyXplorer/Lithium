@@ -784,17 +784,25 @@ private struct SwatchLabel<Fill: View>: View {
 
 /// NSColorPanel reports changes through target-action.
 @MainActor
-private final class ColorPanelTarget: NSObject {
+final class ColorPanelTarget: NSObject {
     private var onChange: ((Color) -> Void)?
 
     func show(initial: Color, onChange: @escaping (Color) -> Void) {
         self.onChange = onChange
         let panel = NSColorPanel.shared
+        take(panel, initial: initial)
+        panel.orderFront(nil)
+    }
+
+    /// Picks only as the mouse is let go: each pick renders the whole screenshot again on the main
+    /// thread, and a drag across the wheel would pick at every move. The page's picker, which
+    /// shares the panel, sets its own.
+    func take(_ panel: NSColorPanel, initial: Color) {
         panel.showsAlpha = false
+        panel.isContinuous = false
         panel.color = NSColor(initial)
         panel.setTarget(self)
         panel.setAction(#selector(colorChanged(_:)))
-        panel.orderFront(nil)
     }
 
     func close() {

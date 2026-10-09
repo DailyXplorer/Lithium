@@ -920,6 +920,7 @@ struct BrowserTests {
     /// off the main thread, not at every change; quitting writes what waits at once.
     @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {
         let browser = Browser()
+        browser.titleSaveDelay = .zero
         let tab = browser.newTab(url: URL(string: "data:text/html,<title>Start</title>start")!)
         defer { browser.close(tab) }
         #expect(await waitUntil(120) { loaded(tab) && tab.title == "Start" })
@@ -942,10 +943,35 @@ struct BrowserTests {
         #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
     }
 
+    /// A background page ticking its title (a clock) doesn't rewrite the session every second; a
+    /// change of tabs still goes out a moment later, the waiting title with it.
+    @Test func aTickingTitleWaitsWhileOtherChangesDont() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>10:00:00</title>clock")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) && tab.title == "10:00:00" })
+        browser.saveNow()
+        let before = SessionStore.writes
+
+        for second in 1...3 {
+            _ = try await tab.webView.evaluateJavaScript("document.title = '10:00:0\(second)'")
+            #expect(await waitUntil(5) { tab.title == "10:00:0\(second)" })
+        }
+        try await Task.sleep(for: Browser.sessionSaveDelay + .milliseconds(500))
+        #expect(SessionStore.writes == before)
+
+        let url = try #require(URL(string: "data:text/html,other-\(UUID().uuidString)"))
+        let other = browser.newTab(url: url, selecting: false)
+        defer { browser.close(other) }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.url == url } })
+        #expect(SessionStore.load().tabs.contains { $0.title == "10:00:03" })
+    }
+
     /// A title that changes and changes back while the changed one is still being written ends
     /// with the file holding the page's title, not the one in between.
     @Test func aChangeBackWhileAWriteIsInFlightIsWritten() async throws {
         let browser = Browser()
+        browser.titleSaveDelay = .zero
         let tab = browser.newTab(url: URL(string: "data:text/html,<title>Steady</title>steady")!)
         defer { browser.close(tab) }
         #expect(await waitUntil(120) { loaded(tab) && tab.title == "Steady" })

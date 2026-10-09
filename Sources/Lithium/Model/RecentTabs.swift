@@ -15,6 +15,9 @@ final class RecentTabs {
     @ObservationIgnored private var shown: [Tab.ID: Int] = [:]
     @ObservationIgnored private var clock = 0
     @ObservationIgnored private var openings: [Tab.ID: Opening] = [:]
+    /// A tab opened by no page (an address typed, a link from another app), with the tab shown
+    /// before it: nil for the start page.
+    @ObservationIgnored private var replacements: [Tab.ID: Tab.ID?] = [:]
     /// A tab gone to straight from its opener: closing it goes back to the opener.
     @ObservationIgnored private weak var opened: Tab?
     @ObservationIgnored private weak var opener: Tab?
@@ -29,6 +32,15 @@ final class RecentTabs {
 
     func didOpen(_ tab: Tab, from opener: Tab) {
         openings[tab.id] = Opening(opener: opener, at: clock)
+    }
+
+    func didOpen(_ tab: Tab, replacing shown: Tab?) {
+        replacements[tab.id] = .some(shown?.id)
+    }
+
+    /// What `tab` was opened over, if no page opened it: `.some(nil)` is the start page.
+    func shownBefore(_ tab: Tab) -> Tab.ID?? {
+        replacements[tab.id]
     }
 
     func didShow(_ tab: Tab, after previous: Tab?) {
@@ -51,6 +63,7 @@ final class RecentTabs {
     func didClose(_ tab: Tab) {
         shown[tab.id] = nil
         openings[tab.id] = nil
+        replacements[tab.id] = nil
     }
 
     /// Forward goes to the tab shown before `current`, back to the one shown longest ago; tabs

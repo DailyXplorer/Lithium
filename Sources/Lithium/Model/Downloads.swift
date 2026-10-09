@@ -115,6 +115,25 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
+    /// Asks whether to quit with this many files still downloading. Tests replace it, so no alert shows.
+    @ObservationIgnored var confirmQuit: @MainActor (Int) -> Bool = Downloads.askToQuit(stopping:)
+
+    /// Quitting ends every transfer for good: nothing is kept to resume it after a relaunch.
+    func shouldTerminate() -> NSApplication.TerminateReply {
+        let running = active.count
+        guard running > 0 else { return .terminateNow }
+        return confirmQuit(running) ? .terminateNow : .terminateCancel
+    }
+
+    private static func askToQuit(stopping count: Int) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = count == 1 ? "A download is in progress" : "\(count) downloads are in progress"
+        alert.informativeText = count == 1 ? "If you quit now, it stops and can’t be resumed." : "If you quit now, they stop and can’t be resumed."
+        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     var overallFraction: Double? {
         let running = active
         // In Double: two server-given sizes near Int64.max would overflow an Int64 sum.

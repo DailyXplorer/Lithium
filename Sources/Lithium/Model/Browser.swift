@@ -8,7 +8,7 @@ import WebKit
 @Observable
 final class Browser {
     private(set) var pins: [Pin] {
-        didSet { PinStore.save(pins) }
+        didSet { if holdsPinSave { pinsUnsaved = true } else { savePins() } }
     }
     private(set) var tabs: [Tab] = []
     private(set) var selectedTabID: Tab.ID? {
@@ -76,6 +76,12 @@ final class Browser {
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
+    /// A favorite's page can change its icon every few seconds (a timer, a progress ring): such
+    /// changes write pins.json at most once a minute, the last one at the next write or at quit.
+    @ObservationIgnored private var pinsSaved = Date.distantPast
+    @ObservationIgnored private var pinsUnsaved = false
+    @ObservationIgnored private var holdsPinSave = false
+    private static let pinIconSaveInterval: TimeInterval = 60
 
     /// Present only while agent access is on, so with it off every agent hook is a nil check.
     private(set) var agent: AgentHub?
@@ -1185,6 +1191,7 @@ final class Browser {
     func saveNow() {
         saveSession(now: true)
         history.writeTitles()
+        if pinsUnsaved { savePins() }
     }
 
     /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists.
@@ -1377,7 +1384,15 @@ final class Browser {
         if let url { pin.iconURL = ["http", "https"].contains(url.scheme?.lowercased()) ? url : nil }
         guard pin != pins[index] else { return }
         if pin.favicon != pins[index].favicon { pinIcons[pin.id] = nil }
+        holdsPinSave = Date().timeIntervalSince(pinsSaved) < Self.pinIconSaveInterval
         pins[index] = pin
+        holdsPinSave = false
+    }
+
+    private func savePins() {
+        PinStore.save(pins)
+        pinsSaved = Date()
+        pinsUnsaved = false
     }
 
     func savedIconURL(of tab: Tab) -> URL? {

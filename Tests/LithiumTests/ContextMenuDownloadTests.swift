@@ -213,6 +213,36 @@ struct ContextMenuDownloadTests {
         #expect(abs(fraction - 0.5) < 0.01)
     }
 
+    /// Quitting stops every running transfer for good, so it asks first; with none running, or
+    /// once they end, it quits without asking.
+    @Test func quittingWithADownloadRunningAsksFirst() async throws {
+        let silent = try await serve { _ in }
+        defer { silent.listener.cancel() }
+        let downloads = Downloads()
+        var asked: [Int] = []
+        var answer = false
+        downloads.confirmQuit = { count in
+            asked.append(count)
+            return answer
+        }
+        #expect(downloads.shouldTerminate() == .terminateNow)
+        #expect(asked.isEmpty)
+
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        for path in ["one", "two"] {
+            downloads.track(await webView.startDownload(using: URLRequest(url: silent.url.appending(path: path))))
+        }
+        defer { downloads.items.forEach { $0.cancel() } }
+        #expect(downloads.shouldTerminate() == .terminateCancel)
+        answer = true
+        #expect(downloads.shouldTerminate() == .terminateNow)
+        #expect(asked == [2, 2])
+
+        downloads.items.forEach { $0.cancel() }
+        #expect(downloads.shouldTerminate() == .terminateNow)
+        #expect(asked == [2, 2])
+    }
+
     /// A menu download that ends before WebKit asks where to save leaves nothing that would make
     /// a later ordinary download ask.
     @Test func aMenuDownloadFailingBeforeThePanelLeavesNothingBehind() async throws {

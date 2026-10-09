@@ -170,6 +170,24 @@ struct SplitViewTests {
         #expect(!zone.takesMouse(buttons: 1, drag: item))
     }
 
+    /// Side by side, the drop zone's sides are left and right; stacked (the new pair stays so),
+    /// top and bottom, as the pair will show. The middle drops nothing either way.
+    @Test func dropZoneSidesFollowTheSplitsOrientation() {
+        let zone = SplitDropZone.DropView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        #expect(zone.side(at: NSPoint(x: 100, y: 500)) == .first)
+        #expect(zone.side(at: NSPoint(x: 900, y: 100)) == .second)
+        #expect(zone.side(at: NSPoint(x: 500, y: 550)) == nil)
+        #expect(zone.frame(of: .second) == NSRect(x: 500, y: 0, width: 500, height: 600))
+
+        zone.isStacked = true
+        // Not flipped: the top is the high y.
+        #expect(zone.side(at: NSPoint(x: 100, y: 550)) == .first)
+        #expect(zone.side(at: NSPoint(x: 100, y: 50)) == .second)
+        #expect(zone.side(at: NSPoint(x: 50, y: 300)) == nil)
+        #expect(zone.frame(of: .first) == NSRect(x: 0, y: 300, width: 1000, height: 300))
+        #expect(zone.frame(of: .second) == NSRect(x: 0, y: 0, width: 1000, height: 300))
+    }
+
     /// A file or an image from another app carries no text, so the drop zone, registered for text
     /// only, never sees it enter: it stands down as the drag reaches it, and the page gets the drop.
     @Test func aFileDragFromAnotherAppAfterATabDragReachesThePage() {

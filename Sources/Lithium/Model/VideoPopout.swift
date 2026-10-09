@@ -58,14 +58,16 @@ final class VideoPopout {
 
     /// Pops out the selected tab's video from the menu or ⌥⌘P; the page shows where it went.
     func showSelected() {
-        guard let tab = browser?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
+        guard browser?.quickLinks.keyTab == nil, let tab = browser?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
         request += 1
         let current = request
         Task { await show(tab, request: current) }
     }
 
+    /// Not while a link's window is in front: the menu would pop out the main window's video,
+    /// and the player takes only `Browser.tabs`, which a link's page isn't in.
     var canShowSelected: Bool {
-        guard let tab = browser?.selectedTab else { return false }
+        guard browser?.quickLinks.keyTab == nil, let tab = browser?.selectedTab else { return false }
         return tab !== self.tab && !tab.isAsleep && tab.pdf == nil && tab.url != nil
     }
 

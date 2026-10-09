@@ -2,8 +2,9 @@ import AppKit
 
 /// A tab list of its own (Personal, Work), with its own favorites, color and icon, Arc-like. The
 /// sidebar shows one space at a time. A space can keep its cookies, logins and site storage apart
-/// in a WebKit store of its own, so a site can be signed in with another account there. History,
-/// downloads, site settings and extensions stay shared, as WebKit's stores don't cover them.
+/// in a WebKit store of its own, so a site can be signed in with another account there; its site
+/// permissions and per-site choices are then its own too (`Tab.siteSpace`). History, downloads and
+/// extensions stay shared, as WebKit's stores don't cover them.
 ///
 /// Until a second space is made, `Browser.spaces` is empty and every tab and favorite is in the
 /// main space: nothing is saved, observed or watched for spaces.
@@ -41,6 +42,20 @@ struct Space: Codable, Identifiable, Equatable {
     /// What a saved tab or favorite records: nothing for the main space, so files written
     /// without spaces stay as they were.
     static func saved(_ id: ID) -> ID? { id == mainID ? nil : id }
+
+    /// Per-site choices of separate spaces (protections, site fonts) as saved in the defaults:
+    /// by space id, then site.
+    static func siteChoices(_ stored: [String: Any]?) -> [ID: [String: Bool]] {
+        var choices: [ID: [String: Bool]] = [:]
+        for (key, value) in stored ?? [:] {
+            if let id = UUID(uuidString: key), let sites = value as? [String: Bool] { choices[id] = sites }
+        }
+        return choices
+    }
+
+    static func stored(_ choices: [ID: [String: Bool]]) -> [String: [String: Bool]] {
+        Dictionary(uniqueKeysWithValues: choices.map { ($0.key.uuidString, $0.value) })
+    }
 
     static func trimmedName(_ name: String, fallback: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -112,6 +127,11 @@ extension Browser {
     /// More than one space: the sidebar shows the switcher and watches for swipes.
     var hasSpaces: Bool { spaces.count > 1 }
     var canAddSpace: Bool { allSpaces.count < Space.limit }
+
+    /// Whether the space keeps its cookies apart (`Space.separatesData`); never the main one.
+    func separatesData(_ id: Space.ID) -> Bool {
+        id != Space.mainID && spaces.contains { $0.id == id && $0.separatesData }
+    }
 
     /// The favorites of the space shown, in grid order.
     var spacePins: [Pin] { pins(in: currentSpaceID) }

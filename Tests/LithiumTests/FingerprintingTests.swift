@@ -1339,6 +1339,39 @@ struct FingerprintingTests {
         #expect(protected["marked"] == AnyHashable(true))
     }
 
+    /// `document.open` while the page loads drops the `DOMContentLoaded` listener that stopped the
+    /// parse observer, which then searched every later batch for the page's life. Run before the
+    /// script, `dropped` stands for that open and tracks the observers on the document.
+    @Test func parseObserverStopsWhenItsListenerIsDropped() async throws {
+        let dropped = """
+            (() => {
+              const observe = MutationObserver.prototype.observe, disconnect = MutationObserver.prototype.disconnect;
+              const listen = EventTarget.prototype.addEventListener;
+              const watching = new Set();
+              window.parseObservers = { started: 0, watching };
+              MutationObserver.prototype.observe = function (target, options) {
+                if (target === document) { watching.add(this); window.parseObservers.started++; }
+                return observe.call(this, target, options);
+              };
+              MutationObserver.prototype.disconnect = function () { watching.delete(this); return disconnect.call(this); };
+              EventTarget.prototype.addEventListener = function (type, ...rest) {
+                if (this === document && type === 'DOMContentLoaded') return;
+                return listen.call(this, type, ...rest);
+              };
+            })();
+            """
+        let probe = """
+            document.body.appendChild(document.createElement('div')).appendChild(document.createElement('p'));
+            await new Promise((done) => setTimeout(done));
+            return JSON.stringify({ started: parseObservers.started, after: parseObservers.watching.size });
+            """
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling(), html: "<body><p>Text</p></body>", before: dropped, awaiting: true)
+
+        // It ran during the parse, and stopped once a batch came after it.
+        #expect(protected["started"] == AnyHashable(1))
+        #expect(protected["after"] == AnyHashable(0))
+    }
+
     /// A frame's initial blank window, which the page reaches before the frame's page loads, is
     /// kept, with what the page put in it, when that page is of the same origin: the copy of the
     /// script for that page, and the Trusted Types flag, call nothing the page left there (its

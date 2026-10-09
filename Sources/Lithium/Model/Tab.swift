@@ -675,6 +675,8 @@ final class Tab: NSObject, Identifiable {
         // The next web view asks afresh, even if this one's question never gets an answer.
         isAskingPlayback = false
         tearDown()
+        // Asleep, the page can't change its count, which would stay on the tile as it was.
+        updateUnread { $0.pageSlept() }
         pdf = nil
         pdfHistory = [:]
         pdfRecency = []
@@ -1397,6 +1399,12 @@ extension Tab: WKNavigationDelegate {
         guard let browser else { return }
         guard browser.isOnScreen(self) else {
             sleep(configuration: browser.makeConfiguration(for: url))
+            // A favorite wakes again a moment later, or its badge would stay as it was; not after
+            // a crash within the last minute, so a page that keeps crashing can't loop.
+            if pinID != nil, lastCrashReload.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
+                lastCrashReload = Date()
+                browser.wakeSleepingFavorites()
+            }
             return
         }
         if let last = lastCrashReload, Date().timeIntervalSince(last) < 10 {

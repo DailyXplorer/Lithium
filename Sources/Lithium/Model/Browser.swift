@@ -130,6 +130,7 @@ final class Browser {
     @ObservationIgnored var favoriteWakeDelay = Duration.seconds(3)
     /// Started by the first `windowDidAppear`; awaited in tests.
     @ObservationIgnored private(set) var launchFavorites: Task<Void, Never>?
+    @ObservationIgnored private var favoriteWake: Task<Void, Never>?
 
     struct ClosedTab {
         let url: URL
@@ -252,12 +253,18 @@ final class Browser {
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let event = self.memoryPressure?.data else { return }
-                self.memoryLevel = event
-                if event != .normal { self.sleepTabs() }
+                self.memoryLevelChanged(to: event)
             }
         }
         source.activate()
         memoryPressure = source
+    }
+
+    /// Back to normal, the favorites critical memory put to sleep wake again, or their badges
+    /// would stay as they were. Internal for tests.
+    func memoryLevelChanged(to event: DispatchSource.MemoryPressureEvent) {
+        memoryLevel = event
+        if event != .normal { sleepTabs() } else { wakeSleepingFavorites() }
     }
 
     /// Like Firefox's tab unloading: when memory runs low, tabs idle for 5 minutes sleep; when it
@@ -401,21 +408,41 @@ final class Browser {
         if launchFavorites == nil { wakeRestoredFavorites() }
     }
 
+    /// A favorite's notification that came while the window wasn't key put a dot on its tile; the
+    /// user is now looking at that page.
+    func windowDidBecomeKey() {
+        selectedTab?.didOpen()
+    }
+
     /// Restored asleep, a favorite's page counts nothing until clicked: each wakes, unselected, a
     /// few seconds apart, and idle sleep spares it after. Then the favorites still without a page
     /// fetch their icon, as at a change of day: the date may have changed since the last session.
     private func wakeRestoredFavorites() {
-        let restored = tabs.filter { $0.pinID != nil && $0.isAsleep }
-        launchFavorites = Task { [weak self, delay = favoriteWakeDelay] in
-            for tab in restored {
-                try? await Task.sleep(for: delay)
-                guard let self else { return }
-                // Unpinned or closed meanwhile, or memory short: left asleep.
-                guard tab.pinID != nil, memoryLevel == .normal, tabs.contains(where: { $0 === tab }) else { continue }
-                tab.wakeIfAsleep()
-            }
+        wakeSleepingFavorites()
+        launchFavorites = Task { [weak self, wake = favoriteWake, delay = favoriteWakeDelay] in
+            await wake?.value
             try? await Task.sleep(for: delay)
             self?.refreshSleepingPinIcons()
+        }
+    }
+
+    /// Also once memory is back to normal and after a favorite's page crashed out of sight. One
+    /// pass at a time, which picks up a favorite put to sleep meanwhile but wakes each once, so a
+    /// page that keeps crashing can't keep it going; it stops while memory is short, and the next
+    /// normal level starts it again.
+    func wakeSleepingFavorites() {
+        guard favoriteWake == nil, tabs.contains(where: { $0.pinID != nil && $0.isAsleep }) else { return }
+        favoriteWake = Task { [weak self, delay = favoriteWakeDelay] in
+            var woken: Set<ObjectIdentifier> = []
+            while true {
+                try? await Task.sleep(for: delay)
+                guard let self, memoryLevel == .normal, let tab = tabs.first(where: {
+                    $0.pinID != nil && $0.isAsleep && $0.url != nil && !woken.contains(ObjectIdentifier($0))
+                }) else { break }
+                woken.insert(ObjectIdentifier(tab))
+                tab.wakeIfAsleep()
+            }
+            self?.favoriteWake = nil
         }
     }
 

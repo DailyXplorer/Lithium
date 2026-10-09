@@ -850,6 +850,70 @@ struct BrowserTests {
         #expect(!visible.isAsleep)
     }
 
+    /// Asleep, a favorite's tile drops the count its page can no longer change, keeps a dot not
+    /// yet seen, and its page wakes once memory is back to normal.
+    @Test func aFavoriteSleptByCriticalMemoryWakesWhenItEnds() async throws {
+        let browser = Browser()
+        browser.favoriteWakeDelay = .milliseconds(100)
+        let favorite = browser.newTab(url: URL(string: "data:text/html,<title>(3) Chat</title>chat")!, selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        defer { [favorite, visible].forEach(browser.close) }
+        #expect(await waitUntil(120) { loaded(favorite) && loaded(visible) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        #expect(favorite.unread.shown == .count(3))
+
+        favorite.receive(.notification)
+        browser.relieveMemoryPressure(critical: true)
+        #expect(favorite.isAsleep)
+        #expect(favorite.unread.shown == .dot)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(favorite.isAsleep, "nothing wakes it before macOS says memory is normal")
+
+        browser.memoryLevelChanged(to: .normal)
+        #expect(await waitUntil(10) { !favorite.isAsleep && loaded(favorite) && favorite.unread.shown == .count(3) })
+        #expect(browser.selectedTab === visible)
+    }
+
+    /// A favorite's page that crashed out of sight wakes a moment later, once: crashing again
+    /// right after, it stays asleep.
+    @Test func aFavoriteThatCrashedOutOfSightWakesOnce() async throws {
+        let browser = Browser()
+        browser.favoriteWakeDelay = .milliseconds(100)
+        let favorite = browser.newTab(url: URL(string: "data:text/html,<title>Chat</title>chat")!, selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        defer { [favorite, visible].forEach(browser.close) }
+        #expect(await waitUntil(120) { loaded(favorite) && loaded(visible) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+
+        favorite.webViewWebContentProcessDidTerminate(favorite.webView)
+        #expect(favorite.isAsleep)
+        #expect(await waitUntil(10) { !favorite.isAsleep && loaded(favorite) })
+
+        favorite.webViewWebContentProcessDidTerminate(favorite.webView)
+        #expect(favorite.isAsleep)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(favorite.isAsleep)
+    }
+
+    /// A notification that came while the window wasn't key leaves no dot on the favorite once
+    /// the user is back on its page.
+    @Test func aFavoritesDotGoesWhenItsWindowBecomesKey() async {
+        let browser = Browser()
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+
+        favorite.receive(.notification)
+        #expect(favorite.unread.shown == .dot, "no window is key in tests")
+        browser.windowDidBecomeKey()
+        #expect(favorite.unread.shown == nil)
+    }
+
     /// A tab zoomed in wakes from sleep at the same zoom.
     @Test func sleepingTabKeepsItsZoom() async throws {
         let browser = Browser()

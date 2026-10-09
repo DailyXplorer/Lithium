@@ -161,7 +161,10 @@ final class Browser {
         quickLinks.browser = self
         tidyTitles.browser = self
         extensions.start()
-        restore(SessionStore.load())
+        let saved = SessionStore.load()
+        restore(saved)
+        // Written only when restoring changed it (a tab left out, a space gone), not at every launch.
+        savedSession = saved
         saveSession()
         Task { [tidyTitles] in
             // Off the launch path: the model loads once the window is up.
@@ -345,7 +348,8 @@ final class Browser {
         let font = { (tab: Tab, url: URL) in
             PageStyle.usesPageFont(url, privateSession: tab.privateSession, space: tab.siteSpace) ? PageStyle.websiteFamily : nil
         }
-        let pages = tabs.compactMap { tab -> (Tab, URL, String?)? in
+        // Links' windows too, like `setProtections`.
+        let pages = self.pages.compactMap { tab -> (Tab, URL, String?)? in
             guard !tab.isAsleep, let url = tab.url, !Internal.isInternal(url) else { return nil }
             return (tab, url, font(tab, url))
         }
@@ -807,6 +811,12 @@ final class Browser {
         extensions.didSelect(tab)
     }
 
+    /// A split's sidebar row: the pair already shown keeps its focused side, as ⌘1…⌘9 does.
+    func selectSplit(showing first: Tab) {
+        if let selectedTab, split(of: first)?.contains(selectedTab.id) == true { return select(selectedTab) }
+        select(first)
+    }
+
     /// The selection falls back on the tab's group, never on a favorite. A tab the user went to
     /// straight from its opener, and left for no other, goes back to its opener instead.
     func close(_ tab: Tab) {
@@ -1053,7 +1063,8 @@ final class Browser {
             // An extension's own page needs its extension, which loads after the session comes back.
             guard saved.url.scheme != Extensions.scheme else { continue }
             let space = saved.spaceID.flatMap { id in spaces.contains { $0.id == id } ? id : nil } ?? Space.mainID
-            let tab = Tab(browser: self, configuration: makeConfiguration(for: saved.url), space: space)
+            // Its configuration is made as it wakes: most restored tabs stay asleep for a while.
+            let tab = Tab(browser: self, configuration: nil, space: space)
             tab.restore(url: saved.url, title: saved.title)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { id in pins.contains { $0.id == id && $0.space == space } ? id : nil }

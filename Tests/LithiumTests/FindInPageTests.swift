@@ -146,6 +146,34 @@ struct FindInPageTests {
         #expect(selected == "Needle")
     }
 
+    /// A search starting mid-page (the user clicked there) counts from the match it shows, not
+    /// from 1, and steps and wraps from there. Hidden text is left out, as the count leaves it out.
+    @Test(.timeLimit(.minutes(1))) func theCounterShowsTheMatchsPlaceInThePage() async throws {
+        let page = """
+            <!doctype html><body>
+            <p>Needle one</p><p style="display: none">Needle hidden</p><p>Needle two</p>
+            <p id="clicked">Needle three</p><p>Needle four</p><p>Needle five</p>
+            </body>
+            """
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+        _ = try await webView.callAsyncJavaScript("getSelection().collapse(document.getElementById('clicked').firstChild, 6)", contentWorld: .page)
+
+        let find = FindInPage()
+        await find.update(query: "needle", in: webView)
+        #expect(find.matchCount == 5)
+        #expect(find.currentMatch == 4)
+        await find.step(forward: true, in: webView)
+        #expect(find.currentMatch == 5)
+        await find.step(forward: true, in: webView)
+        #expect(find.currentMatch == 1)
+        await find.step(forward: false, in: webView)
+        #expect(find.currentMatch == 5)
+    }
+
     @MainActor
     final class Target: FindTarget {
         let matches: Int

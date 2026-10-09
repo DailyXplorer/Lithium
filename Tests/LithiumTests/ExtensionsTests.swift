@@ -8,7 +8,7 @@ struct ExtensionsTests {
     private let id = "aabbccddeeffgghhiijjkkllmmnnoopp"
 
     /// A tiny Manifest V3 extension, zipped with its files at the root like a store package.
-    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#, links: [String: String] = [:]) throws -> Data {
+    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#, files: [String: String] = [:], links: [String: String] = [:]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         let zip = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID()).zip")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
@@ -17,6 +17,9 @@ struct ExtensionsTests {
             try? FileManager.default.removeItem(at: zip)
         }
         try Data(manifest.utf8).write(to: source.appending(path: "manifest.json"))
+        for (name, contents) in files {
+            try Data(contents.utf8).write(to: source.appending(path: name))
+        }
         for (name, destination) in links {
             try FileManager.default.createSymbolicLink(atPath: source.appending(path: name).path, withDestinationPath: destination)
         }
@@ -132,6 +135,32 @@ struct ExtensionsTests {
         #expect(extensions.contexts[id] != nil)
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "\(id)/manifest.json").path))
         #expect(FileManager.default.fileExists(atPath: folder.appending(path: "\(id).zip").path))
+    }
+
+    /// Extensions load together at launch: each turned on is running once they are done, and the
+    /// one turned off isn't.
+    @Test(.timeLimit(.minutes(1))) func everyExtensionTurnedOnLoadsAtLaunch() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let ids = ["a", "b", "c", "d"].map { String(repeating: $0, count: 32) }
+        let worker = #""background": {"service_worker": "background.js"}"#
+        for id in ids {
+            try archive(manifest: #"{"manifest_version": 3, "name": "\#(id)", "version": "1.0", \#(worker)}"#, files: ["background.js": ""])
+                .write(to: folder.appending(path: "\(id).zip"))
+        }
+        let entries = ids.map { InstalledExtension(id: $0, name: $0, version: "1.0", isEnabled: $0 != ids[2]) }
+        try JSONEncoder().encode(entries).write(to: folder.appending(path: "installed.json"))
+
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        extensions.start()
+        await extensions.waitUntilLoaded()
+
+        #expect(Set(extensions.contexts.keys) == [ids[0], ids[1], ids[3]])
+        #expect(extensions.controller.extensionContexts.count == 3)
+        for id in [ids[0], ids[1], ids[3]] {
+            #expect(FileManager.default.fileExists(atPath: folder.appending(path: "\(id)/\(ExtensionCompatibility.worker)").path))
+        }
     }
 
     private func prepared(manifest: String, worker: String? = nil) throws -> (folder: URL, manifest: [String: Any]) {

@@ -55,6 +55,7 @@ final class Privacy {
     /// Part of each compiled list's name: bump it when `prepared(_:)` changes, so lists are rebuilt.
     private static let preparation = 4
     private static let updateInterval: TimeInterval = 24 * 60 * 60
+    nonisolated static let firstUpdateDelay = Duration.seconds(5 * 60)
     private static let downloadedFilters = URL.applicationSupportDirectory.appending(path: "Lithium/Filters")
 
     init() {
@@ -183,8 +184,11 @@ final class Privacy {
         // Set by scripts/test: each test's Browser would otherwise download and convert the lists.
         guard ProcessInfo.processInfo.environment["LITHIUM_NO_FILTER_UPDATES"] != "1" else { return }
         updateLoop = Task { [weak self] in
+            await self?.loadTask?.value
+            // Not while the app launches: a full update (downloads, conversion, engine build and
+            // recompiling every group) would compete with the first pages for seconds of CPU.
+            try? await Task.sleep(for: Self.firstUpdateDelay)
             while !Task.isCancelled {
-                await self?.loadTask?.value
                 await self?.updateFiltersIfStale()
                 try? await Task.sleep(for: .seconds(60 * 60))
             }
@@ -465,9 +469,14 @@ final class Privacy {
         var kept: Set<String> = []
         var ruleCount = 0
         var complete = true
-        for group in manifest.groups.keys.sorted() {
+        // Started together, as WebKit compiles on a concurrent queue: the first page waits for the
+        // slowest group rather than for all of them in turn. Kept in the groups' order.
+        let compiles = manifest.groups.keys.sorted().map { group in
             let identifier = "lithium-\(group)-\(stamp)-p\(Self.preparation)"
-            if let list = await compiled(group, identifier: identifier, folder: folder, store: store) {
+            return (group, identifier, Task { await compiled(group, identifier: identifier, folder: folder, store: store) })
+        }
+        for (group, identifier, compile) in compiles {
+            if let list = await compile.value {
                 lists.append(list)
                 kept.insert(identifier)
                 ruleCount += manifest.groups[group]?.webkitRules ?? 0

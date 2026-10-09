@@ -30,6 +30,27 @@ struct HistoryStoreTests {
         #expect(store.visits(matching: "").map(\.title) == ["Swift"])
     }
 
+    /// Closed at quit, with a search's connection open too, the log is folded into the file, so
+    /// the next launch has nothing to replay. A title still waiting is kept; nothing is written after.
+    @Test func closingFoldsTheLogIntoTheFile() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "history-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "history.sqlite")
+        let store = HistoryStore(fileURL: file)
+        let url = URL(string: "https://example.com/")!
+        store.record(url, title: "")
+        #expect(await store.visitsInBackground(matching: "example")?.count == 1)
+        store.updateTitle("Example Domain", for: url)
+
+        store.close()
+        store.record(URL(string: "https://example.org/")!, title: "After")
+        // The file alone, without the log beside it, holds every visit.
+        let copy = folder.appending(path: "copy.sqlite")
+        try FileManager.default.copyItem(at: file, to: copy)
+        #expect(HistoryStore(fileURL: copy).visits(matching: "").map(\.title) == ["Example Domain"])
+    }
+
     @Test func collapsesImmediateRevisitsAndUpdatesTitles() async {
         let store = makeStore()
         let url = URL(string: "https://example.com/")!

@@ -45,6 +45,8 @@ final class Tab: NSObject, Identifiable {
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
+        let configuration = self.configuration ?? browser?.makeConfiguration(for: url) ?? WKWebViewConfiguration()
+        self.configuration = configuration
         // A private tab's web views keep its own store, and no extension runs in them.
         if let privateStore {
             configuration.websiteDataStore = privateStore
@@ -63,7 +65,10 @@ final class Tab: NSObject, Identifiable {
         return webView
     }
     @ObservationIgnored private(set) var loadedWebView: WKWebView?
-    @ObservationIgnored private var configuration: WKWebViewConfiguration
+    /// Nil for a tab restored asleep at launch: made when it first needs a web view.
+    @ObservationIgnored private var configuration: WKWebViewConfiguration?
+    /// For tests.
+    var hasConfiguration: Bool { configuration != nil }
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
     @ObservationIgnored private var sleepingState: Any?
@@ -114,8 +119,33 @@ final class Tab: NSObject, Identifiable {
             }
         }
     }
-    private(set) var favicon: NSImage?
-    private(set) var faviconData: Data?
+    private(set) var favicon: NSImage? {
+        get {
+            access(keyPath: \.favicon)
+            readRestoredIcon()
+            return shownFavicon
+        }
+        set {
+            readRestoredIcon()
+            withMutation(keyPath: \.favicon) { shownFavicon = newValue }
+        }
+    }
+    private(set) var faviconData: Data? {
+        get {
+            access(keyPath: \.faviconData)
+            readRestoredIcon()
+            return shownFaviconData
+        }
+        set {
+            readRestoredIcon()
+            withMutation(keyPath: \.faviconData) { shownFaviconData = newValue }
+        }
+    }
+    @ObservationIgnored private var shownFavicon: NSImage?
+    @ObservationIgnored private var shownFaviconData: Data?
+    /// The address whose cached icon a tab restored at launch shows, read when first asked for:
+    /// the sidebar draws only the rows in view, and each read is a file and an image.
+    @ObservationIgnored private var restoredIconURL: URL?
     private(set) var isLoading = false
     private(set) var progress = 0.0
     private(set) var zoom = 1.0
@@ -252,7 +282,7 @@ final class Tab: NSObject, Identifiable {
         privateStore == nil ? browser?.spaceStore(for: spaceID) : nil
     }
 
-    init(browser: Browser, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID) {
+    init(browser: Browser, configuration: WKWebViewConfiguration?, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID) {
         self.browser = browser
         self.configuration = configuration
         self.privateStore = privateStore
@@ -265,7 +295,8 @@ final class Tab: NSObject, Identifiable {
         privateStore == nil && browser?.separatesData(spaceID) == true ? spaceID : nil
     }
 
-    var dataStore: WKWebsiteDataStore { privateStore ?? spaceStore ?? configuration.websiteDataStore }
+    /// Without a configuration yet, the store `Privacy.harden` gives every one.
+    var dataStore: WKWebsiteDataStore { privateStore ?? spaceStore ?? configuration?.websiteDataStore ?? .default() }
 
     private func attach(_ webView: WKWebView) {
         hasShownPage = false
@@ -336,10 +367,18 @@ final class Tab: NSObject, Identifiable {
     func restore(url: URL, title: String) {
         self.url = url
         self.title = title
-        faviconData = (browser?.favicons ?? .shared).cachedData(host: url.host() ?? "")
-        favicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : faviconData.flatMap(NSImage.init(data:))
+        restoredIconURL = url
         isAsleep = true
         hasHadPage = true
+    }
+
+    /// The restored address's icon, read before anything else reads or sets the tab's.
+    private func readRestoredIcon() {
+        guard let url = restoredIconURL else { return }
+        restoredIconURL = nil
+        let data = (browser?.favicons ?? .shared).cachedData(host: url.host() ?? "")
+        shownFaviconData = data
+        shownFavicon = Internal.isInternal(url) ? NSImage(named: NSImage.applicationIconName) : data.flatMap(NSImage.init(data:))
     }
 
     func stopLoading() {
@@ -1148,6 +1187,15 @@ extension Tab: WKNavigationDelegate {
     @objc(_webView:navigation:didSameDocumentNavigation:)
     func webView(_ webView: WKWebView, navigation: WKNavigation?, didSameDocumentNavigation type: Int) {
         if type == 0 || type == 3 { sameDocumentNavigations += 1 }
+        // A web app's new view, through pushState or Back and Forward, is a new page to search.
+        if type == 1 || type == 3 { searchAgainIfFinding() }
+    }
+
+    /// The find bar's count and match belong to the page it searched.
+    private func searchAgainIfFinding() {
+        guard let browser, browser.showsFindBar(over: self), !browser.find.query.isEmpty else { return }
+        let find = browser.find
+        Task { await find.update(query: find.query, in: findTarget) }
     }
 
     /// Private WebKit (`WKNavigationDelegatePrivate`): the page menu's Download Image, Linked File and
@@ -1238,10 +1286,7 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
-        if let browser, browser.showsFindBar(over: self), !browser.find.query.isEmpty {
-            let find = browser.find
-            Task { await find.update(query: find.query, in: findTarget) }
-        }
+        searchAgainIfFinding()
         guard failedURL == nil else { return }
         if browser?.isOnScreen(self) == true { checkReader() }
         if let url = webView.url { recordVisit(url, title: webView.title ?? "") }

@@ -242,6 +242,12 @@ struct FilterUpdateTests {
         #expect(!Privacy.needsUpdate(updated: ahead, matchesSources: true, complete: true, notBefore: now.addingTimeInterval(60), now: now))
     }
 
+    /// Stale lists at launch are updated minutes later, not while the first pages load.
+    @Test func theFirstFilterCheckWaitsUntilAfterLaunch() {
+        #expect(Privacy.firstUpdateDelay >= .seconds(60))
+        #expect(Privacy.firstUpdateDelay <= .seconds(10 * 60))
+    }
+
     /// A 200 answer that isn't a filter list (empty, an HTML page, a handful of lines) counts as
     /// failed and keeps the last good copy, so the next update retries it soon.
     @Test func aBodyThatIsNotAListKeepsTheLastGoodCopy() async throws {

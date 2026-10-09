@@ -126,6 +126,10 @@ final class Browser {
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
     @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
+    /// Restored favorites wake this far apart once the window is up, not all at once. Shorter in tests.
+    @ObservationIgnored var favoriteWakeDelay = Duration.seconds(3)
+    /// Started by the first `windowDidAppear`; awaited in tests.
+    @ObservationIgnored private(set) var launchFavorites: Task<Void, Never>?
 
     struct ClosedTab {
         let url: URL
@@ -393,6 +397,25 @@ final class Browser {
     func windowDidAppear() {
         installEventMonitors()
         selectedTab?.markActive()
+        if launchFavorites == nil { wakeRestoredFavorites() }
+    }
+
+    /// Restored asleep, a favorite's page counts nothing until clicked: each wakes, unselected, a
+    /// few seconds apart, and idle sleep spares it after. Then the favorites still without a page
+    /// fetch their icon, as at a change of day: the date may have changed since the last session.
+    private func wakeRestoredFavorites() {
+        let restored = tabs.filter { $0.pinID != nil && $0.isAsleep }
+        launchFavorites = Task { [weak self, delay = favoriteWakeDelay] in
+            for tab in restored {
+                try? await Task.sleep(for: delay)
+                guard let self else { return }
+                // Unpinned or closed meanwhile, or memory short: left asleep.
+                guard tab.pinID != nil, memoryLevel == .normal, tabs.contains(where: { $0 === tab }) else { continue }
+                tab.wakeIfAsleep()
+            }
+            try? await Task.sleep(for: delay)
+            self?.refreshSleepingPinIcons()
+        }
     }
 
     /// Installed once the window exists: a monitor added before NSApplication finishes launching is dropped.

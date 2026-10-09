@@ -544,7 +544,8 @@ final class Tab: NSObject, Identifiable {
         wakeIfAsleep()
     }
 
-    private func wakeIfAsleep() {
+    /// Without selecting it: a restored favorite wakes this way at launch.
+    func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)
         reloadedURL = url

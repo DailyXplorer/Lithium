@@ -149,8 +149,9 @@ final class Tab: NSObject, Identifiable {
     private(set) var isLoading = false
     private(set) var progress = 0.0
     private(set) var zoom = 1.0
-    /// Typed or interacted with since loaded (`UnsavedInput`): idle sleep would lose that work.
-    @ObservationIgnored private(set) var hasUnsavedInput = false
+    /// When the page last reported typing or interaction since loaded (`UnsavedInput`): idle sleep
+    /// would lose that work. It lapses, or one keystroke in a search field would keep the tab awake for good.
+    @ObservationIgnored private(set) var unsavedInputAt: Date?
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     private(set) var pdf: PDFReader?
@@ -588,7 +589,12 @@ final class Tab: NSObject, Identifiable {
     /// From the page shown, not one put away or left behind by sleep.
     func noteUnsavedInput(from webView: WKWebView) {
         guard webView === loadedWebView, !isAsleep else { return }
-        hasUnsavedInput = true
+        unsavedInputAt = Date()
+    }
+
+    /// The page reports again while the user keeps at it: this is work left alone for less than `interval`.
+    func hasUnsavedInput(within interval: TimeInterval) -> Bool {
+        unsavedInputAt.map { Date().timeIntervalSince($0) <= interval } ?? false
     }
 
     /// Uses Safari's speaker state (private `_isPlayingAudio`). WebKit's public media state calls a
@@ -665,7 +671,7 @@ final class Tab: NSObject, Identifiable {
         canGoBack = false
         canGoForward = false
         isLoading = false
-        hasUnsavedInput = false
+        unsavedInputAt = nil
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -1211,7 +1217,7 @@ extension Tab: WKNavigationDelegate {
         shownProtectedURL = protectedURL
         awaitCommit(false)
         // A new document: its script tells again, a page back from the cache too.
-        hasUnsavedInput = false
+        unsavedInputAt = nil
         resetReader()
         if navigation !== errorNavigation { loadError = nil }
         // A later link to the same tracked address (after Back, say) is stripped again.

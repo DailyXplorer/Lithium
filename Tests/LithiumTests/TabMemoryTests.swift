@@ -95,6 +95,29 @@ struct TabMemoryTests {
         #expect(tab.webView.url == base)
     }
 
+    /// Waking a tab, restored asleep or slept since, brings back a page already seen: no new
+    /// visit, which would raise it in Top Sites. A page it then goes to is recorded as before.
+    @Test func wakingATabRecordsNoNewVisit() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Page</title>page"),
+            "/next": ("Content-Type: text/html", "<title>Next</title>next"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!)
+        defer { browser.close(other) }
+        let tab = browser.newTab(selecting: false)
+        defer { browser.close(tab) }
+        tab.restore(url: base, title: "Page")
+        let visits = { browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").map(\.url) }
+
+        tab.wake()
+        #expect(await waitUntil(30) { loaded(tab) && tab.webView.title == "Page" })
+        tab.load(base.appending(path: "next"))
+        #expect(await waitUntil(30) { visits().contains(base.appending(path: "next")) })
+        #expect(!visits().contains(base), "the restored page woke without a visit")
+    }
+
     /// Low memory spares tabs used a moment ago, a popup and its opener included. Critical memory
     /// puts every background tab to sleep, a favorite's page and a popup pair too, and their
     /// processes exit; the selected tab stays awake, and a slept one wakes on its page.

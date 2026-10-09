@@ -55,6 +55,9 @@ struct DownloadNamesTests {
         #expect(DownloadNames.fileName("Setup.command", keepingExtensionOf: "download") == "Setup")
         #expect(DownloadNames.fileName("Report v1.2", keepingExtensionOf: "file.pdf") == "Report v1.2.pdf")
         #expect(DownloadNames.fileName(".pdf", keepingExtensionOf: "file.pkg") == "file.pkg")
+        // Dots or spaces left before a dropped suffix don't shield the extension behind them.
+        #expect(DownloadNames.fileName("Invoice.pdf..x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
+        #expect(DownloadNames.fileName("Invoice.pdf .x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
     }
 
     @Test func acceptsOnlyAnswersAboutThePage() {

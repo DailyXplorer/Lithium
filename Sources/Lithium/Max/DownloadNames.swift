@@ -95,10 +95,17 @@ enum DownloadNames {
     /// name ends in itself ("Invoice.pdf", from a page's title or the model) goes: Finder hides
     /// the real one, so "Invoice.pdf.pkg" would pass for a PDF. `original` when nothing is left.
     static func fileName(_ name: String, keepingExtensionOf original: String) -> String {
-        var stem = Substring(name)
+        // Trailing dots and spaces go before every check, not once at the end: "Invoice.pdf..x" or
+        // "Invoice.pdf .x" would stop at the empty or spaced suffix, then end in ".pdf" once trimmed.
+        func trimmingEnd(_ text: Substring) -> Substring {
+            var text = text
+            while text.last == "." || text.last?.isWhitespace == true { text.removeLast() }
+            return text
+        }
+        var stem = trimmingEnd(Substring(name))
         while let dot = stem.lastIndex(of: "."), case let suffix = stem[stem.index(after: dot)...],
               suffix.contains(where: \.isLetter), suffix.allSatisfy({ $0.isLetter || $0.isNumber }) {
-            stem = stem[..<dot]
+            stem = trimmingEnd(stem[..<dot])
         }
         let base = stem.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
         guard !base.isEmpty else { return original }

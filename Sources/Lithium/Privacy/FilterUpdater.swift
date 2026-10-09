@@ -80,6 +80,12 @@ struct FilterUpdater: Sendable {
                 }
             }
             let result = ContentBlockerConverter().convertArray(rules: rules, safariVersion: .autodetect(), advancedBlocking: true)
+            // Rules over WebKit's limit are dropped without a word: the set would block less than its
+            // lists say yet count as complete. The last set stays, as scripts/update-filters.py refuses it too.
+            guard result.discardedSafariRules == 0 else {
+                NSLog("Lithium: filter group %@ is over WebKit's rule limit, %d rules discarded", group, result.discardedSafariRules)
+                throw URLError(.dataLengthExceedsMaximum)
+            }
             try result.safariRulesJSON.write(to: staging.appending(path: "\(group).json"), atomically: false, encoding: .utf8)
             advanced += (result.advancedRulesText ?? "").split(separator: "\n").map(String.init)
             groups[group] = Manifest.Group(lists: names, sourceRules: result.sourceRulesCount, webkitRules: result.safariRulesCount)

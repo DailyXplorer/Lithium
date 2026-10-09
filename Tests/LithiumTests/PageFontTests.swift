@@ -389,6 +389,36 @@ struct PageFontTests {
         #expect((reads ?? .max) < 20, "read the style of \(reads ?? -1) elements for two sheets")
     }
 
+    /// An icon sheet from another origin (a CDN without CORS) can't be read: its icons still keep
+    /// their font right after it loads, not after a delayed recheck.
+    @Test func anUnreadableSheetKeepsItsIconsAtOnce() async throws {
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(IconSheet(), forURLScheme: "lithium-test")
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(#"<p id="text">Hello</p><i id="icon" class="glyph"></i>"#, baseURL: URL(string: "lithium-test://example.com/")!)
+        try await loaded.wait()
+
+        let probe = """
+            const first = (element) => getComputedStyle(element).fontFamily.split(',')[0].replace(/"/g, '').trim();
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'lithium-test://cdn.example.net/icons.css';
+            await new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; document.head.append(link); });
+            let readable = true;
+            try { link.sheet.cssRules; } catch (_) { readable = false; }
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            return { readable, icon: first(document.getElementById('icon')), text: first(document.getElementById('text')) };
+            """
+        let result = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: Any])
+        #expect(result["readable"] as? Bool == false)
+        #expect(result["icon"] as? String == "Font Awesome 6 Free")
+        #expect(result["text"] as? String == "Lithium DM Sans")
+    }
+
     /// A font the user picked from the Mac's: named, not shipped, and icons and code keep theirs.
     @Test func pickedFontReplacesTextFontsButNotIconsCodeOrMath() async throws {
         let script = PageStyle.fontScript(family: "Helvetica Neue")
@@ -453,4 +483,18 @@ struct PageFontTests {
         #expect(try await font("late") == "Font Awesome 6 Free")
         #expect(try await webView.callAsyncJavaScript("return window.marked === true", contentWorld: .page) as? Bool == true)
     }
+}
+
+/// Serves an icon sheet under a custom scheme without CORS headers, so a page on another host
+/// can't read its rules.
+@MainActor
+private final class IconSheet: NSObject, WKURLSchemeHandler {
+    func webView(_ webView: WKWebView, start task: any WKURLSchemeTask) {
+        let url = task.request.url!
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/css"])!)
+        task.didReceive(Data(#".glyph { font-family: "Font Awesome 6 Free"; }"#.utf8))
+        task.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop task: any WKURLSchemeTask) {}
 }

@@ -334,13 +334,15 @@
 
   // A new sheet changes only what its font rules select (an element whose font it names keeps its
   // subtree): those are rechecked, not the whole page, which a CSS-in-JS or lazy-CSS site adds
-  // sheets to all the time. Run by `flush`, which rechecks `changed` right after.
+  // sheets to all the time. Run by `flush`, which rechecks `changed` and scans `pending` right after.
   const sheetAdded = (node) => {
     if (!node.isConnected || !node.sheet) return;
     const root = node.getRootNode();
     let selectors;
     try { selectors = readFontSelectors(node.sheet.cssRules, []); } catch (_) {
-      recheckSubtreeLater(root === document ? document.documentElement : root);
+      // A sheet from another origin (icon fonts from a CDN) can't be read: the whole root is
+      // scanned before the next paint, or its icons would show in the page font until a later check.
+      pending.add(root === document ? document.documentElement : root);
       return;
     }
     for (const selector of selectors) {

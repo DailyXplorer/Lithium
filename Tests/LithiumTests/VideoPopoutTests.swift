@@ -93,6 +93,31 @@ struct VideoPopoutTests {
         #expect(popover as? Bool == false, "the page is left as it was")
     }
 
+    /// Paused, the video isn't raised every frame, and the state check waits in the page for it to
+    /// change instead of answering twice a second; playing again brings both back at once.
+    @Test func aPausedVideoCostsNothingUntilItPlays() async throws {
+        let (webView, window) = try await playingPage()
+        defer { window.orderOut(nil) }
+        _ = try await VideoPopout.run("show", in: webView)
+        let looping = { try await webView.callAsyncJavaScript("return globalThis.lithiumVideoPopout.frame !== 0", contentWorld: .defaultClient) as? Bool }
+        #expect(try await looping() == true)
+
+        _ = try await VideoPopout.run("pause", in: webView)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(try await looping() == false, "no frame loop while paused")
+
+        let start = Date()
+        let waiting = Task { try await VideoPopout.run("state", in: webView, value: VideoPopout.pausedWait) as? [String: Any] }
+        try await Task.sleep(for: .milliseconds(500))
+        _ = try await webView.callAsyncJavaScript("document.querySelector('video').play()", contentWorld: .page)
+        let state = try #require(try await waiting.value)
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(elapsed >= 0.4 && elapsed < 3, "answered when it played, not before")
+        #expect(state["paused"] as? Bool == false)
+        #expect(try await looping() == true)
+        _ = try await VideoPopout.run("hide", in: webView)
+    }
+
     /// The player stays where it is dropped, and keeps its distance from the nearest corner when
     /// the page changes size. Dropped past an edge, it stays whole in the page.
     @Test func playerStaysWhereItIsDropped() {

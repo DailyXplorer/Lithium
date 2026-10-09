@@ -29,6 +29,8 @@ final class VideoPopout {
     private static let script = Resources.bundle.url(forResource: "video-popout", withExtension: "js")
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     private static let pollInterval: Duration = .milliseconds(500)
+    /// How long the page holds the state check of a paused video that doesn't change (in ms).
+    static let pausedWait = 5000
 
     /// The tab left behind pops its playing video out; the one shown takes its video back.
     func selectionChanged(from previous: Tab?, to selected: Tab?) {
@@ -137,13 +139,14 @@ final class VideoPopout {
     }
 
     /// Also closes the player when the video is gone (the page went elsewhere, or its process died).
+    /// A paused video's check waits in the page until it changes, so an idle player asks every few seconds.
     private func poll(_ tab: Tab) {
         polling?.cancel()
         polling = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.pollInterval)
                 guard let self, !Task.isCancelled, self.tab === tab else { return }
-                self.update(try? await Self.run("state", in: tab.webView), from: tab)
+                self.update(try? await Self.run("state", in: tab.webView, value: Self.pausedWait), from: tab)
             }
         }
     }

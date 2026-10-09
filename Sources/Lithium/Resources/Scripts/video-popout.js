@@ -1,5 +1,5 @@
 // Body of an async function run by VideoPopout in Lithium's own content world.
-// Arguments: command, and value for "seek" and "mute".
+// Arguments: command, and value for "seek", "mute" and "state".
 // The video goes into the top layer (a manual popover) and fills the shrunk web view: nothing is
 // moved or reloaded, so it never stops.
 
@@ -72,21 +72,44 @@ const raise = (video) => {
 };
 
 // Removing an element closes its popover: YouTube moves its player when its window narrows.
-// Every frame, the video goes back up.
+// Every frame, the video goes back up. Paused, the loop stops until it plays again: the state
+// check raises it meanwhile.
 const keepRaised = (video) => {
   cancelAnimationFrame(store.frame);
+  store.frame = 0;
   const check = () => {
     if (store.video !== video) return;
-    store.frame = requestAnimationFrame(check);
     raise(video);
+    if (video.paused) {
+      store.frame = 0;
+      video.addEventListener('play', () => { if (store.video === video && !store.frame) keepRaised(video); }, { once: true });
+      return;
+    }
+    store.frame = requestAnimationFrame(check);
   };
   store.frame = requestAnimationFrame(check);
 };
+
+// Resolves when a paused video plays, seeks, changes sound or source, or the page resizes it,
+// and at the latest after `ms`: nothing else changes what the player shows.
+const changeOf = (video, ms) => new Promise((resolve) => {
+  const events = ['play', 'seeked', 'volumechange', 'emptied', 'resize'];
+  const done = () => {
+    clearTimeout(timer);
+    events.forEach((type) => video.removeEventListener(type, done));
+    removeEventListener('resize', done);
+    resolve();
+  };
+  const timer = setTimeout(done, ms);
+  events.forEach((type) => video.addEventListener(type, done));
+  addEventListener('resize', done);
+});
 
 const hide = () => {
   const video = store.video;
   store.video = null;
   cancelAnimationFrame(store.frame);
+  store.frame = 0;
   store.style?.remove();
   if (!video) return;
   if (video.matches(':popover-open')) video.hidePopover();
@@ -103,9 +126,16 @@ switch (command) {
   }
   case 'show': return show();
   case 'hide': hide(); return null;
-  case 'state':
+  case 'state': {
     if (store.video) raise(store.video);
+    // `value` (ms): a paused video answers once it changes, so the app doesn't ask twice a second.
+    const video = store.video;
+    if (value > 0 && video?.isConnected && (video.paused || video.ended)) {
+      await changeOf(video, value);
+      if (store.video) raise(store.video);
+    }
     return state(store.video);
+  }
 }
 
 const video = store.video;

@@ -94,6 +94,31 @@ struct AddressSuggestionsTests {
         await suggestions.historyQuery?.value
         #expect(suggestions.items.last?.id == "history:https://docs5.example/")
     }
+
+    /// A click on a row that ended the edit keeps the list for as long as it is held, and the list
+    /// goes only after its mouse-up is handled; back in the field by then, the list stays.
+    @Test func aHeldClickKeepsTheListUntilItsMouseUp() async throws {
+        let suggestions = AddressSuggestions()
+        let mainQueueTurn = { await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } } }
+        suggestions.update(query: "swift", tabs: [], pins: [], history: history([]))
+        suggestions.historyQuery?.cancel()
+
+        suggestions.clearAfterMouseUp()
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(suggestions.items.map(\.id) == ["search:swift"], "a long press keeps the row")
+        suggestions.mouseWentUp()
+        #expect(!suggestions.items.isEmpty, "the row is still there while the mouse-up is handled")
+        await mainQueueTurn()
+        #expect(suggestions.items.isEmpty)
+
+        suggestions.update(query: "swift", tabs: [], pins: [], history: history([]))
+        suggestions.historyQuery?.cancel()
+        suggestions.clearAfterMouseUp()
+        suggestions.editingBegan()
+        suggestions.mouseWentUp()
+        await mainQueueTurn()
+        #expect(suggestions.items.map(\.id) == ["search:swift"], "a new edit keeps its list")
+    }
 }
 
 /// The address bar's rows ask for their icons at every keystroke.

@@ -42,6 +42,9 @@ final class AddressSuggestions {
     @ObservationIgnored private var pointerAtChange: CGPoint?
     /// Tests replace it, so the real pointer is never read.
     @ObservationIgnored var pointerLocation: @MainActor () -> CGPoint = { NSEvent.mouseLocation }
+    /// Set while the click that ended the edit is still held (`clearAfterMouseUp()`).
+    @ObservationIgnored private var clearsOnMouseUp = false
+    @ObservationIgnored private var mouseUpMonitor: Any?
 
     private static let perSource = 3
     private static let limit = 8
@@ -116,7 +119,34 @@ final class AddressSuggestions {
         select(suggestion)
     }
 
+    /// A click on a row ends the edit at mouse-down but picks the row at mouse-up, however long it
+    /// is held: the list stays until that mouse-up, rather than for a fixed time.
+    func clearAfterMouseUp() {
+        clearsOnMouseUp = true
+        guard mouseUpMonitor == nil else { return }
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp, .otherMouseUp]) { [weak self] event in
+            MainActor.assumeIsolated { self?.mouseWentUp() }
+            return event
+        }
+    }
+
+    /// Clears once the mouse-up is handled, so the row under it gets its click first.
+    func mouseWentUp() {
+        if let mouseUpMonitor { NSEvent.removeMonitor(mouseUpMonitor) }
+        mouseUpMonitor = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self, clearsOnMouseUp else { return }
+            clear()
+        }
+    }
+
+    /// Back in the field before that mouse-up: the list is the new edit's.
+    func editingBegan() {
+        clearsOnMouseUp = false
+    }
+
     func clear() {
+        clearsOnMouseUp = false
         historyQuery?.cancel()
         items = []
         selectedIndex = 0

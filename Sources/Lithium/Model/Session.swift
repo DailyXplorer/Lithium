@@ -22,6 +22,18 @@ struct Session: Codable, Equatable {
     var spaceID: Space.ID? = nil
     /// Nil until the user makes a folder, so files written without folders stay as they were.
     var folders: [TabFolder]? = nil
+
+    /// Same tabs, places and spaces, page titles aside: such a change can wait to be written.
+    func differsOnlyInTitles(from other: Session) -> Bool {
+        guard tabs.count == other.tabs.count else { return false }
+        var untitled = self
+        untitled.tabs = zip(tabs, other.tabs).map { tab, saved in
+            var tab = tab
+            tab.title = saved.title
+            return tab
+        }
+        return untitled == other
+    }
 }
 
 enum SessionStore {

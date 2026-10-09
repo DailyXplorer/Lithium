@@ -5,8 +5,10 @@ import WebKit
 /// of the site's (a setting, always on for Brave Search).
 @MainActor
 enum PageStyle {
-    /// Scrollable regions inside the page (tables, code blocks, carousels) keep working.
-    private static let baseCSS = "html, body { overflow-x: clip !important; }"
+    /// Scrollable regions inside the page (tables, code blocks, carousels) keep working. Only at
+    /// desktop widths: a fixed-width layout in a split pane, a narrow window or zoomed in would lose
+    /// its right side, with no way to scroll to it (zoom narrows the width in CSS pixels).
+    private static let baseCSS = "@media (min-width: 1024px) { html, body { overflow-x: clip !important; } }"
 
     private static let baseScript = script(css: baseCSS)
 

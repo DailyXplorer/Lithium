@@ -293,6 +293,41 @@ struct FilterUpdateTests {
         #expect(try manifest().sources == "test-sources")
     }
 
+    /// A condition nested thousands deep is false, and doesn't overflow the updater's stack.
+    @Test func aDeeplyNestedConditionIsFalse() {
+        let tokens: Set<String> = ["env_safari"]
+        #expect(FilterUpdater.evaluate("env_safari && !(ext_ubol || cap_x)", trueTokens: tokens))
+        #expect(!FilterUpdater.evaluate("!env_safari", trueTokens: tokens))
+        #expect(FilterUpdater.evaluate(String(repeating: "(", count: 20) + "env_safari", trueTokens: tokens))
+        #expect(FilterUpdater.evaluate(String(repeating: "!", count: 20) + "env_safari", trueTokens: tokens))
+        for prefix in ["(", "!", "!(", "!!"] {
+            #expect(!FilterUpdater.evaluate(String(repeating: prefix, count: 100_000) + "env_safari", trueTokens: tokens))
+        }
+    }
+
+    /// An endless chain of includes on the list's own server ends: the list fails and keeps its
+    /// last good copy.
+    @Test func anEndlessChainOfIncludesFailsTheList() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let updater = updater(["ads": ["chain"]])
+        StubLists.serve("||good.example^", at: url("chain"))
+        try await updater.update(into: destination)
+        let goodCopy = try read("lists/chain.txt")
+
+        StubLists.serve("!#include chain-1.txt\n||first.example^", at: url("chain"))
+        let last = FilterUpdater.maximumListFiles + 8
+        for link in 1...last {
+            StubLists.serve((link < last ? "!#include chain-\(link + 1).txt\n" : "") + "||link-\(link).example^", at: url("chain-\(link)"))
+        }
+        await #expect(throws: (any Error).self) { try await updater.update(into: destination) }
+        #expect(try read("lists/chain.txt") == goodCopy)
+
+        // A few includes are fine.
+        StubLists.serve("!#include chain-\(last - 2).txt\n||first.example^", at: url("chain"))
+        try await updater.update(into: destination)
+        #expect(try read("lists/chain.txt").contains("link-\(last).example"))
+    }
+
     /// Automatic updates after a failure wait longer each time, up to a day, instead of fetching every list each hour.
     @MainActor
     @Test func failedUpdatesAreRetriedWithABackoff() {

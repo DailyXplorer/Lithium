@@ -161,6 +161,9 @@ struct FilterUpdater: Sendable {
 
     private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
         guard seen.insert(url).inserted else { return [] }
+        // A chain of ever new addresses would keep the update going for the whole launch. Real
+        // lists include a handful of files; past this the list fails and keeps its last good copy.
+        guard seen.count <= Self.maximumListFiles else { throw URLError(.cannotParseResponse) }
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
@@ -219,9 +222,20 @@ struct FilterUpdater: Sendable {
             }
         }
 
+        // Each `!` or `(` nests a call: thousands of them in a list would overflow the updater's
+        // small stack and take the app down at every launch. Real conditions nest a few levels;
+        // one nested deeper than this is malformed, and false.
         var position = 0
+        var depth = 0
+        var tooDeep = false
         func primary() -> Bool {
-            guard position < tokens.count else { return false }
+            guard position < tokens.count, !tooDeep else { return false }
+            guard depth < Self.maximumConditionDepth else {
+                tooDeep = true
+                return false
+            }
+            depth += 1
+            defer { depth -= 1 }
             let token = tokens[position]
             position += 1
             switch token {
@@ -249,8 +263,13 @@ struct FilterUpdater: Sendable {
             }
             return value
         }
-        return or()
+        let value = or()
+        return !tooDeep && value
     }
+
+    static let maximumConditionDepth = 64
+    /// The files one list may be made of, itself and everything it includes.
+    static let maximumListFiles = 32
 }
 
 struct Manifest: Codable {

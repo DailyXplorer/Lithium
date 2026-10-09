@@ -158,7 +158,16 @@ final class Tab: NSObject, Identifiable {
     /// The page shown looks like an article: the address bar offers the reader (`ReaderMode`).
     private(set) var isReaderAvailable = false
     /// The reader shows the page's article in place of the page.
-    private(set) var isReading = false
+    /// The page's media waits while it does, its frames' too (a YouTube embed, which no script of
+    /// the page can reach) and what would start then: WebKit keeps it waiting, across documents,
+    /// until told, so it is told whenever the reader goes, however it goes.
+    private(set) var isReading = false {
+        didSet {
+            guard isReading != oldValue, let webView = loadedWebView else { return }
+            let suspended = isReading
+            Task { await webView.setAllMediaPlaybackSuspended(suspended) }
+        }
+    }
     /// The page shown was asked whether it is an article.
     @ObservationIgnored private var readerChecked = false
     /// The reader was used in this web view: a page back from the cache may still show it, so

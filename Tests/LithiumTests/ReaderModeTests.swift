@@ -141,10 +141,13 @@ struct ReaderModeTests {
         // The page's own broken image already ran its handler.
         _ = try await webView.evaluateJavaScript("delete window.ran; 0")
         #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
-        #expect(try await value("String(document.querySelectorAll('script, iframe, img, body style, link').length)", in: webView) == "0")
-        #expect(try await value("String([...document.querySelectorAll('*')].some((e) => [...e.attributes].some((a) => a.name.startsWith('on'))))", in: webView) == "false")
-        #expect(try await value("String(document.querySelectorAll('a[href^=javascript]').length)", in: webView) == "0")
-        _ = try await webView.evaluateJavaScript("document.querySelectorAll('a:not([href]), p').forEach((e) => e.click()); 0")
+        #expect(try await value("String(document.body.querySelectorAll('script, iframe, img, style, link').length)", in: webView) == "0")
+        #expect(try await value("String([...document.body.querySelectorAll('*')].some((e) => [...e.attributes].some((a) => a.name.startsWith('on'))))", in: webView) == "false")
+        #expect(try await value("String(document.body.querySelectorAll('a[href^=javascript]').length)", in: webView) == "0")
+        // The page waits behind the reader, out of reach: unseen, it takes no click nor focus.
+        #expect(try await value("getComputedStyle(document.querySelector('body ~ body')).pointerEvents", in: webView) == "none")
+        #expect(try await value("getComputedStyle(document.querySelector('body ~ body')).visibility", in: webView) == "hidden")
+        _ = try await webView.evaluateJavaScript("document.body.querySelectorAll('a:not([href]), p').forEach((e) => e.click()); 0")
         try await Task.sleep(for: .milliseconds(300))
         #expect(try await value("String(window.ran)", in: webView) == "undefined")
         #expect(webView.url?.absoluteString == "https://example.com/notes/")
@@ -219,7 +222,8 @@ struct ReaderModeTests {
         #expect(try await value(fixtureFace, in: webView) == "true")
 
         #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
-        #expect(try await value("String(document.styleSheets.length)", in: webView) == "0")
+        // The head's sheets stay, off; the body's leave with it.
+        #expect(try await value("[...document.styleSheets].map((sheet) => sheet.disabled).join()", in: webView) == "true,true,true,true,true")
         await ReaderMode.exit(webView)
         #expect(try await swatches(in: webView) == before)
         // The page's FontFace font stays; the reader's DM Sans joins it, as the page font script's does.
@@ -305,7 +309,8 @@ struct ReaderModeTests {
     }
 
     /// A CSS-in-JS library that makes its <style> on its first write, while the reader is open,
-    /// keeps that sheet: what it writes there once the reader is left styles the page.
+    /// keeps that sheet: what it writes there once the reader is left styles the page. Here in the
+    /// <body>, the reader's then, whose <style> moves to the page's and gets a new sheet.
     @Test func keepsStylingThroughASheetThePageMadeWhileReading() async throws {
         let (webView, listener) = try await loadStyledPage()
         defer { listener.cancel() }
@@ -313,7 +318,7 @@ struct ReaderModeTests {
         _ = try await webView.evaluateJavaScript("""
             const lazy = document.createElement('style');
             lazy.nonce = 'fixture';
-            document.head.append(lazy);
+            document.body.append(lazy);
             window.lazySheet = lazy.sheet;
             lazySheet.insertRule('.late-js { color: rgb(37, 38, 39); }', 0); 0
             """)
@@ -360,12 +365,151 @@ struct ReaderModeTests {
     @Test func appliesTheStyle() async throws {
         let webView = try await load(ReaderPages.article)
         #expect(await ReaderMode.enter(webView, style: ReaderStyle(size: 23, theme: .sepia, font: .serif)))
-        #expect(try await value("document.documentElement.dataset.theme", in: webView) == "sepia")
-        #expect(try await value("document.documentElement.dataset.font", in: webView) == "serif")
+        #expect(try await value("document.body.dataset.theme", in: webView) == "sepia")
+        #expect(try await value("document.body.dataset.font", in: webView) == "serif")
+        #expect(try await value("getComputedStyle(document.body).backgroundColor", in: webView) == "rgb(245, 238, 225)")
         #expect(try await value("getComputedStyle(document.querySelector('article')).fontSize", in: webView) == "23px")
         await ReaderMode.apply(ReaderStyle(size: 15, theme: .dark, font: .sans), to: webView)
-        #expect(try await value("document.documentElement.dataset.theme", in: webView) == "dark")
+        #expect(try await value("document.body.dataset.theme", in: webView) == "dark")
         #expect(try await value("getComputedStyle(document.querySelector('article')).fontSize", in: webView) == "15px")
+    }
+
+    /// The page's own <body>, behind the reader's, naming a theme of its own: the reader keeps the user's.
+    @Test func keepsItsThemeWhateverThePageNames() async throws {
+        let webView = try await load(ReaderPages.article.replacingOccurrences(of: "<body>", with: "<body data-theme=\"dark\">"))
+        // The theme's color, not the background, which fades to it: a web view out of a window
+        // never moves a transition on.
+        let background = "getComputedStyle(document.body).getPropertyValue('--bg').trim().toLowerCase()"
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle(theme: .light)))
+        #expect(try await value(background, in: webView) == "#ffffff")
+        await ReaderMode.apply(ReaderStyle(theme: .sepia), to: webView)
+        #expect(try await value(background, in: webView) == "#f5eee1")
+    }
+
+    /// A CSS-in-JS rule whose text can't be read back whole (`font: var(--a)` with a font longhand
+    /// after it, as on Condé Nast's sites): the page keeps the very sheet, so its text sizes stay.
+    @Test func keepsRulesTheirTextCantCarry() async throws {
+        let page = ReaderPages.article.replacingOccurrences(of: "</head>", with: """
+            <style id="css-in-js"></style></head>
+            """).replacingOccurrences(of: "<body>", with: """
+            <body class="big"><script>
+            document.getElementById('css-in-js').sheet.insertRule(
+              '.big { --size: 30px; font: 700 var(--size)/1.2 Georgia, serif; font-feature-settings: normal; }', 0);
+            </script>
+            """)
+        let webView = try await load(page)
+        let size = "getComputedStyle(document.body).fontSize"
+        #expect(try await value(size, in: webView) == "30px")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        await ReaderMode.exit(webView)
+        #expect(try await value(size, in: webView) == "30px")
+        #expect(try await value("String(document.styleSheets[1].disabled)", in: webView) == "false")
+    }
+
+    /// The page's styles never reach the reader, even those its scripts add while it is open, nor
+    /// what it set on its <html> or put there; they are all the page's again once it is left.
+    @Test func keepsThePageStylesOutOfTheReader() async throws {
+        let page = ReaderPages.article
+            .replacingOccurrences(of: "<html lang=\"en\">", with: "<html lang=\"en\" style=\"overflow: hidden\">")
+            .replacingOccurrences(of: "<style>", with: "<style id=\"text\">p { color: rgb(255, 0, 0); } ")
+            .replacingOccurrences(of: "</body></html>", with: """
+                <script>
+                const overlay = document.createElement('div');
+                overlay.id = 'overlay';
+                overlay.textContent = 'Sign in to keep reading';
+                document.documentElement.append(overlay);
+                </script></body></html>
+                """)
+        let webView = try await load(page)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle(theme: .light)))
+        _ = try await webView.evaluateJavaScript("""
+            const late = document.createElement('style');
+            late.textContent = 'p { font-size: 40px; }';
+            document.head.append(late);
+            document.getElementById('text').append('p { letter-spacing: 9px; }'); 0
+            """)
+        try await Task.sleep(for: .milliseconds(100))
+        var paragraph = "getComputedStyle(document.querySelector('article > div p'))"
+        #expect(try await value("\(paragraph).color", in: webView) == "rgb(28, 29, 36)")
+        #expect(try await value("\(paragraph).fontSize", in: webView) == "19px")
+        #expect(try await value("\(paragraph).letterSpacing", in: webView) == "normal")
+        #expect(try await value("getComputedStyle(document.documentElement).overflow", in: webView) == "visible")
+        #expect(try await value("document.getElementById('overlay').checkVisibility() + ''", in: webView) == "false")
+        #expect(try await value("document.body.innerText.includes('Sign in') + ''", in: webView) == "false")
+        await ReaderMode.exit(webView)
+        paragraph = "getComputedStyle(document.querySelector('.story p'))"
+        #expect(try await value("\(paragraph).color", in: webView) == "rgb(255, 0, 0)")
+        #expect(try await value("\(paragraph).fontSize", in: webView) == "40px")
+        #expect(try await value("\(paragraph).letterSpacing", in: webView) == "9px")
+        #expect(try await value("getComputedStyle(document.documentElement).overflow", in: webView) == "hidden")
+        #expect(try await value("document.getElementById('overlay').checkVisibility() + ''", in: webView) == "true")
+    }
+
+    /// A page's own scrollbars (::-webkit-scrollbar) give way to the system's in the reader, and
+    /// come back with the page.
+    @Test func givesThePageBackItsScrollbars() async throws {
+        let page = ReaderPages.article.replacingOccurrences(of: "<style>", with: """
+            <style>::-webkit-scrollbar { width: 12px; background: rgb(200, 200, 200); } main { min-height: 3000px; }
+            """)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 900, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = webView
+        defer { window.contentView = nil }
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/notes/")!)
+        try await loaded.wait()
+        let width = "String(innerWidth - document.documentElement.clientWidth)"
+        #expect(try await value(width, in: webView) == "12")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        #expect(try await value(width, in: webView) != "12")
+        await ReaderMode.exit(webView)
+        #expect(try await value(width, in: webView) == "12")
+    }
+
+    /// An article in an accordion's closed panels, as on public service pages: the reader shows
+    /// them open. A menu's closed panel stays out.
+    @Test func opensFoldedSections() async throws {
+        let sections = (1...3).map { index in
+            """
+            <h2><button aria-expanded="false" aria-controls="part-\(index)">Part \(index)</button></h2>
+            <div id="part-\(index)" class="collapse" style="visibility: hidden; max-height: 0; overflow: hidden">
+            <p>Paragraph 0\(index): you are concerned if you were granted this protection, with its residence card, its travel document and the rights that come with them.</p>
+            </div>
+            """
+        }
+        let page = """
+            <!doctype html><html lang="en"><head><title>Protection: residence and travel</title></head><body>
+            <header><button aria-expanded="false" aria-controls="menu">Menu</button>
+            <ul id="menu" hidden><li><a href="/a">Housing and family benefits, all of them</a></li></ul></header>
+            <main><article><h1>Protection: residence and travel</h1>
+            <p>Checked on 1 July: what this protection gives you and how to keep it, step by step.</p>
+            \(sections.joined(separator: "\n"))
+            <p>Paragraph 04: this support also covers the steps to take with the prefecture, and the documents to bring.</p>
+            </article></main></body></html>
+            """
+        let webView = try await load(page)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        for index in 1...4 { #expect(text.contains("Paragraph 0\(index)"), "paragraph \(index)") }
+        #expect(!text.contains("Housing and family benefits"))
+    }
+
+    /// The box that stands for an embed until cookies are accepted is named like content
+    /// ("consent-overlay__content"), and reads like a long paragraph: it stays out, the story in.
+    @Test func leavesConsentBoxesOut() async throws {
+        let notice = "This content is blocked because you have not accepted cookies and other trackers. It is provided by a social network; "
+            + "to see it, you must accept its use, which may use cookies, trackers, and other technologies, for your own purposes, as stated."
+        let page = ReaderPages.article.replacingOccurrences(of: "<div class=\"share-bar\">", with: """
+            <div class="cmp-consent-overlay"><div class="cmp-consent-overlay__content"><p>\(notice)</p><p>\(notice)</p></div></div>
+            <div class="share-bar">
+            """)
+        let webView = try await load(page)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        let text = try #require(try await value("document.body.innerText", in: webView))
+        #expect(text.contains("Paragraph 1 of the field notes") && text.contains("Paragraph 6"))
+        #expect(!text.contains("This content is blocked"))
     }
 
     /// Served with a Content-Security-Policy that blocks inline styles and data: fonts, the page
@@ -608,6 +752,60 @@ struct ReaderTabTests {
         #expect(!tab.isReaderAvailable)
         #expect(!tab.isReading)
         #expect(await !tab.toggleReader())
+    }
+
+    /// A video playing in an embed, which the page's own scripts can't reach, waits while the
+    /// reader is open, and plays on once it is left.
+    @Test func embedsWaitBehindTheReader() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let video = try #require(Bundle.module.url(forResource: "Fixtures/red", withExtension: "mp4"))
+        try FileManager.default.copyItem(at: video, to: folder.appending(path: "red.mp4"))
+        let article = folder.appending(path: "article.html")
+        try ReaderPages.article.replacingOccurrences(of: "<iframe src=\"about:blank\"></iframe>", with: """
+            <iframe srcdoc="<video src='red.mp4' loop playsinline></video>"></iframe>
+            """).write(to: article, atomically: true, encoding: .utf8)
+        let browser = Browser()
+        browser.newTab(url: article)
+        let tab = try #require(browser.selectedTab)
+        #expect(await waitUntil(10) { tab.isReaderAvailable })
+        // Media plays only in a page in a window: one far off screen, which WebKit mustn't take for hidden.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = tab.webView
+        let selector = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        if tab.webView.responds(to: selector) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(tab.webView.method(for: selector), to: Setter.self)(tab.webView, selector, false)
+        }
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
+        // The reader carries no frame: this one is the page's, behind it.
+        let embedded = "document.querySelector('iframe').contentDocument.querySelector('video')"
+        func paused() async -> Bool? {
+            try? await tab.webView.callAsyncJavaScript("return \(embedded).paused", contentWorld: .page) as? Bool
+        }
+        let started = try await tab.webView.callAsyncJavaScript("""
+            const media = \(embedded);
+            return await Promise.race([media.play().then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+            """, contentWorld: .page) as? Bool
+        try #require(started == true, "the embed plays")
+
+        #expect(await tab.toggleReader())
+        #expect(await poll(5) { await paused() == true }, "the embed waits behind the reader")
+        #expect(await tab.toggleReader())
+        #expect(await poll(5) { await paused() == false }, "and plays on once the reader is left")
+    }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return await condition()
     }
 
     /// A page that moves on by itself (pushState) is asked again for its new address.

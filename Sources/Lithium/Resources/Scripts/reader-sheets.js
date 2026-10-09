@@ -1,10 +1,9 @@
-// Body of a function run by ReaderMode in the page's own world, as the reader opens, which takes the
-// page's <style>s and <link>s out of the document, and as it closes, which moves those the page added
-// meanwhile to the page's: put back, each gets a new sheet, while a CSS-in-JS
-// library keeps writing to the one it holds (styled-components keeps it for good). That one now
-// passes what it's told on: to its element's sheet once the page is back, and while the reader is
-// open, to the one `reader.js` gives back on leaving. Only while both hold as many rules, so that an
-// index means the same rule in each. replace() and replaceSync() throw on these sheets anyway.
+// Body of a function run by ReaderMode in the page's own world as the reader closes, which moves the
+// <style>s and <link>s the page added to the reader's <body> to its own: moved, each gets a new
+// sheet, while a CSS-in-JS library keeps writing to the one it holds (styled-components keeps it for
+// good). That one now passes what it's told on, to its element's sheet once the page is back. Only
+// while both hold as many rules, so that an index means the same rule in each. replace() and
+// replaceSync() throw on these sheets anyway.
 const latest = document[Symbol.for('lithium.readerSheets')] ??= new WeakMap();
 const owned = (root) => [
   ...[...root.styleSheets].filter((sheet) => sheet.ownerNode),

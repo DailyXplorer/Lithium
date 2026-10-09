@@ -1,7 +1,9 @@
 // Body of an async function run by ReaderMode in Lithium's own content world, only when the user
-// asks for the reader. Swaps the page's document for one holding its article alone, and back: the
-// page's own stays as it was, detached, so leaving returns to it without a reload (its frames,
-// which lose their document when detached, load again).
+// asks for the reader. Puts a <body> holding its article alone before the page's, which waits
+// behind it, hidden, and takes it away again: nothing of the page leaves the document, so leaving
+// returns to it as it was, without a reload. Taken out, its custom elements would tear down what
+// they built (disconnectedCallback), its frames would lose their document, and its sheets couldn't
+// be put back exactly (below). The page's sheets are off while reading.
 // Arguments: action ('enter', 'exit' or 'style'), style ({ size, theme, font }), css and font (DM
 // Sans as base64) for 'enter'.
 // The article is found by Mozilla Readability, Firefox's reader, bundled at the end of this file.
@@ -14,7 +16,9 @@ const applyStyle = (root) => {
 
 // A <style> or <link> taken out of the document loses its sheet, and gets a new one, read again
 // from its text or address, when put back. What scripts did to the old one (rules CSS-in-JS added
-// with insertRule, a theme sheet turned off) lives on that object alone, so it goes to the new one.
+// with insertRule, a theme sheet turned off) lives on that object alone, so it goes to the new one,
+// as text: close, not exact, since a rule written `font: var(--a); font-feature-settings: normal`
+// reads back without its font. Only <style>s the page adds to the reader's <body> go that way.
 // A <link> still loading takes it once loaded; another site's sheet, which scripts can't change,
 // just keeps its on or off. So does one whose text or address the page changed meanwhile (more text
 // from a CSS-in-JS library, another theme): read anew, the new sheet is the page's.
@@ -45,9 +49,9 @@ const ownedSheets = (root) => [
   ...[...root.styleSheets].filter((sheet) => sheet.ownerNode).map((sheet) => ({ node: sheet.ownerNode, sheet, source: sourceOf(sheet.ownerNode) })),
   ...[...root.querySelectorAll('*')].filter((element) => element.shadowRoot).flatMap((element) => ownedSheets(element.shadowRoot)),
 ];
-// The page's scripts ran on while the reader was on, and what they wrote to the document reached
-// the reader's: the page gets it back. Classes and attributes on <html> and <body> (a theme, "fonts
-// loaded") join the page's; elements added to <head> and <body> (styles, dialogs) move there.
+// The page's scripts ran on while the reader was on, and what they wrote to the <body> reached the
+// reader's: the page gets it back. Its classes and attributes ("fonts loaded") join the page's,
+// elements added to it (styles, dialogs) move there.
 const carry = (from, to, ours) => {
   for (const { name, value } of from.attributes) {
     if (ours.includes(name)) continue;
@@ -60,27 +64,40 @@ const carry = (from, to, ours) => {
   for (const node of [...from.childNodes]) if (!ours.includes(node)) to.append(node);
 };
 
+// WebKit picks the window's scrollbars, the page's own (::-webkit-scrollbar) or the system's, as it
+// makes them, not as the document changes: the reader's <body> hides them a moment, on its way in or
+// out, so they are made again for the document shown.
+const hideScrollbars = (body) => {
+  const overflow = [body.style.getPropertyValue('overflow'), body.style.getPropertyPriority('overflow')];
+  body.style.setProperty('overflow', 'hidden', 'important');
+  return () => overflow[0] ? body.style.setProperty('overflow', ...overflow) : body.style.removeProperty('overflow');
+};
+
 const saved = window.__lithiumReader;
 if (action === 'exit') {
   if (!saved) return false;
-  const reader = document.documentElement;
-  const { head, body } = document;
+  const { reader } = saved;
+  saved.quiet.disconnect();
+  document.removeEventListener('load', saved.switchOff, true);
   const added = ownedSheets(document);
   const adopted = document.adoptedStyleSheets.filter((sheet) => sheet !== saved.sheet && !saved.adopted.includes(sheet));
-  const title = document.title;
-  document.replaceChild(saved.root, reader);
+  const showScrollbars = hideScrollbars(reader);
+  reader.getBoundingClientRect();
+  // Back on first, so that a sheet made anew from one of these takes its on or off.
+  for (const [sheet, disabled] of saved.off) sheet.disabled = disabled;
+  reader.remove();
+  if (!saved.body.isConnected) document.documentElement.append(saved.body);
+  showScrollbars();
   document.adoptedStyleSheets = [...saved.adopted, ...adopted];
   delete window.__lithiumReader;
-  if (title !== saved.pageTitle) document.title = title;
-  carry(reader, saved.root, ['lang', 'dir', 'data-theme', 'data-font', '--reader-size', head, body]);
-  if (head && document.head) carry(head, document.head, [saved.title]);
-  if (body && document.body) carry(body, document.body, [saved.article]);
+  carry(reader, saved.body, ['lang', 'dir', 'data-theme', 'data-font', '--reader-size', saved.article]);
   [...saved.owned, ...added].forEach(restoreSheet);
+  for (const media of saved.playing) media.play().catch(() => {});
   scrollTo(saved.x, saved.y);
   return true;
 }
 if (action === 'style') {
-  if (saved) applyStyle(document.documentElement);
+  if (saved) applyStyle(saved.reader);
   return Boolean(saved);
 }
 if (saved) return true;
@@ -93,9 +110,12 @@ if (!document.body) return false;
 const unrendered = new Set(['script', 'style', 'noscript', 'template', 'link', 'meta']);
 const unlikely = /(^|[\s_-])ads?([\s_-]|$)|advert|sponsor|promo|newsletter|subscribe|signup|related|recommend|share|social|cookie|popup|modal|comment|sidebar|breadcrumb|pagination|footer|menu|carousel|slider|swiper|slick|splide|glide/i;
 const likely = /article|content|story|post|entry|main|body|text/i;
+// A cookie consent box, or the one that stands for an embed until cookies are accepted, is never
+// the article, whatever else it is named ("consent-overlay__content").
+const consent = /consent|didomi|onetrust/i;
 const isClutter = (element) => {
   const name = `${typeof element.className === 'string' ? element.className : ''} ${element.id}`;
-  return unlikely.test(name) && !likely.test(name) && element.textContent.length < 1000;
+  return (consent.test(name) || unlikely.test(name) && !likely.test(name)) && element.textContent.length < 1000;
 };
 // Page furniture Readability keeps when it reads like a sentence: carousels and their slides,
 // tabs, sliders, what the page reads out to screen readers ("Slide 1 of 5") or shows them alone
@@ -125,6 +145,15 @@ const isFurniture = (element, computed) => {
   return computed.display !== 'inline' && !/^(td|th|h[1-6])$/.test(element.localName)
     && element.childElementCount < 4 && element.textContent.length < 40 && counter.test(element.textContent);
 };
+// A section the page folds away, an accordion's closed panel, is the article's still: the reader
+// shows it open. Not a menu's, a search box's list or a dialog.
+const folded = new Set([...document.querySelectorAll('[aria-expanded=false][aria-controls]')]
+  .filter((control) => !control.closest('nav, header, [role=navigation], [role=menubar], [role=menu], [role=combobox]'))
+  .flatMap((control) => control.getAttribute('aria-controls').split(/\s+/).map((id) => document.getElementById(id)))
+  .filter((panel) => panel && !/^(menu|listbox|dialog|tree|grid)$/.test(panel.getAttribute('role'))));
+const inFolded = (element) => folded.size > 0 && [...folded].some((panel) => panel.contains(element));
+const isHidden = (element, computed) => computed.display === 'none' && !folded.has(element)
+  || computed.visibility === 'hidden' && !inFolded(element);
 const copy = document.cloneNode(true);
 const originals = document.body.getElementsByTagName('*');
 const copies = [...copy.body.getElementsByTagName('*')];
@@ -133,7 +162,12 @@ for (let index = 0; index < copies.length; index++) {
   const element = originals[index];
   if (removed?.contains(element) || unrendered.has(element.localName)) continue;
   const computed = getComputedStyle(element);
-  if (computed.display === 'none' || computed.visibility === 'hidden' || isClutter(element) || isFurniture(element, computed)) {
+  if (folded.has(element)) {
+    copies[index].removeAttribute('hidden');
+    copies[index].style.removeProperty('display');
+    copies[index].style.removeProperty('visibility');
+  }
+  if (isHidden(element, computed) || isClutter(element) || isFurniture(element, computed)) {
     removed = element;
     copies[index].remove();
   } else if (element.localName === 'img') {
@@ -228,13 +262,6 @@ const byline = clean(found.byline).length < 100 ? clean(found.byline) : '';
 const site = clean(found.siteName) || location.hostname.replace(/^www\./, '');
 const minutes = Math.max(1, Math.round(clean(content.textContent).split(' ').length / 230));
 
-const root = document.createElement('html');
-root.lang = document.documentElement.lang;
-root.dir = found.dir || document.documentElement.dir;
-const head = document.createElement('head');
-const pageTitle = document.createElement('title');
-pageTitle.textContent = document.title;
-head.append(pageTitle);
 // A constructed sheet and a font made from its bytes: the page's Content-Security-Policy, which
 // outlives its document, blocks a <style> element and a data: font, but neither of these.
 const sheet = new CSSStyleSheet();
@@ -259,17 +286,40 @@ if (byline) {
 const article = document.createElement('article');
 article.append(header, content);
 const body = document.createElement('body');
+body.lang = document.documentElement.lang;
+body.dir = found.dir || document.documentElement.dir;
 body.append(article);
-root.append(head, body);
-applyStyle(root);
+applyStyle(body);
 
+// The page's sheets left in the document go off, and so do those its scripts add while reading (a
+// <style> in the head, more text in one, a <link> that loads): the page's styles never reach the
+// reader, and each comes back on, or off, as it was.
+const off = new Map();
+const switchOff = () => {
+  for (const sheet of document.styleSheets) {
+    if (off.has(sheet)) continue;
+    off.set(sheet, sheet.disabled);
+    sheet.disabled = true;
+  }
+};
+const quiet = new MutationObserver(switchOff);
 // A copy of the page's adopted sheets: the array is live, and would hold the reader's instead.
 window.__lithiumReader = {
-  root: document.documentElement, adopted: [...document.adoptedStyleSheets], owned: ownedSheets(document),
-  sheet, title: pageTitle, pageTitle: document.title, article, x: scrollX, y: scrollY,
+  body: document.body, reader: body, adopted: [...document.adoptedStyleSheets], owned: ownedSheets(document),
+  off, quiet, switchOff, sheet, article, x: scrollX, y: scrollY,
 };
 document.adoptedStyleSheets = [sheet];
-document.replaceChild(root, document.documentElement);
+const showScrollbars = hideScrollbars(body);
+// The first <body> is the document's: the page's scripts, find, translation and summaries see the reader's.
+document.body.before(body);
+// A video or sound the page plays waits for it, hidden.
+window.__lithiumReader.playing = [...window.__lithiumReader.body.querySelectorAll('video, audio')].filter((media) => !media.paused);
+for (const media of window.__lithiumReader.playing) media.pause();
+switchOff();
+quiet.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+document.addEventListener('load', switchOff, true);
+body.getBoundingClientRect();
+showScrollbars();
 scrollTo(0, 0);
 return true;
 

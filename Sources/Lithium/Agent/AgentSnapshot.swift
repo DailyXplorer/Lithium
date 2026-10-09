@@ -1,7 +1,6 @@
 import Foundation
 
-/// The viewport of a frame as `agent.js` reports it, in CSS pixels: size, scroll, page size,
-/// device pixel ratio (pageZoom and magnification included), and the visual viewport.
+/// A frame's viewport as `agent.js` reports it, in CSS pixels; `dpr` includes pageZoom and magnification.
 struct PageViewport: Codable, Equatable {
     let w: Double, h: Double, sx: Double, sy: Double, pw: Double, ph: Double
     let dpr: Double, vx: Double, vy: Double, vs: Double
@@ -72,7 +71,6 @@ struct SnapshotNode: Equatable {
     var origin: String?
     var box: [Int]
     var off: String?
-    /// The frame ref of the frame it is in.
     var frame: String?
     var depth = 0
 
@@ -135,7 +133,6 @@ struct SnapshotNode: Equatable {
     }
 }
 
-/// What `snapshot` returns (design section 4.2), before and after it is numbered for a session.
 struct PageSnapshot {
     let tab: String
     let url: String
@@ -148,8 +145,7 @@ struct PageSnapshot {
     /// Nodes left out over the cap, nearest the viewport kept.
     let dropped: Int
     var nodes: [SnapshotNode]
-    /// The main frame's document: a diff from a snapshot of another one (a reload, the next
-    /// page) would remove and add every node, so the whole snapshot is given instead.
+    /// The main frame's document: across documents a diff would replace every node, so none is given.
     var document = ""
     /// Frames read before that didn't answer this time (too slow), by ref: their nodes are left out, not removed.
     var unread: Set<String> = []
@@ -200,7 +196,6 @@ struct PageSnapshot {
         ([header] + nodes.map(\.line)).joined(separator: "\n")
     }
 
-    /// What changed since `earlier`: nodes added, removed, and changed (given whole).
     func diff(since earlier: PageSnapshot) -> JSONValue {
         let before = Dictionary(earlier.nodes.map { ($0.ref, $0) }) { first, _ in first }
         let now = Set(nodes.map(\.ref))
@@ -229,7 +224,6 @@ struct PageSnapshot {
         return .object(fields)
     }
 
-    /// Whether a node of this snapshot is inside one of `frames`, at any depth.
     private func inside(_ frames: Set<String>) -> (SnapshotNode) -> Bool {
         let parents = Dictionary(nodes.filter { $0.role == "frame" }.map { ($0.ref, $0.frame) }) { first, _ in first }
         return { node in
@@ -242,8 +236,7 @@ struct PageSnapshot {
         }
     }
 
-    /// This snapshot with what `earlier` showed in the frames that didn't answer this time, each
-    /// after its frame, as the diff left it: the baseline the next snapshot compares with.
+    /// The baseline for the next diff: this snapshot plus what `earlier` showed in frames that didn't answer.
     func keepingUnread(from earlier: PageSnapshot) -> PageSnapshot {
         guard !unread.isEmpty, earlier.document == document else { return self }
         var kept = self
@@ -255,9 +248,8 @@ struct PageSnapshot {
 }
 
 extension AgentTab {
-    /// Puts the frames' reports together in top-level viewport CSS pixels: each child frame's
-    /// nodes follow its frame node, offset by the content boxes on its path and clipped to them.
-    /// Each node's `guard` is what `Guardrails` would ask before acting on it.
+    /// Puts the frames' reports together in top-level CSS pixels: each child frame's nodes follow
+    /// its frame node, offset and clipped by the content boxes on its path.
     func compose(tab id: String, main: FrameReport, children: [FrameReport], origins: [String: String], zoom: Double, maxNodes: Int, providers: PaymentProviders = .known) -> PageSnapshot {
         let viewport = main.viewport ?? PageViewport(w: 0, h: 0, sx: 0, sy: 0, pw: 0, ph: 0, dpr: 1, vx: 0, vy: 0, vs: 1)
         var byPath: [String: FrameReport] = [:]
@@ -278,9 +270,8 @@ extension AgentTab {
         var challenge = main.challenge.map { AgentChallenge(kind: $0, page: true) }
         var unread: Set<String> = []
 
-        // Focus goes down from the main frame through the frames focused in their parents: a frame
-        // left may keep its activeElement, as the HTML standard has it. `document.hasFocus()` can't tell:
-        // it is false in every frame of a tab not shown in the key window, as agents' tabs often are.
+        // Focus follows the focused frame chain down from the main frame: a frame left may keep its
+        // activeElement, and `document.hasFocus()` is false in every frame of a tab not in the key window.
         func add(_ report: FrameReport, path: String, offset: (x: Double, y: Double), scale: Double, clip: CGRect, depth: Int, inFrame: String?, focusing: Bool, inPaymentFrame: Bool) {
             let document = report.token
             let facts = Dictionary((report.frames ?? []).map { ($0.id, $0) }) { first, _ in first }
@@ -347,7 +338,6 @@ extension AgentTab {
         }
         add(main, path: "", offset: (0, 0), scale: 1, clip: .infinite, depth: 0, inFrame: nil, focusing: true, inPaymentFrame: false)
 
-        // Over the cap, the nodes nearest the viewport stay, in page order.
         var dropped = 0
         if nodes.count > maxNodes {
             let distance = { (node: SnapshotNode) -> Double in
@@ -368,10 +358,8 @@ extension AgentTab {
         )
     }
 
-    /// Numbers the snapshot for the session: the same number as its last snapshot in the same view
-    /// when nothing but boxes changed, the next number otherwise. Returns that last snapshot, the
-    /// only one a diff may compare with: a view of another scope or size shows other nodes. What a
-    /// frame too slow this time showed before stays in the one kept for the next diff.
+    /// Numbers the snapshot for the session (unchanged if only boxes moved) and returns the last
+    /// snapshot of the same view, the only one a diff may compare with.
     func record(_ snapshot: inout PageSnapshot, session: String) -> PageSnapshot? {
         let key = "\(session) \(snapshot.view)"
         let previous = snapshots[key]
@@ -389,8 +377,6 @@ extension AgentTab {
         return previous
     }
 
-    /// The session ended: nothing will diff against its snapshots again, and every reconnect
-    /// opens a new one.
     func forget(session: String) {
         snapshots = snapshots.filter { !$0.key.hasPrefix("\(session) ") }
         seqs[session] = nil
@@ -415,8 +401,7 @@ extension AgentTab {
 }
 
 extension Int {
-    /// A length or position the page reported, rounded and kept within ±1e9 CSS pixels: a page
-    /// can report boxes far past what `Int(_:)` takes without trapping.
+    /// Clamped to ±1e9: a page can report boxes far past what `Int(_:)` takes without trapping.
     init(css value: Double) {
         self = value.isNaN ? 0 : Int(Swift.min(Swift.max(value.rounded(), -1e9), 1e9))
     }

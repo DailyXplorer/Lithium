@@ -1,25 +1,20 @@
 import AppKit
 import WebKit
 
-/// An agent's clicks, keys and wheel as `NSEvent`s handed straight to one web view (design
-/// section 5.2), so pages see trusted events. Nothing is posted to the window server: the
-/// system cursor never moves, no other app or Lithium's own UI can receive them, and Lithium
-/// needs no Accessibility permission. Points are in the web view's own coordinates, put in the
-/// window's as each event is made, in the window it goes to.
+/// An agent's input as `NSEvent`s handed straight to one web view, so pages see trusted events.
+/// Nothing goes to the window server: the cursor never moves, no other app or Lithium UI can
+/// receive them, and no Accessibility permission is needed. Points are in web view coordinates.
 @MainActor
 final class NativeInput {
-    /// The window the web view was in when the action began: one it leaves between events (the
-    /// user selected the tab) stops the action, which may retry in the new one.
+    /// The web view left its window mid-action (the user selected the tab); the action may retry.
     struct WindowChanged: Error {
         /// A press was already delivered: the action happened, so it isn't repeated.
         let afterPress: Bool
     }
 
-    /// What an action may send, as `AgentHub.gate` let it through: a button or a key it didn't
-    /// weigh never reaches the page.
+    /// What `AgentHub.gate` weighed: anything else never reaches the page.
     struct Sends: OptionSet {
         let rawValue: Int
-        /// Pointer moves and the wheel.
         static let pointer = Sends(rawValue: 1)
         static let buttons = Sends(rawValue: 2)
         static let keys = Sends(rawValue: 4)
@@ -30,7 +25,6 @@ final class NativeInput {
     private let sends: Sends
     /// Runs before every event: the tab closing, the user's own input and Stop end the action there.
     private let check: () throws -> Void
-    /// Where the agent's pointer is, for the dot the user sees.
     private let onPointer: (CGPoint) -> Void
     private var held: (button: NSEvent.EventType, at: CGPoint, modifiers: NSEvent.ModifierFlags)?
     private var pressed = false
@@ -54,7 +48,6 @@ final class NativeInput {
 
     // MARK: Pointer
 
-    /// `steps` moves on a straight line from the agent's last pointer position, or one move.
     func move(to point: CGPoint, steps: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws {
         try checkGated(.pointer)
         let start = pointer ?? point
@@ -65,7 +58,7 @@ final class NativeInput {
         }
     }
 
-    /// Down and up `clickCount` times, the nth press counted as such, so the page sees `dblclick`.
+    /// The nth press carries clickCount n, so the page sees `dblclick`.
     func click(at point: CGPoint, button: Button, count: Int, modifiers: NSEvent.ModifierFlags) throws {
         for press in 1...max(1, count) {
             try down(at: point, button: button, clickCount: press, modifiers: modifiers)
@@ -109,7 +102,7 @@ final class NativeInput {
             cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
             cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: event.phase)
             // The event has no window: AppKit gives the CG location, flipped by the primary
-            // screen's height, as locationInWindow (design section 3, item 6). It is never posted.
+            // screen's height, as locationInWindow. It is never posted.
             let height = NSScreen.screens.first?.frame.height ?? 0
             let location = webView.convert(point, to: nil)
             cg.location = CGPoint(x: location.x, y: height - location.y)
@@ -226,9 +219,8 @@ final class NativeInput {
 
     // MARK: Key guard
 
-    /// Marks every event an agent's input made, on the event itself: WebKit sends keys a page
-    /// doesn't handle back through `NSApp.sendEvent` once the page answered, however long it
-    /// was busy, where they would reach Lithium's menus (design section 5.5).
+    /// Marks agent events on the event itself: WebKit sends keys a page doesn't handle back through
+    /// `NSApp.sendEvent`, however much later, where they would reach Lithium's menus.
     private static let agentsKey = UnsafeRawPointer(UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1))
 
     private static func note(_ event: NSEvent) {
@@ -239,8 +231,7 @@ final class NativeInput {
         objc_getAssociatedObject(event, agentsKey) != nil
     }
 
-    /// The local monitor `AgentHub` installs: an agent's ⌘W reaches the page as a `keydown` and
-    /// never closes a tab, nor does any other shortcut reach Lithium's menus.
+    /// An agent's ⌘W reaches the page as a `keydown` and never closes a tab.
     static func guarded(_ event: NSEvent) -> NSEvent? {
         isAgents(event) ? nil : event
     }
@@ -258,7 +249,6 @@ struct NativeKey: Equatable {
     let characters: String
     /// Shift for an uppercase letter or a shifted symbol; Function for arrows and F keys.
     var flags: NSEvent.ModifierFlags = []
-    /// What a letter or symbol key types with Shift on a US layout.
     var shifted: String?
 
     func characters(with flags: NSEvent.ModifierFlags) -> String {
@@ -274,17 +264,14 @@ struct NativeKey: Equatable {
         flags.contains(.shift) ? shifted ?? characters : characters
     }
 
-    /// Enter, or a combination that types a carriage return as Enter does (Control+M): it
-    /// submits a field's form and activates a button or link.
+    /// Enter, or a combination that types a carriage return like it (Control+M).
     func isEnter(with modifiers: NSEvent.ModifierFlags) -> Bool {
         code == 36 || characters(with: modifiers.union(flags)) == "\r"
     }
 
-    /// Space activates a button, a checkbox and the like, whatever the modifiers.
     var isSpace: Bool { code == 49 }
 
-    /// The key types a character into a field: no Command, Control or function key, and a
-    /// printable character (Space's too).
+    /// Whether the key types a printable character into a field.
     func types(with modifiers: NSEvent.ModifierFlags) -> Bool {
         let flags = modifiers.union(self.flags)
         return flags.isDisjoint(with: [.command, .control, .function]) && characters(with: flags).unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
@@ -314,7 +301,6 @@ struct NativeKey: Equatable {
         "'": (39, "\""), ";": (41, ":"), "\\": (42, "|"), ",": (43, "<"), "/": (44, "?"), ".": (47, ">"), "`": (50, "~"),
     ]
 
-    /// Named keys, as `press` takes them.
     static let named: [String: NativeKey] = {
         let function = { (code: UInt16, key: Int) in NativeKey(code: code, characters: String(UnicodeScalar(UInt32(key))!), flags: .function) }
         var keys: [String: NativeKey] = [
@@ -332,15 +318,13 @@ struct NativeKey: Equatable {
         return keys
     }()
 
-    /// Other spellings of named keys, lowercased, and the name `parse` gives them.
     private static let aliases: [String: String] = {
         var aliases = ["return": "Enter", "esc": "Escape", " ": "Space"]
         for name in named.keys { aliases[name.lowercased()] = name }
         return aliases
     }()
 
-    /// `Meta+K`, `Shift+Tab`, `ArrowDown`: the key and its modifiers, nil for a name it doesn't
-    /// know. Named keys are found whatever their case or spelling, and named as `named` names them.
+    /// `Meta+K`, `Shift+Tab`, `ArrowDown`: the key and its modifiers, nil for an unknown name.
     static func parse(_ combo: String) -> (key: NativeKey, name: String, modifiers: NSEvent.ModifierFlags)? {
         var parts = combo.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
         // "+" and "Meta++" name the plus key.

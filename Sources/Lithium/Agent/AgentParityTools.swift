@@ -1,11 +1,9 @@
 import Foundation
 import WebKit
 
-/// What MCP clients show and weigh before calling a tool (`annotations` in `tools/list`): a
-/// title, and hints of what the tool does. Hints only: Lithium's guardrails decide, not the client.
+/// MCP tool `annotations`. Hints only: Lithium's guardrails decide, not the client.
 enum AgentToolHints {
     enum Effect {
-        /// Reads the browser or a page, changes nothing.
         case reads
         /// Changes something the user can see, nothing a page acts on (a tab selected, a scroll).
         case shows
@@ -16,9 +14,7 @@ enum AgentToolHints {
     private struct Hint {
         let title: String
         let effect: Effect
-        /// Calling it twice with the same arguments does no more than once.
         var idempotent = false
-        /// Talks to websites, whose content is untrusted.
         var openWorld = true
     }
 
@@ -62,9 +58,7 @@ enum AgentToolHints {
         "evaluate": Hint(title: "Run a script in a page", effect: .acts),
     ]
 
-    /// Nil for a tool the table doesn't know, which then goes without. A hint is given only where
-    /// it differs from MCP's default (not read-only, destructive, not idempotent, open world), as
-    /// `tools/list` goes to the model with every turn.
+    /// Only hints that differ from MCP's defaults: `tools/list` goes to the model with every turn.
     static func annotations(for tool: String) -> JSONValue? {
         guard let hint = table[tool] else { return nil }
         var fields: [String: JSONValue] = ["title": .string(hint.title)]
@@ -84,7 +78,6 @@ extension AgentHub {
 
     // MARK: Filling a form
 
-    /// One field of `fill_form`, as the tool that fills it would be called.
     private struct FormStep {
         let ref: String
         let kind: String
@@ -146,8 +139,7 @@ extension AgentHub {
             if let grant = last["grant"] { entry["grant"] = grant }
             if let changed = last["changed"] { entry["changed"] = changed }
             filled.append(.object(entry))
-            // A field that brought another document leaves nothing to fill; one that only moved
-            // within the page (a filter writing its state in the address) keeps the refs alive.
+            // A new document leaves nothing to fill; a same-page navigation keeps the refs alive.
             if named.tab.commits > commits, index < steps.count - 1 {
                 throw AgentToolError(code: "navigation_failed", message: "Field \(index + 1) of \(steps.count) (\(step.ref)) made \(named.id) load another page: the fields after it weren’t filled.", tab: id)
             }
@@ -157,7 +149,6 @@ extension AgentHub {
         return .object(result)
     }
 
-    /// Checked before any field is touched, so a wrong one answers `invalid_params` at once.
     private static func formStep(_ field: JSONValue, number: Int) throws -> FormStep {
         let place = "fields[\(number - 1)]"
         guard let ref = field["ref"]?.string, AgentTab.isRef(ref) else { throw Arguments.invalid("\(place).ref must be a ref from snapshot, such as e9.") }
@@ -216,7 +207,6 @@ extension AgentHub {
             guard let state = hub.agentTab(for: tab) else { throw named.closedError }
             state.viewport = CGSize(width: width, height: height)
             tab.wake()
-            // In the stage, so the page lays out and renders at that size now.
             let webView = hub.staged(tab)
             hub.touch(tab)
             var result: [String: JSONValue] = ["tab": .string(named.id), "width": .int(Int(webView.frame.width)), "height": .int(Int(webView.frame.height))]
@@ -227,9 +217,8 @@ extension AgentHub {
         }
     }
 
-    /// WebKit gives the page its new size a moment after the view's: the page is asked, and
-    /// answers once its viewport matches (or after a second, as it is). The answer races the
-    /// deadline and the tab's interruptions, as a busy page can't answer. Nil without one.
+    /// WebKit gives the page its new size a moment after the view's: the page answers once its
+    /// viewport matches, or after a second. Nil when a busy page can't answer.
     private func layout(of named: NamedTab, _ webView: WKWebView, at size: CGSize, until deadline: ContinuousClock.Instant) async throws -> (width: Int, height: Int)? {
         let zoom = max(0.1, webView.pageZoom)
         let script = """
@@ -241,7 +230,6 @@ extension AgentHub {
             return [innerWidth, innerHeight];
             """
         let arguments = ["w": Int((size.width / zoom).rounded()), "h": Int((size.height / zoom).rounded())]
-        // A page that can't answer (between documents) answers empty.
         let answer = PageAnswer<[Int]>()
         Task { answer.result = .success((try? await webView.callAsyncJavaScript(script, arguments: arguments, contentWorld: PageProbe.world)) as? [Int] ?? []) }
         guard let measured = try await watch(named, until: min(deadline, .now + .seconds(2)), { try answer.result?.get() }), measured.count == 2 else { return nil }

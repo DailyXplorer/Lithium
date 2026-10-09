@@ -1,9 +1,8 @@
 import Foundation
 import WebKit
 
-/// Receives what `agent-console.js` passes from the page's world: console messages, and response
-/// bodies when Settings › Agents › Capture response bodies is on. The page can see this handler,
-/// so it exists only in tabs an agent used (design section 8).
+/// Receives console messages and response bodies from `agent-console.js`. The page can see this
+/// handler, so it exists only in tabs an agent used.
 @MainActor
 final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
     static let name = "lithiumAgentConsole"
@@ -32,7 +31,6 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
     static let errorsSource = script("agent-errors")
     private static let errors = WKUserScript(source: errorsSource, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: PageProbe.world)
 
-    /// The scripts for the documents the page loads from now on, in every frame.
     func install(on controller: WKUserContentController, bodies: Bool) {
         if !controllers.contains(controller) {
             controller.removeScriptMessageHandler(forName: Self.name, contentWorld: .page)
@@ -50,8 +48,7 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
         controllers.remove(controller)
     }
 
-    /// Access turned off: pages no longer find the handler. A wrapper already in a page posts
-    /// into nothing, without an error, until the page goes.
+    /// A wrapper already in a page posts into nothing, without an error, until the page goes.
     func uninstall() {
         for controller in controllers.allObjects {
             controller.removeScriptMessageHandler(forName: Self.name, contentWorld: .page)
@@ -65,8 +62,7 @@ final class AgentConsoleHandler: NSObject, WKScriptMessageHandler {
               capture.admitsMessage() else { return }
         let frameID = ResourceLoadSpy.frameID(of: message.frameInfo)
         if let response = body["body"] as? [String: Any] {
-            // Each body is up to 256 KB of regex work: a page posting them faster than they are
-            // redacted would pile up tasks and memory. One over the cap is not kept.
+            // Each body is up to 256 KB of regex work: capped so a flooding page can't pile up tasks.
             guard hub.capturesBodies, redactions < Self.maxRedactions, let url = response["url"] as? String, let method = response["method"] as? String,
                   let text = response["text"] as? String else { return }
             let truncated = response["truncated"] as? Bool ?? false
@@ -91,9 +87,7 @@ extension AgentHub {
 
     // MARK: Capture
 
-    /// The tab's network log and console, started the first time an agent uses the tab (any call
-    /// naming it, or opening it): the resource load delegate on its web view, and the console
-    /// and error scripts in its frames. The page shown gets them at once.
+    /// Starts the tab's network log and console the first time an agent uses the tab.
     @discardableResult
     func capture(in tab: Tab) -> TabCapture? {
         guard let state = agentTab(for: tab) else { return nil }
@@ -113,14 +107,12 @@ extension AgentHub {
         return capture
     }
 
-    /// Hooked from `Tab.attach`: a tab agents use keeps its network log through a new web view
-    /// (waking, a new configuration). Its scripts come with the page, from `install`.
+    /// Hooked from `Tab.attach`: keeps the network log through a new web view (waking, a new configuration).
     func didAttach(_ webView: WKWebView, to tab: Tab) {
         guard usesResourceLoadDelegate, let capture = tabs[tab.id]?.capture else { return }
         capture.spy.attach(to: webView)
     }
 
-    /// Access turned off: no web view keeps the delegate, no page finds the console handler.
     func stopCapturing() {
         for state in tabs.values {
             if let capture = state.capture, let webView = state.tab?.loadedWebView { capture.spy.detach(from: webView) }
@@ -137,9 +129,8 @@ extension AgentHub {
         throw AgentToolError(code: "unsupported", message: "networkidle needs WebKit’s resource load delegate, which this version of macOS doesn’t offer. Use load, or wait_for text or a ref.")
     }
 
-    /// Until none of the page's requests has been in flight for `quiet`, counted from the last
-    /// one that ended, or from `after` if later. Requests of a page the tab left don't count.
-    /// The tab closing, sleeping, the user navigating it, `stop` and the deadline end the wait.
+    /// Until no request has been in flight for `quiet`, counted from the last one that ended, or
+    /// from `after` if later.
     func waitForNetworkIdle(_ named: NamedTab, quiet: Duration = .milliseconds(500), after start: ContinuousClock.Instant? = nil, deadline: ContinuousClock.Instant, timeout: Duration) async throws {
         try checkNetworkIdle(.networkidle)
         guard let capture = capture(in: named.tab) else { throw named.closedError }
@@ -300,8 +291,7 @@ extension AgentHub {
         }
     }
 
-    /// WebKit's frame ids of the child frames that said hello, to their refs. Extension frames
-    /// never say hello, and a frame Lithium never heard from is just "child".
+    /// WebKit frame ids to refs, for child frames that said hello; others show as "child".
     private static func frameRefs(in state: AgentTab) -> [UInt64: String] {
         var refs: [UInt64: String] = [:]
         for (token, info) in state.frames {
@@ -352,7 +342,7 @@ extension AgentHub {
         return "Lithium has no body for request \(entry.id) (\(entry.type)): it keeps those of fetch and XMLHttpRequest, from pages loaded after Capture response bodies was turned on, and the page’s own document."
     }
 
-    /// The page's own document, which WebKit still holds, read when asked rather than kept.
+    /// The page's own document, read from WebKit when asked rather than kept.
     private func documentBody(of entry: NetworkEntry, in named: NamedTab, capture: TabCapture) async throws -> CapturedBody? {
         let latest = capture.entries.last { $0.type == "document" && $0.frameID == nil && $0.redirectedTo == nil }
         guard latest?.id == entry.id, entry.ended != nil, entry.error == nil, Self.isText(entry.mimeType),
@@ -372,8 +362,7 @@ extension AgentHub {
         return cookies.filter { sites.contains(SiteInfo.registrable(String($0.domain.trimmingPrefix(".")))) }.map(\.value)
     }
 
-    /// Without the resource load delegate: each frame's performance timeline, which has no
-    /// headers, no request in flight, and no status in WebKits that leave it out.
+    /// Fallback without the resource load delegate: no headers, no requests in flight, maybe no status.
     private func timelineLog(_ named: NamedTab, filter: String?, type: String?, minStatus: Int, limit: Int) async throws -> AgentToolOutput {
         struct Timeline: Decodable, DocumentReport {
             struct Item: Decodable {
@@ -411,6 +400,5 @@ extension AgentHub {
         }
     }
 
-    /// The timeline's `initiatorType`, as the delegate's types name it.
     private static let timelineTypes = ["navigation": "document", "fetch": "fetch", "xmlhttprequest": "xhr", "script": "script", "link": "stylesheet", "img": "image", "image": "image", "video": "media", "audio": "media"]
 }

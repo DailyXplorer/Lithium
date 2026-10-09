@@ -12,7 +12,7 @@ struct TargetReport: Decodable {
     let token: String
     var path: String?
     var gone: Bool?
-    /// The point hit a frame: its index in `window.frames`, and its address.
+    /// The point hit a frame: its index in `window.frames`.
     var frame: Int?
     var src: String?
     var id: Int?
@@ -41,7 +41,7 @@ struct TargetReport: Decodable {
     var inViewport: Bool?
     var unstable: Bool?
     var coveredBy: ElementReport.Cover?
-    /// Why the point that stands for the element would press something else instead.
+    /// Why the element's point would press something else instead.
     var notActionable: String?
     var viewport: PageViewport?
     var counts: [String: Int]?
@@ -50,7 +50,6 @@ struct TargetReport: Decodable {
     var frames: [String]?
 }
 
-/// One frame's payment facts and challenge, for the page's `Guardrails.Page`.
 struct PayReport: Decodable, DocumentReport {
     let token: String
     var path: String?
@@ -64,7 +63,6 @@ struct FocusedReport: Decodable, DocumentReport {
     var path: String?
     var id: Int?
     var frame: Int?
-    /// The focused frame's address, and its origin when the page knows it.
     var src: String?
     var origin: String?
 }
@@ -91,8 +89,7 @@ private struct FocusReport: Decodable {
     var names: [String]?
 }
 
-/// An action's target, placed: the element (or what the point hits), the frame to ask about it,
-/// where to press in the web view, and what Guardrails needs to know.
+/// An action's target, placed: where to press, and what Guardrails needs to know.
 struct ActionTarget {
     var report: TargetReport
     let address: ElementAddress?
@@ -101,25 +98,24 @@ struct ActionTarget {
     /// Where to press, in top-level viewport CSS pixels and in the web view's points.
     var css: CGPoint
     var point = CGPoint.zero
-    /// The window the web view was in, and the prompts the tab had shown the user, when it was
-    /// placed: `deliver` places it again if either changed since.
+    /// The window and prompt count when placed: `deliver` places it again if either changed.
     weak var window: NSWindow?
     var prompts = 0
     var viewport: PageViewport?
     var inPaymentFrame = false
-    /// Focus is in a frame Lithium can't read (open before agent access was on): whatever it
-    /// holds may be a password field, so text sent there is never logged.
+    /// Focus is in a frame Lithium can't read: it may be a password field, so text sent there is
+    /// never logged.
     var inUnreadFrame = false
     /// ... and of an origin nobody knows.
     var inUnknownFrame = false
     var page = Guardrails.Page()
 
-    /// `e9 button "Pay €42.00"`, as messages name it.
+    /// `e9 button "Pay €42.00"`.
     var label: String {
         "\(ref ?? "the element at \(Int(css: css.x)),\(Int(css: css.y))") \(report.role ?? "element")" + ((report.name ?? "").isEmpty ? "" : " \(SnapshotNode.quoted(report.name ?? ""))")
     }
 
-    /// “Pay €42.00”, or the role when it has no name, for the caption and the user's prompt.
+    /// “Pay €42.00”, or the role when it has no name.
     var shortName: String {
         let name = report.name ?? ""
         return name.isEmpty ? (report.role ?? "the element") : "“\(name.count > 40 ? String(name.prefix(39)) + "…" : name)”"
@@ -136,20 +132,17 @@ struct ActionTarget {
         case key(NativeKey, NSEvent.ModifierFlags)
     }
 
-    /// What Guardrails weighs before `input` reaches the target, decided the same way for a
-    /// click and a key: a click, or Enter or Space on a control, activates it and submits the
-    /// form of a submit control; Enter also submits from any input of a form (a checkbox's too)
-    /// and a one-line field; a key that types a character types it.
+    /// What Guardrails weighs before `input` reaches the target. Enter submits from any input of
+    /// a form (a checkbox's too) and a one-line field, besides activating controls as Space does.
     func guarded(_ input: Input) -> (action: Guardrails.Action, submitting: TargetReport.Form?) {
         guard case .key(let key, let modifiers) = input else { return (.activate, report.submit == true ? report.form : nil) }
-        // Decided on the key, not how its name was spelled: Enter and Space with any modifier,
-        // and Control+M, which types Enter's carriage return, may still activate or submit.
+        // Decided on the key, not its spelling: Enter and Space with any modifier, and Control+M
+        // (Enter's carriage return), may still activate or submit.
         let enter = key.isEnter(with: modifiers)
         let activates = (enter || key.isSpace) && Self.activatedByKeys.contains(report.role ?? "")
         if !activates, key.types(with: modifiers) { return (.type, nil) }
         let submits = report.submit == true && activates || enter && (report.submit == true || report.tag == "input" || report.editable == true && report.multiline != true)
-        // Beside a filled password, Enter anywhere may reach a page's own key listener that sends
-        // it, on a checkbox or a file input too: it asks as Enter in a field does.
+        // Beside a filled password, Enter anywhere may reach a page's key listener that sends it.
         if enter, report.passwordFilled == true { return (.press(enter: true), submits ? report.form : nil) }
         return (activates ? .activate : .press(enter: enter), submits ? report.form : nil)
     }
@@ -163,7 +156,6 @@ extension Guardrails.Form {
     }
 }
 
-/// One action call, in its turn in a tab.
 @MainActor
 struct ActionContext {
     let named: NamedTab
@@ -256,8 +248,7 @@ extension AgentHub {
             let gate = try await hub.gate([(.pointer, "hover over \(target.shortName)")], ctx)
             return try await hub.deliver(ctx, target, gate, wait: .commit, diff: diff) { input in
                 try input.move(to: target.point, steps: 4)
-                // WebKit gives pointer moves without a button only to the window the user has
-                // in front: a tab out of sight, or Lithium in the background, gets none.
+                // WebKit gives buttonless pointer moves only to the window the user has in front.
                 let unseen = "\(ctx.named.id)’s page didn’t get the pointer: WebKit passes hover only to the page in the window in front of the user. Click instead, or ask the user to bring the tab to the front."
                 return Settle(type: "mousemove", count: (target.counts["mousemove"] ?? 0) + 1, unseen: unseen)
             }
@@ -289,21 +280,18 @@ extension AgentHub {
             // Not scrolled into view: that would move where the drag starts.
             let end = try await hub.resolve(to, ctx, checks: [])
             ctx.state.acting?.caption = "Dragging \(start.shortName)"
-            // The press and the release are a click on what each lands on (one element, for a
-            // drag that ends where it starts), and the stricter asks.
+            // The press and the release each count as a click on what they land on.
             let gate = try await hub.gate([(.press(on: [start, end], .left), "drag \(start.shortName)")], ctx)
             return try await hub.deliver(ctx, start, gate, wait: .commit, diff: diff) { input in
                 try input.move(to: start.point)
                 try input.down(at: start.point)
-                // The page reaches a move without a button only in the window in front: what it
-                // counted by the press tells whether that first move is one of its own.
+                // Buttonless moves reach only the window in front, so recount after the press.
                 let pressed = try await hub.settle(ctx, start.frame, Settle(type: "mousedown", count: (start.counts["mousedown"] ?? 0) + 1), timeout: 250, frame: false)
                 var moves = pressed["mousemove"] ?? start.counts["mousemove"] ?? 0
                 for step in 1...steps {
                     let fraction = Double(step) / Double(steps)
                     try input.move(to: CGPoint(x: start.point.x + (end.point.x - start.point.x) * fraction, y: start.point.y + (end.point.y - start.point.y) * fraction))
-                    // WebKit sends only the last of the moves queued while the page is busy:
-                    // each step waits until the page saw the one before.
+                    // WebKit coalesces moves queued while the page is busy: wait for each one.
                     moves += 1
                     try await hub.settle(ctx, start.frame, Settle(type: "mousemove", count: moves), timeout: 250, frame: false)
                 }
@@ -337,7 +325,7 @@ extension AgentHub {
                 throw Arguments.invalid("\(target.label) holds one line: \\n would submit its form. Use submit: true.")
             }
             ctx.state.acting?.caption = "Typing in \(target.shortName)"
-            // Each \n is a real Enter key: it asks as `press Enter` in that field does.
+            // Each \n is a real Enter key, gated as `press Enter`.
             let enter = { (field: ActionTarget) -> (Delivery, describing: String) in
                 let (action, form) = field.guarded(.key(NativeKey.named["Enter"]!, []))
                 return (.keys(into: field, action, submitting: form), "press Enter in \(field.shortName)")
@@ -359,10 +347,8 @@ extension AgentHub {
                     try input.click(at: target.point, button: .left, count: 1, modifiers: [])
                     try await hub.settle(ctx, target.frame, Settle(type: "mouseup", count: (target.counts["mouseup"] ?? 0) + 1), timeout: 1000, frame: false)
                 }
-                // The page may move focus on the click (a decoy field that focuses a password
-                // field), a moment after it, or while the user answers: the first key goes where
-                // focus is right before it, once a gate has weighed that element as typing there
-                // asks. A page that keeps moving focus gets nothing.
+                // The page may move focus (a decoy field that focuses a password field): keys go
+                // only where focus is once a gate has weighed that element.
                 for attempt in 1... {
                     if !clear, ref != nil, let address = into.address {
                         _ = try await hub.ask(ctx.named, ctx.webView, into.frame, "caretEnd", ["id": address.id, "token": address.document], until: ctx.deadline)
@@ -406,9 +392,7 @@ extension AgentHub {
                     try await hub.insert(&pending, input, ctx, into, keys: keys, inserted: &inserted)
                     last = "beforeinput"
                 } else {
-                    // Every key in this field before the call ends: a page that handles each
-                    // one slowly (a field capping its length as it grows) would otherwise get
-                    // the rest in the next field an action clicks.
+                    // Else a slow page would get the rest in the next field an action clicks.
                     try await hub.keysHandled(ctx, into, keys: keys, since: since)
                 }
                 if submit {
@@ -663,11 +647,8 @@ extension AgentHub {
 
     // MARK: Running an action
 
-    /// Runs an action in its turn in the tab (design section 5): a sleeping tab wakes into the
-    /// stage, the web view goes where it takes events, and the user sees a border, a caption and
-    /// the agent's pointer while it runs. The user editing in Lithium's own UI over the tab, or
-    /// pressing in its page, holds it up to 5 seconds, then `user_busy`. Once more when the
-    /// user moved the tab into another window before any press (design section 2.7).
+    /// Runs an action in its turn in the tab (design section 5). The user busy over the tab holds
+    /// it up to 5 seconds; it runs once more if the tab changed windows before any press (2.7).
     func action(_ named: NamedTab, _ verb: String, session: MCPSession, timeout: Duration, _ body: (ActionContext) async throws -> JSONValue) async throws -> JSONValue {
         let deadline = ContinuousClock.now + timeout
         return try await exclusive(named, until: deadline, timeout: timeout) {
@@ -711,8 +692,7 @@ extension AgentHub {
         }
     }
 
-    /// The tab's web view in a window that takes events: its own (the selected tab, the video
-    /// pop-out), else the stage.
+    /// The tab's web view in a window that takes events: its own, else the stage.
     @discardableResult
     func staged(_ tab: Tab) -> WKWebView {
         let webView = sizedWebView(of: tab)
@@ -735,7 +715,6 @@ extension AgentHub {
         }
     }
 
-    /// What the user is doing over the tab shown, if it holds an agent's action up.
     func userBusy(in tab: Tab) -> String? {
         guard let webView = tab.loadedWebView, let window = webView.userWindow else { return nil }
         if (webView as? PageWebView)?.isUserPressing == true { return "pressing in \(id(for: tab))’s page" }
@@ -764,8 +743,7 @@ extension AgentHub {
         static let contextMenu = Checks(rawValue: 16)
     }
 
-    /// The action's target with every check of design section 5.1, in its order, and the
-    /// payment facts of the page; each fails with the first error.
+    /// Runs the checks of design section 5.1 in order; fails with the first error.
     func resolve(_ spec: TargetSpec, _ ctx: ActionContext, checks: Checks) async throws -> ActionTarget {
         var target: ActionTarget
         switch spec {
@@ -796,7 +774,6 @@ extension AgentHub {
         return target
     }
 
-    /// The checks `agent.js` answered for, in the order of design section 5.1.
     private func check(_ target: ActionTarget, _ checks: Checks, _ ctx: ActionContext) throws {
         let report = target.report
         if report.extensionUI == true {
@@ -831,9 +808,8 @@ extension AgentHub {
         return AgentToolError(code: "covered", message: "\(target.label) is covered by \(tag)\(text) (\(ref)). Close or scroll past it first.")
     }
 
-    /// A target in a child frame: its point in the top-level viewport, each frame above letting
-    /// it through, and whether a payment provider's frame or a challenge holds it. Keys, which
-    /// reach the focused element wherever it is, take one out of view (`onScreen` false).
+    /// Places a child frame's target in the top-level viewport, hit-testing each frame above.
+    /// Keys reach the focused element wherever it is, so they pass `onScreen` false.
     private func placeInFrame(_ target: inout ActionTarget, _ ctx: ActionContext, hitTest: Bool, onScreen: Bool = true) async throws {
         guard let address = target.address else { return }
         let layout = try await self.layout(of: ctx.named, ctx.webView, until: ctx.deadline, placing: address)
@@ -864,7 +840,6 @@ extension AgentHub {
         }
     }
 
-    /// What a point hits, down into the frames it lands on that Lithium can read.
     private func resolvePoint(_ css: CGPoint, _ ctx: ActionContext, menu: Bool) async throws -> ActionTarget {
         var frame = FrameTarget.main
         var local = css
@@ -903,7 +878,7 @@ extension AgentHub {
         }
     }
 
-    /// The focused element, down the frames focus went into; the page itself when none has focus.
+    /// The page itself when nothing has focus.
     private func resolveFocused(_ ctx: ActionContext, checks: Checks) async throws -> ActionTarget {
         let frames = try await askEveryFrame(ctx.named, ctx.webView, "focused", [:], FocusedReport.self, until: ctx.deadline)
         var report = frames.reports[0].0
@@ -920,8 +895,7 @@ extension AgentHub {
             let main = try PageProbe.decode(TargetReport.self, from: try await ask(ctx.named, ctx.webView, .main, "target", ["x": 0, "y": 0], until: ctx.deadline))
             var target = ActionTarget(report: TargetReport(token: main.token, path: "", role: unread ? "frame" : "page", focused: unread ? true : nil, viewport: main.viewport, counts: main.counts, pay: main.pay, challenge: main.challenge, frames: main.frames), address: nil, frame: .main, ref: nil, css: .zero, viewport: main.viewport)
             guard unread else { return target }
-            // Focus went into a frame that never said hello (open before agent access was on):
-            // keys go to it whatever it holds. The frames on the way decide as for a point, and
+            // Focus went into a frame that never said hello: keys go to it whatever it holds, and
             // one whose origin nobody knows asks.
             for (parent, child) in zip(above, above.dropFirst() + [report]) {
                 try note(frame: parent.src ?? "", origin: origin(of: child.token, ctx), in: &target)
@@ -948,8 +922,7 @@ extension AgentHub {
         return placed
     }
 
-    /// A frame on the target's way down: a payment provider's makes every action in it a
-    /// payment; a challenge's is the user's to solve.
+    /// A payment provider's frame makes every action in it a payment; a challenge's is the user's.
     private func note(frame src: String, origin: String?, in target: inout ActionTarget) throws {
         if paymentProviders.contains(address: src) || paymentProviders.contains(address: origin) { target.inPaymentFrame = true }
         if let kind = AgentChallenge.kind(of: src) ?? origin.flatMap(AgentChallenge.kind(of:)) {
@@ -961,7 +934,6 @@ extension AgentHub {
         ctx.state.frames[document].map { "\($0.securityOrigin.protocol)://\($0.securityOrigin.host)\($0.securityOrigin.port == 0 ? "" : ":\($0.securityOrigin.port)")" }
     }
 
-    /// The page's payment facts, every frame together, and a challenge the whole page is.
     private func addPageFacts(to target: inout ActionTarget, _ ctx: ActionContext) async throws {
         var reports = [PayReport(token: target.report.token, path: target.report.path, pay: target.report.pay, challenge: target.report.challenge, frames: target.report.frames)]
         if !ctx.state.frames.isEmpty {
@@ -992,35 +964,26 @@ extension AgentHub {
 
     /// What an action's events do to the page, as Guardrails weighs them.
     enum Delivery {
-        /// Pointer moves and the wheel: nothing is pressed.
         case pointer
-        /// A button pressed and let go: a click on what it lands on, whatever the tool. A drag's
-        /// press and release land on two elements, and the stricter decides. A right click
-        /// activates nothing itself, but the page gets its mousedown and mouseup, which its own
-        /// listeners may act on: it asks what a click asks.
+        /// A click on what it lands on, whatever the tool; the stricter of a drag's two ends
+        /// decides. A right click asks as a click: the page's listeners still get its mouse events.
         case press(on: [ActionTarget], NativeInput.Button)
-        /// Keys or text into the target, `action` as `ActionTarget.guarded` decides it.
         case keys(into: ActionTarget, Guardrails.Action, submitting: TargetReport.Form?)
         /// A change made without input events: an option chosen.
         case change(ActionTarget, Guardrails.Action)
     }
 
-    /// What `gate` let an action send, and how the user allowed it.
     struct Gate {
         var sends: NativeInput.Sends = []
         var grant: JSONValue = .null
     }
 
-    /// The one way to an action's events (design section 7.3): each step of `steps` asks the
-    /// user's Allow when Guardrails decides it needs one, as `click` and `type` decide it, before
-    /// any event; and text is logged only once every field it goes to is one typing there
-    /// wouldn't ask for, in a frame Lithium can read. One Allow covers the steps of an action
-    /// (typing a password, then submitting its form), but a payment submit always asks.
+    /// The one way to an action's events (design section 7.3): asks the user's Allow before any
+    /// event. One Allow covers the steps of an action, but a payment submit always asks.
     func gate(_ steps: [(Delivery, describing: String)], _ ctx: ActionContext) async throws -> Gate {
         var gate = Gate()
         var asked: Set<ConfirmationKind> = []
-        // Decided on the fields alone, before any Allow: a key the user denies is logged as one
-        // they allowed would be. An option chosen is logged as text typed there would be.
+        // Decided on the fields alone, before any Allow, so a denied key is logged as an allowed one.
         let fields = steps.compactMap { step -> ActionTarget? in
             switch step.0 {
             case .keys(let target, _, _), .change(let target, .select): target
@@ -1064,10 +1027,8 @@ extension AgentHub {
         }
     }
 
-    /// The user's Allow for `action` on `target` when Guardrails asks for one (design section
-    /// 7.3), before any event. Null when the action is free, else how it was allowed: once, by a
-    /// site grant, or by the Allow given on the same form in the last 2 minutes (typing into a
-    /// card number, then its expiry and CVC).
+    /// Null when the action is free, else how it was allowed: once, by a site grant, or by an
+    /// Allow on the same form in the last 2 minutes.
     private func allow(_ action: Guardrails.Action, on target: ActionTarget, submitting form: TargetReport.Form?, _ describing: String, _ ctx: ActionContext) async throws -> JSONValue {
         let submitted = form.map(Guardrails.Form.init)
         guard let kind = Guardrails.confirmation(for: action, on: target.element, page: target.page, submitting: submitted) else { return .null }
@@ -1080,8 +1041,7 @@ extension AgentHub {
         let host = ctx.named.tab.url?.host() ?? ""
         let (asking, subject) = (describing + (host.isEmpty ? "" : " on \(host)"), "\(describing) \(target.label)")
         let prompt = AgentTab.prompt(kind, asking, subject: subject)
-        // The action run again (`AgentHub.action`) takes the answer its last attempt got, once,
-        // not the form cover that answer made.
+        // A retried action takes its last attempt's answer, once.
         if let grant = ctx.state.answered.removeValue(forKey: prompt) { return .string(grant.rawValue) }
         ctx.state.formCovers.removeAll { $0.until <= .now }
         if fieldEntry, let form, ctx.state.formCovers.contains(where: { $0.form == form && $0.session == ctx.session.id && $0.kind == kind }) {
@@ -1096,14 +1056,9 @@ extension AgentHub {
     // MARK: Delivering
 
     /// Sends the action's events, then waits until the page has handled them (design section
-    /// 5.3): it counted the last of them, then one rendering update. A page load they started
-    /// within 50 ms is followed as far as `wait`; new tabs, a dialog, a download and a file
-    /// chooser the action caused are in the result, with the viewport's diff. Only what `gate`
-    /// let through is sent.
+    /// 5.3). Only what `gate` let through is sent.
     func deliver(_ ctx: ActionContext, _ target: ActionTarget, _ gate: Gate, wait: LoadWait, diff: Bool, fields: [String: JSONValue] = [:], _ send: (NativeInput) async throws -> Settle) async throws -> JSONValue {
-        // While the user answered, the page may have moved the element, or the user selected the
-        // tab and its web view left the stage: the action places its target again, every check
-        // with it, and their answers stand.
+        // While the user answered, the element or the web view may have moved: place it again.
         guard ctx.webView.window === target.window, ctx.state.prompts == target.prompts else { throw NativeInput.WindowChanged(afterPress: false) }
         try checkNetworkIdle(wait)
         let tab = ctx.named.tab
@@ -1129,22 +1084,18 @@ extension AgentHub {
         result["tab"] = .string(ctx.named.id)
         if let ref = target.ref { result["ref"] = .string(ref) }
         do {
-            // A load the events start within 50 ms is followed: the page holds its answer that
-            // long, timed in the page, as a timer of Lithium's in the background fires late.
+            // The 50 ms hold is timed in the page: a background timer of Lithium's fires late.
             if let settle { try await self.settle(ctx, target.frame, settle, timeout: 1000, frame: true, hold: 50, since: since, document: target.report.token) }
             var page: JSONValue?
             if since.hasMoved(tab, ctx.state) {
                 do {
-                    // `none`: the load has started, and nothing more is known, as for navigate.
                     page = wait == .none ? self.page(ctx.named, reached: LoadWait.none) : try await follow(since, in: ctx.named, wait: wait, deadline: ctx.deadline, timeout: ctx.timeout, landedWithinPage: nil)
                 } catch let error as AgentToolError where error.code == "navigation_cancelled" {
-                    // The load the events started was given up before it showed anything (a 204
-                    // answer): the action happened, and the page stayed.
+                    // A load given up before showing anything (a 204): the page stayed.
                     guard case .dropped? = tab.lastUnshownLoad else { throw error }
                 }
             }
-            // The requests the action sent (a Save button's fetch), which WebKit reports a moment
-            // after the page handled the events: quiet is counted from now, not from before.
+            // WebKit reports the action's requests a moment later: quiet counts from now.
             if page == nil, wait == .networkidle {
                 try await waitForNetworkIdle(ctx.named, after: .now, deadline: ctx.deadline, timeout: ctx.timeout)
             }
@@ -1171,21 +1122,16 @@ extension AgentHub {
         return .object(result)
     }
 
-    /// Waits in the page until it has seen the events `settle` names; with `frame`, then one
-    /// rendering update. A page that never sees them (it stopped them before Lithium's listener)
-    /// holds the action no longer than `timeout` milliseconds. A document on its way out never
-    /// answers: a load that started `since` ends the wait, as does the frame going.
-    /// Returns the frame's counts of trusted events once it answered.
-    /// `gone` is thrown when the child frame's `document` went, or the frame did, instead of answering.
+    /// Waits in the page until it has seen the events `settle` names, at most `timeout` ms. A
+    /// document on its way out never answers, so a load since `since` or the frame going ends it.
+    /// `gone` is thrown when the child frame's `document` went instead of answering.
     @discardableResult
     func settle(_ ctx: ActionContext, _ frame: FrameTarget, _ settle: Settle, timeout: Int, frame rendered: Bool, hold: Int = 0, since: LoadProgress? = nil, document: String? = nil, gone: AgentToolError? = nil) async throws -> [String: Int] {
         let args: [String: Any] = ["type": settle.type, "count": settle.count, "timeoutMs": timeout, "scrolled": settle.scrolled, "frame": rendered, "hold": hold]
         let pending = start(ctx.webView, frame, "settle", args)
         let (tab, state) = (ctx.named.tab, ctx.state)
-        // A child frame's document replaced or taken away commits nothing in the tab: past half a
-        // second, the frame is asked which document it shows, after every half second. Its answer
-        // as another document, or none, ends the wait. A main frame's going is a commit. A probe
-        // unanswered for a second (sent to a document as it went) is replaced.
+        // A child frame's document going commits nothing in the tab, so the frame is probed
+        // every half second; a probe unanswered for a second is replaced.
         let probing = frame.info == nil ? nil : document
         var probe: PageAnswer<Data>?
         var probed = ContinuousClock.now
@@ -1216,10 +1162,8 @@ extension AgentHub {
         return report?.counts ?? [:]
     }
 
-    /// Text no key types, inserted once the page has seen the keys typed before it: an
-    /// insertion overtakes key events still queued (design section 3, item 12). `inserted`
-    /// becomes the page's `beforeinput` count once it has the text, counted from what the keys
-    /// before it fired, as a key that types fires one too.
+    /// Text no key types, inserted once the page has seen the keys before it: an insertion
+    /// overtakes key events still queued (design section 3, item 12).
     func insert(_ pending: inout String, _ input: NativeInput, _ ctx: ActionContext, _ target: ActionTarget, keys: Int, inserted: inout Int) async throws {
         guard !pending.isEmpty else { return }
         // Its document gone, the text would go to whatever has focus in the next one.
@@ -1230,11 +1174,8 @@ extension AgentHub {
         try await settle(ctx, target.frame, Settle(type: "beforeinput", count: inserted), timeout: 1000, frame: false, document: target.report.token, gone: Self.frameGone(target.ref))
     }
 
-    /// Waits until the page has seen `keys` key presses in `target`'s frame, for as long as it
-    /// keeps counting more: WebKit hands a busy page its queued keys one at a time, and a click
-    /// overtakes them, so keys still queued when the action ends would go into whatever field
-    /// the next action clicks. A page that stops counting them is waited for a second only.
-    /// Returns the frame's counts.
+    /// WebKit hands a busy page its queued keys one at a time and a click overtakes them, so
+    /// wait while the page keeps counting more, or they'd go into the next field clicked.
     @discardableResult
     func keysHandled(_ ctx: ActionContext, _ target: ActionTarget, keys: Int, since: LoadProgress? = nil, gone: AgentToolError? = nil) async throws -> [String: Int] {
         var seen = -1
@@ -1245,7 +1186,7 @@ extension AgentHub {
         }
     }
 
-    /// The size of the page area the user sees, which background pages are laid out at.
+    /// Background pages are laid out at the size of the page area the user sees.
     var pageAreaSize: CGSize {
         browser?.selectedTab?.loadedWebView.flatMap { $0.userWindow == nil ? nil : $0.bounds.size } ?? CGSize(width: 1280, height: 800)
     }
@@ -1293,8 +1234,7 @@ extension Arguments {
     /// Far past any viewport, and far from where converting to `Int` traps.
     static let maxCoordinate = 1e6
 
-    /// `ref`, or `x` and `y`, at the top level or in the object under `key` (drag's from and to),
-    /// which may also be a ref string.
+    /// `ref`, or `x` and `y`, at the top level or under `key` (drag's from and to).
     func target(in key: String? = nil) throws -> AgentHub.TargetSpec {
         if let key {
             guard let field = value[key] else { throw Self.invalid("\(key) is required: a ref, or {\"x\": …, \"y\": …}.") }

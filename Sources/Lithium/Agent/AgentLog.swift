@@ -1,7 +1,7 @@
 import Foundation
 
-/// Every agent tool call and session eviction, one JSON object per line in `log/YYYY-MM-DD.jsonl` under the agent
-/// folder, readable by the user alone and kept 30 days. Written off the main thread.
+/// Agent tool calls and session evictions as JSON Lines in `log/YYYY-MM-DD.jsonl`, readable by the
+/// user alone and kept 30 days.
 actor AgentLog {
     static let retentionDays = 30
 
@@ -13,7 +13,6 @@ actor AgentLog {
         self.folder = folder
     }
 
-    /// `entry` is the line without `ts` and `seq`, which the log adds.
     func append(_ entry: [String: JSONValue], at date: Date = Date()) {
         seq += 1
         var line = entry
@@ -36,7 +35,7 @@ actor AgentLog {
         }
     }
 
-    /// The newest `limit` entries, newest first, for `lithium://agents`.
+    /// Newest first.
     func entries(limit: Int) -> [JSONValue] {
         var entries: [JSONValue] = []
         for name in dayFiles().reversed() {
@@ -50,7 +49,6 @@ actor AgentLog {
         return entries
     }
 
-    /// Every day file, oldest first, as one JSON Lines document.
     func export() -> Data {
         dayFiles().reduce(into: Data()) { data, name in
             data += (try? Data(contentsOf: folder.appending(path: name))) ?? Data()
@@ -66,9 +64,8 @@ actor AgentLog {
         ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".jsonl") }.sorted()
     }
 
-    /// Deletes day files older than the retention period, and those named after tomorrow: files
-    /// an earlier version named in a Buddhist year (2569) would otherwise sort as the newest and
-    /// never go.
+    /// Also deletes files named after tomorrow: one named in a Buddhist year (2569) would otherwise
+    /// sort as the newest and never go.
     func prune(now: Date = Date()) {
         guard let cutoff = Self.dayCalendar.date(byAdding: .day, value: -Self.retentionDays, to: now),
               let tomorrow = Self.dayCalendar.date(byAdding: .day, value: 1, to: now) else { return }
@@ -80,9 +77,8 @@ actor AgentLog {
         }
     }
 
-    /// The local day, so a day's file holds what the user did that day, as a Gregorian date
-    /// whatever the user's calendar: names are sorted and compared as text, which a Buddhist
-    /// year (2569) or a Japanese era's (0008) would put out of order.
+    /// The local day as a Gregorian date whatever the user's calendar: names are compared as text,
+    /// which a Buddhist or Japanese era year would put out of order.
     static func fileName(for date: Date, timeZone: TimeZone = .current) -> String {
         var calendar = dayCalendar
         calendar.timeZone = timeZone
@@ -90,13 +86,11 @@ actor AgentLog {
         return String(format: "%04d-%02d-%02d.jsonl", day.year ?? 0, day.month ?? 0, day.day ?? 0)
     }
 
-    /// What an exported log is offered as: the same local day as the day files (ISO 8601's own
-    /// default is UTC, a day behind or ahead around midnight).
+    /// The local day, as the day files use (ISO 8601's default UTC is off by a day around midnight).
     static func exportName(for date: Date, timeZone: TimeZone = .current) -> String {
         "Lithium agent log \(fileName(for: date, timeZone: timeZone))"
     }
 
-    /// Gregorian, in the user's time zone.
     static var dayCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US_POSIX")
@@ -116,6 +110,5 @@ struct AgentLogLine: Identifiable, Equatable {
     let tool: String
     let tab: String?
     let host: String?
-    /// The error code; nil when the call succeeded.
     let error: String?
 }

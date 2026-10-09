@@ -2,11 +2,8 @@ import Foundation
 import JavaScriptCore
 import WebKit
 
-/// What `agent.js` reports around an agent's script, per frame: the values of its password and
-/// card fields (any one keeps the script from running; those filled while it ran are scrubbed
-/// out of its result), whether one ever held a value since `agent.js` came, whether a card
-/// field is filled or focused, whether it holds an extension's frame, and the addresses of the
-/// frames it holds.
+/// What `agent.js` reports per frame around an agent's script: password and card values (any one
+/// blocks the script; ones filled while it ran are scrubbed from its result) and what frames it holds.
 struct GuardReport: Decodable, DocumentReport {
     let token: String
     var secrets: [String] = []
@@ -16,16 +13,14 @@ struct GuardReport: Decodable, DocumentReport {
     var frames: [String] = []
 }
 
-/// What `agent.js` did with the element `evaluate`'s ref names: nothing, when the frame held a
-/// password or card value (`blocked`).
 struct HandOverReport: Decodable {
     var blocked: Bool?
     var gone: Bool?
     var extensionUI: Bool?
 }
 
-/// What `agent-evaluate.js` answers: the function's result as JSON text (nil for `undefined`),
-/// or what kept it from running.
+/// What `agent-evaluate.js` answers: the result as JSON text (nil for `undefined`), or what kept it
+/// from running.
 struct ScriptAnswer: Decodable {
     var json: String?
     var cut: Bool?
@@ -37,18 +32,16 @@ struct ScriptAnswer: Decodable {
 extension AgentHub {
     static let evaluateTools: [AgentTool] = [evaluateTool]
 
-    /// The world agents' scripts run in unless they ask for the page's. Not `agent.js`'s: what
-    /// that script reports decides what asks the user, so no agent code runs beside it.
+    /// Not `agent.js`'s world: what that script reports decides what asks the user, so no agent
+    /// code runs beside it.
     static let scriptWorld = WKContentWorld.world(name: "lithium-agent-script")
-    /// A `timeoutMs` under 100 answers `invalid_params`.
     static let scriptTimeouts = 100...30_000
     /// What the agent gets back at most, after the scrub; the page sends ten times that at most.
     nonisolated static let maxScriptResult = 100_000
 
     private static let runner = Resources.bundle.url(forResource: "agent-evaluate", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
 
-    /// Short like every tool's (its rules are in the server's instructions): the user turned it
-    /// on, and it is listed only then, so it costs nothing to those who didn't.
+    /// Listed only when the user turned it on, so it costs nothing to those who didn't.
     static let evaluateTool: AgentTool = {
         var tool = AgentTool(
             name: "evaluate",
@@ -97,7 +90,6 @@ extension AgentHub {
             let webView = sizedWebView(of: tab)
             guard let state = agentTab(for: tab) else { throw named.closedError }
 
-            // Where it runs: the frame of `ref`, or `frame`, or the main frame.
             var element: ElementAddress?
             var target = FrameTarget.main
             var document = state.mainDocument
@@ -127,9 +119,8 @@ extension AgentHub {
             let (answer, took) = try await run(function, args: args, element: element, ref: ref, in: target, of: webView, isolated: isolated, named: named, timeout: timeout)
             let ms = Int(took / .milliseconds(1))
 
-            // Fields filled while it ran (by the script itself, or the user) are scrubbed. Without
-            // the script's frame's word on them, nothing says what to scrub: a script that keeps
-            // the page busy after it returns, or leaves it, gets no result back.
+            // Fields filled while it ran are scrubbed; without the script's frame answering,
+            // nothing says what to scrub, so the result is withheld.
             let after: FrameReports<GuardReport>?
             do {
                 after = try await askEveryFrame(named, webView, "guards", [:], GuardReport.self, until: .now + AgentHub.frameTimeout)
@@ -161,9 +152,8 @@ extension AgentHub {
         }
     }
 
-    /// A script's JSON as the agent gets it: scrubbed, cut to `maxScriptResult`, and decoded
-    /// when whole. Off the main actor: the page may send a megabyte, and each secret and pattern
-    /// is a pass over all of it.
+    /// Scrubbed, cut and decoded off the main actor: the page may send a megabyte, and each
+    /// secret and pattern is a pass over all of it.
     nonisolated static func shown(_ json: String, cut: Bool, secrets: [String], cookies: [String]) -> (result: JSONValue, text: String, truncated: Bool) {
         let text = scrubbed(json, secrets: secrets, cookies: cookies)
         if cut || text.count > maxScriptResult {
@@ -174,10 +164,9 @@ extension AgentHub {
         return ((try? PageProbe.decode(JSONValue.self, from: Data(text.utf8))) ?? .string(text), text, false)
     }
 
-    /// Whether `function` stays inside the brackets the runner pastes it into. Text that closes
-    /// them could declare a function (`setTimeout`, `addEventListener`), which JavaScript hoists
-    /// above the wait for the hand-over, so it would run before `agent.js`'s last check. Such
-    /// text parses inside one pair of brackets or inside two, never both.
+    /// Whether `function` stays inside the runner's brackets. Text that closes them could declare a
+    /// hoisted function that runs before `agent.js`'s last check; such text parses in one or two
+    /// pairs of brackets, never both.
     nonisolated static func isOneExpression(_ function: String) -> Bool {
         let context = JSGlobalContextCreate(nil)
         defer { JSGlobalContextRelease(context) }
@@ -188,11 +177,8 @@ extension AgentHub {
         }
     }
 
-    /// Scripts never run where a secret is present (design section 7.5): a value in a password or
-    /// card field, or a card field in use, in any frame Lithium can read; a password manager's
-    /// (an extension's) frame or a payment provider's frame, which it can't; a payment provider's
-    /// tab. The script's frame must answer, or its fields go unchecked. The values found mask the
-    /// log line, which may quote one.
+    /// Scripts never run where a secret may be: password or card values, a password manager's or
+    /// payment provider's frame, or a payment provider's tab. The script's frame must answer.
     private func checkNoSecrets(_ named: NamedTab, _ webView: WKWebView, frame document: String?, of target: FrameTarget, named name: String?, until deadline: ContinuousClock.Instant) async throws {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
         // A script reaches a linked window's page too (`opener.document`, a popup's handle), whose
@@ -227,12 +213,9 @@ extension AgentHub {
         AgentToolError(code: "blocked", message: "\(named.id) can’t run scripts: a password or card field holds a value on this page. Use snapshot and the input tools instead.")
     }
 
-    /// Starts the runner in `target`, then has `agent.js` check the frame once more and hand it
-    /// the element: the runner's call goes out first, so its listener is in place when the event
-    /// comes, and the agent's code runs only after it. The script's `timeout` starts once the
-    /// element is handed over. Its answer races that, `stop`, the user and the tab closing, so a
-    /// script that never ends or keeps the page busy can't hold the call; it goes on in the page,
-    /// to nobody.
+    /// Starts the runner first, so its listener is in place, then has `agent.js` check the frame
+    /// once more and hand over the element; the agent's code runs only after that. A script that
+    /// never ends can't hold the call: it goes on in the page, to nobody.
     private func run(_ function: String, args: String, element: ElementAddress?, ref: String?, in target: FrameTarget, of webView: WKWebView, isolated: Bool, named: NamedTab, timeout: Duration) async throws -> (ScriptAnswer, Duration) {
         let event = "lithium-element-\(AgentEndpoint.randomString(bytes: 12))"
         let setup: [String: Any] = ["args": args, "element": event, "wantsElement": element != nil, "cap": Self.maxScriptResult * 10]
@@ -274,9 +257,8 @@ extension AgentHub {
         }
     }
 
-    /// A script's result or error as the agent may see it: the page's password and card values
-    /// (3 characters or more, as written and as JSON writes them), the site's cookie values (6
-    /// or more, as `network_body` takes them out), then card numbers, bearer tokens and JWTs.
+    /// Removes password and card values (3+ characters, raw and JSON-escaped), cookie values (6+),
+    /// then card numbers, bearer tokens and JWTs.
     nonisolated static func scrubbed(_ text: String, secrets: [String], cookies: [String]) -> String {
         let values = Set(secrets.filter { $0.count >= 3 } + cookies.filter { $0.count >= 6 })
         let forms = Set(values.flatMap { [$0, jsonEscaped($0)] }).sorted { $0.count > $1.count }
@@ -305,7 +287,6 @@ extension AgentHub {
 }
 
 extension JSONValue {
-    /// The same value with every string, at any depth, transformed.
     func mappingStrings(_ transform: (String) -> String) -> JSONValue {
         switch self {
         case .string(let value): .string(transform(value))

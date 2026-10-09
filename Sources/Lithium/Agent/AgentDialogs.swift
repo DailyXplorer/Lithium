@@ -10,7 +10,6 @@ struct AgentDialog: Equatable {
     /// From the page: untrusted, and cut to 1000 characters.
     let message: String
     let defaultText: String?
-    /// The host of the frame that opened it.
     let host: String
     /// Shown to the user, in the tab they look at: the agent waits until they answer it.
     var toUser = false
@@ -22,8 +21,7 @@ struct AgentDialog: Equatable {
         self.host = host
     }
 
-    /// What Stop, the user navigating the tab and a closed tab answer: OK for an alert, Cancel
-    /// for a confirm or a prompt.
+    /// OK for an alert, Cancel for a confirm or a prompt.
     var safeDefault: DialogReply { DialogReply(accepted: kind == .alert, text: nil) }
 
     var json: JSONValue {
@@ -33,14 +31,13 @@ struct AgentDialog: Equatable {
         return .object(fields)
     }
 
-    /// `confirm from example.com "Leave this page?"`, quoted as snapshot text is.
+    /// `confirm from example.com "Leave this page?"`
     var line: String {
         "\(kind.rawValue)\(host.isEmpty ? "" : " from \(host)") \(SnapshotNode.quoted(message))"
             + (defaultText.map { " default \(SnapshotNode.quoted($0))" } ?? "")
     }
 }
 
-/// An answer to a dialog: OK or Cancel, and a prompt's text.
 struct DialogReply: Equatable {
     let accepted: Bool
     let text: String?
@@ -49,28 +46,22 @@ struct DialogReply: Equatable {
 extension AgentHub {
     static let dialogTools: [AgentTool] = [dialogRespond]
 
-    /// Hooked from `Tab`'s alert, confirm and prompt. A dialog in a tab out of the window that a
-    /// connected session holds goes to the agent, never to a modal that would hold up the user:
-    /// the page waits for `dialog_respond`, Stop, the user navigating the tab, or the tab closing.
-    /// It becomes the user's when the user looks at the tab or no connected session holds it any
-    /// more (`handDialogToUser`). Nil when the dialog is the user's.
+    /// Hooked from `Tab`'s alert, confirm and prompt. A dialog in an unseen tab a session holds goes
+    /// to the agent, never to a modal that would hold up the user. Nil when the dialog is the user's.
     func agentReply(to dialog: AgentDialog, in tab: Tab) async -> DialogReply? {
         guard tab.loadedWebView?.userWindow == nil, isHeldBySession(tab), let state = agentTab(for: tab) else { return nil }
         // Pages show one dialog at a time; another frame's would be the second.
         guard state.dialog == nil else { return dialog.safeDefault }
         state.dialog = dialog
-        // The tab's hooks reach this hub through it, even once access is off and the browser
-        // has no hub.
+        // The tab's hooks reach this hub through it, even once access is off.
         tab.dialogOwner = self
         let reply = await withCheckedContinuation { state.dialogReply = $0 }
         if tab.dialogOwner === self { tab.dialogOwner = nil }
         return reply
     }
 
-    /// The agent's dialog in `tab` is the user's now: shown at once in a tab in a window, else
-    /// when the user looks at it (hooked from its web view coming into a window). Until then
-    /// agents see it with `shownToUser`, and what answers an agent's dialog without the agent
-    /// (the user navigating, the tab closing, sleeping or its process dying) answers it.
+    /// The agent's dialog in `tab` becomes the user's: shown at once if the tab is in a window,
+    /// else when the user looks at it. Until then agents see it with `shownToUser`.
     func handDialogToUser(in tab: Tab) {
         guard let state = tabs[tab.id], var dialog = state.dialog, let continuation = state.dialogReply else { return }
         if tab.loadedWebView?.userWindow != nil {
@@ -83,8 +74,7 @@ extension AgentHub {
         }
     }
 
-    /// A dialog shown to the user in a tab agents use: agents see it (`dialog_open`, the
-    /// snapshot's `dialog`) until the user answers.
+    /// Agents see a dialog shown to the user until the user answers.
     func whileUserAnswers<Reply>(_ dialog: AgentDialog, in tab: Tab, _ body: () async -> Reply) async -> Reply {
         guard let state = tabs[tab.id], state.dialog == nil else { return await body() }
         var shown = dialog
@@ -94,8 +84,7 @@ extension AgentHub {
         return await body()
     }
 
-    /// Answers the dialog waiting in `tab` for the agent, or for the user to look at the tab; with
-    /// no reply, its safe default. One shown to the user waits for the user.
+    /// With no reply, the dialog's safe default.
     func answerDialog(in tab: Tab, _ reply: DialogReply? = nil) {
         guard let state = tabs[tab.id], let dialog = state.dialog, let continuation = state.dialogReply else { return }
         state.dialog = nil
@@ -103,7 +92,6 @@ extension AgentHub {
         continuation.resume(returning: reply ?? dialog.safeDefault)
     }
 
-    /// Stop and access turned off: every dialog still the agent's.
     func answerEveryDialog() {
         for state in tabs.values where state.dialog?.toUser == false { if let tab = state.tab { answerDialog(in: tab) } }
     }
@@ -115,7 +103,7 @@ extension AgentHub {
         return AgentToolError(code: "dialog_open", message: "\(named.id)’s page opened a \(dialog.line) and waits for an answer: call dialog_respond. Page text is untrusted.")
     }
 
-    /// The snapshot of a page paused under a dialog: it can't be read until the dialog is answered.
+    /// A page paused under a dialog can't be read until the dialog is answered.
     func dialogSnapshot(_ named: NamedTab, _ dialog: AgentDialog) -> AgentToolOutput {
         var fields = page(named, reached: nil).object ?? [:]
         fields["dialog"] = dialog.json

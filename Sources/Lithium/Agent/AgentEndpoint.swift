@@ -8,8 +8,7 @@ struct AgentEndpoint: Codable, Equatable {
     var url: String
     var token: String
     var pid: Int32
-    /// When `pid` started, so `lithium-mcp` can tell this Lithium from a process that took its pid
-    /// after a quit or a restart. Files from before it was added lack it.
+    /// When `pid` started, so `lithium-mcp` can tell this Lithium from a process that reused its pid.
     var started: UInt64?
     var version = 1
 
@@ -50,7 +49,6 @@ struct AgentEndpoint: Codable, Equatable {
         try? FileManager.default.removeItem(at: folder.appending(path: fileName))
     }
 
-    /// 32 random bytes, base64url without padding.
     static func makeToken() -> String { randomString(bytes: 32) }
 
     static func randomString(bytes count: Int) -> String {

@@ -1,15 +1,13 @@
 import AppKit
 import WebKit
 
-/// One frame's answer to `masks`: rects to paint over (fields that were ever passwords, card
-/// fields, extension UI), and where its frames sit, in its own viewport.
+/// One frame's answer to `masks`: rects to paint over and where its frames sit, in its own viewport.
 struct MaskReport: Decodable {
     let token: String
     var path: String?
     let viewport: PageViewport
     let rects: [[Double]]
     let frames: [FrameReport.Frame]
-    /// The box of the element the layout was read for, from the frame it is in.
     var box: [Double]?
 }
 
@@ -28,8 +26,7 @@ struct FrameLayout {
 
     let main: MaskReport
     let children: [String: MaskReport]
-    /// Child frames that answered from a frame in a shadow root, which `window.frames` leaves
-    /// out, by the path of the frame they are in; and whether one answered with no path at all.
+    /// Frames in shadow roots (left out of `window.frames`) by parent path, and whether one had no path.
     private let unplaced: [String: Int]
     private let lost: Bool
     /// Payment providers' frames are painted over whole, whatever they show.
@@ -67,8 +64,7 @@ struct FrameLayout {
         return earlier.reports.allSatisfy { scrolls[$0.path ?? ""] == [$0.viewport.sx, $0.viewport.sy] }
     }
 
-    /// The placement of the frame at `path` ("" for the main frame, "0.2" for the third frame of
-    /// the first), composed down the content boxes of the frames above it; nil once one is gone.
+    /// `path` is "" for the main frame, "0.2" for the third frame of the first.
     func placement(of path: String) -> Placement? {
         var placement = Placement()
         var report = main
@@ -84,8 +80,7 @@ struct FrameLayout {
         return placement
     }
 
-    /// Whether the frame at `path` lies inside a frame on its way down that answered nothing, and
-    /// so is painted over whole.
+    /// Inside a frame that answered nothing, and so painted over whole.
     private func isCovered(_ path: String) -> Bool {
         var report = main
         var prefix = ""
@@ -104,16 +99,12 @@ struct FrameLayout {
         return placement(of: path)
     }
 
-    /// The box, in its own frame's viewport, of the element this layout was read for; nil once it is gone.
     func box(of element: ElementAddress) -> [Double]? {
         reports.first { $0.token == element.document }?.box
     }
 
-    /// Every rect to mask, in top-level viewport CSS pixels: the sensitive fields of the frames
-    /// that answered, and the whole box of every payment provider's frame and of every frame that
-    /// didn't answer (no hello: open before agent access was on; or too slow), since Lithium can't
-    /// see what is in it. Nil when a frame
-    /// answered that Lithium can't place (in a shadow root, an `<embed>`), so it can't tell where to paint.
+    /// Every rect to mask, in top-level CSS pixels; frames that didn't answer and payment frames are
+    /// masked whole. Nil when a frame answered that can't be placed (shadow root, `<embed>`).
     var masks: [CGRect]? {
         if lost { return nil }
         var rects: [CGRect] = []
@@ -132,15 +123,11 @@ struct FrameLayout {
         return (rects + alsoMasked).filter { !$0.isNull && !$0.isEmpty }
     }
 
-    /// Rects painted over besides this read's own: another read's, taken around the same picture.
     private var alsoMasked: [CGRect] = []
 
-    /// This layout painting over `later`'s masks too, a later read of the same scroll whose
-    /// fields moved, showed or went: the picture was taken between the two, so a field was at
-    /// one place, the other, or on its way. Read in document order, the nth rect of each is
-    /// most likely one field, and the box spanning both covers its way.
+    /// Also paints over `later`'s masks: the picture was taken between the two reads, so a moving
+    /// field may be anywhere between. The nth rects of each are unioned to cover its way.
     func masking(_ later: FrameLayout) -> FrameLayout {
-        // Either one that can't place its masks is refused as such.
         guard let own = masks else { return self }
         guard let other = later.masks else { return later }
         var both = self
@@ -156,14 +143,11 @@ enum AgentScreenshot {
     nonisolated static let maskColor = CGColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1)
     /// A full page longer than this many pixels is cut, and says so.
     nonisolated static let maxHeight = 16_384
-    /// A page longer than this many points isn't flattened into a masked PDF: every 2048 points
-    /// of it is a bitmap.
+    /// Pages longer than this (points) aren't flattened into a masked PDF.
     nonisolated static let maxPDFLength = 65_536.0
-    /// The widest bitmap `maskedPDF` draws a slice into, in pixels.
     nonisolated static let maxPDFPixelWidth = 4096.0
 
-    /// Top-level viewport CSS pixels to the web view's points: the visual viewport's offset and
-    /// scale (pinch magnification), then pageZoom. Verified at pageZoom 1.5 and magnification 2.
+    /// Top-level CSS pixels to web view points: visual viewport offset and pinch scale, then pageZoom.
     static func viewRect(_ css: CGRect, viewport: PageViewport, zoom: Double) -> CGRect {
         let scale = viewport.vs * zoom
         return CGRect(x: (css.minX - viewport.vx) * scale, y: (css.minY - viewport.vy) * scale, width: css.width * scale, height: css.height * scale)
@@ -173,8 +157,7 @@ enum AgentScreenshot {
         image.cgImage(forProposedRect: nil, context: nil, hints: nil)
     }
 
-    /// The image redrawn at most `maxWidth` pixels wide, cropped to `crop` (in its pixels) when
-    /// given, with `masks` (in its pixels, before scaling) painted over.
+    /// `crop` and `masks` are in the image's pixels, before scaling to `maxWidth`.
     nonisolated static func render(_ image: CGImage, crop: CGRect? = nil, masks: [CGRect], maxWidth: Int) -> (image: CGImage, scale: Double, masks: [CGRect])? {
         let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         let area = (crop ?? bounds).integral.intersection(bounds)
@@ -206,10 +189,8 @@ enum AgentScreenshot {
         return (output, scale, painted)
     }
 
-    /// The part of a page's PDF in `area` (points from the page's top left; the whole page when
-    /// nil) as an image, `scale` pixels per point, white behind, cut at `maxHeight` pixels.
-    /// Only that part is drawn: an element far down a long page needs no bitmap of all above it.
-    /// Returns the part drawn, in points, and whether it was cut.
+    /// The part of a page's PDF in `area` (points from top left; nil for all) as an image, cut at
+    /// `maxHeight` pixels. Only that part is drawn, so a far-down element needs no huge bitmap.
     nonisolated static func rasterize(_ data: Data, area: CGRect? = nil, scale: Double) -> (image: CGImage, area: CGRect, cut: Bool)? {
         guard let pdf = PagePDF(data) else { return nil }
         let rect = (area ?? CGRect(origin: .zero, size: pdf.size)).intersection(CGRect(origin: .zero, size: pdf.size))
@@ -230,8 +211,7 @@ enum AgentScreenshot {
         return (image, rect, full > height)
     }
 
-    /// `rasterize` then `render`, with `masks` in points from the page's top left, off the main
-    /// thread: the picture of a long page or a tall element is a large bitmap.
+    /// `rasterize` then `render`, off the main thread: a long page makes a large bitmap.
     nonisolated static func picture(ofPDF data: Data, area: CGRect?, scale: Double, masks: [CGRect], maxWidth: Int) async -> Picture? {
         await Task.detached(priority: .userInitiated) {
             guard let drawn = rasterize(data, area: area, scale: scale) else { return nil }
@@ -243,8 +223,7 @@ enum AgentScreenshot {
         }.value
     }
 
-    /// A picture `picture(ofPDF:)` made: `scale` output pixels per rasterized pixel, `masks` in
-    /// output pixels. `CGImage` is immutable, so handing it across threads is safe.
+    /// `CGImage` is immutable, so handing it across threads is safe.
     struct Picture: @unchecked Sendable {
         let image: CGImage
         let scale: Double
@@ -252,13 +231,11 @@ enum AgentScreenshot {
         let cut: Bool
     }
 
-    /// The size of the page a WebKit PDF holds, all its PDF pages together.
     nonisolated static func pdfPageSize(_ data: Data) -> CGSize? {
         PagePDF(data)?.size
     }
 
-    /// A page as WebKit makes it into a PDF: a long page comes cut into several PDF pages (of
-    /// about 14,400 points), so the page is all of them, one under the other.
+    /// WebKit cuts a long page into several PDF pages (about 14,400 points each); this stacks them.
     private struct PagePDF {
         let document: CGPDFDocument
         let pages: [(page: CGPDFPage, box: CGRect, top: Double)]
@@ -280,8 +257,7 @@ enum AgentScreenshot {
             size = CGSize(width: first.box.width, height: top)
         }
 
-        /// Draws the PDF pages showing the page from `top` to `bottom` (points down from its top)
-        /// into `context`, whose space is points, y up, with the page's top left at the origin.
+        /// `context` is in points, y up, with the page's top left at the origin.
         func draw(in context: CGContext, from top: Double, to bottom: Double) {
             for (page, box, offset) in pages where offset < bottom && offset + box.height > top {
                 context.saveGState()
@@ -293,12 +269,8 @@ enum AgentScreenshot {
         }
     }
 
-    /// A page's PDF as pixels, `scale` per point, with `masks` (in points from the page's top
-    /// left) painted over: a page with masked regions goes out as pixels, since text drawn under
-    /// a mask would still be in the PDF. Cut into pages of up to `slice` points, so a page of any
-    /// length keeps its proportions and its end within a bitmap's size. Callers run it off the
-    /// main thread and refuse pages longer than `maxPDFLength`; a very wide page is drawn at
-    /// fewer pixels per point.
+    /// A page's PDF flattened to pixels with `masks` painted over: text under a mask would still be
+    /// in a vector PDF. Sliced into pages of up to `slice` points to bound each bitmap.
     nonisolated static func maskedPDF(_ data: Data, masks: [CGRect], scale: Double = 2, slice: Double = 2048) -> (data: Data, pages: Int)? {
         guard let page = PagePDF(data) else { return nil }
         let box = CGRect(origin: .zero, size: page.size)

@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import WebKit
 
-/// Where a call to `agent.js` runs: the main frame, or a child frame that said hello.
 enum FrameTarget {
     case main
     case child(WKFrameInfo)
@@ -34,7 +33,6 @@ enum PageProbe {
 
     struct Failure: Error {}
 
-    /// A frame of a web view: the main frame, or the `WKFrameInfo` its `AgentTab` holds.
     private struct FrameKey: Hashable {
         let webView: ObjectIdentifier
         let frame: ObjectIdentifier?
@@ -42,11 +40,10 @@ enum PageProbe {
 
     /// The calls waiting for the install going on in each frame.
     private static var installing: [FrameKey: [CheckedContinuation<Void, Never>]] = [:]
-    /// How many times `agent.js` went into a frame.
     private(set) static var installs = 0
 
-    /// The JSON `agent.js` answered with. Throws when the frame is gone or the script failed. A
-    /// call that finds no `agent.js` while another call installs it waits for that install.
+    /// Throws when the frame is gone or the script failed. A call that finds no `agent.js` while
+    /// another call installs it waits for that install.
     static func run(_ operation: String, _ arguments: [String: Any], in target: FrameTarget, of webView: WKWebView) async throws -> Data {
         let parameters: [String: Any] = ["operation": operation, "args": arguments]
         let key = FrameKey(webView: ObjectIdentifier(webView), frame: target.info.map(ObjectIdentifier.init))
@@ -70,9 +67,8 @@ enum PageProbe {
         return Data(json.utf8)
     }
 
-    /// A page's answer. `JSONDecoder` refuses a whole document for one lone surrogate escape
-    /// (`\ud83d` with no low half), which a page can write on purpose: such an answer is read
-    /// again with each one replaced by U+FFFD. Only a refused answer pays for the repair.
+    /// `JSONDecoder` refuses a whole document for one lone surrogate escape, which a page can write
+    /// on purpose: a refused answer is retried with each replaced by U+FFFD.
     nonisolated static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
         do {
             return try JSONDecoder().decode(type, from: data)
@@ -82,9 +78,8 @@ enum PageProbe {
         }
     }
 
-    /// JSON text with every `\uD800`–`\uDFFF` escape that isn't half of a pair replaced by
-    /// `�`, or nil when there is none. Backslashes appear only in strings, so the text is
-    /// read escape by escape, and an escaped backslash before "ud83d" is left alone.
+    /// Nil when there is no lone surrogate. Read escape by escape, so an escaped backslash before
+    /// "ud83d" is left alone.
     nonisolated static func replacingLoneSurrogates(in data: Data) -> Data? {
         let bytes = [UInt8](data)
         func unit(at index: Int) -> UInt16? {
@@ -130,8 +125,7 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
         self.hub = hub
     }
 
-    /// Adds the bootstrap to a page's scripts, which `Tab.applyProtections` sets on every
-    /// main-frame navigation. A handler from a hub that has gone (access off, then on) is replaced.
+    /// A handler from a hub that has gone (access off, then on) is replaced.
     func install(on controller: WKUserContentController) {
         if !controllers.contains(controller) {
             controller.removeScriptMessageHandler(forName: PageProbe.messageName, contentWorld: PageProbe.world)
@@ -141,7 +135,6 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
         controller.addUserScript(PageProbe.bootstrap)
     }
 
-    /// A hello, or an uncaught error from `agent-errors.js` in a tab agents use.
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let tab = (message.webView as? PageWebView)?.tab, let hub, hub.isOpen(tab),
               message.frameInfo.securityOrigin.protocol != Extensions.scheme else { return }
@@ -158,7 +151,7 @@ final class AgentFrameHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-/// An answer still to come from a page, observed, so a wait on it ends as it comes.
+/// Observed, so a wait on it ends as the answer comes.
 @MainActor
 @Observable
 final class PageAnswer<Value> {

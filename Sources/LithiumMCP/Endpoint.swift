@@ -1,17 +1,14 @@
 import Foundation
 import LithiumProcess
 
-/// What Lithium writes to `endpoint.json` (`AgentEndpoint` in the app). Read again whenever
-/// Lithium stops answering, so a relaunch or Reset Token needs no change in the client.
+/// What Lithium writes to `endpoint.json` (`AgentEndpoint` in the app).
 struct Endpoint: Decodable, Equatable, Sendable {
     let url: String
     let token: String
     let pid: Int32
     let started: UInt64?
 
-    /// The token only ever goes to the process that wrote it: a file left by a Lithium that
-    /// quit names a pid and a port anyone may have taken since. A file without `started` counts
-    /// as not running, so the bridge starts Lithium, which writes it again.
+    /// The token only goes to the process that wrote it: a stale file's pid and port may belong to anyone.
     func isRunning(as executable: String?) -> Bool {
         LithiumProcess.isLithium(pid, started: started, executable: executable)
     }
@@ -31,10 +28,9 @@ struct Endpoint: Decodable, Equatable, Sendable {
     }
 }
 
-/// Starts Lithium without bringing it forward: `open -g` leaves the user's app in front and
-/// `-j` launches it hidden, so no window shows over their work.
+/// Starts Lithium hidden and in the background (`open -g -j`), so no window shows over the user's work.
 struct Launcher: Sendable {
-    /// `/usr/bin/open`, or the stub tests put in its place: tests never start an app.
+    /// `/usr/bin/open`, or a test stub.
     let program: URL
     let arguments: [String]
 
@@ -59,7 +55,7 @@ struct Launcher: Sendable {
     }
 }
 
-/// An answer the bridge gives in Lithium's place, as a JSON-RPC error for the request it ends.
+/// A JSON-RPC error the bridge answers in Lithium's place.
 struct Failure: Error, Sendable {
     var code = -32000
     let message: String

@@ -39,8 +39,9 @@ final class Privacy {
     @ObservationIgnored private let farblingTemplate: String
     /// Drawn at launch, so the noise of a site changes from launch to launch.
     @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
-    /// Private tabs farble with keys of their own: nothing in them matches the same site in a normal tab.
-    @ObservationIgnored private let privateFarblingKey = SymmetricKey(size: .bits256)
+    /// Each private session farbles with a key of its own, drawn when it first needs one: nothing
+    /// in it matches the same site in a normal tab, or in another private session of the launch.
+    @ObservationIgnored private var privateFarblingKeys: [ObjectIdentifier: SymmetricKey] = [:]
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
 
@@ -147,7 +148,7 @@ final class Privacy {
     /// One script holds every address of the page and replaces the one before: a script per
     /// address piled up for the page's life as frames of new addresses came. Without WebKit's
     /// private call to remove one, each address still gets a script of its own, once.
-    func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, isPrivate: Bool = false, to controller: WKUserContentController) {
+    func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
         guard enabled, let mode = Self.trustedTypes(of: response), let url = response.url else { return }
         // Gone with the rest of the scripts at a main-frame navigation: the new page starts afresh.
         let last = trustedTypesScripts.object(forKey: controller).flatMap { last in
@@ -158,7 +159,7 @@ final class Privacy {
         guard modes[address] != mode else { return }
         modes[address] = mode
         let replaces = controller.responds(to: Self.removeUserScript)
-        guard let source = Self.trustedTypesScript(modes: replaces ? modes : [address: mode], key: isPrivate ? privateFarblingKey : farblingKey) else { return }
+        guard let source = Self.trustedTypesScript(modes: replaces ? modes : [address: mode], key: farblingKey(for: privateSession)) else { return }
         let script = WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         // Added before the old one goes, so no document starts with neither.
         controller.addUserScript(script)
@@ -329,6 +330,15 @@ final class Privacy {
     /// The private session's last tab closed: its choices go with its cookies.
     func forget(privateSession: ObjectIdentifier) {
         privateExceptions[privateSession] = nil
+        privateFarblingKeys[privateSession] = nil
+    }
+
+    private func farblingKey(for privateSession: ObjectIdentifier?) -> SymmetricKey {
+        guard let privateSession else { return farblingKey }
+        if let key = privateFarblingKeys[privateSession] { return key }
+        let key = SymmetricKey(size: .bits256)
+        privateFarblingKeys[privateSession] = key
+        return key
     }
 
     /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,
@@ -344,15 +354,15 @@ final class Privacy {
     }
 
     /// Adds the protection scripts for `url`; the caller has already reset the controller's scripts.
-    func addScripts(_ enabled: Bool, for url: URL, isPrivate: Bool = false, to controller: WKUserContentController) {
-        scripts(enabled, for: url, isPrivate: isPrivate).forEach(controller.addUserScript)
+    func addScripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
+        scripts(enabled, for: url, privateSession: privateSession).forEach(controller.addUserScript)
     }
 
     /// The protection scripts for `url`.
-    func scripts(_ enabled: Bool, for url: URL, isPrivate: Bool = false) -> [WKUserScript] {
+    func scripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
         guard enabled else { return [] }
         // Every frame gets the top page's site, as in Brave: a frame embedded on many sites farbles differently on each.
-        let farbling = WKUserScript(source: Self.farbling(farblingTemplate, key: isPrivate ? privateFarblingKey : farblingKey, site: Self.farblingSite(url)),
+        let farbling = WKUserScript(source: Self.farbling(farblingTemplate, key: farblingKey(for: privateSession), site: Self.farblingSite(url)),
                                     injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]

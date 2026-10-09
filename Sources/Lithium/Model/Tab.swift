@@ -801,7 +801,7 @@ final class Tab: NSObject, Identifiable {
         browser?.nowPlaying.install(on: controller)
         UnsavedInput.shared.install(on: controller)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
-        privacy.addScripts(enabled, for: url, isPrivate: isEphemeral, to: controller)
+        privacy.addScripts(enabled, for: url, privateSession: privateSession, to: controller)
         browser?.agent?.install(on: controller, for: self)
     }
 
@@ -1183,7 +1183,7 @@ extension Tab: WKNavigationDelegate {
         if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
         if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
-            privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession), for: response.response, isPrivate: isEphemeral,
+            privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession), for: response.response, privateSession: privateSession,
                                           to: webView.configuration.userContentController)
         }
         let isAttachment = (response.response as? HTTPURLResponse)?

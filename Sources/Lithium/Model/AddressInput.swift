@@ -74,7 +74,9 @@ enum AddressInput {
             }
             // A port alone doesn't make an address: "10:30" and "john3:16" are searches.
             if looksLikeDomain(host) {
-                if url.port != nil { return .address(url) }
+                // A device on the local network ("nas.local", "router.lan") rarely has a certificate,
+                // and often serves plain HTTP only: one that has HTTPS redirects there.
+                if url.port != nil || isLocalSuffix(host) { return .address(url) }
                 if let secure = URL(string: "https://" + input) { return .address(secure) }
             }
             if let port = url.port, port >= 10, isLocalName(host) { return .address(url) }
@@ -97,6 +99,10 @@ enum AddressInput {
     }
 
     private static let localSuffixes: Set<String> = ["local", "localhost", "internal", "lan", "home", "test"]
+
+    private static func isLocalSuffix(_ host: String) -> Bool {
+        host.split(separator: ".").last.map { localSuffixes.contains($0.lowercased()) } ?? false
+    }
 
     /// A host ending in a real suffix, so "node.js" and "config.json" stay searches. The suffix list
     /// answers with the bare last label, not marked ICANN, for a suffix it doesn't know.

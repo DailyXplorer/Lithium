@@ -146,6 +146,34 @@ struct NavigationTests {
         #expect(requests["/a?utm_source=test"] == 0)
     }
 
+    /// A page sending itself on to a tracked address (`location.replace`, a meta refresh) is
+    /// stripped and still replaced: Back goes to the page before it, not to the redirect.
+    @Test func aStrippedRedirectStaysOutOfTheHistory() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", Data("<title>Start</title>".utf8)),
+            "/script": ("Content-Type: text/html", Data(#"<script>location.replace("/a?utm_source=test")</script>"#.utf8)),
+            "/meta": ("Content-Type: text/html", Data(#"<meta http-equiv="refresh" content="0;url=/a?utm_source=test">"#.utf8)),
+            "/a": ("Content-Type: text/html", Data("<title>Article</title>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        for (visit, hop) in ["script", "meta"].enumerated() {
+            #expect(await waitUntil(30) { tab.webView.title == "Start" && !tab.webView.isLoading })
+            tab.load(base.appending(path: hop))
+            #expect(await waitUntil(30) { tab.webView.title == "Article" && !tab.webView.isLoading })
+            #expect(tab.webView.url?.query() == nil)
+            #expect(tab.webView.backForwardList.backList.map(\.url) == [base], "\(hop)")
+            tab.webView.goBack()
+            #expect(await waitUntil(30) { tab.webView.title == "Start" && !tab.webView.isLoading })
+            #expect(requests["/\(hop)"] == 1)
+            #expect(requests["/a"] == visit + 1)
+        }
+        #expect(requests["/a?utm_source=test"] == 0)
+    }
+
     /// Landed on a stripped address, a link there to the same address with other tracking
     /// parameters is stripped too: only the stripped load's own bounce is let through.
     @Test func aTrackedLinkToTheStrippedAddressIsStripped() async throws {

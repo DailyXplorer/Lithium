@@ -196,6 +196,9 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var lastCrashReload: Date?
     /// A redirect putting the tracking parameters back is let through, not stripped and reloaded forever.
     @ObservationIgnored private var strippedURL: URL?
+    /// The stripped address a page's own redirect was sent on to by the tab's script, which
+    /// WebKit counts as a press: it is still the page's load, not the user's.
+    @ObservationIgnored private var strippedRedirect: URL?
     @ObservationIgnored private var trustedInternalURL: URL?
     @ObservationIgnored private var hasInternalBridge = false
     @ObservationIgnored private var hasWebstoreBridge = false
@@ -1034,8 +1037,9 @@ extension Tab: WKNavigationDelegate {
         }
         if isMainFrame, action.targetFrame != nil, !Self.isRedirect(action) {
             // Not every Back or Reload: a page's own `history.go(0)` comes as one too.
-            loadWasRequested = appStartedLoad || pressed
+            loadWasRequested = appStartedLoad || url != strippedRedirect && pressed
             appStartedLoad = false
+            strippedRedirect = nil
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
@@ -1121,7 +1125,21 @@ extension Tab: WKNavigationDelegate {
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             appStartedLoad = loadWasRequested
-            Task { webView.load(URLRequest(url: clean)) }
+            // A page sending itself on (`location.replace`, a meta refresh) takes its place in the
+            // history: a new load would leave it there, so Back would land on it and bounce again.
+            if action.navigationType == .other, !loadWasRequested, webView.backForwardList.currentItem != nil {
+                strippedRedirect = clean
+                Task {
+                    do {
+                        _ = try await webView.callAsyncJavaScript("location.replace(url)", arguments: ["url": clean.absoluteString], contentWorld: .defaultClient)
+                    } catch {
+                        strippedRedirect = nil
+                        webView.load(URLRequest(url: clean))
+                    }
+                }
+            } else {
+                Task { webView.load(URLRequest(url: clean)) }
+            }
             return (.cancel, preferences)
         }
 

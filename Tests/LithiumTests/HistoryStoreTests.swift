@@ -22,6 +22,14 @@ struct HistoryStoreTests {
         #expect(store.visits(matching: "").map(\.title) == ["Swift"])
     }
 
+    /// Visits commit on the main thread: they don't wait for the disk on each one.
+    @Test func visitsDontSyncTheDiskOnEachCommit() {
+        let store = makeStore()
+        #expect(store.synchronousSetting == 1)
+        store.record(URL(string: "https://swift.org/")!, title: "Swift")
+        #expect(store.visits(matching: "").map(\.title) == ["Swift"])
+    }
+
     @Test func collapsesImmediateRevisitsAndUpdatesTitles() async {
         let store = makeStore()
         let url = URL(string: "https://example.com/")!

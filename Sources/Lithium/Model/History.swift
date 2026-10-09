@@ -40,6 +40,9 @@ final class HistoryStore {
         Self.addUnicodeLower(to: db)
         execute("""
             PRAGMA journal_mode = WAL;
+            -- Each visit commits on the main thread: with WAL, NORMAL syncs at checkpoints instead
+            -- of on every commit, and still survives a crash (a power loss may drop the last visits).
+            PRAGMA synchronous = NORMAL;
             CREATE TABLE IF NOT EXISTS visits (
                 id INTEGER PRIMARY KEY,
                 url TEXT NOT NULL,
@@ -215,6 +218,14 @@ final class HistoryStore {
         let held = heldWrites ?? []
         heldWrites = nil
         for write in held { run(write.sql, values: write.values) }
+    }
+
+    /// For tests: the main connection's `synchronous` setting (1 is NORMAL).
+    var synchronousSetting: Int32? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA synchronous", -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_step(statement) == SQLITE_ROW ? sqlite3_column_int(statement, 0) : nil
     }
 
     private func execute(_ sql: String) {

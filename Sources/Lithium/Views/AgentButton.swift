@@ -6,22 +6,41 @@ import SwiftUI
 struct AgentButton: View {
     let agent: AgentHub
     @State private var isPresented = false
-    @State private var pulse = false
 
     var body: some View {
         IconButton(icon: .robotFill, help: help) {
             isPresented.toggle()
         }
         .foregroundStyle(agent.isActing ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
-        .opacity(agent.isActing && pulse ? 0.45 : 1)
-        .animation(agent.isActing ? .easeInOut(duration: 0.6).repeatForever() : .default, value: pulse)
-        .onChange(of: agent.isActing, initial: true) { _, acting in pulse = acting }
+        .modifier(ActingPulse(isOn: agent.isActing))
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             AgentPanel(agent: agent)
         }
     }
 
     private var help: String { agent.isActing ? "Agent acting" : "Agent connected" }
+}
+
+/// Dims what it wraps to 0.45 and back every 1.2 s while `isOn`. A timeline paused when off, not
+/// a `repeatForever` animation: SwiftUI never ended that one once a call did (the opacity went
+/// back to 1 without an animation to replace it), and the toolbar then redrew at the display's
+/// rate for as long as the agent stayed connected, idle page or not.
+struct ActingPulse: ViewModifier {
+    let isOn: Bool
+    @State private var start = Date()
+
+    func body(content: Content) -> some View {
+        TimelineView(.animation(paused: !isOn)) { context in
+            content.opacity(isOn ? Self.opacity(after: context.date.timeIntervalSince(start)) : 1)
+        }
+        .onChange(of: isOn) { _, isOn in if isOn { start = Date() } }
+    }
+
+    /// Eased in and out, as `easeInOut(duration: 0.6).repeatForever()` was.
+    static func opacity(after elapsed: TimeInterval) -> Double {
+        let dip = (1 - cos(2 * .pi * max(0, elapsed) / 1.2)) / 2
+        return 1 - 0.55 * dip
+    }
 }
 
 struct AgentPanel: View {

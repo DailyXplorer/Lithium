@@ -105,6 +105,8 @@ final class Tab: NSObject, Identifiable {
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
     @ObservationIgnored private var shownHost: String?
+    /// `load` names the address before WebKit starts on it: the page shown stays until the next commits.
+    @ObservationIgnored private var isStartingLoad = false
 
     private(set) var title = ""
     private(set) var url: URL? {
@@ -114,7 +116,9 @@ final class Tab: NSObject, Identifiable {
                 // Its popover too, which a hidden Zen bar's button can't close.
                 if let browser, browser.selectedTabID == id, browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
                 // The article was the old address's, even when the page moved on by itself (pushState).
-                if isReading { leaveReader() }
+                // A load's address comes before its page: the reader stays until that page commits
+                // (`resetReader`), or the page left behind would show, and play, meanwhile.
+                if isReading, !isStartingLoad, loadedWebView?.isLoading != true { leaveReader() }
                 readerPageMovedOn()
             }
         }
@@ -333,7 +337,9 @@ final class Tab: NSObject, Identifiable {
             let configuration = browser.makeConfiguration(for: url)
             if isAsleep { self.configuration = configuration } else { sleep(configuration: configuration) }
         }
+        isStartingLoad = true
         self.url = url
+        isStartingLoad = false
         isAsleep = false
         sleepingState = nil
         addressAfterWaking = nil
@@ -1363,6 +1369,9 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        // A PDF stopped partway never finishes: its viewer opens what came, or leaves WebKit's
+        // showing, rather than staying blank over it. A failure shows the error page instead.
+        if Self.isDropped(error), let pdf, pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } }
         showError(error, for: url)
     }
 

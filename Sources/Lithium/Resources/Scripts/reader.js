@@ -194,6 +194,11 @@ const imageSource = (image) => {
   return sources.find((url) => !url.startsWith('data:')) ?? sources[0];
 };
 
+// Where footnotes and contents lead (`#fn1`): each element of the reader's whose original had that
+// id, or name for an old anchor. Kept here rather than as ids, which the page's scripts would find
+// in place of their own elements. An element with no tag of its own leaves an empty <span> instead:
+// the reader's only spans.
+const targets = new Map();
 const build = (node, into) => {
   for (const child of node.childNodes) {
     if (child.nodeType === Node.TEXT_NODE) {
@@ -202,11 +207,14 @@ const build = (node, into) => {
     }
     if (child.nodeType !== Node.ELEMENT_NODE || child.matches(skipped)) continue;
     const tag = tags[child.localName];
+    const name = child.id || child.localName === 'a' && child.getAttribute('name');
     if (!tag) {
+      if (name) targets.set(into.appendChild(document.createElement('span')), name);
       build(child, into);
       continue;
     }
     const copy = document.createElement(tag);
+    if (name) targets.set(copy, name);
     if (tag === 'a') {
       const href = address(child.getAttribute('href'), false);
       if (href) copy.href = href;
@@ -228,7 +236,15 @@ const build = (node, into) => {
 const content = document.createElement('div');
 build(found.content, content);
 for (const element of [...content.querySelectorAll('p, div, li, a, figure, h2, h3, h4, h5, h6, blockquote')].reverse()) {
-  if (!element.textContent.trim() && !element.querySelector('img, br, hr')) element.remove();
+  if (element.textContent.trim() || element.querySelector('img, br, hr')) continue;
+  // A link's target goes too, but for an empty mark where it was.
+  const marks = [...element.getElementsByTagName('span')];
+  if (targets.has(element)) {
+    const mark = document.createElement('span');
+    targets.set(mark, targets.get(element));
+    marks.unshift(mark);
+  }
+  element.replaceWith(...marks);
 }
 const clean = (text) => (text ?? '').replace(/\s+/g, ' ').trim();
 if (clean(content.textContent).length < 200) return false;
@@ -270,6 +286,19 @@ body.lang = document.documentElement.lang;
 body.dir = found.dir || document.documentElement.dir;
 body.append(article);
 applyStyle(body);
+// A link to a place in this page scrolls the reader there: the page's own element is hidden.
+body.addEventListener('click', (event) => {
+  const link = event.target.closest?.('a[href]');
+  if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const url = new URL(link.href);
+  if (url.hash.length < 2 || url.href.slice(0, -url.hash.length) !== location.href.split('#')[0]) return;
+  let wanted;
+  try { wanted = decodeURIComponent(url.hash.slice(1)); } catch { return; }
+  const target = [...targets].find(([element, name]) => name === wanted && element.isConnected)?.[0];
+  if (!target) return;
+  event.preventDefault();
+  target.scrollIntoView();
+});
 
 // The page's sheets go off, and so do those its scripts add while reading; each comes back as it was.
 const off = new Map();

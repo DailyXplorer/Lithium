@@ -3,20 +3,30 @@
   --bg: #FFFFFF; --ink: #1C1D24; --muted: #6B6D7C; --line: rgba(28, 29, 36, .12); --code: rgba(28, 29, 36, .05); --accent: #4A5BD9;
   color-scheme: light;
 }
-:root[data-theme=sepia] { --bg: #F5EEE1; --ink: #3A3027; --muted: #85766A; --line: rgba(58, 48, 39, .15); --code: rgba(58, 48, 39, .06); --accent: #9A5B2B; }
-:root[data-theme=dark] { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
+:root:has(> body[data-theme=sepia]) { --bg: #F5EEE1; --ink: #3A3027; --muted: #85766A; --line: rgba(58, 48, 39, .15); --code: rgba(58, 48, 39, .06); --accent: #9A5B2B; }
+:root:has(> body[data-theme=dark]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
-  :root[data-theme=auto] { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
+  :root:has(> body[data-theme=auto]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
 }
 
-html { background: var(--bg); transition: background-color .2s; }
-body { margin: 0; color: var(--ink); -webkit-font-smoothing: antialiased; }
+/* The page's <html> stays, with what its scripts set on it (a modal's overflow: hidden, a
+   background): the reader's own <body> paints the window, without fading in from the page's
+   color. Anything else <html> holds besides <head> and <body> (an overlay) waits with the page. */
+html { background: none !important; overflow: visible !important; }
+html > :not(head, body) { display: none !important; }
+/* The page's own <body>, after the reader's: hidden, and in the window's frame, out of the way of
+   the reader's scrolling, so that what it shows at its top (what its scripts watch) stays there. */
+body ~ body {
+  position: fixed !important; inset: 0 !important; z-index: -1 !important; overflow: hidden !important;
+  visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; contain: strict;
+}
+body { margin: 0; background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; transition: background-color .2s; }
 article {
   max-width: 34em; margin: 0 auto; padding: 64px 32px 120px;
   font-size: var(--reader-size); line-height: 1.62; overflow-wrap: break-word; font-optical-sizing: auto;
   font-family: "Lithium DM Sans", -apple-system, sans-serif;
 }
-:root[data-font=serif] article { font-family: ui-serif, "New York", Georgia, serif; }
+body[data-font=serif] article { font-family: ui-serif, "New York", Georgia, serif; }
 
 header { margin-bottom: 2em; padding-bottom: 1.4em; border-bottom: 1px solid var(--line); }
 header h1 { font-size: 1.9em; line-height: 1.18; letter-spacing: -.02em; margin: .25em 0 .35em; }

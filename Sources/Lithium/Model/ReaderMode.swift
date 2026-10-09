@@ -3,12 +3,11 @@ import WebKit
 
 /// The reader: a page's article alone, in a clean view the user sizes and colors. It takes the
 /// page's place in the same web view (`reader.js`), so find, zoom, print, translation and summaries
-/// all work on what is read, and leaving it puts the page back as it was, without a reload. Its
-/// frames alone load again: detached, a frame loses its document.
+/// all work on what is read, and leaving it puts the page back as it was, without a reload: the
+/// page waits behind it, hidden, its frames and components still in the document.
 /// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
-/// the address bar's button, which asks once per page shown, and not at all once turned off. Opening
-/// and leaving the reader alone touch the page's world (`reader-sheets.js`), so the sheets it holds
-/// stay live.
+/// the address bar's button, which asks once per page shown, and not at all once turned off. Leaving
+/// the reader alone touches the page's world (`reader-sheets.js`), so the sheets it holds stay live.
 /// The article is found by Mozilla Readability, Firefox's reader, which `reader.js` carries: it
 /// reaches a page only when the reader opens there.
 @MainActor
@@ -37,8 +36,7 @@ enum ReaderMode {
 
     /// False when the page has no article to show.
     static func enter(_ webView: WKWebView, style: ReaderStyle) async -> Bool {
-        _ = try? await webView.callAsyncJavaScript(sheetsScript, contentWorld: .page)
-        return await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
+        await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
     }
 
     /// The sheets the page added while reading move back with their elements, and get new ones too.

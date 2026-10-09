@@ -272,6 +272,38 @@ struct ReaderModeTests {
         #expect(try await value("String(document.adoptedStyleSheets.length)", in: webView) == "2")
     }
 
+    /// A CSS-in-JS library that writes text (goober, Emotion and styled-components out of
+    /// production) adds to its <style> while the reader is open: the page keeps all of it.
+    @Test func keepsTextThePageAddedToItsStyles() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        _ = try await webView.evaluateJavaScript("window.textStyle = document.querySelector('style'); 0")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("textStyle.append('.late-text { color: rgb(41, 42, 43); }'); 0")
+        await ReaderMode.exit(webView)
+        let after = try await swatches(in: webView)
+        #expect(after["late-text"]?.hasPrefix("rgb(41, 42, 43)") == true)
+        #expect(after["from-style"]?.hasPrefix("rgb(10, 20, 30)") == true)
+    }
+
+    /// A CSS-in-JS library keeps the sheet it was given (styled-components does, for good): what
+    /// it writes there once the reader is left, or while it is open a second time, styles the page.
+    @Test func keepsStylingThroughTheSheetThePageHolds() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        await ReaderMode.exit(webView)
+        _ = try await webView.evaluateJavaScript("cssInJs.insertRule('.after-exit { color: rgb(44, 45, 46); }', cssInJs.cssRules.length); 0")
+        #expect(try await swatches(in: webView)["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("cssInJs.insertRule('.late-js { color: rgb(37, 38, 39); }', cssInJs.cssRules.length); 0")
+        await ReaderMode.exit(webView)
+        let after = try await swatches(in: webView)
+        #expect(after["from-js"]?.hasPrefix("rgb(1, 2, 3)") == true)
+        #expect(after["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
+        #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
+    }
+
     /// Each paragraph in its own section, custom element and div, as on some company blogs.
     @Test func keepsParagraphsSplitAcrossSections() async throws {
         try await expectWholeArticle("reader-split-sections", paragraphs: 9, without: ["Listen to article", "Products", "Related stories", "Copyright footer"])

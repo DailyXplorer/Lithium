@@ -16,15 +16,18 @@ const applyStyle = (root) => {
 // from its text or address, when put back. What scripts did to the old one (rules CSS-in-JS added
 // with insertRule, a theme sheet turned off) lives on that object alone, so it goes to the new one.
 // A <link> still loading takes it once loaded; another site's sheet, which scripts can't change,
-// just keeps its on or off.
-const restoreSheet = ({ node, sheet }) => {
+// just keeps its on or off. So does one whose text or address the page changed meanwhile (more text
+// from a CSS-in-JS library, another theme): read anew, the new sheet is the page's.
+const sourceOf = (node) => node.localName === 'link' ? node.href : node.textContent;
+const restoreSheet = ({ node, sheet, source }) => {
   const fresh = node.sheet;
   if (!fresh) {
-    if (node.localName === 'link' && node.isConnected) node.addEventListener('load', () => restoreSheet({ node, sheet }), { once: true });
+    if (node.localName === 'link' && node.isConnected) node.addEventListener('load', () => restoreSheet({ node, sheet, source }), { once: true });
     return;
   }
   if (fresh === sheet) return;
   fresh.disabled = sheet.disabled;
+  if (sourceOf(node) !== source) return;
   // The rules they share at the start stay: an @import among them isn't fetched again.
   try {
     const rules = [...sheet.cssRules].map((rule) => rule.cssText);
@@ -39,7 +42,7 @@ const restoreSheet = ({ node, sheet }) => {
 // The sheets of a document or shadow root, and of the shadow roots within, with their elements:
 // a sheet forgets its element once that leaves the document.
 const ownedSheets = (root) => [
-  ...[...root.styleSheets].filter((sheet) => sheet.ownerNode).map((sheet) => ({ node: sheet.ownerNode, sheet })),
+  ...[...root.styleSheets].filter((sheet) => sheet.ownerNode).map((sheet) => ({ node: sheet.ownerNode, sheet, source: sourceOf(sheet.ownerNode) })),
   ...[...root.querySelectorAll('*')].filter((element) => element.shadowRoot).flatMap((element) => ownedSheets(element.shadowRoot)),
 ];
 // The page's scripts ran on while the reader was on, and what they wrote to the document reached

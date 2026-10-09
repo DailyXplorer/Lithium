@@ -6,7 +6,8 @@ import WebKit
 /// all work on what is read, and leaving it puts the page back as it was, without a reload. Its
 /// frames alone load again: detached, a frame loses its document.
 /// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
-/// the address bar's button, which asks once per page shown, and not at all once turned off.
+/// the address bar's button, which asks once per page shown, and not at all once turned off. Opening
+/// the reader alone touches the page's world (`reader-sheets.js`), so the sheets it holds stay live.
 /// The article is found by Mozilla Readability, Firefox's reader, which `reader.js` carries: it
 /// reaches a page only when the reader opens there.
 @MainActor
@@ -35,7 +36,8 @@ enum ReaderMode {
 
     /// False when the page has no article to show.
     static func enter(_ webView: WKWebView, style: ReaderStyle) async -> Bool {
-        await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
+        _ = try? await webView.callAsyncJavaScript(sheetsScript, contentWorld: .page)
+        return await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
     }
 
     static func exit(_ webView: WKWebView) async {
@@ -54,6 +56,8 @@ enum ReaderMode {
 
     private static let checkScript = source("reader-check", "js")
     private static let script = source("reader", "js")
+    /// The page's sheet objects, which its scripts may keep, are the page's world's alone.
+    private static let sheetsScript = source("reader-sheets", "js")
     /// DM Sans travels apart, as bytes (`reader.js`): pages can't reach the app bundle, and a strict
     /// Content-Security-Policy blocks a data: font.
     private static let css = source("reader", "css")

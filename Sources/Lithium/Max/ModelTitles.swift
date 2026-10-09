@@ -8,8 +8,7 @@ struct ShortTabTitle {
     let label: String
 }
 
-/// The model's answer for a title. Outside `ModelTitles`, so tests can stand in for the model
-/// on any macOS.
+/// Outside `ModelTitles`, so tests can stand in for the model on any macOS.
 enum TitleOutcome {
     case title(String)
     /// Refused for this title (guardrails, unsupported language): don't ask again.
@@ -18,8 +17,7 @@ enum TitleOutcome {
     case failed
 }
 
-/// Apple's on-device model (Apple Intelligence), used to name pages whose title is still too
-/// long after the rules. Runs out of process on the Neural Engine; nothing leaves the Mac.
+/// Names pages whose title is still too long after the rules, on device; nothing leaves the Mac.
 @available(macOS 26.0, *)
 @MainActor
 final class ModelTitles {

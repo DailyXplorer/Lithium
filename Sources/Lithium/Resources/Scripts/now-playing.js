@@ -1,10 +1,6 @@
-// Injected by NowPlaying at document start in every frame, in the page's own world: the page's
-// Media Session handlers and the sounds it never attaches to the document (Spotify plays a
-// detached Audio) can only be seen from there. Its channel is the page's to see and post to as
-// well, so the app doesn't take an iframe's word alone. It reports what plays when the media
-// changes or WebKit starts or stops hearing the page, never on a timer: for the sidebar's mini
-// player, whose setting only shows or hides it, and for one sound at a time, which pauses the
-// tab heard before. It answers the player's buttons.
+// Runs in the page's own world: Media Session handlers and detached Audio (Spotify) can only be
+// seen from there. The page can post to its channel too, so the app doesn't take an iframe's word
+// alone. Reports on media changes or when WebKit starts or stops hearing the page, never on a timer.
 (() => {
   const key = Symbol.for('lithium.nowPlaying');
   if (globalThis[key]) return;
@@ -12,7 +8,6 @@
   const channel = globalThis.webkit?.messageHandlers?.lithiumNowPlaying;
   if (!channel) return;
   const post = channel.postMessage.bind(channel);
-  // Tells this frame's reports from its parent's and its siblings'.
   const frame = Math.random().toString(36).slice(2);
   const send = (media) => post({ frame, media });
   // A page that wraps its timers (or breaks them) would delay or lose a report.
@@ -22,16 +17,13 @@
   const handlers = {};
   // Set by the page for the media then active: another media has its own.
   let position = null;
-  // The artwork drawn small here, so the app never fetches what the page names.
+  // Drawn small here, so the app never fetches what the page names.
   let art = { src: null, data: null };
-  // The last media heard: what the player shows and controls.
   let active = null;
   let reported = false;
   let restored = false;
   let timer = 0;
-  // What WebKit hears of a page that never played a media element, as the app tells it ('heard',
-  // then 'silent'): its sound comes from elsewhere (Web Audio), shown with the page's Media
-  // Session, or the tab's title and icon.
+  // 'heard' or 'silent', as the app tells it, for a page whose sound comes from no media element.
   let sound = null;
   let hadMedia = false;
 
@@ -39,7 +31,6 @@
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
   const isRunning = () => active ? isPlaying(active) : !hadMedia && sound === 'heard';
 
-  // The page sets the position once in a while; in between it runs while the media plays.
   const positionNow = () => position.time + (position.running ? (performance.now() - position.at) / 1000 * position.rate : 0);
   const anchor = () => {
     if (position) position = { ...position, time: positionNow(), at: performance.now(), running: isRunning() };
@@ -59,8 +50,7 @@
     // element's time and duration may span several tracks).
     const time = position ? positionNow() : active?.currentTime ?? 0;
     const duration = position ? position.duration : active?.duration;
-    // The page can replace what picking and drawing the picture use (Image, the array methods):
-    // without it, the player still shows the media.
+    // The page can replace what drawing the picture uses: without it, the player still shows the media.
     let picture = null;
     try { picture = draw(artwork(metadata?.artwork)); } catch {}
     send({
@@ -81,7 +71,6 @@
     restored = false;
   };
 
-  // A burst of media events (a new track fires half a dozen) makes one message.
   const schedule = () => { timer ||= later(report, 100); };
 
   // The smallest picture still sharp at the player's size, else the largest there is.
@@ -96,9 +85,8 @@
     return (sized.find((image) => image.size >= 96) ?? sized.at(-1))?.url ?? null;
   };
 
-  // Loaded by the page, under its content blocking and without credentials, then drawn into a
-  // 96-pixel square sent as a data URL. Until then, or when the page may not read the picture
-  // (no CORS), the player shows the tab's icon.
+  // Loaded by the page, under its content blocking and without credentials. Without CORS the
+  // player shows the tab's icon.
   const draw = (src) => {
     if (src === art.src) return art.data;
     art = { src, data: null };
@@ -122,20 +110,17 @@
     return null;
   };
 
-  // YouTube's own player buttons, embedded ones included, shown only when there is a track to go to.
   const youTubeButton = (which) => {
     if (!/(^|\.)youtube(-nocookie)?\.com$/.test(location.hostname)) return null;
     const button = document.querySelector(`.ytp-${which}-button`);
     return button && button.offsetParent && button.getAttribute('aria-disabled') !== 'true' ? button : null;
   };
 
-  // Media once in the document. Taken out of it (X closing a video), WebKit pauses them but keeps
-  // them loaded, and Play would sound from nothing on screen. A sound never in it (Spotify) stays.
-  // Still playing out of it, a media was put back, or WebKit lets it be heard.
+  // Media taken out of the document are paused by WebKit but kept loaded, and Play would sound from
+  // nothing on screen. A sound never in it (Spotify) stays.
   const attached = new WeakSet();
   const isGone = (media) => attached.has(media) && !media.isConnected && media.paused;
-  // Only while the active media is in the document: it sees one removed already paused, which
-  // fires no event.
+  // Sees a media removed already paused, which fires no event.
   const removals = new MutationObserver(() => {
     if (active && isGone(active)) changed(active, null);
   });
@@ -176,8 +161,8 @@
     }
   };
 
-  // Media in the document reach a capturing listener; detached ones only through play(). A media
-  // event stops at its shadow root (Reddit's player), which gets a listener of its own.
+  // Detached media are seen only through play(). A media event stops at its shadow root, which
+  // gets a listener of its own.
   const onPlay = (event) => {
     if (watched.has(event.target)) return;
     watch(event.target);
@@ -227,8 +212,7 @@
     }
   }
 
-  // Leaving the page takes it out of the player. Coming back from the back-forward cache, where
-  // WebKit paused its media, puts it back paused, if no other tab holds the player meanwhile.
+  // Coming back from the back-forward cache puts it back paused, if no other tab holds the player.
   addEventListener('pagehide', () => {
     cancel(timer);
     timer = 0;
@@ -249,19 +233,17 @@
     return true;
   };
 
-  // The media's own events report the outcome: a page that pauses later (Spotify) would still
-  // say it plays if asked right away.
+  // The media's own events report the outcome: a page that pauses later would still say it plays
+  // if asked right away.
   Object.defineProperty(globalThis, key, {
     value: (command) => {
       switch (command) {
-        // Asked of the page even when its media seem there already: a pause it hasn't made yet
-        // would otherwise win over the play that follows.
+        // Asked of the page first: a pause it hasn't made yet would otherwise win over the play.
         case 'play': if (!call('play')) active?.play().catch(() => {}); break;
         case 'pause': if (!call('pause')) active?.pause(); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
-        // WebKit started or stopped hearing the page: what plays is reported again, a sound the
-        // script saw no media element make included.
+        // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
           anchor();

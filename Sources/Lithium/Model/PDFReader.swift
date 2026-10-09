@@ -6,9 +6,8 @@ import Synchronization
 import UniformTypeIdentifiers
 import WebKit
 
-/// A PDF shown in a tab. WebKit loads the file as usual, so its address, reload and history stay
-/// the file's own; Lithium then takes the bytes WebKit received and draws the document itself with
-/// PDFKit, over WebKit's viewer. Without the two WebKit calls this relies on, WebKit's viewer stays.
+/// A PDF shown in a tab: WebKit loads the file as usual, then Lithium draws the bytes it received
+/// with PDFKit, over WebKit's viewer. Without the two WebKit calls this relies on, WebKit's viewer stays.
 @MainActor
 @Observable
 final class PDFReader: NSObject {
@@ -43,15 +42,13 @@ final class PDFReader: NSObject {
     @ObservationIgnored private var loadedWorker: PDFWorker?
     @ObservationIgnored private var password: String?
     @ObservationIgnored private var matches: [PDFWorker.Match] = []
-    /// Selections for the first matches only: a query found tens of thousands of times would
-    /// otherwise stall the main thread building them.
+    /// The first matches only: tens of thousands of selections would stall the main thread.
     @ObservationIgnored private var highlighted: [PDFSelection] = []
     @ObservationIgnored private var currentMatch: Int?
     @ObservationIgnored private var fittedScale: CGFloat = 0
     /// Where to open once the view has a size: before that, PDFKit scrolls to the wrong place.
     @ObservationIgnored private var openingPage: Int?
 
-    /// The tab's icon when the site has none, as for a file on disk.
     static let icon = NSWorkspace.shared.icon(for: .pdf)
 
     static let zoomLevels: [CGFloat] = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]
@@ -151,23 +148,20 @@ final class PDFReader: NSObject {
         pageDidChange()
     }
 
-    /// Links like file.pdf#page=3, as in Chrome and Safari. Any page can link to `#page=` with
-    /// `Int.min`, which would trap subtracting one: a page below the first is the first.
+    /// Links like file.pdf#page=3, as in Chrome and Safari.
     static func openingPage(of url: URL) -> Int {
         let fragment = url.fragment() ?? ""
         guard fragment.hasPrefix("page=") else { return 0 }
         return pageIndex(ofNumber: Int(fragment.dropFirst(5)) ?? 1)
     }
 
-    /// The index of page `number`, counted from 1 as typed in the page field: `Int.min` typed
-    /// there would trap subtracting one, so a page below the first is the first.
+    /// Counted from 1; clamped first, as `Int.min` (from a link or the page field) would trap subtracting one.
     static func pageIndex(ofNumber number: Int) -> Int {
         max(number, 1) - 1
     }
 
-    /// Any page's PDF writes its outline: one nested past reason, or looping back on itself, would
-    /// overflow the stack or never end, and a huge one would hold up the main thread. Past these,
-    /// entries are left out.
+    /// The outline is the PDF's to write: a deep, looping or huge one would overflow the stack, never
+    /// end, or hold up the main thread. Past these, entries are left out.
     static let outlineDepthLimit = 64
     static let outlineEntryLimit = 10_000
 
@@ -195,7 +189,6 @@ final class PDFReader: NSObject {
         return entries(of: root, in: document, depth: 0, id: &id)
     }
 
-    /// The document's own title, or its file name, as Chrome shows it.
     var title: String {
         if let metadataTitle { return metadataTitle }
         let name = url.lastPathComponent
@@ -207,9 +200,7 @@ final class PDFReader: NSObject {
         return metadata?.isEmpty == false ? metadata : nil
     }
 
-    /// A name for the file alone: the URL's last segment comes percent-decoded, so an encoded "/" in
-    /// it would otherwise lead the saved file out of its folder. A long title is cut short to
-    /// what a file name can hold, its extension kept.
+    /// The URL's last segment comes percent-decoded: an encoded "/" would lead the saved file out of its folder.
     var filename: String {
         let name = url.lastPathComponent
         let chosen = name.lowercased().hasSuffix(".pdf") ? name : title + ".pdf"
@@ -323,7 +314,6 @@ final class PDFReader: NSObject {
     private static let matchColor = NSColor.findHighlightColor.withAlphaComponent(0.5)
     private static let currentMatchColor = NSColor.systemOrange.withAlphaComponent(0.8)
 
-    /// The page's thumbnail, drawn off the main thread.
     func thumbnail(of index: Int, size: CGSize) async -> NSImage? {
         guard let worker, let page = document?.page(at: index) else { return nil }
         let rotation = page.rotation
@@ -343,8 +333,7 @@ final class PDFReader: NSObject {
     /// once Preview has it (its Recents, its autosave): never for a private tab's.
     var canOpenInPreview: Bool { document != nil && (isLocalFile || !isPrivate) }
 
-    /// Saves the bytes the page received, so it works even where the link has since expired. The
-    /// document's own title can name a file called "document(3).pdf".
+    /// Saves the bytes the page received, so it works even where the link has since expired.
     func download() {
         guard let data else { return }
         Downloads.shared.save(data, suggestedFilename: filename, from: url, title: metadataTitle)
@@ -382,8 +371,7 @@ final class PDFReader: NSObject {
         ExternalApps.open(file, withApplicationAt: preview)
     }
 
-    /// What a summary reads: the tab's web view holds WebKit's PDF viewer, which has no text to
-    /// give. Read off the main thread by the worker; nil while locked or still loading.
+    /// What a summary reads: WebKit's PDF viewer in the tab has no text to give.
     func content(limit: Int) async -> PageContent? {
         guard !isLocked, let worker, let read = await worker.text(limit: limit, password: password) else { return nil }
         let selection = view.currentSelection?.string ?? ""
@@ -419,7 +407,6 @@ extension PDFReader: FindTarget {
         return matches.count
     }
 
-    /// The current match stands out from the others, as in Chrome.
     func showNextMatch(of query: String, forward: Bool) async -> FindStep {
         guard !matches.isEmpty else { return .none }
         let index = switch currentMatch {
@@ -432,8 +419,7 @@ extension PDFReader: FindTarget {
         return .shown(position: index + 1)
     }
 
-    /// Scrolls the match to the middle of the view unless it is well in view already, as Preview
-    /// does: `go(to:)` with a selection leaves the view where it is when the match is pages away.
+    /// `go(to:)` with a selection leaves the view where it is when the match is pages away.
     private func reveal(_ selection: PDFSelection) {
         guard let page = selection.pages.first, let document = view.documentView,
               let scrollView = document.enclosingScrollView else {
@@ -456,7 +442,6 @@ extension PDFReader: FindTarget {
 
     private static let revealMargin: CGFloat = 56
 
-    /// The current match is drawn on top of the others.
     @discardableResult
     private func highlight(current: Int?) -> PDFSelection? {
         let currentSelection = current.flatMap { matches.indices.contains($0) ? selection(for: matches[$0]) : nil }
@@ -523,8 +508,7 @@ actor PDFWorker {
         latestSearch.withLock { $0 == search }
     }
 
-    /// Match by match, yielding in between: a thumbnail asked for meanwhile is drawn without waiting
-    /// for the whole document, and a newer search stops this one. A match across two pages counts once.
+    /// Yields between matches, so a thumbnail asked for meanwhile isn't kept waiting.
     func find(_ query: String, search: Int, password: String?) async -> [Match]? {
         guard let document = unlocked(password) else { return nil }
         var found: [Match] = []
@@ -543,7 +527,6 @@ actor PDFWorker {
         return nil
     }
 
-    /// The document's text, page by page, up to `limit` characters: only as many pages as that takes are read.
     func text(limit: Int, password: String?) -> (text: String, isTruncated: Bool)? {
         guard let document = unlocked(password) else { return nil }
         var text = ""
@@ -586,7 +569,6 @@ final class ReaderView: PDFView {
 }
 
 extension NSColor {
-    /// Behind the pages: a soft gray that lets white pages stand out, in light and dark.
     static let pdfCanvas = NSColor(name: "pdfCanvas") { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(white: 0.14, alpha: 1) : NSColor(white: 0.93, alpha: 1)
     }

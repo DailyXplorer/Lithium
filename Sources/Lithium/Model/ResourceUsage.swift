@@ -3,28 +3,24 @@ import Foundation
 
 /// What the tab hover card says about the page's process.
 enum TabUsage: Equatable {
-    /// No web view, so no process: nothing to measure, and nothing used.
     case asleep
-    /// `cpu` is nil until a second sample gives it a span to be measured over. `sharedWith`
-    /// counts the other tabs in the same process, whose numbers these are too.
+    /// `cpu` is nil until a second sample; `sharedWith` counts other tabs in the same process.
     case live(footprint: UInt64, cpu: Double?, sharedWith: Int)
 }
 
 /// Reads a process's memory and CPU the way Activity Monitor does. CPU is a rate, so each
-/// sample is measured against the previous one of the same process; a sampler lives only as
-/// long as the card that shows it, which keeps those to the processes on screen.
+/// sample is measured against the previous one of the same process.
 struct ResourceSampler {
     struct Reading: Equatable {
-        /// Nanoseconds of user and system time the process has used since it started.
+        /// Nanoseconds of user and system time.
         let cpuTime: UInt64
-        /// Nanoseconds on a monotonic clock, when `cpuTime` was read.
+        /// Nanoseconds on a monotonic clock.
         let wallTime: UInt64
     }
 
     private var previous: [pid_t: Reading] = [:]
 
-    /// The process's "Memory" in Activity Monitor, and its CPU since the last sample; nil when
-    /// the process is gone or not ours to read.
+    /// Nil when the process is gone or not ours to read.
     mutating func sample(_ pid: pid_t) -> (footprint: UInt64, cpu: Double?)? {
         // pid 0 is the kernel, which would answer.
         guard pid > 0 else { return nil }
@@ -64,8 +60,7 @@ struct ResourceSampler {
 }
 
 enum UsageFormat {
-    /// Like Chrome's hover card: whole megabytes, gigabytes to one decimal. Always English, as
-    /// the rest of the interface is.
+    /// Always English, as the rest of the interface is.
     static func memory(_ bytes: UInt64) -> String {
         let megabytes = Double(bytes) / 1_048_576
         if megabytes.rounded() < 1024 { return "\(max(Int(megabytes.rounded()), 1)) MB" }
@@ -82,7 +77,6 @@ enum UsageFormat {
 }
 
 extension TabUsage {
-    /// How many of `others`, the processes of every other awake tab, are `pid`.
     static func sharing(_ pid: pid_t, among others: [pid_t?]) -> Int {
         others.count { $0 == pid }
     }

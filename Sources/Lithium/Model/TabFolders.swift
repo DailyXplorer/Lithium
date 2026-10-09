@@ -1,14 +1,9 @@
 import Foundation
 import Observation
 
-/// A named group of tabs in the sidebar, Arc-like: it collapses to its header, and tabs are
-/// dragged in and out of it. A space's folders sit at the top of its tab list, each with its tabs
-/// in order, above the tabs outside folders, and the tab list reads in that order everywhere
-/// (Next Tab, ⌘1…⌘9, Close Tabs Below). A tab says which folder it is in (`Tab.folderID`); the
-/// folders, their collapsed state and their tabs are saved with the session.
-///
-/// Until the user makes one, `TabFolders.all` is empty: the tab list is the plain list it always
-/// was, and nothing is sorted, saved or watched for folders.
+/// A named group of tabs in the sidebar. Folders sit above the tabs outside folders, and the tab
+/// list reads in that order everywhere (Next Tab, ⌘1…⌘9, Close Tabs Below).
+/// Until the user makes one, nothing is sorted, saved or watched for folders.
 struct TabFolder: Codable, Identifiable, Equatable {
     typealias ID = UUID
 
@@ -26,14 +21,12 @@ struct TabFolder: Codable, Identifiable, Equatable {
 @MainActor
 @Observable
 final class TabFolders {
-    /// Every space's folders, in sidebar order.
     fileprivate(set) var all: [TabFolder] = []
     /// The folder whose name is being typed, as `Browser.renamingTabID` is for a tab.
     var renamingID: TabFolder.ID?
 }
 
-/// One row of the tab list as the sidebar shows it: a folder's header, or a tab (alone or leading
-/// its split pair).
+/// A folder's header, or a tab (alone or leading its split pair).
 enum TabListRow: Identifiable {
     case folder(TabFolder)
     case tab(TabListEntry)
@@ -55,12 +48,9 @@ extension Browser {
         folders.all.isEmpty ? [] : folders.all.filter { $0.space == space }
     }
 
-    /// The folders of the space shown.
     var spaceFolders: [TabFolder] { folders(in: currentSpaceID) }
 
-    /// The tab list's rows: each folder's header, then its tabs unless it is collapsed, then the
-    /// tabs outside folders. A collapsed folder still shows the tab shown (and its split), as Arc
-    /// does, so the selected tab is never out of sight.
+    /// A collapsed folder still shows the selected tab (and its split), as Arc does.
     var tabListRows: [TabListRow] {
         let entries = tabListEntries
         let shown = spaceFolders
@@ -77,8 +67,7 @@ extension Browser {
         return rows + entries.filter { $0.tab.folderID == nil }.map(TabListRow.tab)
     }
 
-    /// A folder at the end of the space's folders, its name field open. `tab`, given, goes in it,
-    /// in the tab's space.
+    /// Made in `tab`'s space when given, with `tab` in it, its name field open.
     @discardableResult
     func newFolder(with tab: Tab? = nil) -> TabFolder {
         let folder = TabFolder(id: UUID(), name: TabFolder.defaultName, spaceID: Space.saved(tab?.spaceID ?? currentSpaceID))
@@ -89,7 +78,6 @@ extension Browser {
         return folder
     }
 
-    /// An empty or whitespace-only name keeps the one it had.
     func renameFolder(_ id: TabFolder.ID, to name: String) {
         if let index = folders.all.firstIndex(where: { $0.id == id }) {
             let trimmed = Space.trimmedName(name, fallback: folders.all[index].name)
@@ -110,7 +98,6 @@ extension Browser {
         if folders.renamingID == id { folders.renamingID = nil }
     }
 
-    /// A deleted space's folders go with it.
     func removeFolders(in space: Space.ID) {
         guard !folders.all.isEmpty else { return }
         folders.all.removeAll { $0.space == space }
@@ -122,8 +109,7 @@ extension Browser {
 
     var savedFolders: [TabFolder]? { folders.all.isEmpty ? nil : folders.all }
 
-    /// Before the tabs, which name their folder. A folder of a space no longer saved goes to the
-    /// main space rather than vanish, like a favorite.
+    /// Before the tabs, which name their folder. A folder of a missing space goes to the main one.
     func restoreFolders(_ saved: [TabFolder]?) {
         guard let saved, !saved.isEmpty else { return }
         let known = Set(allSpaces.map(\.id))

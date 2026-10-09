@@ -1,8 +1,6 @@
 import SwiftUI
 import WebKit
 
-/// One puzzle-piece button for every running extension, as in Chrome. It lists them with their
-/// badge; choosing one runs its action, which usually opens its popup under this button.
 struct ExtensionsButton: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser

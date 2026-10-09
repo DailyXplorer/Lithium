@@ -7,8 +7,7 @@ struct ZoomPill: View {
     let tab: Tab
     @Binding var isPresented: Bool
 
-    /// It stays while its popover is open, so stepping through 100 % doesn't close it. PDFs
-    /// have their own zoom.
+    /// Stays while its popover is open, so stepping through 100 % doesn't close it.
     static func isShown(for tab: Tab, isPresented: Bool) -> Bool {
         tab.pdf == nil && (PageZoom.label(tab.zoom) != nil || isPresented)
     }
@@ -77,7 +76,6 @@ struct ZoomView: View {
     }
 }
 
-/// A QR code of the page's address, to open it on a phone.
 struct QRCodeView: View {
     let url: URL
     /// One pixel per module.
@@ -102,8 +100,7 @@ struct QRCodeView: View {
                     .truncationMode(.middle)
             }
             if let code {
-                // Drawn at the screen's own pixels, whole points per module: nothing scales it, so
-                // every module stays square and sharp.
+                // Whole screen pixels per module, so nothing scales it and every module stays sharp.
                 let pixelsPerPoint = Int(displayScale.rounded(.up))
                 let perModule = max(1, Int(Self.side) / code.width)
                 Image(decorative: QRCode.image(for: url.absoluteString, scale: perModule * pixelsPerPoint) ?? code, scale: CGFloat(pixelsPerPoint))

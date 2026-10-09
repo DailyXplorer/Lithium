@@ -1,8 +1,6 @@
-// Agent perception, installed by PageProbe in a frame the first time an agent reads it. Runs in
-// the lithium-agent content world: the page's world can't see its globals, its observers or its
-// listeners. Every answer is a JSON string, read by PageProbe. Values of password and card
-// fields never leave this script; hidden text (display, visibility, opacity, aria-hidden,
-// clipped, under 6 px) is left out, as it is a common carrier of prompt injection.
+// Agent perception, installed by PageProbe in the lithium-agent content world. Values of password
+// and card fields never leave this script; hidden text is left out, as it is a common carrier of
+// prompt injection.
 (() => {
   // Installed already: a second copy would number the document's elements again from 1.
   if (globalThis.lithiumAgent) return;
@@ -16,8 +14,6 @@
   // Refs: a number per element, never reused within the document, held weakly.
   const ids = new WeakMap();
   const elements = new Map();
-  // An element collected takes its entry with it, so a long-lived document's map doesn't keep
-  // one per element ever numbered. Ids aren't reused: a live ref is never the one removed.
   const collected = new FinalizationRegistry((id) => elements.delete(id));
   let nextID = 1;
   const idOf = (element) => {
@@ -36,8 +32,7 @@
     return element?.isConnected ? element : null;
   };
 
-  // Anything that can change what a snapshot shows bumps the generation; an unchanged one lets
-  // a snapshot answer without walking the document.
+  // An unchanged generation lets a snapshot answer without walking the document.
   let generation = 1;
   const dirty = () => { generation++; };
   const observedRoots = new WeakSet();
@@ -50,28 +45,24 @@
   for (const type of ['scroll', 'resize', 'input', 'change', 'focusin', 'focusout', 'toggle', 'transitionend', 'animationend', 'load']) {
     addEventListener(type, dirty, { capture: true, passive: true });
   }
-  // A menu that CSS :hover alone reveals changes no node, rule or box the checks below see;
-  // only the real pointer moves :hover.
+  // A menu that CSS :hover alone reveals changes nothing the checks below see.
   for (const type of ['pointerover', 'pointerout']) {
     addEventListener(type, (event) => { if (event.isTrusted) dirty(); }, { capture: true, passive: true });
   }
   // Layout also changes with no mutation: a web font arriving, the page growing.
   document.fonts?.addEventListener('loadingdone', dirty);
   const resizes = new ResizeObserver(dirty);
-  // A page may remove its root element: agent.js still goes in, and reads it as empty.
   if (document.documentElement) resizes.observe(document.documentElement);
   if (document.body) resizes.observe(document.body);
 
   const collapse = (text) => (text || '').replace(/\s+/g, ' ').trim();
-  // Slices on code points: half of an emoji's surrogate pair isn't text, and Swift's JSON
-  // decoder refuses an answer that holds one.
+  // Slices on code points: Swift's JSON decoder refuses half a surrogate pair.
   const head = (text, length) => text.slice(0, /[\uD800-\uDBFF]/.test(text[length - 1] ?? '') ? length - 1 : length);
   const tail = (text, start) => text.slice(/[\uDC00-\uDFFF]/.test(text[start] ?? '') ? start + 1 : start);
   const cut = (text, length) => (text.length > length ? `${head(text, length - 1)}…` : text);
   const plain = (text) => (text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[_.[\]]/g, ' ');
   const round = (rect) => [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)];
 
-  // Elements whose own text is never page text, or never rendered.
   const skipped = new Set(['script', 'style', 'noscript', 'template', 'head', 'meta', 'link', 'title', 'datalist']);
   const textless = new Set(['input', 'select', 'textarea', 'option', 'optgroup', 'svg', 'canvas', 'iframe', 'frame', 'object', 'embed', 'video', 'audio', 'img']);
   // Password managers draw their menus inside pages; they are UI, not the page.
@@ -86,14 +77,11 @@
     try { return new URL(raw, document.baseURI).href; } catch { return ''; }
   };
 
-  // An element a page makes in another namespace (createElementNS) can share an HTML control's
-  // name but has none of its properties (`value`, `selectedOptions`, `cells`, `elements`): these
-  // names count only on HTML elements. A namespace, not instanceof, so it holds in the
-  // same-origin child documents `guards` and text waits read, whose elements have their own.
+  // An element of another namespace can share an HTML control's name but none of its properties.
+  // A namespace check, not instanceof, so it holds for elements of same-origin child documents.
   const htmlNamed = new Set(['input', 'select', 'textarea', 'tr', 'form']);
   const tagOf = (element) => (htmlNamed.has(element.localName) && element.namespaceURI !== 'http://www.w3.org/1999/xhtml' ? '' : element.localName);
 
-  // Roles
   const inputRoles = {
     button: 'button', submit: 'button', reset: 'button', image: 'button', file: 'button', color: 'button',
     checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox',
@@ -147,7 +135,6 @@
     return '';
   };
 
-  // A simplified accessible name: labelledby, aria-label, labels, alt, title, placeholder, text.
   const nameOf = (element, role) => {
     const labelledBy = element.getAttribute('aria-labelledby');
     if (labelledBy) {
@@ -204,9 +191,8 @@
     }
     if (autocomplete(element).some((token) => ['current-password', 'new-password', 'one-time-code'].includes(token))) return true;
     if (/passw|pwd/i.test(`${element.getAttribute('name') || ''} ${element.id}`)) return true;
-    // A field the page draws as discs itself (a PIN, a password in a text field) holds a secret
-    // too, and stays one when a "show" toggle turns the masking off. The style is inherited, so
-    // only fields one types in count.
+    // A field the page masks itself holds a secret too, and stays one when a "show" toggle
+    // unmasks it. The style is inherited, so only text fields count.
     if (!textTypes.has(element.type)) return false;
     const security = getComputedStyle(element).webkitTextSecurity;
     if (security && security !== 'none') {
@@ -219,11 +205,9 @@
     && (autocomplete(element).some((token) => token.startsWith('cc-') || token === 'transaction-amount') || cardWords.test(fieldWords(element)));
   const isCardNumber = (element) => autocomplete(element).includes('cc-number') || cardNumberWords.test(fieldWords(element));
   const guardOf = (element) => (isPassword(element) ? 'password' : isCard(element) ? 'payment' : null);
-  // Apple Pay and Google Pay buttons: activating one starts a payment.
   const isWallet = (element, style) => element.localName === 'apple-pay-button' || element.localName === 'gpay-button'
     || element.classList.contains('gpay-button') || /-apple-pay-button/.test(style.webkitAppearance || style.appearance || '');
 
-  // Digit runs that pass the Luhn check, wherever a field holds one.
   const luhn = (digits) => {
     let sum = 0;
     for (let i = 0; i < digits.length; i++) {
@@ -235,7 +219,6 @@
   };
   const maskCards = (text) => text.replace(/\d(?:[ -]?\d){12,18}/g, (run) => (luhn(run.replace(/\D/g, '')) ? '[card]' : run));
 
-  // The field's value as an agent may see it, or null for controls without one.
   const valueOf = (element, role) => {
     const guard = guardOf(element);
     if (guard) {
@@ -298,7 +281,6 @@
     }
     return false;
   };
-  // Children of every element, through open shadow roots; closed ones are out of reach.
   const childrenOf = (element) => {
     if (element.shadowRoot) {
       observe(element.shadowRoot);
@@ -321,11 +303,9 @@
   };
   const isVisible = (element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !hiddenByAncestor(element);
 
-  // Controls follow Playwright's actionability rather than the text rules: one with a box is
-  // there to act on even at opacity 0 (TodoMVC's toggle, which its label draws), and a field
-  // hidden on purpose behind a styled label (clipped to a pixel, zero size, off the page) is
-  // reached through that label, as the user's click on the label reaches it. Text stays under
-  // the text rules, so a control's name never comes from text the user can't see.
+  // Controls follow Playwright's actionability rather than the text rules: one with a box counts
+  // even at opacity 0, and a field hidden behind a styled label is reached through that label.
+  // A control's name never comes from text the user can't see.
   const isControl = (element) => interactive.has(roleOf(element));
   const tiny = (rect) => rect.width < 2 || rect.height < 2;
   const offPage = (rect) => rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0;
@@ -334,15 +314,13 @@
     return isVisible(label) && !tiny(rect) && !offPage(rect) && !clippedAway(label, getComputedStyle(label));
   });
   // What stands for the control on screen: itself, its label, or nothing when it is hidden.
-  // `clipped`: an ancestor clips it away, so only a label outside can stand for it.
   const controlFace = (element, style = getComputedStyle(element), clipped = false) => {
     if (!element.checkVisibility({ visibilityProperty: true }) || hiddenByAncestor(element)) return null;
     const rect = element.getBoundingClientRect();
     if (!clipped && !tiny(rect) && !offPage(rect) && !clippedAway(element, style)) return element;
     return isField(element) ? shownLabel(element) ?? null : null;
   };
-  // A control the user can't see named only by what they can (its visible labels) or what the
-  // page gives assistive technology, never by its own transparent text.
+  // Never by the control's own transparent text.
   const unseenName = (element) => {
     const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
       .map((id) => element.getRootNode().getElementById?.(id) ?? document.getElementById(id)).filter((label) => label && isVisible(label));
@@ -350,7 +328,6 @@
       || collapse([...(element.labels ?? [])].filter(isVisible).map(textOf).join(' ')) || collapse(element.getAttribute('title'));
   };
   const controlName = (element, role) => cut(isVisible(element) ? nameOf(element, role) : unseenName(element), 80);
-  // An element as the snapshot, waits and forms see it.
   const isShown = (element) => (isControl(element) ? Boolean(controlFace(element)) : isVisible(element) && element.getBoundingClientRect().width > 0);
 
   // Challenges a whole page is made of; widgets in frames are told by their address, in Lithium.
@@ -370,8 +347,7 @@
     dpr: devicePixelRatio, vx: visualViewport?.offsetLeft ?? 0, vy: visualViewport?.offsetTop ?? 0, vs: visualViewport?.scale ?? 1,
   });
 
-  // This frame's place among its ancestors' frames: an index into parent.frames per level.
-  // Cross-origin parents still expose their frames list and its windows for comparison.
+  // An index into parent.frames per level; cross-origin parents still expose their frames list.
   const framePath = () => {
     const path = [];
     try {
@@ -407,16 +383,12 @@
     };
   };
 
-  // A page script setting value, checked or selected fires no event and no mutation: the
-  // controls the last snapshot showed are read again each time.
+  // A script setting value, checked or selected fires no event and no mutation.
   const controlState = (element) => (tagOf(element) === 'select'
     ? [...element.selectedOptions].map((option) => option.index).join(',')
     : `${element.checked} ${element.indeterminate} ${element.value}`);
   const controlStates = () => (frame.controls ?? []).map(controlState).join('\u0000');
-  // Nor does a layout change: the boxes of what the last snapshot showed are read again, rules
-  // added through the CSSOM counted, and nothing is taken as unchanged while something animates.
-  // A custom element shown without a shadow root may attach one and render into it, which no
-  // observer sees: whether each has one is read again too.
+  // Nor does a layout change, a CSSOM rule, or a custom element attaching a shadow root.
   const boxStates = () => (frame.shown ?? []).map((element) => (element?.isConnected
     ? round(element.getBoundingClientRect()).join(' ') + (element.shadowRoot ? ' s' : '') : '')).join(',');
   const sheetStates = () => [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])].map((sheet) => {
@@ -424,11 +396,9 @@
   }).join(',');
   const animating = () => document.getAnimations().some((animation) => animation.playState === 'running');
 
-  // Snapshot
   const snapshot = ({ scope, since, key, of }) => {
     // `of`: the document Lithium's cached report came from, which a page Back restored may not be.
-    // Focus going into a frame fires no focusin in its parent, whose activeElement still changes.
-    // Nor does pushState fire anything, so the address is compared too.
+    // Focus going into a frame fires no focusin in its parent, and pushState fires nothing.
     if (since === generation && key === frame.lastKey && of === frame.token && location.href === frame.url && controlStates() === frame.controlStates
       && sheetStates() === frame.sheetStates && !animating() && boxStates() === frame.boxStates && deepFocus() === frame.focused) {
       return { token: frame.token, unchanged: true, gen: generation, path: framePath() };
@@ -451,8 +421,7 @@
       if (!style) styles.set(element, (style = getComputedStyle(element)));
       return style;
     };
-    // Text and inline elements of a block, up to its next block: all of it, and the part outside
-    // links and buttons, which have nodes of their own. A block of links only repeats them.
+    // All of a block's inline text, and the part outside controls: a block of links only repeats them.
     const inlineText = (element, inControl = false) => {
       let all = '';
       let own = '';
@@ -496,8 +465,7 @@
       if (isField(element)) controls.push(element);
       return node;
     };
-    // Inside text the user can't see (transparent, clipped away), only controls still operable
-    // there are listed, never the text.
+    // Inside text the user can't see, only operable controls are listed, never the text.
     const visitUnseen = (element, context) => {
       if (nodes.length >= limit) return;
       const tag = element.localName;
@@ -543,7 +511,6 @@
       if (shown && isField(element) && isCard(element)) pay.cards = true;
       const emitted = shown && role && (interactive.has(role) || structural.has(role) || role === 'clickable');
       if (emitted) {
-        // A field off the page or shrunk to nothing shows through its label, if any.
         const face = isField(element) ? controlFace(element, style) : element;
         const box = face ? round(face.getBoundingClientRect()) : [0, 0, 0, 0];
         if (interactive.has(role) || role === 'clickable') next.interactive = true;
@@ -562,8 +529,7 @@
         }
       }
       if (['select', 'textarea', 'svg', 'canvas', 'video', 'audio', 'object', 'embed'].includes(tag)) return;
-      // A custom element that draws something with no children and no reachable shadow root
-      // most likely has a closed one: agents act inside it by coordinates.
+      // Most likely a closed shadow root: agents act inside it by coordinates.
       if (shown && tag.includes('-') && !element.shadowRoot && element.childElementCount === 0 && !collapse(element.textContent)) {
         const box = round(element.getBoundingClientRect());
         if (box[2] >= 4 && box[3] >= 4 && inScope(box)) nodes.push({ id: idOf(element), role: 'shadow-closed', name: tag, box, wallet: wallet || undefined });
@@ -585,17 +551,15 @@
     frame.boxStates = boxStates();
     frame.sheetStates = sheetStates();
     frame.url = location.href;
-    // Each walk has a generation of its own: the states above are this walk's, so a report
-    // Lithium kept from an earlier walk (this one answered too late) never counts as unchanged.
+    // Each walk has its own generation, so a report from an earlier walk never counts as unchanged.
     return {
       token: frame.token, gen: ++generation, path: framePath(), url: frame.url, title: document.title, viewport: view,
       nodes, frames, focused: focusedID, focusedFrame, challenge: pageChallenge(), truncated: nodes.length >= limit, pay,
     };
   };
 
-  // Masks for screenshots: fields that were ever passwords, card fields, and extension UI, in
-  // this frame's viewport, plus where its frames sit so their own masks can be placed. With
-  // `element` in this document (`of`), that element's box too, read with the masks.
+  // Masks for screenshots: fields that were ever passwords, card fields, and extension UI, plus
+  // where this frame's frames sit so their own masks can be placed.
   const masks = ({ element: id, of }) => {
     const rects = [];
     const frames = [];
@@ -616,8 +580,7 @@
         else frames.push(frameFacts(element, getComputedStyle(element), indexes));
       } else if (tag === 'embed') embeds.push(element);
     }
-    // An <embed> showing a document is in window.frames but gives no way to its window: while
-    // a frame is unaccounted for, every <embed> counts as a frame that didn't answer.
+    // An <embed> showing a document is in window.frames but gives no way to its window.
     if (claimed.size < window.length) {
       for (const element of embeds) frames.push(frameFacts(element, getComputedStyle(element), indexes));
     }
@@ -625,7 +588,6 @@
     return { token: frame.token, path: framePath(), viewport: viewport(), rects, frames, box: element ? round(element.getBoundingClientRect()) : undefined };
   };
 
-  // Readable text, as lines, each with the block it came from: read_text, find_text, waits.
   const excludedFromMain = 'nav, footer, aside, header, dialog, menu, [role=navigation], [role=contentinfo], [role=complementary], [role=search], [role=banner], [role=dialog], [role=alertdialog], [aria-modal=true]';
   // `sources`: each line also gets `nodes`, the text node each of its characters comes from.
   const lines = (root, { markdown = false, main = false, sources = false } = {}) => {
@@ -676,12 +638,10 @@
         flush();
         block = element;
       }
-      // Cells and link text go through the same rules, so hidden text in them stays out too.
       const visibleText = (child, inMarkdown) => collapse(lines(child, { markdown: inMarkdown }).map((item) => item.text).join(' '));
       if (tagOf(element) === 'tr') {
         const cellLines = [...element.cells].map((cell) => lines(cell, { markdown, sources }));
         const cells = cellLines.map((items) => items.map((item) => item.text).join(' '));
-        // Spacer rows (Hacker News has one between stories) have nothing to read.
         if (!cells.some(Boolean)) return;
         const row = { text: markdown ? `| ${cells.join(' | ')} |` : cells.join(' | '), element };
         if (sources) {
@@ -715,7 +675,7 @@
     return out;
   };
 
-  // The article or main element when it holds the page's content, as page-text.js picks it.
+  // As page-text.js picks it.
   const mainRoot = () => {
     const body = document.body;
     const length = (element) => (element.innerText || '').length;
@@ -737,7 +697,6 @@
       return { token: frame.token, text: '', truncated: false, title: document.title };
     }
     let found = lines(id ? root : main ? mainRoot() : root, { markdown, main: main && !id });
-    // A page built only from what main leaves out still has text to read.
     if (main && !id) {
       const everything = lines(document.body, { markdown });
       const size = (list) => list.reduce((sum, item) => sum + item.text.length, 0);
@@ -805,8 +764,7 @@
     return { token: frame.token, forms: found, loose };
   };
 
-  // The link or button a text node is in, up to the block its line comes from (often the list
-  // item or paragraph around it), so a match's ref is one to click.
+  // The control a text node is in, so a match's ref is one to click.
   const controlOf = (node, block) => {
     for (let element = node?.parentElement ?? node?.getRootNode?.()?.host; element; element = element.parentElement ?? element.getRootNode()?.host) {
       if (isControl(element)) return element;
@@ -827,10 +785,8 @@
           const length = found[0].length;
           count++;
           if (matches.length < limit) {
-            // About 80 characters around the match, and the whole match with 10 on each side when it is longer.
             const around = Math.max(10, Math.floor((80 - length) / 2));
             const start = Math.max(0, at - around);
-            // Nil for a match outside a control, or across two.
             const first = controlOf(line.nodes[at], line.element);
             const control = first === controlOf(line.nodes[at + length - 1], line.element) ? first : null;
             const match = { id: idOf(control ?? line.element), context: head(tail(line.text, start), Math.max(start + 80, at + length + around) - start) };
@@ -884,7 +840,6 @@
     return null;
   };
 
-  // Element facts for element_info and the stale-ref check.
   const info = ({ id }) => {
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
@@ -909,8 +864,7 @@
     return facts;
   };
 
-  // Input (design section 5). Trusted events are counted in the capture phase, so Lithium knows
-  // when the page has handled what it sent instead of waiting a fixed time.
+  // Trusted events are counted, so Lithium knows when the page has handled what it sent.
   const counts = {};
   const counted = [];
   for (const type of ['mousemove', 'mousedown', 'mouseup', 'keyup', 'beforeinput', 'wheel']) {
@@ -920,9 +874,8 @@
       for (const waiter of [...counted]) waiter();
     }, { capture: true, passive: true });
   }
-  // An agent's right click gives the page its contextmenu, never the native menu, which would
-  // open on the user's screen and hold Lithium in its loop: the default is prevented on the
-  // way back up, once the page's own listeners have run.
+  // An agent's right click never opens the native menu, which would hold Lithium in its loop:
+  // the default is prevented once the page's own listeners have run.
   addEventListener('contextmenu', (event) => {
     if (!event.isTrusted || !(frame.agentMenu > Date.now())) return;
     frame.agentMenu = 0;
@@ -944,16 +897,13 @@
     const fields = [...form.elements];
     return { id: idOf(form), cards: fields.some((field) => isField(field) && isCard(field)), password: fields.some((field) => isPassword(field) && field.value !== '') };
   };
-  // A password field that isn't empty in the target's document, in any of its open shadow roots
-  // (a design system's field and button are often in two components), whoever filled it: a
-  // sign-in sent by a script from a plain button, a link, or Enter in a field outside any form
-  // sends it as a form's submit would (design section 7.3).
+  // A filled password anywhere in the target's document: a script can send it from any button
+  // or link, as a form's submit would (design section 7.3).
   const passwordFilled = (element) => [...new Set([document, element.getRootNode()])].some((root) => {
     for (const field of allElements(root)) if (isPassword(field) && field.value !== '') return true;
     return false;
   });
-  // Whether the document is a payment page (design section 7.3): card fields and wallet buttons
-  // anywhere in it, and the frames it holds by address.
+  // Whether the document is a payment page (design section 7.3).
   const walletSelector = 'apple-pay-button, gpay-button, .gpay-button, button, [role=button], input[type=button], input[type=submit]';
   const payFacts = () => {
     const pay = {};
@@ -970,10 +920,8 @@
     frames: [...document.querySelectorAll('iframe, frame')].map((element) => element.src).filter(Boolean),
   });
 
-  // The element an action aims at, by ref (`id`) or by point (`x`, `y`, in this frame's
-  // viewport), with every check of design section 5.1 this frame can make: scrolled into view
-  // when needed, measured again a frame later when it moved since the last snapshot, the point
-  // to press hit-tested. A point on a frame names the frame, for Lithium to look inside it.
+  // The element an action aims at, by ref or by point, with every check of design section 5.1
+  // this frame can make. A point on a frame names the frame, for Lithium to look inside it.
   const target = async ({ id, x, y, scroll, known, menu }) => {
     if (menu) frame.agentMenu = Date.now() + 2000;
     const byPoint = id === undefined;
@@ -1021,7 +969,6 @@
       rect = face.getBoundingClientRect();
     }
     const box = round(rect);
-    // Stable: the same box a frame later, measured only when it differs from the last snapshot's.
     if (!known || known.some((value, index) => Math.abs(value - box[index]) > 1)) {
       await nextFrame();
       const again = round(face.getBoundingClientRect());
@@ -1031,7 +978,6 @@
     facts.viewport = viewport();
     if (!showing(rect)) return { ...facts, inViewport: false };
     facts.inViewport = true;
-    // The center of the largest visible rect, else a point of it that reaches the element.
     const clipped = [...face.getClientRects()].map((r) => {
       const left = Math.max(r.left, 0);
       const top = Math.max(r.top, 0);
@@ -1071,7 +1017,6 @@
     return facts;
   };
 
-  // In a parent frame: whether a point lands on the frame at `index` of window.frames, or what covers it.
   const frameHit = ({ x, y, index }) => {
     const hit = hitAt(x, y);
     const facts = { token: frame.token };
@@ -1080,9 +1025,8 @@
     return facts;
   };
 
-  // The focused element, or the frame focus went into, for keys sent without a ref: its address,
-  // and its origin when known. A frame of another origin is where its address says, unless that
-  // is this document's own origin, which it then left.
+  // A cross-origin frame is where its address says, unless that is this document's own origin,
+  // which it then left.
   const focused = () => {
     const element = deepFocus();
     const facts = { token: frame.token, path: framePath(), counts: { ...counts } };
@@ -1100,10 +1044,7 @@
     return { ...facts, id: idOf(element) };
   };
 
-  // Waits until the page has seen `count` trusted events of `type` (or `timeoutMs` passes), then
-  // with `frame` one rendering update; with `scrolled`, until the scroll position holds for a
-  // frame; with `hold`, until that many milliseconds after the call, so a load the events start
-  // has begun (Lithium stops waiting as soon as one does: this document then never answers).
+  // `hold` waits that many milliseconds after the call, so a load the events start has begun.
   const settle = async ({ type, count, timeoutMs, scrolled, frame: rendered, hold }) => {
     const called = performance.now();
     const seen = await new Promise((resolve) => {
@@ -1137,8 +1078,8 @@
     return { token: frame.token, seen, counts: { ...counts } };
   };
 
-  // A <select> without native input (design section 5.2): its pop-up menu would run a tracking
-  // loop on the user's screen. Sets the options, then input and change, untrusted.
+  // Without native input (design section 5.2): its pop-up menu would run a tracking loop on the
+  // user's screen.
   const selectOption = ({ id, values, labels }) => {
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
@@ -1157,7 +1098,6 @@
     return { token: frame.token, selected: [...element.selectedOptions].map(label) };
   };
 
-  // Focus as tabbing into the element gives it: no input event.
   const focus = ({ id }) => {
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
@@ -1165,7 +1105,6 @@
     return { token: frame.token, focused: deepFocus() === element };
   };
 
-  // The caret at the end of the field a click just focused, so typing adds to what it holds.
   const caretEnd = ({ id }) => {
     const element = elementOf(id);
     if (!element) return { token: frame.token, gone: true };
@@ -1189,19 +1128,15 @@
     return { token: frame.token, box: round(element.getBoundingClientRect()), viewport: viewport() };
   };
 
-  // What a file input holds now, by name only, after an upload.
   const files = ({ id }) => {
     const element = elementOf(id);
     return { token: frame.token, names: element?.files ? [...element.files].map((file) => file.name) : undefined };
   };
 
-  // DOM waits: re-checked when the document changes, never by polling faster than 4 times a
-  // second for changes no observer sees (a style animating, say). A text check walks the whole
-  // body and those of the frames it reaches, so it runs on that 4-a-second timer alone. Each
-  // wait is kept under the key Lithium gave it, so the call that started it can end it.
+  // Re-checked on mutations, and polled 4 times a second for changes no observer sees. A text
+  // check walks the whole body and its frames, so it runs on that timer alone.
   const waits = new Map();
-  // Text in a document and the shown same-origin frames in it, which this world reaches as
-  // `guards` does; a frame of another origin can't be read from here, and is counted instead.
+  // A frame of another origin can't be read from here, and is counted instead.
   const textIn = (root, needle, depth) => {
     if (root.body && lines(root.body).some((line) => line.text.toLowerCase().includes(needle))) return { found: true, unread: 0 };
     let unread = 0;
@@ -1265,13 +1200,11 @@
       if (key !== undefined) waits.set(key, done);
     });
   };
-  // The call that started the wait ended (met elsewhere, timed out, stopped): no more checks.
   const cancelWait = ({ key }) => {
     waits.get(key)?.(false);
     return { token: frame.token };
   };
 
-  // What a read checks before it reads: the page-wide check, and the frames a widget could be in.
   const challenge = () => ({
     token: frame.token,
     page: pageChallenge(),
@@ -1281,9 +1214,8 @@
     }).map((element) => element.src).filter(Boolean),
   });
 
-  // The network log without Lithium's resource load delegate: the document's performance
-  // timeline, read when asked, so it costs nothing until then. No headers, and no status in
-  // WebKits that leave `responseStatus` undefined.
+  // The network log from the performance timeline, so it costs nothing until asked. No headers,
+  // and no status in WebKits that leave `responseStatus` undefined.
   const resources = () => ({
     token: frame.token,
     entries: [...performance.getEntriesByType('navigation'), ...performance.getEntriesByType('resource')].map((entry) => ({
@@ -1292,16 +1224,12 @@
     })),
   });
 
-  // What `evaluate` needs before and after an agent's script. Any value in a password or card
-  // field, a card field in use, or an extension's frame (password managers fill through them)
-  // means the script doesn't run; same-origin child documents count, since the script can reach
-  // them. The values go to Lithium alone, which also takes them out of what a script returns,
-  // and the frames' addresses let it spot a payment provider's.
+  // Any secret value, a card field in use, or an extension's frame means an agent's script doesn't
+  // run; same-origin child documents count, since the script can reach them.
   const isSecretField = (element) => isField(element) && (isPassword(element) || isCard(element));
   const secretValue = (element) => (element.localName === 'select' ? (element.selectedIndex > 0 ? element.value : '') : element.value);
-  // An earlier script's listener, or its page-world globals, may keep a value typed after it
-  // ran and hand it to a later script once the field is empty again: once a secret field held a
-  // value in this document, no script runs here.
+  // An earlier script's listener may keep a value typed after it ran and hand it to a later one:
+  // once a secret field held a value in this document, no script runs here.
   let filledBefore = false;
   addEventListener('input', (event) => {
     if (filledBefore) return;
@@ -1335,11 +1263,8 @@
     if (secrets.size) filledBefore = true;
     return { token: frame.token, path: framePath(), secrets: [...secrets], filledBefore, card, manager, frames };
   };
-  // Hands `evaluate`'s world the element `id` names, by an event only that world listens for (a
-  // random name, so the page can't). It goes to `document` when no element is asked for, and to
-  // `window` when it is gone or is extension UI. The frame is checked again first, in the same
-  // task as the hand-over, so no value typed since Lithium's check reaches the script; a frame
-  // that holds one gets no event, and the script never runs.
+  // Hands `evaluate`'s world the element by an event with a random name. The frame is checked
+  // again in the same task, so no value typed since Lithium's check reaches the script.
   const handOver = ({ id, element: name }) => {
     const held = guards();
     if (held.secrets.length || held.filledBefore || held.card || held.manager) return { token: frame.token, blocked: true };
@@ -1357,19 +1282,16 @@
   };
 
   const operations = { snapshot, masks, readText, links, forms, find, info, wait, cancelWait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
-  // A document WebKit parks in its back/forward cache runs no timer and no frame callback, so a
-  // call still pending in it (a wait, a settle) would hold Lithium's reply, and the tab's web
-  // view with it, until WebKit drops the page, even after the tab closed. It answers as gone.
+  // A document in WebKit's back/forward cache runs no timer, so a pending call would hold
+  // Lithium's reply and the web view until WebKit drops the page. It answers as gone.
   const parked = new Set();
   addEventListener('pagehide', (event) => {
     if (!event.persisted) return;
     for (const leave of [...parked]) leave();
-    // Nobody waits for them any more: no checks after Back brings the page back.
     for (const done of [...waits.values()]) done(false);
   });
   globalThis.lithiumAgent = {
     run: async (operation, args) => {
-      // An element call for a document that is no longer the one shown.
       if (args.token && args.token !== frame.token) return JSON.stringify({ token: frame.token, gone: true });
       let leave;
       const left = new Promise((resolve) => { leave = () => resolve({ token: frame.token, gone: true }); });

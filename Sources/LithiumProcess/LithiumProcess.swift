@@ -1,7 +1,6 @@
 import Darwin
 
-/// Tells the Lithium that wrote the endpoint file from whatever runs under its pid now: the file
-/// outlives a quit or a restart, and its pid may since belong to any process, but no other
+/// Tells the Lithium that wrote the endpoint file from whatever reuses its pid now: no other
 /// process has both Lithium's executable and its start time.
 public enum LithiumProcess {
     /// When `pid` started, in microseconds since 1970; nil when nothing runs under it.
@@ -19,9 +18,8 @@ public enum LithiumProcess {
         return String(cString: path)
     }
 
-    /// Whether `pid` is the Lithium that started at `started`. Its executable must be `expected`,
-    /// else any app's `Contents/MacOS/Lithium`, so a Lithium launched from another copy of the app
-    /// still counts. No `started` (a file from before it was written) never counts.
+    /// Whether `pid` is the Lithium that started at `started`, running `expected` or else any
+    /// app's `Contents/MacOS/Lithium`. A nil `started` never counts.
     public static func isLithium(_ pid: Int32, started: UInt64?, executable expected: String? = nil) -> Bool {
         guard let started, self.started(pid) == started, let path = executable(pid) else { return false }
         guard let expected else { return path.hasSuffix(".app/Contents/MacOS/Lithium") }

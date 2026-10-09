@@ -93,7 +93,6 @@ private struct AddressBar: View {
     }
 }
 
-/// Lock in the address bar; opens the site's connection, cookies and permissions.
 private struct ConnectionButton: View {
     let tab: Tab
     let isSecure: Bool
@@ -119,7 +118,6 @@ private struct ConnectionButton: View {
     }
 }
 
-/// Opened from the ⋯ menu: protections are set once per site, so they don't need a toolbar button.
 private struct ShieldPanel: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
@@ -155,7 +153,6 @@ struct ShieldView: View {
                 Text("Protections").font(Theme.font(15, .semibold))
                 Text(host).font(Theme.font(12)).foregroundStyle(.secondary)
             }
-            // The switch on the right edge, as in the lock's panel, not right after its text.
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("On for this site")
@@ -249,7 +246,6 @@ struct PageMenuItems: View {
         Divider()
         Button("Show All History") { browser.openHistory() }
         Button("Extensions") { browser.openSettings(section: "extensions") }
-        // With access off there is no panel: Settings is where it is turned on.
         Button("Agents") {
             if browser.agent == nil { browser.openSettings(section: "agents") } else { panel = .agents }
         }
@@ -293,9 +289,8 @@ private struct AddressField: NSViewRepresentable {
 
     func updateNSView(_ field: URLTextField, context: Context) {
         context.coordinator.parent = self
-        // The user picked another tab (⌃Tab, ⌘1…9): the edit was for the one left, so it ends
-        // and the new page takes the keyboard; Return can't send the text to the old tab and
-        // bring it back. Queued before a focus request of the same change (⌘T), which wins.
+        // Another tab was picked: the edit ends so Return can't send it to the old tab. Queued
+        // before a focus request of the same change (⌘T), which wins.
         if context.coordinator.pickToken != pickToken {
             context.coordinator.pickToken = pickToken
             DispatchQueue.main.async { [browser] in
@@ -305,7 +300,6 @@ private struct AddressField: NSViewRepresentable {
             }
         }
         field.textColor = onDarkBackground && !isEditing ? .white : .labelColor
-        // The interface font changed in Settings.
         if let font = Theme.nsFont(13), field.font != font { field.font = font }
         if field.url != url || !field.isEditing {
             field.url = url

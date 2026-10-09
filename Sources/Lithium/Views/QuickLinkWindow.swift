@@ -1,25 +1,21 @@
 import SwiftUI
 
-/// The window of a link from another app (`QuickLinks`): the page under a slim bar. Made when the
-/// link comes, gone once it closes or its page moves into the main window.
+/// The window of a link from another app (`QuickLinks`): the page under a slim bar.
 final class QuickLinkWindow: NSWindow, NSWindowDelegate {
     /// Not `tab`, which NSWindow has for window tabs.
     private let page: Tab
     private weak var browser: Browser?
-    /// Where the last one opened, so the next link's window doesn't cover it.
     private static var lastTopLeft: NSPoint?
 
     static func open(_ tab: Tab, browser: Browser) -> NSWindow? {
         let window = QuickLinkWindow(tab: tab, browser: browser)
-        // The link comes while another app is in front, and macOS may decline to activate Lithium
-        // for it (cooperative activation): the window would open behind that app, unseen. Put it in
-        // front of every app's windows first, then ask to become active so it takes the keyboard.
+        // macOS may decline to activate Lithium (cooperative activation), leaving the window behind
+        // the app in front: order it front first, then ask to become active for the keyboard.
         window.orderFrontRegardless()
         window.makeKey()
         NSApp.activate()
-        // SwiftUI handles the link event after this and brings the main window forward, over
-        // this one. Bring this one back once that has run: on the next turns of the run loop and
-        // when Lithium becomes active (which can come later than the event).
+        // SwiftUI then brings the main window over this one: bring this one back on the next
+        // run-loop turns and when Lithium becomes active (which can come later).
         for delay in [0.0, 0.15, 0.4] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in window?.bringForward() }
         }
@@ -34,7 +30,6 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
         return window
     }
 
-    /// In front of the main window and of other apps, with the keyboard, while still open.
     private func bringForward() {
         guard isVisible else { return }
         orderFrontRegardless()
@@ -55,7 +50,6 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
         titleVisibility = .hidden
         tabbingMode = .disallowed
         minSize = NSSize(width: 420, height: 320)
-        // The bar has its own Close; the traffic lights would only crowd it.
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             standardWindowButton(button)?.isHidden = true
         }
@@ -85,8 +79,7 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         browser?.quickLinks.windowClosed(page)
-        // Gone at once: a late update of the closed view would take the web view back from the
-        // main window, which the page may just have moved to.
+        // A late update of the closed view would take the web view back from the main window.
         contentView = nil
     }
 }
@@ -104,7 +97,6 @@ struct QuickLinkView: View {
                 browser.quickLinks.close(tab)
             } onMove: {
                 browser.quickLinks.moveToMainWindow(tab)
-                // Brings it back if the user closed it.
                 openWindow(id: "browser")
             }
             .overlay { LoadingBar(tab: tab) }
@@ -122,7 +114,6 @@ struct QuickLinkView: View {
                         PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                     }
                 }
-                // When find was opened in this window (`Browser.showsFindBar`), as in the main window.
                 .overlay(alignment: .topTrailing) {
                     if browser.showsFindBar(over: tab) {
                         FindBar(tab: tab)
@@ -140,7 +131,6 @@ struct QuickLinkView: View {
     }
 }
 
-/// Close, the page's site, and Move to main window.
 struct QuickLinkBar: View {
     let url: URL?
     let isSecure: Bool
@@ -172,7 +162,6 @@ struct QuickLinkBar: View {
         .environment(\.sidebarPalette, SidebarPalette(style: .translucent, colorHex: Theme.defaultSidebarHex, scheme: colorScheme))
     }
 
-    /// The site without its "www.", as Safari's compact address shows it.
     static func site(of url: URL?) -> String {
         guard let url else { return "" }
         guard let host = url.host(), !host.isEmpty else { return url.absoluteString }

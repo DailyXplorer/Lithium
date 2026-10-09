@@ -30,7 +30,6 @@ struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             spaceContent
-                // A space's favorites and tabs slide in from the side it lies on.
                 .id(browser.currentSpaceID)
                 .transition(.push(from: browser.spaceStepsForward ? .trailing : .leading))
             if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
@@ -69,8 +68,6 @@ struct SidebarView: View {
             .dropDestination(for: String.self) { items, _ in dropTab(items, on: .tabList(0)) }
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    // A tab dropped on a row's upper half goes above it, on its lower half below
-                    // it: in that row's folder, or outside folders.
                     ForEach(browser.tabListRows) { row in
                         switch row {
                         case .folder(let folder):
@@ -109,7 +106,6 @@ struct SidebarView: View {
             }
         }
         .alert(deletingFolder.map { "Delete “\($0.name)”?" } ?? "", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }), presenting: deletingFolder) { folder in
-            // Keeping them comes first, the default: nothing is lost.
             Button("Keep Tabs") { deleteFolder(folder, closingTabs: false) }
             Button("Close Tabs", role: .destructive) { deleteFolder(folder, closingTabs: true) }
             Button("Cancel", role: .cancel) {}
@@ -122,7 +118,6 @@ struct SidebarView: View {
         browser.nowPlaying.shownTab(besides: browser.videoPopout.tab)
     }
 
-    /// An empty folder goes at once; one with tabs asks what becomes of them.
     private func askToDelete(_ folder: TabFolder) {
         if browser.tabList(in: folder.space, folder: folder.id).isEmpty {
             deleteFolder(folder, closingTabs: false)
@@ -218,7 +213,6 @@ private struct PinTile: View {
             .overlay {
                 BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: live?.unread.shown)
             }
-            // The slot a drop lands in: whatever is dragged takes this place and the tile shifts along.
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
@@ -335,7 +329,6 @@ private struct TabRow: View {
     }
 }
 
-/// Above the tabs agents opened, which sit apart from the user's own until the user keeps one.
 private struct AgentGroupHeader: View {
     var body: some View {
         HStack(spacing: 6) {
@@ -353,7 +346,6 @@ private struct AgentGroupHeader: View {
 
 /// On the favicon of a tab an agent acted in, until the tab closes.
 struct AgentBadge: View {
-    /// An agent action runs in the tab: an accent ring around the badge.
     var isActing = false
     @Environment(\.sidebarPalette) private var palette
 
@@ -367,7 +359,6 @@ struct AgentBadge: View {
     }
 }
 
-/// At the end of a private tab's row: nothing it shows is saved, and its cookies go with it.
 struct PrivateTabBadge: View {
     var body: some View {
         Icon(.privateTab, size: 12)
@@ -417,19 +408,16 @@ private struct TabNameField: View {
             }
             .onChange(of: name) { browser.renameDraft = name }
             .onChange(of: isFocused) { _, focused in
-                // Clicking elsewhere keeps the new name, like renaming in Finder.
                 if !focused, browser.renamingTabID == tab.id { commit() }
             }
-            // Gone with the sidebar (⌘B): the rename would otherwise stay open, holding Escape,
-            // the agent's input and the sidebar's peek. Not when the row only scrolls out of the
-            // lazy list: the rename goes on there.
+            // Hiding the sidebar (⌘B) would otherwise leave the rename open, holding Escape and the
+            // peek. Not when the row only scrolls out of the lazy list.
             .onDisappear {
                 if browser.renamingTabID == tab.id, !browser.showsSidebar { commit() }
             }
     }
 
-    /// Keeps the name and hands the keyboard back to the page, unless it moved to another field.
-    /// On the next turn: moved while the field ends its own editing (Return), the keyboard left
+    /// On the next turn: moving the keyboard while the field ends its own editing (Return) left
     /// SwiftUI's focus behind, and the next rename's field couldn't take it.
     private func commit() {
         browser.rename(tab, to: name, shown: shown)
@@ -486,8 +474,7 @@ struct Favicon: View {
     }
 }
 
-/// A favorite's icon with its unread badge at the top right, like the Dock's. The badge is an
-/// overlay, so it never moves the icon.
+/// A favorite's icon with its unread badge at the top right, as an overlay so it never moves the icon.
 struct BadgedFavicon: View {
     let image: NSImage?
     let fallback: String
@@ -497,8 +484,7 @@ struct BadgedFavicon: View {
         Favicon(image: image, fallback: fallback, size: 20)
             .overlay(alignment: .topTrailing) {
                 if let badge {
-                    // Centered on the icon's corner, a little inside it: a frame of no size
-                    // centers what it holds on its point.
+                    // A frame of no size centers the badge on the icon's corner.
                     UnreadBadgeView(shown: badge)
                         .frame(width: 0, height: 0)
                         .offset(x: -2, y: 2)

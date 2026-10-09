@@ -2,8 +2,7 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// What the start page, shown when no tab is selected, is drawn with. Each kind keeps its own
-/// preferences, so going back to one finds its colors or picture as they were.
+/// What the start page, shown when no tab is selected, is drawn with.
 enum StartBackground: String, CaseIterable {
     case lithium, color, gradient, image, wallpaper
 
@@ -22,9 +21,8 @@ extension Preference {
     static let startImage = "startImage"
 }
 
-/// The picture chosen for the start page, copied into Lithium's own folder so it outlives
-/// the original. A new picture gets a new name: the page notices the change, and never shows
-/// a half-written file.
+/// The start page's picture, copied into Lithium's folder. A new picture gets a new name: the page
+/// notices the change, and never shows a half-written file.
 enum StartImage {
     static let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Start Page")
 
@@ -36,7 +34,6 @@ enum StartImage {
         UserDefaults.standard.string(forKey: Preference.startImage).flatMap(url(named:))
     }
 
-    /// Asks for a picture and makes it the start page's background. False when none was chosen.
     @MainActor
     static func choose() async -> Bool {
         let panel = NSOpenPanel()
@@ -60,14 +57,12 @@ enum StartImage {
     }
 }
 
-/// Pictures decoded at the size of the largest screen, off the main thread. The last one is
-/// kept, so the start page shows it at once every time.
+/// Pictures decoded at the largest screen's size, off the main thread; the last one is kept.
 @MainActor
 enum StartPictures {
     private static var last: (url: URL, image: CGImage)?
 
-    /// Drops the kept picture once the start page no longer shows it, so its bitmap (tens of
-    /// megabytes at screen size) doesn't outlive it.
+    /// Once the start page no longer shows it: the bitmap is tens of megabytes at screen size.
     static func forget() {
         last = nil
     }

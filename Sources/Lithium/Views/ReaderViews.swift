@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The address bar's reader buttons: the reader on and off, and while it shows, how it looks.
 struct ReaderButtons: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
@@ -32,7 +31,6 @@ struct ReaderButtons: View {
     }
 }
 
-/// One of the reader's buttons, from plain values so it also draws without a tab.
 struct ReaderButtonLabel: View {
     let icon: Phosphor
     let isOn: Bool
@@ -61,7 +59,7 @@ private struct ReaderStylePopover: View {
     }
 }
 
-/// The reader's text size, colors and font, from plain values so it also draws without a browser.
+/// From plain values, so it also draws without a browser.
 struct ReaderStyleView: View {
     @Binding var style: ReaderStyle
 

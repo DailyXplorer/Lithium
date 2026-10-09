@@ -40,7 +40,6 @@
   .extension .actions { display: flex; align-items: center; gap: 10px; }
   #start-kind button { padding: 5px 11px; white-space: nowrap; }
   #site-font-site { flex: 1; min-width: 0; }
-  /* Both font pickers line up at 220px; a longer family name widens its picker rather than being clipped. */
   .font-picker { min-width: 220px; }
   .sample { font-size: 13px; }
   .snippet > div { min-width: 0; }
@@ -356,7 +355,6 @@
     if (value) option.style.fontFamily = fontStack(value);
     return option;
   };
-  // `shown` is the family the choice stands for, the interface's for "Same as interface".
   // A family no longer on the Mac is still listed while it is the choice.
   const pickFont = (select, value, shown) => {
     if (![...select.options].some((option) => option.value === value)) select.append(fontOption(value));
@@ -380,7 +378,6 @@
     document.querySelectorAll('#reveal button').forEach((b) => b.classList.toggle('on', b.dataset.value === appearance.sidebarReveal));
     $('#mini-player').checked = appearance.miniPlayer;
     $('#tab-usage').checked = appearance.tabUsage;
-    // This page is Lithium's interface too: it takes the interface font as soon as it is picked.
     document.body.style.fontFamily = appearance.interfaceFont === DM_SANS ? '' : fontStack(appearance.interfaceFont);
     pickFont($('#interface-font'), appearance.interfaceFont, appearance.interfaceFont);
     pickFont($('#website-family'), appearance.websiteFamily, appearance.websiteFontName);
@@ -556,10 +553,8 @@
   const setGradient = () => call('setStartGradient', { from: $('#start-from').value, to: $('#start-to').value }).then(render);
   $('#start-from').oninput = setGradient;
   $('#start-to').oninput = setGradient;
-  // WebKit's own color popover opens far from the swatch in Lithium's window: the swatches ask
-  // for Lithium's picker, placed by their rect, and take its colors as if picked in place.
-  // The picker sends a color at every step of a drag, and each one rebuilds the whole settings
-  // state: one goes to the app at a time, then the latest picked meanwhile.
+  // WebKit's own color popover opens far from the swatch in Lithium's window, so Lithium's picker
+  // is used. A drag sends many colors and each rebuilds the settings: one goes at a time.
   let picking = null, picked = null, sending = false;
   const sendPicked = async () => {
     sending = true;

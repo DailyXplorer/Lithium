@@ -7,15 +7,12 @@ enum UnshownLoad {
     case download(fileName: String?)
     /// Lithium refused where it led: another app's scheme (`mailto:`), or its own pages.
     case refused(scheme: String)
-    /// Given up before it showed anything: a 204 No Content answer, a load the page stopped, a
-    /// response WebKit dropped (error 102).
+    /// A 204 No Content answer, a load the page stopped, a response WebKit dropped (error 102).
     case dropped
 }
 
-/// The navigation delegate of a web view its tab has put away (closed, or asleep). A load still
-/// on its way can reach a decision after that, say a redirect to `mailto:`; WebKit asks a web view
-/// with no delegate nothing and hands such an address to another app itself (NSWorkspace), so a
-/// closed tab could open the user's mail app. This one refuses every load.
+/// Refuses every load of a put-away web view. Without a delegate, WebKit hands a late redirect to
+/// `mailto:` to another app itself, so a closed tab could open the user's mail app.
 @MainActor
 final class PutAwayWebView: NSObject, WKNavigationDelegate {
     static let refusing = PutAwayWebView()
@@ -36,31 +33,24 @@ final class Tab: NSObject, Identifiable {
     var pinID: Pin.ID? {
         didSet { if (oldValue == nil) != (pinID == nil) { pinnedChanged() } }
     }
-    /// The tile's badge, for a pinned tab only.
     private(set) var unread = UnreadBadge()
-    /// The icon address the page declares, as last fetched for this web view: the page's word
-    /// wins over the icon cached for its site, which may be a day old.
+    /// The icon the page declares: it wins over the icon cached for its site, which may be a day old.
     @ObservationIgnored private(set) var liveIcon: URL?
-    /// The tab's one icon fetch at a time: a page's next load replaces its last one's, and the
-    /// icon a pinned page names replaces both, so a page can't pile fetches up.
+    /// One icon fetch at a time, each replacing the last, so a page can't pile fetches up.
     @ObservationIgnored private var faviconLoad: Task<Void, Never>?
     @ObservationIgnored private var iconFollow: Task<Void, Never>?
-    /// A page that swaps its icon faster than this (an animation) has it fetched, shown and
-    /// saved at most this often.
+    /// An icon swapped faster than this (an animation) is fetched, shown and saved at most this often.
     static let iconInterval = Duration.seconds(2)
-    /// Made on first use and dropped while the tab sleeps, which frees the page's memory. A tab
-    /// restored asleep at launch holds no web view at all until it is selected.
+    /// Made on first use and dropped while the tab sleeps, which frees the page's memory.
     var webView: WKWebView {
         access(keyPath: \.webView)
         if let loadedWebView { return loadedWebView }
-        // Every web view of a private tab, after sleep or a crash too, keeps the tab's own store,
-        // and no extension runs in it (`Extensions.tabs`).
+        // A private tab's web views keep its own store, and no extension runs in them.
         if let privateStore {
             configuration.websiteDataStore = privateStore
             configuration.webExtensionController = nil
         } else if let spaceStore, url?.scheme != Extensions.scheme {
-            // Likewise a space's own store, popups too (`Privacy.harden` hands them the default
-            // one). An extension's pages keep their extension's.
+            // Popups too (`Privacy.harden` hands them the default store). Extension pages keep theirs.
             configuration.websiteDataStore = spaceStore
         }
         let webView = PageWebView(frame: .zero, configuration: configuration)
@@ -73,52 +63,39 @@ final class Tab: NSObject, Identifiable {
         return webView
     }
     @ObservationIgnored private(set) var loadedWebView: WKWebView?
-    /// What the next web view is made with.
     @ObservationIgnored private var configuration: WKWebViewConfiguration
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
-    /// The page's back and forward history (and scroll position) while the tab sleeps, so it
-    /// wakes where it was left.
     @ObservationIgnored private var sleepingState: Any?
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
-    /// The tab whose page made this one's web view (any `window.open` or target=_blank, a plain
-    /// tab included): WebKit links the two pages, `window.opener` one way and the handle
-    /// `window.open` returned the other, until either web view goes. `evaluate` runs in neither.
+    /// The tab whose page made this one's web view (`window.open`, target=_blank): WebKit links the
+    /// two pages through `window.opener` and the returned handle until either web view goes.
     @ObservationIgnored weak var scriptOpener: Tab?
     /// The hub whose dialog the page waits on: it still answers it once agent access is off.
     @ObservationIgnored var dialogOwner: AgentHub?
-    /// The page's dialog waiting for the tab to be shown (`present`): resumed with true when it
-    /// is, false for the default answer.
+    /// The page's dialog waiting for the tab to be shown: true when it is, false for the default answer.
     @ObservationIgnored private var hiddenDialog: CheckedContinuation<Bool, Never>?
     /// For tests.
     var hasHiddenDialog: Bool { hiddenDialog != nil }
-    /// When the page was last heard, so a pause between tracks or while buffering isn't taken
-    /// for silence.
+    /// So a pause between tracks or while buffering isn't taken for silence.
     @ObservationIgnored private var lastHeard: Date?
     @ObservationIgnored private var isAskingPlayback = false
-    /// Whether this web view has shown a page yet: one woken on a form's result has nothing to
-    /// fall back on if the form isn't sent again.
+    /// One woken on a form's result has nothing to fall back on if the form isn't sent again.
     @ObservationIgnored private var hasShownPage = false
-    /// Whether the tab has ever had a page, in any web view, or came back from the last session.
-    /// One that wakes without its history has none in its new web view, yet isn't a tab opened
-    /// just to fetch a file.
+    /// One that wakes without its history isn't a tab opened just to fetch a file.
     @ObservationIgnored private var hasHadPage = false
-    /// "Send the form again?", while it is on the window.
     @ObservationIgnored private var resubmissionSheet: NSWindow?
-    /// The page's alert, confirm or prompt, while it is on the window.
     @ObservationIgnored private var dialogSheet: NSWindow?
-    /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
-    /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
+    /// A woken tab's old page: its load, started by restoring the history, is cancelled.
     @ObservationIgnored private var supersededURL: URL?
     /// The app sent the tab to an address (`load`), for the next main-frame decision.
     @ObservationIgnored private var appStartedLoad = false
-    /// The app, a press in the page, Back, Forward or Reload started the main frame's current
-    /// load: a file it turns out to be downloads at once. One the page started on its own asks
-    /// first, as Safari does, so no page fills Downloads without a click.
+    /// The user or app started the current load, so a file downloads at once. One the page started
+    /// on its own asks first, as Safari does, so no page fills Downloads without a click.
     @ObservationIgnored private var loadWasRequested = false
     /// Where an extension sent a tab that slept without its history, loaded once its old page is
-    /// shown, or once it is clear it won't be. Stopping the tab drops it.
+    /// shown or clearly won't be.
     @ObservationIgnored private var addressAfterWaking: URL?
     /// The site of the page shown, which its frames belong to. `webView.url` moves to the next
     /// address as soon as it starts loading, while the frames still are the old page's.
@@ -131,8 +108,7 @@ final class Tab: NSObject, Identifiable {
                 browser?.summaries.discard(self)
                 // Its popover too, which a hidden Zen bar's button can't close.
                 if let browser, browser.selectedTabID == id, browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
-                // The reader's article was the old address's: a page moving on by itself
-                // (pushState) shows its own content again.
+                // The article was the old address's, even when the page moved on by itself (pushState).
                 if isReading { leaveReader() }
                 readerPageMovedOn()
             }
@@ -142,25 +118,17 @@ final class Tab: NSObject, Identifiable {
     private(set) var faviconData: Data?
     private(set) var isLoading = false
     private(set) var progress = 0.0
-    /// The web view's `pageZoom`, which it keeps across this tab's pages, and the next web view
-    /// gets (waking from sleep).
     private(set) var zoom = 1.0
-    /// The user typed into the page, or interacted with one that asks before it is left, since it
-    /// was loaded (`UnsavedInput`): idle sleep, which would lose that work, passes the tab by.
+    /// Typed or interacted with since loaded (`UnsavedInput`): idle sleep would lose that work.
     @ObservationIgnored private(set) var hasUnsavedInput = false
     private(set) var canGoBack = false
     private(set) var canGoForward = false
-    /// Set while the page is a PDF, which Lithium draws with its own viewer.
     private(set) var pdf: PDFReader?
-    /// The PDFs of this tab's history. WebKit brings such a page back from its cache without
-    /// its bytes; the kept reader also comes back where it was left.
+    /// WebKit brings a PDF page back from its cache without its bytes.
     @ObservationIgnored private var pdfHistory: [WKBackForwardListItem: PDFReader] = [:]
-    /// The page shown looks like an article: the address bar offers the reader (`ReaderMode`).
     private(set) var isReaderAvailable = false
-    /// The reader shows the page's article in place of the page.
-    /// The page's media waits while it does, its frames' too (a YouTube embed, which no script of
-    /// the page can reach) and what would start then: WebKit keeps it waiting, across documents,
-    /// until told, so it is told whenever the reader goes, however it goes.
+    /// The page's media waits while reading, its frames' too (a YouTube embed no page script can
+    /// reach). WebKit keeps it waiting across documents until told, so it is told however the reader goes.
     private(set) var isReading = false {
         didSet {
             guard isReading != oldValue, let webView = loadedWebView else { return }
@@ -168,64 +136,46 @@ final class Tab: NSObject, Identifiable {
             Task { await webView.setAllMediaPlaybackSuspended(suspended) }
         }
     }
-    /// The page shown was asked whether it is an article.
     @ObservationIgnored private var readerChecked = false
-    /// The reader was used in this web view: a page back from the cache may still show it, so
-    /// pages are asked even with the button off.
+    /// A page back from the cache may still show the reader, so pages are asked even with the button off.
     @ObservationIgnored private var hasRead = false
-    /// The one check of an address the page moved to by itself (`readerPageMovedOn`).
     @ObservationIgnored private var readerRecheck: Task<Void, Never>?
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private(set) var observations: [NSObject] = []
     @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
-    /// The address the page's scripts were last set up for (nil: none, as on Lithium's pages), and
-    /// what it was when the shown page committed: see `restoreProtections`.
+    /// The address the page's scripts were last set up for, and at the shown page's commit (`restoreProtections`).
     @ObservationIgnored private var protectedURL: URL?
     @ObservationIgnored private var shownProtectedURL: URL?
     @ObservationIgnored private var protectionRequests = 0
-    /// Frame hosts of the current page already looked up for advanced rules (`addFrameProtections`).
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
-    /// Lithium's error page stands in for the page, from `showError` until the next load starts.
     var isShowingError: Bool { failedURL != nil }
     @ObservationIgnored private var errorNavigation: WKNavigation?
-    /// Why Lithium's error page stands in for the page, at the address that failed; cleared when
-    /// another page commits.
+    /// Cleared when another page commits.
     private(set) var loadError: NSError?
     var connection: SiteInfo.Connection { SiteInfo.Connection(url: url, loadError: loadError) }
     @ObservationIgnored private var lastCrashReload: Date?
-    /// The address last loaded without its tracking parameters, until another page commits. A
-    /// server sending it back with them (a redirect) is let through, rather than stripped and
-    /// reloaded forever.
+    /// A redirect putting the tracking parameters back is let through, not stripped and reloaded forever.
     @ObservationIgnored private var strippedURL: URL?
-    /// A `lithium://` page this tab was told to open by the app itself.
     @ObservationIgnored private var trustedInternalURL: URL?
     @ObservationIgnored private var hasInternalBridge = false
     @ObservationIgnored private var hasWebstoreBridge = false
 
     private static let webSchemes: Set<String> = ["http", "https", "about", "blob", "data", "file", Internal.scheme, Extensions.scheme]
 
-    /// A name the user gave the tab; it wins over the page's own title until cleared.
     var customTitle: String?
-    /// The agent session ("s1") that opened the tab, which puts it in the sidebar's Agent group.
-    /// Cleared when the user moves it to the tab list; never saved, so it comes back an ordinary tab.
+    /// The agent session ("s1") that opened the tab; never saved, so it comes back an ordinary tab.
     var openedByAgent: String?
     var isInAgentGroup: Bool { pinID == nil && openedByAgent != nil }
     var isInTabList: Bool { pinID == nil && openedByAgent == nil }
-    /// The sidebar folder the tab is in (`TabFolder`). Only a tab of the tab list is in one.
     var folderID: TabFolder.ID?
-    /// Counts the documents shown, error pages included, so an agent waiting on a navigation can
-    /// tell its page from the one before. A sleeping tab's old page, shown on its way to the
-    /// address it was sent to (`go(to:)`), isn't counted.
+    /// So an agent can tell its page from the one before. A woken tab's old page isn't counted.
     private(set) var commits = 0
-    /// Counts the moves within the document shown to an anchor (`page#section`), or Back and
-    /// Forward between `pushState` entries, which WebKit commits nothing for. The page's own
-    /// script makes them too (`location.hash`, `history.back()`), not only a navigation asked for.
-    /// The page's `pushState` and `replaceState` aren't counted.
+    /// Moves to an anchor, or Back and Forward between `pushState` entries, which WebKit commits
+    /// nothing for. The page's own `pushState` and `replaceState` aren't counted.
     private(set) var sameDocumentNavigations = 0
-    /// Counts the loads in the page itself that ended without showing anything, for an agent
-    /// waiting on one; `lastUnshownLoad` tells how the latest ended.
+    /// Loads in the page that ended without showing anything; `lastUnshownLoad` tells how.
     private(set) var unshownLoads = 0
     @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
 
@@ -235,11 +185,9 @@ final class Tab: NSObject, Identifiable {
     }
 
     var loadMarks: LoadMarks { LoadMarks(commits: commits, moves: sameDocumentNavigations, unshown: unshownLoads) }
-    /// From the moment a load starts until it commits a document or ends without one: the
-    /// document shown until then is the one on its way out.
+    /// From a load's start until it commits or ends: the document shown is the one on its way out.
     private(set) var isAwaitingCommit = false
-    /// Counts the loads started, so an agent's input tells a load it started from one already
-    /// under way. Lithium's error page is the end of the load that failed, not a load of its own.
+    /// So an agent's input tells its load from one under way. The error page isn't a load of its own.
     private(set) var loadStarts = 0
     /// From `showError` until its page starts loading, which WebKit may report first through
     /// `isLoading`, before `errorNavigation` is known.
@@ -248,13 +196,10 @@ final class Tab: NSObject, Identifiable {
     /// `unshownLoads` when the load under way started: one that already ended as a download
     /// isn't dropped too when WebKit then gives it up.
     @ObservationIgnored private var unshownAtStart = 0
-    /// The main document's HTTP status, for agents; nil until a response arrives, and for pages
-    /// that have none (Lithium's error page, local files).
+    /// The main document's HTTP status, for agents; nil for pages without one (error page, files).
     @ObservationIgnored private(set) var httpStatus: Int?
-    /// A shorter name for the page's title (Max, Tidy tab titles).
     private(set) var tidyTitle: String?
-    /// Silenced by the user. WebKit keeps it per web view, so each new one (waking) is muted again.
-    /// Muted, it gives up the mini player: it is no longer heard, and would otherwise keep it.
+    /// WebKit keeps it per web view, so each new one (waking) is muted again.
     var isMuted = false {
         didSet {
             if let loadedWebView { applyMute(to: loadedWebView) }
@@ -277,16 +222,13 @@ final class Tab: NSObject, Identifiable {
         return "New Tab"
     }
 
-    /// A private (ephemeral) tab's own non-persistent data store, shared only with the tabs it
-    /// opens: its cookies and storage live in memory and go once no open tab holds it. Such a tab
-    /// is never saved in the session, the history, the closed tabs or the favicon cache.
+    /// A private tab's in-memory data store, shared only with the tabs it opens. Such a tab is never
+    /// saved in the session, the history, the closed tabs or the favicon cache.
     @ObservationIgnored let privateStore: WKWebsiteDataStore?
     var isEphemeral: Bool { privateStore != nil }
     /// Where a private tab's permission answers are kept, for its private session only.
     var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
-    /// Where visits are recorded; a private tab records none.
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
-    /// The address of the last visit recorded.
     @ObservationIgnored private var recordedURL: URL?
 
     private func recordVisit(_ url: URL, title: String) {
@@ -296,8 +238,7 @@ final class Tab: NSObject, Identifiable {
 
     /// The space whose sidebar shows the tab (`Space`). Fixed: its pages' cookies live there.
     let spaceID: Space.ID
-    /// The store of a space that keeps its data apart; a private tab's own wins over it. Asked
-    /// for as a web view is made, so tabs restored asleep make no store.
+    /// Asked for as a web view is made, so tabs restored asleep make no store.
     private var spaceStore: WKWebsiteDataStore? {
         privateStore == nil ? browser?.spaceStore(for: spaceID) : nil
     }
@@ -310,13 +251,11 @@ final class Tab: NSObject, Identifiable {
         super.init()
     }
 
-    /// The space whose own permission answers and per-site choices count, when it keeps its data
-    /// apart: its sign-ins are another identity's. Nil for the shared store and private tabs.
+    /// A space keeping its data apart has its own permissions: its sign-ins are another identity's.
     var siteSpace: Space.ID? {
         privateStore == nil && browser?.separatesData(spaceID) == true ? spaceID : nil
     }
 
-    /// Cookies and storage the page sees, without making a web view.
     var dataStore: WKWebsiteDataStore { privateStore ?? spaceStore ?? configuration.websiteDataStore }
 
     private func attach(_ webView: WKWebView) {
@@ -346,8 +285,6 @@ final class Tab: NSObject, Identifiable {
 
     func load(_ request: URLRequest) {
         guard let url = request.url else { return }
-        // Dropped as when sleeping, the web view is made again, with the address's configuration.
-        // A sleeping tab has none to drop, only the configuration it would wake with.
         if let browser, needsNewWebView(for: url) {
             let configuration = browser.makeConfiguration(for: url)
             if isAsleep { self.configuration = configuration } else { sleep(configuration: configuration) }
@@ -371,9 +308,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     /// WebKit shows an extension's pages only in a web view made with its configuration, and
-    /// nothing else in one: it drops the load without a word. Going between them takes a new
-    /// web view, without the old page's history. A tab without a page shown (asleep) has the
-    /// configuration made for its address.
+    /// nothing else in one (it drops the load silently), so going between them takes a new web view.
     private func needsNewWebView(for url: URL) -> Bool {
         guard let shown = loadedWebView?.url ?? self.url, let current = Self.owner(of: shown), let next = Self.owner(of: url) else { return false }
         return current != next
@@ -389,7 +324,6 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// A tab from the last session starts asleep: it shows its name and icon, and loads when selected.
     func restore(url: URL, title: String) {
         self.url = url
         self.title = title
@@ -399,28 +333,24 @@ final class Tab: NSObject, Identifiable {
         hasHadPage = true
     }
 
-    /// Stops the page, and whatever it was to go on to once shown.
     func stopLoading() {
         addressAfterWaking = nil
         webView.stopLoading()
     }
 
     func reload() {
-        // A sleeping tab has no page to reload: reading `webView` would only make an empty one,
-        // left on the tab until it wakes. Waking loads its page, which is the reload.
+        // Reading `webView` would only make an empty one; waking loads the page, which is the reload.
         if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
         if let failedURL { load(failedURL) } else { reloadPage() }
     }
 
-    /// A first load that never committed (stopped, or its process gone before) leaves WebKit
-    /// nothing to reload: the tab loads its address again instead.
+    /// A first load that never committed leaves WebKit nothing to reload: load the address again.
     private func reloadPage() {
         if webView.backForwardList.currentItem == nil, let url { load(url) } else { appStartedLoad = webView.reload() != nil }
     }
 
-    /// Back and Forward asked of the app (the toolbar, an extension), unlike the page's own
-    /// `history.back()`: a file they lead to downloads without asking.
+    /// Asked of the app, unlike the page's `history.back()`: a file it leads to downloads without asking.
     func goBack() {
         appStartedLoad = webView.goBack() != nil
     }
@@ -429,7 +359,6 @@ final class Tab: NSObject, Identifiable {
         appStartedLoad = webView.goForward() != nil
     }
 
-    /// What shows the page: the PDF viewer or the web view. Keyboard focus goes back to it.
     var contentView: NSView {
         pdf?.view ?? webView
     }
@@ -455,7 +384,6 @@ final class Tab: NSObject, Identifiable {
 
     var canRead: Bool { !isAsleep && pdf == nil && !isShowingError && ReaderMode.handles(url) }
 
-    /// Shows the page's article in the reader, or the page again. False when it has no article.
     @discardableResult
     func toggleReader() async -> Bool {
         guard canRead, let webView = loadedWebView else { return false }
@@ -478,8 +406,7 @@ final class Tab: NSObject, Identifiable {
         Task { await ReaderMode.exit(webView) }
     }
 
-    /// Whether the page looks like an article, for the address bar's button: asked once per page,
-    /// only once it is on screen, and not at all with the button off, unless the reader was used.
+    /// Asked once per page, once on screen, and not with the button off unless the reader was used.
     func checkReader() {
         guard !readerChecked, canRead, ReaderMode.showsButton || hasRead, let webView = loadedWebView else { return }
         readerChecked = true
@@ -515,7 +442,6 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// A new document, or none: neither an article known nor the reader shown.
     private func resetReader() {
         readerChecked = false
         if isReaderAvailable { isReaderAvailable = false }
@@ -533,7 +459,6 @@ final class Tab: NSObject, Identifiable {
         adopt(reader)
     }
 
-    /// The document's title and an icon for the tab, also when the reader comes back from the history.
     private func adopt(_ reader: PDFReader) {
         if favicon == nil { favicon = PDFReader.icon }
         if title.isEmpty {
@@ -552,7 +477,6 @@ final class Tab: NSObject, Identifiable {
     func markActive() {
         noteSound()
         lastActive = Date()
-        // One loading is asked once it has finished.
         if !isLoading { checkReader() }
         wakeIfAsleep()
     }
@@ -560,25 +484,20 @@ final class Tab: NSObject, Identifiable {
     private func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)
-        // A pinned page's icon may have changed while it slept (a calendar's date): fetched
-        // once, and not again when the page names the same one.
+        // A pinned page's icon may have changed while it slept (a calendar's date).
         if let saved = browser?.savedIconURL(of: self) { followIcon(saved) }
     }
 
-    /// What `load(_:history:)` takes to bring this page back elsewhere (a reopened or duplicated
-    /// tab) with its back and forward history; nil when it can't come back that way.
+    /// For `load(_:history:)` in a reopened or duplicated tab; nil when it can't come back that way.
     var history: Any? {
         isAsleep ? sleepingState : loadedWebView.flatMap(restorableState(of:))
     }
 
-    /// The history a sleeping tab wakes with, if every page in it can come back that way. Local
-    /// files and Lithium's own pages can't: their read access and trust are granted by `load`.
-    /// Nor can a page whose process died in the middle of a navigation: the history doesn't
-    /// have the page the tab was going to yet.
+    /// Not for local files and Lithium's pages, whose read access and trust `load` grants, nor a
+    /// page whose process died mid-navigation, whose history lacks the page it was going to.
     private func restorableState(of webView: WKWebView) -> Any? {
         let list = webView.backForwardList
-        // A PDF shown when the tab sleeps loads afresh: Lithium's viewer needs the document's
-        // bytes, which a page brought back from history may not come with.
+        // Lithium's PDF viewer needs the bytes, which a page back from history may not come with.
         guard pdf == nil, let current = list.currentItem, current.url == url,
               (list.backList + [current] + list.forwardList).allSatisfy({ Self.wakesWithHistory($0.url) }) else { return nil }
         return webView.interactionState
@@ -589,7 +508,6 @@ final class Tab: NSObject, Identifiable {
         !url.isFileURL && !Internal.isInternal(url) && url.scheme != Extensions.scheme && url.scheme != "blob"
     }
 
-    /// Shows the page with the history it had, or loads it afresh without one.
     func load(_ url: URL, history: Any?) {
         guard let history else { return load(url) }
         self.url = url
@@ -601,11 +519,8 @@ final class Tab: NSObject, Identifiable {
         if webView.backForwardList.currentItem == nil { load(url) }
     }
 
-    /// A tab that has been left alone for a while and is not busy (loading, playing sound,
-    /// using the camera or microphone) can release its page. It loads again when selected,
-    /// with its history. It is decided in the app, without waiting on the page's process,
-    /// which may be stuck, or slow to answer when memory is short: sound is as last noted,
-    /// which every sleep pass does for every tab first.
+    /// Decided in the app, without waiting on the page's process, which may be stuck or slow when
+    /// memory is short: sound is as last noted, which every sleep pass does for every tab first.
     func canSleep(idleFor interval: TimeInterval) -> Bool {
         guard !isAsleep, url != nil else { return false }
         return !webView.isLoading
@@ -614,8 +529,6 @@ final class Tab: NSObject, Identifiable {
             && !isInCall
     }
 
-    /// Heard in the last 5 minutes, as last noted: a pause between tracks or while buffering
-    /// isn't silence.
     var wasHeardLately: Bool {
         Date().timeIntervalSince(lastHeard ?? .distantPast) <= Self.silenceBeforeSleep
     }
@@ -628,11 +541,9 @@ final class Tab: NSObject, Identifiable {
         hasUnsavedInput = true
     }
 
-    /// Notes whether the page plays sound: what Safari's speaker icon shows (private
-    /// `_isPlayingAudio`, known in the app). WebKit's public media state is no substitute: it
-    /// calls a page holding a video or sound it never started "playing", which would keep
-    /// most news pages awake. It is used only by a WebKit without the private property, as
-    /// Lithium did before, and counts from the next pass, since the page's process answers it.
+    /// Uses Safari's speaker state (private `_isPlayingAudio`). WebKit's public media state calls a
+    /// page holding a video it never started "playing", which would keep most news pages awake: it
+    /// is only a fallback, counting from the next pass, since the page's process answers it.
     func noteSound() {
         guard let webView = loadedWebView, !isAsleep else { return }
         if let isPlayingAudio {
@@ -650,23 +561,20 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// Safari's speaker icon, asked of the app's side of WebKit; nil from a WebKit without it.
+    /// Nil from a WebKit without it.
     var isPlayingAudio: Bool? {
         guard let webView = loadedWebView, webView.responds(to: Selector(("_isPlayingAudio"))) else { return nil }
         return webView.value(forKey: "_isPlayingAudio") as? Bool
     }
 
-    /// The process that runs the page, for the hover card's memory and CPU. Private API; nil
-    /// from a WebKit without it, and while the process isn't running (WebKit reports 0).
+    /// For the hover card. Private API; nil without it, and while the process isn't running (WebKit reports 0).
     var webProcessIdentifier: pid_t? {
         guard let webView = loadedWebView, webView.responds(to: Selector(("_webProcessIdentifier"))),
               let pid = (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else { return nil }
         return pid
     }
 
-    /// Using the camera or microphone, or sharing the screen or a window: a call, whose
-    /// participants are heard through the page's media. Screen sharing is private API, absent
-    /// from older WebKits.
+    /// Camera, microphone, or screen sharing (private API, absent from older WebKits).
     var isInCall: Bool {
         guard let webView = loadedWebView else { return false }
         if webView.cameraCaptureState != .none || webView.microphoneCaptureState != .none { return true }
@@ -674,7 +582,6 @@ final class Tab: NSObject, Identifiable {
         return (webView.value(forKey: "_displayCaptureState") as? Int ?? 0) != 0
     }
 
-    /// Ends the link between a popup window and the page that opened it, both ways.
     func unpair() {
         opener = nil
         browser?.tabs.forEach { if $0.opener === self { $0.opener = nil } }
@@ -737,8 +644,7 @@ final class Tab: NSObject, Identifiable {
                     guard let self, !self.isAsleep else { return }
                     self.title = webView.title ?? ""
                     self.tidyTitle = nil
-                    // Lithium's error page names itself, not the page: its title goes no further
-                    // than the tab (not the history, the session, the badge or extensions).
+                    // The error page's title goes no further than the tab.
                     guard !self.isShowingError else { return }
                     if self.pinID != nil { self.updateUnread { $0.setTitle(self.title) } }
                     self.browser?.tidyTitles.update(self)
@@ -792,7 +698,6 @@ final class Tab: NSObject, Identifiable {
         browser.extensions.didChange(properties, of: self)
     }
 
-    /// `stillWanted`, checked once the lists are ready, can call it off.
     private func applyProtections(for url: URL, if stillWanted: (() -> Bool)? = nil) async {
         guard let privacy = browser?.privacy else { return }
         protectionRequests += 1
@@ -806,8 +711,7 @@ final class Tab: NSObject, Identifiable {
             privacy.applyRuleLists(enabled, to: controller)
             appliedProtections = (enabled, privacy.generation)
         }
-        // User scripts depend on the page (advanced rules are per site), so they are swapped
-        // on every main-frame navigation, before the new document starts.
+        // Advanced rules are per site, so scripts are swapped on every main-frame navigation.
         controller.removeAllUserScripts()
         protectedFrameHosts = []
         PageStyle.scripts(for: url, privateSession: privateSession, space: siteSpace).forEach(controller.addUserScript)
@@ -822,10 +726,8 @@ final class Tab: NSObject, Identifiable {
         browser?.agent?.install(on: controller, for: self)
     }
 
-    /// A main-frame load that ends without showing its page (Stop, a failure, a 204, a download, a
-    /// refused address) left the shown page with the scripts set up for its target: a frame the
-    /// page adds next would farble with that site's seed and get its rules. They go back to the
-    /// shown page's, unless another load set up its own meanwhile.
+    /// A main-frame load that ends unshown left the page with scripts set up for its target: a frame
+    /// added next would farble with that site's seed and get its rules. Put the shown page's back.
     private func restoreProtections() {
         guard hasShownPage, protectedURL != shownProtectedURL else { return }
         let shown = shownProtectedURL, stale = protectedURL, requests = protectionRequests
@@ -839,7 +741,6 @@ final class Tab: NSObject, Identifiable {
             // second sees the first's request. Otherwise each would see the other's and both give up.
             guard untouched(0) else { return }
             guard let shown else {
-                // Lithium's page, which had none.
                 webView.configuration.userContentController.removeAllUserScripts()
                 browser?.agent?.removeConsole(from: webView.configuration.userContentController)
                 protectedURL = nil
@@ -849,9 +750,7 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// Adds the advanced rules for a frame's own site (an embed, an ad, a consent prompt) before
-    /// its document starts: one lookup per host per page, and nothing added when the host has no
-    /// rules. The page's scripts, rebuilt on each main-frame navigation, drop them.
+    /// One lookup per host per page; rebuilding the page's scripts on navigation drops them.
     private func addFrameProtections(for url: URL) {
         guard let privacy = browser?.privacy, let page = webView.url, let host = url.host()?.lowercased(),
               protectedFrameHosts.insert(host).inserted,
@@ -859,11 +758,8 @@ final class Tab: NSObject, Identifiable {
         webView.configuration.userContentController.addUserScript(script)
     }
 
-    /// Sends a tab an extension woke without its history on to the extension's address. Called
-    /// when its old page is shown, and also when that load ends without showing anything (it
-    /// failed, was refused, or became a download): the address is loaded all the same, without
-    /// the old page to go back to. Otherwise it would wait for, and replace, whichever page
-    /// shows next.
+    /// Also called when the old page's load ends unshown: otherwise the address would wait for,
+    /// and replace, whichever page shows next.
     @discardableResult
     private func goToAddressAfterWaking() -> Bool {
         guard let next = addressAfterWaking else { return false }
@@ -889,7 +785,6 @@ final class Tab: NSObject, Identifiable {
         browser?.agent?.loadEndedUnshown(in: self)
     }
 
-    /// Applied only if the page still has the title the tidy name was made from.
     func setTidyTitle(_ tidy: String, from source: String) {
         guard title == source else { return }
         tidyTitle = tidy == title ? nil : tidy
@@ -924,7 +819,6 @@ final class Tab: NSObject, Identifiable {
             if favicon !== NSApp.applicationIconImage { favicon = NSApp.applicationIconImage }
             return
         }
-        // The icon the pinned page names wins anyway.
         guard !followsPageIcon else { return }
         // The fetch can outlast the page: an icon found after the tab moved to another site isn't its.
         let host = url?.host()
@@ -938,24 +832,19 @@ final class Tab: NSObject, Identifiable {
         browser?.didLoadFavicon(data, in: self)
     }
 
-    /// The pinned page's own icon is shown: it names one, and the tile shows no unread badge.
     private var followsPageIcon: Bool {
         liveIcon != nil && unread.shown == nil
     }
 
-    /// Shows an icon fetched for the pinned page; an unchanged one is left alone.
     func showFavicon(_ data: Data) {
         guard data != faviconData else { return }
         faviconData = data
         favicon = NSImage(data: data)
     }
 
-    /// Fetches the icon the page names, once per address for this web view. One fetch runs at a
-    /// time, then waits `iconInterval` before the address named last, so a page animating its
-    /// icon can't have the favorite and its file rewritten at every frame. While the tile shows
-    /// an unread badge nothing is fetched: Discord, Gmail or WhatsApp then name a copy of their
-    /// icon with the count drawn in, which would show it twice. The clean one stays, and the
-    /// page's next icon once the count is gone is followed again.
+    /// Paced by `iconInterval`, so an animated icon can't rewrite the favorite at every frame. Nothing
+    /// is fetched while the tile shows an unread badge: Discord, Gmail or WhatsApp then name an icon
+    /// with the count drawn in, which would show it twice.
     private func followIcon(_ url: URL, after delay: Duration = .zero) {
         guard url != liveIcon else { return }
         liveIcon = url
@@ -975,7 +864,6 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// The page no longer names an icon of its own: a fetch for its last one stops.
     private func forgetLiveIcon() {
         liveIcon = nil
         iconFollow?.cancel()
@@ -989,9 +877,7 @@ final class Tab: NSObject, Identifiable {
         guard next != unread else { return }
         let wasShown = unread.shown != nil
         unread = next
-        // The count is gone, often from the title alone: the icon the page names is followed
-        // again, in place of one shown while it counted (perhaps with the count drawn in). After
-        // `iconInterval`, so a new icon reported just after the title is the one fetched.
+        // After `iconInterval`, so a new icon reported just after the title is the one fetched.
         if wasShown, next.shown == nil, let icon = liveIcon {
             liveIcon = nil
             followIcon(icon, after: Self.iconInterval)
@@ -1003,7 +889,6 @@ final class Tab: NSObject, Identifiable {
         case .badge(let count): updateUnread { $0.setAppBadge(count) }
         case .clearBadge: updateUnread { $0.clearAppBadge() }
         case .notification:
-            // The user is looking at it already.
             guard browser?.selectedTabID != id || loadedWebView?.window?.isKeyWindow != true else { return }
             updateUnread { $0.notify() }
         case .icon(let url, let title):
@@ -1013,14 +898,12 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// The user picked the tab: its notifications have been seen.
     func didOpen() {
         updateUnread { $0.open() }
     }
 
-    /// Pinned, the page gets its script and channel at once, without a reload; unpinned, the
-    /// channel closes and the badge goes. A tab restored asleep counts nothing from the title it
-    /// was saved with: the badge only says what a page said since launch.
+    /// Pinned, the page gets its script and channel at once, without a reload. A tab restored asleep
+    /// counts nothing from its saved title: the badge only says what a page said since launch.
     private func pinnedChanged() {
         if pinID == nil {
             // The icon first: a badge going away would follow it again.
@@ -1069,16 +952,13 @@ extension Tab: WKNavigationDelegate {
         // Asked once, and only when needed: the answer uses the press up.
         lazy var pressed = isPressed(action, in: webView)
         // Only the first decision after an extension sent a sleeping tab on can be its old page's
-        // load, started first; whatever it is, the next ones (the new address's redirects, a
-        // Reload after a download) go through.
+        // load; the next ones (redirects, a Reload after a download) go through.
         if isMainFrame, let superseded = supersededURL {
             supersededURL = nil
             if url == superseded { return (.cancel, preferences) }
         }
-        // A link or form's own load uses the press up whether or not a check below asks for it
-        // (a frame's, a new tab's): the page it opens can't use it again. So does a frame's load
-        // that a click's script started (the main frame's uses it up below); not the other loads
-        // of frames, an ad's say, which would take it from the page.
+        // A link, form, or click-started frame load uses the press up, so the page it opens can't
+        // reuse it; not other frame loads (an ad's), which would take it from the page.
         if [.linkActivated, .formSubmitted].contains(action.navigationType) || !isMainFrame && action.navigationType == .other && Self.isUserInitiated(action),
            !Self.isRedirect(action) { _ = pressed }
         // A server's redirect keeps the type of the click that started its load, whoever pressed since.
@@ -1086,7 +966,6 @@ extension Tab: WKNavigationDelegate {
             browser?.agent?.userStartedLoad(in: self)
         }
         if action.shouldPerformDownload {
-            // A download the agent started waits for the user's Allow.
             let name = url.lastPathComponent
             if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url) {
                 return (allowed ? .download : .cancel, preferences)
@@ -1103,9 +982,8 @@ extension Tab: WKNavigationDelegate {
         }
 
         guard Self.webSchemes.contains(url.scheme?.lowercased() ?? "") else {
-            // Only the user's own click hands an address to another app, never an agent's, nor a
-            // script's `click()`: that does nothing. The site whose frame has the link (an ad's,
-            // say) is the one asking.
+            // Only the user's own click hands an address to another app, never an agent's or a
+            // script's. The site whose frame has the link (an ad's, say) is the one asking.
             if action.navigationType == .linkActivated, pressed, (webView as? PageWebView)?.agentPressedLast != true {
                 let host = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.host ?? shownHost ?? ""
                 openInApp(url, from: host)
@@ -1115,10 +993,8 @@ extension Tab: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
-        // Going back to a form's result WebKit no longer has, reloading it or waking on it sends
-        // the form again: an order, a payment. Like Safari, Lithium asks first, for the page in
-        // front only; a frame's form too (an embedded payment check or sign-in), which refused
-        // stays blank. Refused, a web view with nothing shown yet (a tab waking on that page)
+        // Going back to, reloading or waking on a form's result sends the form again (an order, a
+        // payment): like Safari, ask first, frames too. Refused, a web view with nothing shown yet
         // loads the address instead, without the form.
         if action.navigationType == .formResubmitted {
             // A web view put away meanwhile (its tab closed or asleep) never sends it, nor reloads.
@@ -1131,9 +1007,8 @@ extension Tab: WKNavigationDelegate {
 
         let source = (action.sourceFrame as WKFrameInfo?)?.securityOrigin.protocol
         if Internal.isInternal(url) {
-            // Websites may not open Lithium's pages; only the app or another Lithium page can.
-            // Back, Forward and Reload only return to one the tab already showed: a website can't
-            // put Lithium's pages in the history.
+            // Only the app or another Lithium page may open these. Back, Forward and Reload only
+            // return to one the tab showed: a website can't put Lithium's pages in the history.
             let isRevisit = [.backForward, .reload].contains(action.navigationType)
             guard isMainFrame, url == trustedInternalURL || source == Internal.scheme || isRevisit else {
                 if isMainFrame { endedUnshown(.refused(scheme: Internal.scheme)) }
@@ -1150,17 +1025,14 @@ extension Tab: WKNavigationDelegate {
             setInternalBridge(true)
             return (.allow, preferences)
         }
-        // An extension's own pages run in its configuration, which Lithium leaves alone.
         guard url.scheme != Extensions.scheme else { return (.allow, preferences) }
         guard isMainFrame else {
             addFrameProtections(for: url)
             return (.allow, preferences)
         }
 
-        // ⌘-click opens the link in a new tab, as does an agent's middle click (WebKit's button
-        // mask 4); the user's own middle click follows it here. A script's ⌘-click (an untrusted
-        // `MouseEvent` with `metaKey`) follows it here too, as in WebKit: a new tab of Lithium's
-        // would get around the popup blocker.
+        // An agent's middle click is WebKit's button mask 4. A script's ⌘-click is followed in
+        // place, as in WebKit: a new tab of Lithium's would get around the popup blocker.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil,
            pressed {
             if await browser?.agent?.open(url, from: self) != true {
@@ -1168,9 +1040,7 @@ extension Tab: WKNavigationDelegate {
             }
             return (.cancel, preferences)
         }
-        // A link or script opening a new tab (target=_blank, window.open): WebKit asks the opener
-        // first, then makes the tab in `createWebViewWith`, whose page then decides for itself.
-        // Nothing here is this page's to change.
+        // A new tab's page decides for itself once made in `createWebViewWith`.
         guard action.targetFrame != nil else { return (.allow, preferences) }
         // An extension's page sending its tab to a website (1Password's Sign In button) goes on
         // in a new web view. Only that way round: a website may not open an extension's pages.
@@ -1178,25 +1048,21 @@ extension Tab: WKNavigationDelegate {
             Task { self.load(action.request) }
             return (.cancel, preferences)
         }
-        // Before the store's first script asks for it; taken away only once another page commits,
-        // so a load that never shows (Stop, a 204, a download) leaves the store its button.
+        // Before the store's first script asks for it; removed only once another page commits.
         if ChromeWebStore.isStore(url) { setWebstoreBridge(true) }
         // A woken tab's new web view gets the channel at its first page.
         browser?.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
 
-        // A link or form the user pressed is a new load, not the page bouncing back to its tracked
-        // address: stripped again, even on the stripped address it landed on.
+        // A pressed link or form is a new load, not the page bouncing back: stripped again.
         if [.linkActivated, .formSubmitted].contains(action.navigationType), !Self.isRedirect(action), pressed {
             strippedURL = nil
         }
-        // A site the user turned protections off for keeps its parameters too. Back, Forward and
-        // Reload return to an entry the history already has: cancelled for a new load, they would
-        // drop the forward list and keep the user from going back past that page.
+        // Not Back, Forward or Reload: cancelled for a new load, they would drop the forward list
+        // and keep the user from going back past that page.
         if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
            browser?.privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
-            // The same load, without its parameters: whoever asked for it still did.
             appStartedLoad = loadWasRequested
             Task { webView.load(URLRequest(url: clean)) }
             return (.cancel, preferences)
@@ -1222,9 +1088,8 @@ extension Tab: WKNavigationDelegate {
             return allowed ? .download : .cancel
         }
         if response.isForMainFrame, loadWasRequested { return .download }
-        // A frame in the page (an ad, or a site's Download button pointing a hidden frame at the
-        // file), or the page sending itself to a file without a click, asks first, as in Safari:
-        // the site the user is on is allowed, or not, once.
+        // A frame (an ad, a hidden download frame) or a page going to a file without a click asks
+        // first, as in Safari: the site the user is on is allowed, or not, once.
         return await askToDownload() ? .download : .cancel
     }
 
@@ -1273,9 +1138,8 @@ extension Tab: WKNavigationDelegate {
         if type == 0 || type == 3 { sameDocumentNavigations += 1 }
     }
 
-    /// Private WebKit (`WKNavigationDelegatePrivate`): the page menu's Download Image, Download
-    /// Linked File and Download Video. Without it WebKit drops the download before it starts.
-    /// Like Safari's Save Image As…, it asks where to save.
+    /// Private WebKit (`WKNavigationDelegatePrivate`): the page menu's Download Image, Linked File and
+    /// Video. Without it WebKit drops the download before it starts.
     @objc(_webView:contextMenuDidCreateDownload:)
     func webView(_ webView: WKWebView, contextMenuDidCreateDownload download: WKDownload) {
         Downloads.shared.track(download, askingWhere: true)
@@ -1290,19 +1154,16 @@ extension Tab: WKNavigationDelegate {
         hasUnsavedInput = false
         resetReader()
         if navigation !== errorNavigation { loadError = nil }
-        // Another page showing ends the redirect a stripped address guards against: a later link
-        // to the same tracked address (after Back, say) is stripped again.
+        // A later link to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.
         setInternalBridge(Internal.isInternal(webView.url))
         setWebstoreBridge(ChromeWebStore.isStore(webView.url))
-        // The old page is now in the history, one Back away. Only on its way out, it isn't the
-        // document an agent's navigation waits for.
+        // A woken tab's old page is only on its way out: not the document an agent waits for.
         if !goToAddressAfterWaking() { commits += 1 }
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         browser?.appLinks.cancel(tabID: id)
-        // The page that played is gone; the new one reports its own media.
         browser?.nowPlaying.discard(self)
         // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {
@@ -1328,10 +1189,8 @@ extension Tab: WKNavigationDelegate {
         }
         let reader = PDFReader(url: url)
         reader.isPrivate = isEphemeral
-        // Like a website's links: never Lithium's own pages, local files only from a local PDF and
-        // inside its folder (a file opens with read access to its own folder, which the PDF could
-        // otherwise choose; the folder itself would open with read access to the one above), and
-        // other apps' schemes (mailto:) go to those apps.
+        // Never Lithium's own pages; local files only from a local PDF and strictly inside its folder
+        // (a file opens with read access to its folder, and the folder itself to the one above).
         let folder = url.isFileURL ? url.deletingLastPathComponent().standardizedFileURL.pathComponents : nil
         let site = url.host() ?? ""
         reader.onOpenLink = { [weak self] url, inNewTab in
@@ -1344,7 +1203,6 @@ extension Tab: WKNavigationDelegate {
             case Internal.scheme, Extensions.scheme:
                 break
             default:
-                // As in a page: an agent's click never hands an address to another app.
                 if NSApp.currentEvent.map(NativeInput.isAgents) != true { self.openInApp(url, from: site) }
             }
         }
@@ -1359,7 +1217,6 @@ extension Tab: WKNavigationDelegate {
                 if pdf.document == nil { Task { await openPDF(from: webView, reader: pdf) } } else { adopt(pdf) }
             }
         }
-        // The find bar's count was the page before's: the new page is searched again.
         if let browser, browser.showsFindBar(over: self), !browser.find.query.isEmpty {
             let find = browser.find
             Task { await find.update(query: find.query, in: findTarget) }
@@ -1381,15 +1238,12 @@ extension Tab: WKNavigationDelegate {
         showError(error, for: (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL ?? url)
     }
 
-    /// Private WebKit (`WKNavigationAction._isRedirect`).
     private static func isRedirect(_ action: WKNavigationAction) -> Bool {
         action.responds(to: NSSelectorFromString("_isRedirect")) && action.value(forKey: "_isRedirect") as? Bool == true
     }
 
-    /// A real press (the user's or `NativeInput`'s) started this navigation, not a script on its
-    /// own: WebKit's user gesture (private `WKNavigationAction._isUserInitiated`), or a press in
-    /// the page just before, for a frame's redirect or a WebKit without it. Either uses the press
-    /// up; a redirect of the page's own load keeps whatever started that load.
+    /// A real press, not a script, started this: WebKit's user gesture, or a press just before
+    /// (for a frame's redirect or a WebKit without it). A main-frame redirect keeps its load's answer.
     private func isPressed(_ action: WKNavigationAction, in webView: WKWebView) -> Bool {
         let page = webView as? PageWebView
         if Self.isUserInitiated(action) {
@@ -1402,20 +1256,17 @@ extension Tab: WKNavigationDelegate {
         return true
     }
 
-    /// WebKit's user gesture (private `WKNavigationAction._isUserInitiated`); false without it.
     private static func isUserInitiated(_ action: WKNavigationAction) -> Bool {
         action.responds(to: NSSelectorFromString("_isUserInitiated")) && action.value(forKey: "_isUserInitiated") as? Bool == true
     }
 
-    /// Another app's address, from a click in this tab's page or PDF: asked first (`AppLinks`).
     private func openInApp(_ url: URL, from host: String) {
         guard let browser else { return }
         Task { await browser.appLinks.open(url, from: host, tabID: id, isPrivate: isEphemeral) }
     }
 
-    /// Cancelled, or interrupted by a policy change (WebKit error 102): nothing to show the user.
-    /// Nor is WebKit's 204, "plug-in will handle load": a direct video or audio link's player took
-    /// the load over, and shows the file.
+    /// Cancelled, interrupted by a policy change (WebKit 102), or WebKit's 204 "plug-in will handle
+    /// load" (a media link's player took over): nothing to show the user.
     static func isDropped(_ error: Error) -> Bool {
         let error = error as NSError
         return error.code == NSURLErrorCancelled || (error.domain == "WebKitErrorDomain" && [102, 204].contains(error.code))
@@ -1425,9 +1276,8 @@ extension Tab: WKNavigationDelegate {
         showError(error, for: url)
     }
 
-    /// A tab out of sight comes back when it is selected rather than reloading now: its page may
-    /// have been dropped to free memory. A page that takes its process down again right after
-    /// reloading shows an error instead of reloading forever.
+    /// A tab out of sight sleeps rather than reloading: its page may have been dropped to free memory.
+    /// A page that crashes again right after reloading shows an error instead of reloading forever.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // The media died with the process; a reload that never commits would leave it showing as playing.
         browser?.nowPlaying.discard(self)
@@ -1463,9 +1313,8 @@ extension Tab: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard let browser else { return nil }
-        // An agent's click opening a tab: it goes into the Agent group, unselected, and the
-        // action's result names it. One for an address agents can't open as it is (a file:
-        // page, which asks the user) opens through the hub, without its opener.
+        // An agent's tab for an address agents can't open as it is (a file: page, which asks the
+        // user) opens through the hub, without its opener.
         let agentSession = browser.agent?.actingSession(in: self)
         if agentSession != nil, let url = action.request.url, !url.absoluteString.isEmpty, AgentURLs.verdict(for: url) != .allowed {
             Task { await browser.agent?.open(url, from: self) }
@@ -1486,17 +1335,15 @@ extension Tab: WKUIDelegate {
             return nil
         }
         browser.prepare(popup: configuration)
-        // A private tab's popup shares its store, so a sign-in window's cookies reach its opener;
-        // so does a popup in a space with its own store (`newTab` puts it in its opener's space).
-        // A link's own window opens its pages in windows of their own, leaving the tab list alone.
+        // A private or separate-space tab's popup shares its store, so a sign-in's cookies reach its
+        // opener. A link's own window opens its pages in windows of their own.
         let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore, space: spaceID) }
             ?? (browser.quickLinks.contains(self) ? browser.quickLinks.open(configuration: configuration, space: spaceID) : nil)
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         popup.scriptOpener = self
-        // A popup window gives a size or a position, as sign-in and payment windows do. A link
-        // or script opening a plain tab (target=_blank, noopener) doesn't; neither does a
-        // window.open with no features at all, which can't be told apart from one.
+        // A popup window gives a size or a position, as sign-in and payment windows do; a plain
+        // tab (target=_blank) doesn't, nor does a featureless window.open, which looks the same.
         let geometry = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y]
         if geometry.contains(where: { $0 != nil }) { popup.opener = self }
         return popup.webView
@@ -1575,8 +1422,7 @@ extension Tab: WKUIDelegate {
         return reply.accepted ? reply.text ?? "" : nil
     }
 
-    /// Its web view came into a window: the agent's dialog waiting in the page is the user's now,
-    /// and the page has the window's size, not one an agent gave it.
+    /// The agent's dialog waiting in the page is the user's now.
     func didComeIntoView() {
         if let hiddenDialog {
             self.hiddenDialog = nil
@@ -1586,24 +1432,20 @@ extension Tab: WKUIDelegate {
         browser?.agent?.cameIntoView(self)
     }
 
-    /// Its web view moved to another window, or out of any: out of the agent's stage, if it was there.
     func webViewDidMove(_ webView: WKWebView) {
         browser?.agent?.stage.didLeave(webView)
     }
 
-    /// The user clicked, typed or scrolled in its page.
     func noteUserInput() {
         browser?.agent?.userInput(in: self)
     }
 
-    /// The user clicked in its page, or pressed Enter there.
     func noteUserActivation() {
         browser?.agent?.userActivated(in: self)
     }
 
-    /// A dialog in a tab out of sight that a connected session holds goes to the agent, never to
-    /// a modal that would hold up the user, until it is handed to the user; any other is the
-    /// user's, and agents see it while it shows.
+    /// A dialog in an out-of-sight tab a connected session holds goes to the agent, never to a modal
+    /// that would hold up the user; any other is the user's, and agents see it while it shows.
     private func answer(_ dialog: AgentDialog, asUser: () async -> DialogReply) async -> DialogReply {
         guard let agent = browser?.agent else { return await asUser() }
         if let reply = await agent.agentReply(to: dialog, in: self) { return reply }
@@ -1652,18 +1494,16 @@ extension Tab: WKUIDelegate {
         return await alert.beginSheetModal(for: window) == .alertFirstButtonReturn
     }
 
-    /// Cancels the question when the tab's web view is put away: the sheet would stay on the
-    /// window, for a page that is gone.
+    /// Otherwise the sheet would stay on the window for a page that is gone.
     private func endResubmissionSheet() {
         guard let sheet = resubmissionSheet else { return }
         resubmissionSheet = nil
         sheet.sheetParent?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
     }
 
-    /// A sheet on the tab's window, never an app-modal alert: a page out of sight would hold up
-    /// the whole app (`for (;;) alert(1)` left only Force Quit). Its dialog waits for the tab to
-    /// be shown instead. Nil is the default answer: for one more dialog from the tab meanwhile, and
-    /// for the waiting one when the tab closes, sleeps or is sent elsewhere.
+    /// A sheet, never an app-modal alert: a page out of sight would hold up the whole app
+    /// (`for (;;) alert(1)` left only Force Quit), so its dialog waits for the tab to be shown.
+    /// Nil is the default answer.
     func present(_ alert: NSAlert) async -> NSApplication.ModalResponse? {
         if webView.userWindow == nil {
             guard hiddenDialog == nil else { return nil }
@@ -1675,15 +1515,13 @@ extension Tab: WKUIDelegate {
         return await alert.beginSheetModal(for: window)
     }
 
-    /// An extension or an agent can close the tab while its dialog is up: the dialog goes with
-    /// it, answered Cancel, rather than staying on the window for a page that is gone.
+    /// An extension or agent can close the tab while its dialog is up: the dialog goes with it.
     private func endDialogSheet() {
         guard let sheet = dialogSheet else { return }
         dialogSheet = nil
         sheet.sheetParent?.endSheet(sheet, returnCode: .abort)
     }
 
-    /// Gives the dialog waiting for the tab to be shown its default answer.
     func answerHiddenDialog() {
         guard let hiddenDialog else { return }
         self.hiddenDialog = nil
@@ -1734,19 +1572,15 @@ extension Tab: WKWebExtensionTab {
         browser?.close(self)
     }
 
-    /// A sleeping tab keeps its old page one Back away. With its history saved, it gets it back
-    /// and goes straight on to the address: the old page's load is superseded rather than waited
-    /// for. Without (a tab restored asleep from the last session), it wakes onto its old page first,
-    /// and goes on once that is shown or has failed to be.
-    /// Sent to the page it slept on, it just wakes, which loads that page. Sent between an
-    /// extension's pages and websites, it wakes in a new web view without its history.
+    /// A sleeping tab keeps its old page one Back away: with its history saved, the old page's load
+    /// is superseded; without (restored from the last session), it wakes onto the old page first.
+    /// Between an extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         guard Extensions.mayOpen(url) else { throw Extensions.RefusedAddress() }
         go(to: url)
     }
 
-    /// Sends the tab to an address on someone else's behalf (an extension, an agent), keeping a
-    /// sleeping tab's history as `loadURL(_:for:)` describes.
+    /// For an extension or agent, keeping a sleeping tab's history as `loadURL(_:for:)` describes.
     func go(to url: URL) {
         lastActive = Date()
         guard isAsleep, let old = self.url, !needsNewWebView(for: url) else {
@@ -1771,7 +1605,6 @@ extension Tab: WKWebExtensionTab {
         }
     }
 
-    /// A sleeping tab wakes first, with its history; waking loads its page, which is the reload.
     func reload(fromOrigin: Bool, for context: WKWebExtensionContext) async throws {
         if isAsleep { wake() } else { reload() }
     }

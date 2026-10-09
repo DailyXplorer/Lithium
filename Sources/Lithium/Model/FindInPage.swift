@@ -5,7 +5,6 @@ import WebKit
 @MainActor
 protocol FindTarget: AnyObject {
     func countMatches(of query: String) async -> Int
-    /// Shows the next or previous match, wrapping around.
     func showNextMatch(of query: String, forward: Bool) async -> FindStep
     func selectedText() async -> String?
     func clearMatches()
@@ -27,15 +26,12 @@ final class FindInPage {
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
     private(set) var focusToken = 0
-    /// The link's page (`QuickLinks`) the bar was opened over, nil for the main window's. The bar
-    /// stays in that window when another comes to the front (`Browser.showsFindBar`).
+    /// The link's page (`QuickLinks`) the bar was opened over; nil for the main window's.
     private(set) var linkTab: Tab?
-    /// Whether the bar takes the keyboard when it appears: only Find… asks for it. Find Next and
-    /// Use Selection for Find leave the keyboard where it is, such as a form field in the page.
+    /// Only Find… takes the keyboard; Find Next and Use Selection leave it where it is, such as a form field.
     @ObservationIgnored private(set) var focusesField = true
     /// Set by the bar while its field has the keyboard: Escape there closes the bar.
     @ObservationIgnored var isFieldFocused = false
-    /// What the last search highlighted, cleared when the search moves elsewhere or the bar closes.
     @ObservationIgnored private weak var target: FindTarget?
     /// Only the newest search sets the count: an older one may finish later, even for the same text.
     @ObservationIgnored private var search = 0
@@ -56,7 +52,6 @@ final class FindInPage {
         target = nil
     }
 
-    /// Searches for `newQuery` and shows its first match, or with `forward` false its last.
     func update(query newQuery: String, in target: FindTarget, forward: Bool = true) async {
         if self.target !== target { self.target?.clearMatches() }
         self.target = target
@@ -120,10 +115,9 @@ extension WKWebView: FindTarget {
         return (count as? Int) ?? 0
     }
 
-    /// WebKit's find selects the match and scrolls it just into view, but a selection outside the
-    /// focused view is a faint gray, and the find bar floats over the top of the page. So the match
-    /// gets the find color (a CSS highlight, in Lithium's world) and is centered when near an edge;
-    /// the selection steps aside to a caret after it, and comes back for the next search to start from.
+    /// WebKit's find selection is a faint gray outside the focused view, and the find bar covers the
+    /// top: the match gets a CSS highlight and is centered near an edge; the selection steps aside
+    /// to a caret, and comes back for the next search to start from.
     private static let markScript = """
         const selection = getSelection();
         const range = selection.rangeCount ? selection.getRangeAt(0) : null;

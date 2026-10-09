@@ -87,10 +87,8 @@ input[type=color].custom::-webkit-color-swatch { box-shadow: 0 0 0 1.5px var(--b
 .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .status.ready::before { background: #2FA36B; }
 
-/* A dropdown's closed control looks like a button, with Phosphor's caret instead of the native
-   glyph; the list it opens stays the native menu. A select can't draw a ::after, so the caret
-   sits on a .select wrapper. 37px is the segmented control's and the buttons' height, set
-   outright since WebKit doesn't size a select or a text field by its line height. */
+/* A select can't draw a ::after, so the caret sits on a .select wrapper. 37px is set outright
+   since WebKit doesn't size a select or a text field by its line height. */
 .select { position: relative; display: inline-flex; flex: none; }
 .select::after { content: ""; position: absolute; right: 12px; top: 50%; width: 12px; height: 12px; margin-top: -6px;
   background: var(--muted); pointer-events: none;

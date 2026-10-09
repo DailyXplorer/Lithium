@@ -6,8 +6,7 @@ enum DOMCondition {
     case element(ref: String, state: String)
     case text(String, present: Bool)
 
-    /// Nil when the call waits for something else (load, url).
-    /// `gone`: the text came as `textGone`, which waits for it to go.
+    /// Nil when the call waits for something else (load, url). `gone`: the text came as `textGone`.
     init?(ref: String?, text: String?, gone: Bool = false, arguments: Arguments) throws {
         if let ref {
             guard AgentTab.isRef(ref) else { throw Arguments.invalid("ref must be a ref from snapshot, such as e9 or f2:e7.") }
@@ -25,7 +24,7 @@ enum DOMCondition {
 extension AgentHub {
     static let readTools: [AgentTool] = [snapshotTool, readText, linksTool, formsTool, findText, elementInfo, screenshotTool, pdfTool]
 
-    /// A read waits its turn and runs within this; a page kept busy by a script answers `timeout`.
+    /// Includes waiting for its turn.
     static let readTimeout: Duration = .seconds(10)
     /// How much longer than the main frame a child frame may take to answer a read.
     static let frameTimeout: Duration = .seconds(2)
@@ -52,7 +51,7 @@ extension AgentHub {
             let format = try arguments.choice("format", ["text", "json"], default: "text")
             let maxNodes = try arguments.int("maxNodes", default: 300, in: 1...2000)
             let since = try arguments.value["since"].map { _ in try arguments.int("since", default: 0, in: 0...Int.max) }
-            // A page paused under a dialog can't be read: the snapshot says what waits for an answer.
+            // A page paused under a dialog can't be read.
             if let dialog = hub.tabs[named.tab.id]?.dialog { return hub.dialogSnapshot(named, dialog) }
             do {
                 return addingFailedScripts(to: try await snapshot(named, scope: scope, format: format, maxNodes: maxNodes, since: since, session: session, hub: hub), of: named, hub: hub)
@@ -63,7 +62,6 @@ extension AgentHub {
         }
     )
 
-    /// The page's failed scripts, when it has any, in the result and as the text's last line.
     private static func addingFailedScripts(to output: AgentToolOutput, of named: NamedTab, hub: AgentHub) -> AgentToolOutput {
         guard let failed = hub.failedScripts(in: named.tab), var fields = output.structured.object else { return output }
         var output = output
@@ -204,7 +202,7 @@ extension AgentHub {
     ) { arguments, _, hub in
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
-        // The page's lines have their spaces collapsed, so the text has too, as wait_for's.
+        // The page's lines have their spaces collapsed, so the text is too.
         let text = try arguments.string("text").split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !text.isEmpty else { throw Arguments.invalid("text must not be empty.") }
         let caseSensitive = try arguments.bool("caseSensitive", default: false)
@@ -350,8 +348,7 @@ extension AgentHub {
 
     // MARK: Reading
 
-    /// Runs a read in its turn in the tab, within `readTimeout`. A sleeping tab wakes first, onto
-    /// a page agents may open.
+    /// Runs a read in its turn in the tab, within `readTimeout`.
     func reading<Value>(_ named: NamedTab, _ body: (_ webView: WKWebView, _ deadline: ContinuousClock.Instant) async throws -> Value) async throws -> Value {
         let deadline = ContinuousClock.now + AgentHub.readTimeout
         return try await exclusive(named, until: deadline, timeout: AgentHub.readTimeout) {
@@ -365,8 +362,7 @@ extension AgentHub {
         }
     }
 
-    /// The tab's web view, sized. One that was never in the window has no size, and its page
-    /// lays out in an empty viewport: it gets the size of the page area the user sees.
+    /// A web view never in the window has no size, so its page would lay out in an empty viewport.
     func sizedWebView(of tab: Tab) -> WKWebView {
         let webView = tab.webView
         if webView.superview == nil, webView.frame.width < 1 || webView.frame.height < 1 {
@@ -376,20 +372,18 @@ extension AgentHub {
         return webView
     }
 
-    /// A tab out of the user's window keeps the size `resize` gave its page, in the stage too,
-    /// where the other pages follow the stage's size.
+    /// A tab out of the user's window keeps the size `resize` gave it, in the stage too.
     func fitViewport(of webView: WKWebView, in tab: Tab) {
         guard webView.userWindow == nil, let size = tabs[tab.id]?.viewport else { return }
         webView.autoresizingMask = []
         if webView.frame.size != size { webView.setFrameSize(size) }
     }
 
-    /// Hooked from `Tab.didComeIntoView`: the user's window gives the page its own size.
+    /// Hooked from `Tab.didComeIntoView`.
     func cameIntoView(_ tab: Tab) {
         tabs[tab.id]?.viewport = nil
     }
 
-    /// Starts a call to `agent.js`; its answer comes in the returned box.
     func start(_ webView: WKWebView, _ target: FrameTarget, _ operation: String, _ arguments: [String: Any]) -> PageAnswer<Data> {
         let answer = PageAnswer<Data>()
         Task {
@@ -398,8 +392,7 @@ extension AgentHub {
         return answer
     }
 
-    /// The answer, or nil when the frame is gone or the script failed. A page kept busy past the
-    /// deadline answers `timeout`; the tab closing, the user navigating it, or `stop` end the wait.
+    /// Nil when the frame is gone or the script failed.
     private func answer(_ answer: PageAnswer<Data>, from named: NamedTab, until deadline: ContinuousClock.Instant) async throws -> Data? {
         guard let result = try await watch(named, until: deadline, { answer.result }) else {
             throw AgentToolError(code: "timeout", message: "\(named.id)’s page didn’t answer within \(Int(AgentHub.readTimeout / .seconds(1))) s: a script may be keeping it busy.")
@@ -407,7 +400,6 @@ extension AgentHub {
         return try? result.get()
     }
 
-    /// One frame's answer; a frame that is gone is `frame_gone`.
     func ask(_ named: NamedTab, _ webView: WKWebView, _ target: FrameTarget, _ operation: String, _ arguments: [String: Any], until deadline: ContinuousClock.Instant) async throws -> Data {
         guard let data = try await answer(start(webView, target, operation, arguments), from: named, until: deadline) else {
             throw AgentHub.pageChanged(named)
@@ -415,7 +407,6 @@ extension AgentHub {
         return data
     }
 
-    /// A frame's answer and how to name what it holds.
     struct FrameRefs {
         let state: AgentTab
         let document: String
@@ -426,19 +417,18 @@ extension AgentHub {
         }
     }
 
-    /// Every frame's answer, and how many child frames didn't answer in time.
     struct FrameReports<Report> {
         var reports: [(Report, FrameRefs)]
+        /// Child frames that didn't answer in time.
         var late = 0
 
-        /// Added to a result that lists what every frame holds, so the agent knows it's partial.
+        /// So the agent knows the result is partial.
         func note(_ fields: inout [String: JSONValue]) {
             if late > 0 { fields["framesNotRead"] = .int(late) }
         }
     }
 
-    /// Asks the main frame and every child frame that said hello, side by side. The main frame
-    /// must answer; child frames that are gone or late (`childAnswers`) are left out.
+    /// The main frame must answer; child frames that are gone or late are left out.
     func askEveryFrame<Report: Decodable & DocumentReport>(_ named: NamedTab, _ webView: WKWebView, _ operation: String, _ arguments: [String: Any], _ type: Report.Type, until deadline: ContinuousClock.Instant, patient: Bool = false) async throws -> FrameReports<Report> {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
         let hellos = state.hellos
@@ -461,11 +451,8 @@ extension AgentHub {
         return reports
     }
 
-    /// The child frames' answers, asked side by side with the main frame's. Once the main frame
-    /// answered they get `frameTimeout` more; a frame still busy then is late and left out, and
-    /// pictures paint it over whole. The tab closing, the user navigating it or `stop` end the
-    /// wait as they end any other. Frames of a page the main frame no longer shows are dropped.
-    /// `patient` gives them the whole deadline. Nil data: the frame is gone or its script failed.
+    /// Once the main frame answered, child frames get `frameTimeout` more (`patient`: the whole
+    /// deadline); a frame still busy then is late, and pictures paint it over whole.
     func childAnswers(_ children: [(token: String, answer: PageAnswer<Data>)], of state: AgentTab, from named: NamedTab, until deadline: ContinuousClock.Instant, patient: Bool = false) async throws -> (answers: [(token: String, data: Data?)], late: Int) {
         let budget = patient ? deadline : min(deadline, .now + AgentHub.frameTimeout)
         var answers: [(token: String, data: Data?)] = []
@@ -487,8 +474,7 @@ extension AgentHub {
         return data
     }
 
-    /// The page as the snapshot shows it, from every frame's report, put together. A frame that
-    /// saw nothing change since its last report answers without walking its document.
+    /// A frame that saw nothing change since its last report answers without walking its document.
     func snapshot(of named: NamedTab, in webView: WKWebView, scope: String, maxNodes: Int, until deadline: ContinuousClock.Instant) async throws -> PageSnapshot {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
         let arguments = { (token: String?) -> [String: Any] in
@@ -534,11 +520,8 @@ extension AgentHub {
         return snapshot
     }
 
-    /// What navigation tools and `wait_for` add: what the viewport shows now, as a diff from this
-    /// session's last default snapshot of the tab, or whole when there was none or it was another page.
-    /// Within the call's deadline, and a few seconds at most. Left out, with a note, rather than
-    /// failing the call, when the page doesn't answer; the tab closing, the user taking it back
-    /// or `stop` fail the call, as they would have a moment earlier.
+    /// The viewport as a diff from this session's last snapshot of the page, or whole. Left out,
+    /// with a note, rather than failing the call when the page doesn't answer.
     func addingDiff(to page: JSONValue, of named: NamedTab, for session: MCPSession, if wanted: Bool, until deadline: ContinuousClock.Instant) async throws -> JSONValue {
         guard wanted, var fields = page.object, named.tab.pdf == nil, !named.tab.isAsleep, named.tab.loadedWebView != nil,
               !AgentURLs.isBlocked(named.tab.url), let state = agentTab(for: named.tab) else { return page }
@@ -565,9 +548,8 @@ extension AgentHub {
         return .object(fields)
     }
 
-    /// Reads that a challenge page would only mislead answer `challenge_requires_user` instead:
-    /// Lithium doesn't solve CAPTCHAs or bot checks, the user does. A widget on a page (reCAPTCHA
-    /// on a sign-in form) leaves the page readable; either shows in the indicator.
+    /// A whole-page challenge would only mislead a read, so it fails; a widget on a page (reCAPTCHA
+    /// on a sign-in form) leaves the page readable.
     func refuseChallenge(in named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant) async throws {
         guard let state = agentTab(for: named.tab) else { throw named.closedError }
         let report = try PageProbe.decode(ChallengeReport.self, from: try await ask(named, webView, .main, "challenge", [:], until: deadline))
@@ -583,7 +565,6 @@ extension AgentHub {
         )
     }
 
-    /// The element a ref names and the frame to ask about it.
     func element(_ ref: String, in named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant) async throws -> (ElementAddress, FrameTarget) {
         guard let state = agentTab(for: named.tab), let address = state.address(of: ref) else {
             throw AgentToolError(code: "stale_ref", message: "\(named.id) has no element \(ref). Call snapshot for current refs.")
@@ -597,8 +578,7 @@ extension AgentHub {
         return (address, target)
     }
 
-    /// `stale_ref`, naming what the ref was and, when one with the same role and name sits near
-    /// where it was, the element that took its place.
+    /// Names what the ref was, and a nearby element with the same role and name that took its place.
     func staleRef(_ ref: String, in named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant) async -> AgentToolError {
         guard let old = tabs[named.tab.id]?.shown[ref] else { return AgentToolError(code: "stale_ref", message: "\(ref) is no longer on \(named.id)’s page. Call snapshot for current refs.") }
         var message = "\(ref) \(old.role) \(SnapshotNode.quoted(old.name ?? "")) was removed."
@@ -610,10 +590,8 @@ extension AgentHub {
         return AgentToolError(code: "stale_ref", message: message + " Call snapshot for current refs.")
     }
 
-    /// Where every frame sits, and what to mask in it. `placing` an element: its box is read with
-    /// the masks, and when a frame too slow for `frameTimeout` leaves it unplaced, the frames get
-    /// the read's whole deadline, as the element's own read just had; only a frame that went away
-    /// is `frame_gone`.
+    /// Where every frame sits, and what to mask in it. When a slow frame leaves `element`
+    /// unplaced, the frames get the read's whole deadline.
     func layout(of named: NamedTab, _ webView: WKWebView, until deadline: ContinuousClock.Instant, placing element: ElementAddress? = nil) async throws -> FrameLayout {
         let arguments: [String: Any] = element.map { ["element": $0.id, "of": $0.document] } ?? [:]
         let read = { (patient: Bool) in
@@ -625,11 +603,9 @@ extension AgentHub {
         return try await read(true).0
     }
 
-    /// What `take` captures, with the layout its masks come from. Every frame's scroll and masks
-    /// are read before and after it; a page that scrolled meanwhile is read and captured again,
-    /// three times at most, then refused: masks read at another scroll would miss the fields. A
-    /// field that moved, showed or went meanwhile (an animation) is captured again too, and on
-    /// the last try painted over at both places and between.
+    /// Masks are read before and after `take`: masks read at another scroll would miss the fields,
+    /// so a page that scrolled is captured again, three times at most, then refused. A field that
+    /// moved is captured again too, and on the last try painted over at both places.
     func masked<Value>(_ named: NamedTab, _ webView: WKWebView, from layout: FrameLayout, placing element: ElementAddress? = nil, until deadline: ContinuousClock.Instant, _ take: () async throws -> Value) async throws -> (layout: FrameLayout, value: Value) {
         var layout = layout
         for attempt in 1...3 {
@@ -648,7 +624,7 @@ extension AgentHub {
         AgentToolError(code: "frame_gone", message: "\(named.id)’s page changed while it was read. Try again.")
     }
 
-    /// What a picture of the page paints over, in top-level viewport CSS pixels.
+    /// In top-level viewport CSS pixels.
     private static func masks(_ layout: FrameLayout, of named: NamedTab) throws -> [CGRect] {
         guard let masks = layout.masks else {
             throw AgentToolError(code: "unsupported", message: "\(named.id) has a frame Lithium can’t place (in a shadow root or an embed), so it can’t paint over the password and card fields in it. Use snapshot or read_text.")
@@ -658,10 +634,8 @@ extension AgentHub {
 
     // MARK: Waiting
 
-    /// Waits in the page for an element's state or for text, within the call's deadline. A text
-    /// wait reads the main frame and the same-origin frames in it, and goes on in the next
-    /// document when the main frame navigates. Text gone answers a note when frames of another
-    /// origin, which it can't read, may still hold it.
+    /// A text wait reads the main frame and its same-origin frames, and goes on in the next
+    /// document when the main frame navigates.
     @discardableResult
     func wait(for condition: DOMCondition, in named: NamedTab, deadline: ContinuousClock.Instant, timeout: Duration) async throws -> String? {
         let tab = named.tab
@@ -684,9 +658,8 @@ extension AgentHub {
             // The page's own timer would keep it checking long after the call ended.
             defer { if pending.result == nil { _ = start(webView, target, "cancelWait", ["key": key]) } }
             let commits = tab.commits
-            // A call into a document that went away never answers, and a frame navigating or
-            // taken away commits nothing in the tab: for an element of a frame, its document and
-            // the <iframe> showing it are asked after every half second.
+            // A call into a gone document never answers, and a frame going commits nothing in the
+            // tab: so a frame's document and its <iframe> are probed every half second.
             var probed: [(element: ElementAddress, target: FrameTarget)] = []
             if target.info != nil, let state = agentTab(for: tab) {
                 probed.append((address, target))
@@ -708,15 +681,13 @@ extension AgentHub {
                     for result in probes.compactMap(\.result) {
                         guard let report = try? result.get(), let info = try? PageProbe.decode(WaitReport.self, from: report), info.gone != true else { return gone }
                     }
-                    // The main frame's document was replaced, and every frame in it: the element
-                    // can't come back, and a nested frame's probes go to documents that never answer.
+                    // The main document was replaced: the element can't come back.
                     return tab.commits != commits ? gone : nil
                 }
             } while met == nil && ContinuousClock.now < deadline
             if met == true { return nil }
             if met == false, !gone {
-                // A frame of the page left can still answer after the main frame committed, before
-                // the next page says hello: the element is gone whatever it says.
+                // A frame of the page left can still answer after the commit: the element is gone.
                 if tab.commits != commits { throw await staleRef(ref, in: named, webView, until: .now + .seconds(2)) }
                 throw await staleRefIfGone(ref, named, webView, deadline, timeout: timeout, state: state)
             }
@@ -736,8 +707,7 @@ extension AgentHub {
                 let outcome = try await watch(named, until: deadline) { () -> (met: Bool, unread: Int)? in
                     try self.checkPageShown(named, before: event)
                     if let result = pending.result {
-                        // A document between pages fails at once, and one WebKit caches as it
-                        // leaves answers `gone`: ask the next one.
+                        // A document between pages fails, and one WebKit caches answers `gone`.
                         guard let data = try? result.get(), let wait = try? PageProbe.decode(WaitReport.self, from: data), wait.gone != true else { return (false, 0) }
                         return wait.met == true ? (true, wait.unread ?? 0) : nil
                     }
@@ -749,14 +719,12 @@ extension AgentHub {
                     guard !present, outcome.unread > 0 else { return nil }
                     return "\(outcome.unread == 1 ? "1 frame" : "\(outcome.unread) frames") of another origin couldn’t be checked: find_text reads every frame."
                 }
-                // The main frame moved on: wait until the next document shows, then ask it.
                 _ = try await watch(named, until: deadline) { tab.isAwaitingCommit ? nil : true }
                 guard tab.commits == commits else {
                     pause = .milliseconds(50)
                     continue
                 }
-                // The page failed the call with nothing moving on (its process gone, say): ask
-                // again a little later, unless the tab stops showing a page meanwhile.
+                // The page failed with nothing moving on (its process gone, say): back off and retry.
                 _ = try await watch(named, until: min(deadline, .now + pause)) { () -> Bool? in
                     try self.checkPageShown(named, before: event)
                     return nil
@@ -774,7 +742,6 @@ extension AgentHub {
         return waitKeys
     }
 
-    /// The element of a wait that never came: `stale_ref` when it has gone meanwhile.
     private func staleRefIfGone(_ ref: String, _ named: NamedTab, _ webView: WKWebView, _ deadline: ContinuousClock.Instant, timeout: Duration, state: String) async -> AgentToolError {
         if let address = tabs[named.tab.id]?.address(of: ref), let target = tabs[named.tab.id]?.target(for: address.document),
            let data = try? await ask(named, webView, target, "info", ["id": address.id, "token": address.document], until: .now + .seconds(1)),
@@ -802,7 +769,7 @@ extension AgentHub {
                 address = try await self.element(ref, in: named, webView, until: deadline).0
                 fields["ref"] = .string(ref)
             }
-            // The element's box comes with the masks, so the crop and the masks share the picture's scroll.
+            // The box comes with the masks, so crop and masks share the picture's scroll.
             let place = { (layout: FrameLayout) async throws -> CGRect? in
                 guard let ref, let address else { return nil }
                 guard let placement = layout.placement(ofDocument: address.document) else {
@@ -834,7 +801,6 @@ extension AgentHub {
                 let masks = try AgentHub.masks(layout, of: named)
                 guard let size = AgentScreenshot.pdfPageSize(page) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
                 let points = size.width / max(1, viewport.pw)
-                // Only the element's box is drawn, at a density for its own width.
                 let area = element.map { AgentHub.scaled($0.offsetBy(dx: viewport.sx, dy: viewport.sy), by: points) }
                 if let area, area.intersection(CGRect(origin: .zero, size: size)).isEmpty {
                     throw AgentToolError(code: "unsupported", message: "\(ref ?? named.id) has nothing to picture.")
@@ -862,7 +828,7 @@ extension AgentHub {
 
     // MARK: Helpers
 
-    /// The rects to mask in the whole page, in document CSS pixels.
+    /// In document CSS pixels.
     private static func documentMasks(_ masks: [CGRect], _ viewport: PageViewport) -> [CGRect] {
         masks.map { $0.offsetBy(dx: viewport.sx, dy: viewport.sy) }
     }
@@ -894,7 +860,6 @@ extension AgentHub {
     }
 }
 
-/// A frame's answer, whatever the operation: the document it came from.
 protocol DocumentReport {
     var token: String { get }
 }

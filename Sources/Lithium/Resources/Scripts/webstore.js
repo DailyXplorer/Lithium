@@ -1,9 +1,7 @@
-// The Chrome Web Store's Add to Chrome button, in Lithium. Runs in the store's own page world,
-// since the store's code calls `chrome.webstorePrivate` and `chrome.management` itself. Lithium
-// answers through `WebstoreBridge`, asks before adding anything and downloads from Google.
+// The Chrome Web Store's Add to Chrome button. Runs in the store's page world, since its code calls
+// `chrome.webstorePrivate` itself. Lithium answers through `WebstoreBridge`.
 (() => {
-  // Looked up on each call: a store page back from the back-forward cache would hold the handler
-  // removed when the tab left it, not the one added on its return.
+  // Looked up on each call: after the back-forward cache, a held handler would be the removed one.
   const bridge = () => window.webkit?.messageHandlers?.lithiumWebstore;
   if (!bridge() || window.top !== window) return;
 
@@ -30,8 +28,7 @@
     try { listener(payload); } catch (error) { console.error(error); }
   });
 
-  // Chrome's calling convention: a trailing callback gets the value, with `chrome.runtime.lastError`
-  // set while it runs; without one, the call returns a promise. `then` runs after a success.
+  // Chrome's calling convention: a trailing callback with `lastError` set, or a promise.
   const method = (member, then) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;
     const reply = bridge().postMessage({ member, args: JSON.parse(JSON.stringify(args)) }).then(async (answer) => {

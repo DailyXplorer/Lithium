@@ -1,10 +1,7 @@
-// The body `evaluate` runs (PR 10), in Lithium's script world or the page's. It first waits for
-// agent.js to hand over the element its ref names (by an event whose name only this call
-// knows), which agent.js sends only after it found no password or card value in the frame. The
-// agent's function is pasted in below that wait, and Lithium refuses text that would close the
-// brackets around it (a function declared there would be hoisted above the wait). It sees none of the names below but `lithium` and
-// `lithiumHandedOver`, which hold nothing secret, and is called with the element and its args.
-// What it returns comes back as JSON text, which Lithium scrubs before the agent sees it.
+// The body `evaluate` runs. It first waits for agent.js to hand over the element, which it sends
+// only after it found no password or card value in the frame. The agent's function is pasted in
+// below that wait, and Lithium refuses text that would close the brackets around it (a function
+// declared there would be hoisted above the wait). Lithium scrubs the JSON result.
 const lithiumHandedOver = await new Promise((resolve) => {
   const take = (event) => {
     const target = event.composedPath()[0];
@@ -53,7 +50,6 @@ return await (async (source, setup, element) => {
     const fn = await source();
     const value = typeof fn === 'function' ? await (setup.wantsElement ? fn(element, args) : fn(args)) : fn;
     const json = serialize(value);
-    // Cut on a code point, never between the two halves of an emoji.
     const end = /[\uD800-\uDBFF]/.test(json?.[setup.cap - 1] ?? '') ? setup.cap - 1 : setup.cap;
     if (json !== undefined && json.length > setup.cap) return JSON.stringify({ json: json.slice(0, end), cut: true });
     return JSON.stringify({ json });

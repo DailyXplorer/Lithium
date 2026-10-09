@@ -18,8 +18,7 @@ final class HistoryStore {
     private var pendingTitles: [URL: String] = [:]
     private var titleWrite: Task<Void, Never>?
     static let titleDelay = Duration.seconds(1)
-    /// The address bar's query reads every visit (70 ms at 200,000), so it runs on a connection
-    /// of its own, off the main thread.
+    /// The address bar's query reads every visit (70 ms at 200,000): its own connection, off the main thread.
     private let search: HistorySearch
     private let fileURL: URL
     /// Writes made while `clear()` holds the file, run once it is done: the main connection
@@ -75,7 +74,6 @@ final class HistoryStore {
         }
     }
 
-    /// The titles waiting, each on its address's latest visit.
     func writeTitles() {
         titleWrite?.cancel()
         titleWrite = nil
@@ -95,24 +93,20 @@ final class HistoryStore {
         return Self.visits(in: db, matching: query, limit: limit)
     }
 
-    /// `visits` off the main thread, for the History page: a query few visits match reads them
-    /// all. Nil when a newer query replaced this one before it ran.
+    /// Off the main thread (a query few visits match reads them all); nil when a newer query replaced this one.
     func visitsInBackground(matching query: String, limit: Int = 500) async -> [Visit]? {
         writeTitles()
         return await search.visits(matching: query, limit: limit)
     }
 
-    /// What the user typed, compared literally: `%` and `_` are LIKE wildcards, and `\` escapes them.
-    /// SQLite folds the case of ASCII letters only, so a query with other letters (accents,
-    /// Greek, Cyrillic…) compares lowercased text, through `unicode_lower`. ASCII queries, nearly
-    /// all of them, keep SQLite's own folding and its speed.
+    /// Escapes LIKE wildcards. SQLite folds the case of ASCII letters only, so a query with other
+    /// letters compares through `unicode_lower`; ASCII queries keep SQLite's own folding and its speed.
     nonisolated private static func searchTerms(_ text: String) -> (text: String, column: (String) -> String) {
         let escaped = text.replacing("\\", with: "\\\\").replacing("%", with: "\\%").replacing("_", with: "\\_")
         guard !text.allSatisfy(\.isASCII) else { return (escaped, { $0 }) }
         return (escaped.lowercased(), { "unicode_lower(\($0))" })
     }
 
-    /// `unicode_lower(text)`, used by `searchTerms` on each connection that searches.
     nonisolated fileprivate static func addUnicodeLower(to db: OpaquePointer?) {
         sqlite3_create_function_v2(db, "unicode_lower", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { context, _, values in
             guard let text = sqlite3_value_text(values?[0]) else { return sqlite3_result_null(context) }
@@ -163,9 +157,8 @@ final class HistoryStore {
         guard !trimmed.isEmpty else { return [] }
         let (text, column) = searchTerms(trimmed)
         var statement: OpaquePointer?
-        // The title lookup uses visits_by_url. The outer scan must not: walking that index for
-        // GROUP BY reads the table in random order, 3 to 4 times slower than a plain scan
-        // (measured on 50,000 visits).
+        // NOT INDEXED: walking visits_by_url for GROUP BY reads the table in random order, 3 to 4
+        // times slower than a plain scan (measured on 50,000 visits).
         let sql = """
             SELECT url, (SELECT title FROM visits v2 WHERE v2.url = v.url AND title != '' ORDER BY visited_at DESC LIMIT 1),
                    (\(column("url")) LIKE 'http%://' || ?2 || '%' ESCAPE '\\' OR \(column("url")) LIKE 'http%://www.' || ?2 || '%' ESCAPE '\\') AS prefix,
@@ -260,9 +253,8 @@ final class HistoryStore {
     }
 }
 
-/// A read-only connection to the history file, used on a queue of its own. Only the newest
-/// query of each kind runs: the ones typing made obsolete while it was busy are skipped. The
-/// address bar and the History page each have their own newest.
+/// A read-only connection on a queue of its own. Only the newest query of each kind runs: those
+/// typing made obsolete while it was busy are skipped.
 private final class HistorySearch: @unchecked Sendable {
     private enum Kind { case topSites, visits }
 

@@ -1,11 +1,9 @@
 import Foundation
 import NaturalLanguage
 
-/// Rule-based tidying of page titles: no model, instant, always available.
-/// Removes notification counters and the site's own name ("Sign in to GitHub · GitHub").
+/// Rule-based tidying of page titles: removes notification counters and the site's own name.
 enum TitleCleaner {
-    /// Titles at most this long fit a 240 pt sidebar row in DM Sans 13 (measured) and are left
-    /// to the rules alone.
+    /// Fits a 240 pt sidebar row in DM Sans 13 (measured); shorter titles are left to the rules.
     static let shortEnough = 22
 
     private static let separators = [" - ", " – ", " — ", " | ", " · ", " • ", " :: "]
@@ -49,7 +47,6 @@ enum TitleCleaner {
         return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    /// The dominant language of a title, so a French page keeps a French name.
     static func language(of title: String) -> Locale.Language? {
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(title)

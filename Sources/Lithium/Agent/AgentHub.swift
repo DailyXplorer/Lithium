@@ -9,21 +9,20 @@ struct MCPSession: Identifiable, Equatable {
     let id: String
     /// "s1", "s2", …: how the indicator and the log name the session.
     let label: String
-    /// What the client says it is in `initialize`. Nothing checks it, so the UI marks it as self-reported.
+    /// Self-reported in `initialize`; nothing checks it.
     let clientName: String
     let clientVersion: String
     let protocolVersion: String
 }
 
-/// What a tool answers: structured content (a JSON object), the text clients that read only
-/// text get (its JSON when nil), and content after the text, such as an image.
+/// What a tool answers; `text` defaults to the structured content's JSON.
 struct AgentToolOutput {
     var structured: JSONValue
     var text: String?
     var attachments: [JSONValue] = []
 }
 
-/// An MCP tool. `run` returns the result's structured content, which must be a JSON object.
+/// An MCP tool. `run`'s structured content must be a JSON object.
 struct AgentTool {
     typealias Run = @MainActor (_ arguments: JSONValue, _ session: MCPSession, _ hub: AgentHub) async throws -> AgentToolOutput
 
@@ -31,8 +30,7 @@ struct AgentTool {
     let description: String
     let inputSchema: JSONValue
     let run: Run
-    /// Whether `tools/list` shows it now: a tool the user turns on in Settings is left out while
-    /// it is off, and answers `unsupported` if called anyway.
+    /// A tool the user turns on in Settings is unlisted while off, and answers `unsupported` if called.
     var isListed: @MainActor (AgentHub) -> Bool = { _ in true }
 
     init(name: String, description: String, inputSchema: JSONValue, output: @escaping Run) {
@@ -55,43 +53,36 @@ struct AgentTool {
     }
 }
 
-/// What a tool call tells the log about its own arguments. What an agent puts in a field (text
-/// typed, an option chosen) is logged only once the call knows its field isn't guarded (design
-/// section 7.6): a call that fails before it finds out logs `[redacted]`. A key `press` names
-/// is logged the same way, and a character key never is.
+/// What a tool call tells the log about its arguments. Field values (and named keys) are logged
+/// only once the field is known unguarded (design section 7.6); character keys never are.
 @MainActor
 final class CallNotes {
-    /// The field the values go to in this attempt is known not to be a password or card field,
-    /// nor one in a frame Lithium can't read, and no earlier attempt's was one.
+    /// Not a password, card or unreadable-frame field in this attempt, nor in any earlier one.
     var intoUnguardedField: Bool { attemptUnguarded && !everGuarded }
     private var attemptUnguarded = false
     private var everGuarded = false
 
-    /// `gate` weighed the fields the attempt's values go to.
     func noteFields(unguarded: Bool) {
         attemptUnguarded = unguarded
         if !unguarded { everGuarded = true }
     }
 
-    /// An action tries again, maybe into another field: it decides afresh.
     func startAttempt() {
         attemptUnguarded = false
     }
 
-    /// The arguments that carry what goes into a field, by tool. A prompt's answer (a PIN, a code)
-    /// never goes into a known field, so it is always redacted.
+    /// The arguments that carry field values, by tool. A dialog's answer (a PIN, a code) is
+    /// always redacted.
     private static let values = ["type": ["text"], "press": ["keys"], "select_option": ["values", "labels"], "dialog_respond": ["text"]]
 
-    /// The page's password and card values, once `evaluate` read them: masked wherever its
-    /// function or args quote one.
+    /// Password and card values `evaluate` read: masked wherever its function or args quote one.
     var secrets: [String] = []
     static let loggedScriptLength = 300
     /// Tools whose `steps` are other tools' calls (`drag`'s is a count).
     private static let runSteps: Set<String> = ["batch", "tab_open"]
 
     func logged(_ arguments: JSONValue, tool: String) -> JSONValue {
-        // Each step has a log line of its own, which redacts it as that tool's call: the batch's
-        // line names the tools alone.
+        // Each step gets its own redacted log line; the batch's line names the tools alone.
         if Self.runSteps.contains(tool), var fields = arguments.object {
             if case .array(let steps)? = fields["steps"] {
                 fields["steps"] = .array(steps.map { ["tool": $0["tool"] ?? .null] })
@@ -110,9 +101,7 @@ final class CallNotes {
             if fields["world"] == nil { fields["world"] = "isolated" }
             return .object(fields)
         }
-        // Its fields go through `type`, `select_option` and `set_checked` in one call, so none of
-        // its values is logged, whatever field it went to. A malformed list (a string, an item
-        // that isn't an object) fails the call but is logged all the same: it goes too.
+        // One call covers many fields, so none of its values is logged, even from a malformed list.
         if tool == "fill_form", var fields = arguments.object, let given = fields["fields"] {
             guard case .array(let list) = given else {
                 fields["fields"] = "[redacted]"
@@ -139,14 +128,12 @@ final class CallNotes {
 struct AgentToolError: Error, Equatable {
     let code: String
     let message: String
-    /// The tab the failed call concerns, so the agent can still reach it: the one `tab_open`
-    /// opened stays open when its page fails to load.
+    /// The tab the failed call concerns: the one `tab_open` opened stays open when its page fails.
     var tab: String?
 }
 
-/// Agent access while it is on: the server, the sessions, tool calls in flight, and the Stop
-/// switch. `Browser` holds one only while access is on, so with access off every agent hook is a
-/// nil check.
+/// Agent access while it is on. `Browser` holds one only while access is on, so with access off
+/// every agent hook is a nil check.
 @MainActor
 @Observable
 final class AgentHub {
@@ -170,8 +157,7 @@ final class AgentHub {
     private(set) var calls: [CallKey: Call] = [:]
 
     var isActing: Bool { !calls.isEmpty }
-    /// When the toolbar shows the indicator, with Stop: an agent that can act is never unseen,
-    /// and access merely on costs no button.
+    /// When the toolbar shows the indicator with Stop: an agent that can act is never unseen.
     var isConnected: Bool { !sessions.isEmpty || isActing }
     private var busySessions: Set<String> { Set(calls.keys.map(\.session)) }
     var url: String? { port.map { "http://127.0.0.1:\($0)/mcp" } }
@@ -184,24 +170,20 @@ final class AgentHub {
     struct Call {
         let tool: String
         let session: String
-        /// Nil when the tool stopped on a cancellation; a tool that returned keeps its outcome
-        /// even if Stop came in just after.
+        /// Nil when the tool stopped on a cancellation.
         let task: Task<Result<AgentToolOutput, AgentToolError>?, Never>
     }
 
-    /// What agents have to do with each tab (badge, queue, frames, refs), while it is open.
     private(set) var tabs: [Tab.ID: AgentTab] = [:]
     /// The last few calls, newest last, for the toolbar panel. Hosts only, never full addresses.
     private(set) var recentLog: [AgentLogLine] = []
     static let recentLogLength = 10
-    /// The user's Allow or Deny prompts and the site grants, which the banner and the panel show.
     @ObservationIgnored let confirmations = AgentConfirmations()
-    /// Payment providers' hosts for the snapshot's `guard`; tests make a local server one.
+    /// Tests make a local server a payment provider.
     @ObservationIgnored var paymentProviders = PaymentProviders.known
-    /// The session whose tool call is running, for what the call starts that outlives it (a
-    /// download after `wait: none`) and for confirmations deep inside it.
+    /// The session whose tool call is running, for what outlives the call (a download after
+    /// `wait: none`) and for confirmations deep inside it.
     @TaskLocal static var callSession: MCPSession?
-    /// What the running call tells the log about its arguments.
     @TaskLocal static var callNotes: CallNotes?
     /// Where background tabs' web views take an agent's events.
     @ObservationIgnored private(set) lazy var stage = AgentStage()
@@ -215,10 +197,8 @@ final class AgentHub {
     /// The network log comes from WebKit's resource load delegate where it has one, else from
     /// each document's performance timeline; tests take the second way.
     @ObservationIgnored var usesResourceLoadDelegate = ResourceLoadSpy.isAvailable
-    /// Settings › Agents › Capture response bodies, off by default.
     var capturesBodies: Bool { defaults.bool(forKey: Preference.agentCaptureBodies) }
-    /// Settings › Agents › Let agents run scripts in pages, off by default: `evaluate` in any tab,
-    /// the user's included, without a prompt (PR 11).
+    /// `evaluate` in any tab, the user's included, without a prompt. Off by default.
     var runsScripts: Bool { defaults.bool(forKey: Preference.agentRunScripts) }
     @ObservationIgnored let folder: URL
     @ObservationIgnored let log: AgentLog
@@ -234,7 +214,7 @@ final class AgentHub {
     /// A client that crashed sends no DELETE; without this its session would show as connected
     /// until some other request came in.
     @ObservationIgnored private var idleSweep: Task<Void, Never>?
-    /// What `lastSeen` and the idle timeout read; tests move it forward.
+    /// Tests move it forward.
     @ObservationIgnored private let now: @MainActor () -> Date
 
     init(browser: Browser? = nil, folder: URL = AgentFiles.folder, defaults: UserDefaults = .standard, tools: [AgentTool] = [], now: @escaping @MainActor () -> Date = Date.init) {
@@ -248,10 +228,8 @@ final class AgentHub {
 
     // MARK: Lifecycle
 
-    /// Listens on the port of the last run when it is free, else on a new one, and writes the
-    /// endpoint file. The token is new on every start: a file left by a quit names a port anyone
-    /// may have taken since, so its token must not open the next run. Only `relisten` keeps it,
-    /// and only on the same port.
+    /// The token is new on every start: a file left by a quit names a port anyone may have taken
+    /// since, so its token must not open the next run.
     func start() async {
         if keyGuard == nil { keyGuard = NativeInput.installKeyGuard() }
         token = AgentEndpoint.makeToken()
@@ -282,7 +260,6 @@ final class AgentHub {
         await log.prune()
     }
 
-    /// Listens on `preferred`, else on a free port, and records the port in the endpoint file.
     /// The token stays only when the server lands on `tokenPort` again: clients still post to
     /// that port, so on any other whoever took it would get the token from them.
     private func listen(on server: AgentServer, preferring preferred: UInt16, keepingTokenOn tokenPort: UInt16? = nil) async throws {
@@ -306,9 +283,8 @@ final class AgentHub {
     static let relistenAttempts = 3
     static let relistenDelay: Duration = .milliseconds(500)
     @ObservationIgnored private var isRelistening = false
-    /// Set by every death of the live listener, whatever the hub is doing at the time, and
-    /// cleared only by an attempt to listen again: a death that lands while the hub is starting
-    /// or already relistening is handled once that finishes instead of being dropped.
+    /// Cleared only by an attempt to listen again, so a death while starting or relistening is
+    /// handled once that finishes instead of being dropped.
     @ObservationIgnored private var listenerIsDead = false
     @ObservationIgnored private var listenerError: (any Error)?
     /// Tests only: handed to the server `start()` creates.
@@ -320,11 +296,8 @@ final class AgentHub {
         await relisten()
     }
 
-    /// The listener died after it was ready, typically across sleep or a network change: listen
-    /// again with the same token on the same port when it is free, else with a new token on
-    /// another (clients read the file again after a 401). Sessions and open
-    /// connections are unaffected. A listener that dies again, before or after it was ready,
-    /// takes another attempt; after `relistenAttempts`, access shows as failed.
+    /// The listener died, typically across sleep or a network change: listen again on the same
+    /// port when free, else on another with a new token (clients reread the file after a 401).
     private func relisten() async {
         guard let server, listenerIsDead, !isRelistening, state == .listening || state == .stopped else { return }
         isRelistening = true
@@ -350,8 +323,7 @@ final class AgentHub {
         }
     }
 
-    /// Nothing is left that points at a server that isn’t listening: no endpoint file, no
-    /// address in Settings, no sessions. Turning access off and on starts over.
+    /// Leaves nothing pointing at a server that isn’t listening.
     private func fail(_ message: String) {
         idleSweep?.cancel()
         endAllSessions()
@@ -362,7 +334,6 @@ final class AgentHub {
         state = .failed(message)
     }
 
-    /// Access turned off: the server goes away with the endpoint file, and with it the token.
     func shutdown() {
         isShutDown = true
         idleSweep?.cancel()
@@ -378,9 +349,8 @@ final class AgentHub {
         keyGuard = nil
     }
 
-    /// The user's Stop: cancels every call in flight, denies every prompt and drops every site
-    /// grant, answers the pages' dialogs with their safe default, ends every session, closes
-    /// every connection, and refuses new sessions until `allowAgain()`. Safe to repeat.
+    /// The user's Stop: ends every session and call, and refuses new sessions until `allowAgain()`.
+    /// Safe to repeat.
     func stop() {
         answerEveryDialog()
         endAllSessions()
@@ -392,8 +362,7 @@ final class AgentHub {
         if state == .stopped { state = .listening }
     }
 
-    /// A new token in the endpoint file; clients holding the old one are disconnected. Does
-    /// nothing once access failed, so no endpoint file names a dead server.
+    /// Does nothing once access failed, so no endpoint file names a dead server.
     func resetToken() {
         guard server != nil else { return }
         token = AgentEndpoint.makeToken()
@@ -409,8 +378,7 @@ final class AgentHub {
 
     private func end(_ session: MCPSession) {
         for (key, call) in calls where key.session == session.id { call.task.cancel() }
-        // Its navigations still on their way (`wait: none`) are stopped, so none becomes a
-        // download nobody may allow.
+        // Stop its `wait: none` navigations, so none becomes a download nobody may allow.
         for state in tabs.values where state.drive?.session.id == session.id {
             if let tab = state.tab, drive(of: tab) != nil, !tab.isAsleep { tab.stopLoading() }
             state.drive = nil
@@ -496,8 +464,8 @@ final class AgentHub {
         case .stopped: return Self.error(.server, "The user stopped agents in Lithium. They can click Allow Agents Again in Lithium.", id: id)
         case .starting, .failed: return Self.error(.server, "Lithium’s agent access is not ready.", id: id)
         }
-        // A client that quits without DELETE (Ctrl-C, a crash) keeps its session until the idle
-        // timeout, so at the cap the least recently used session with no call in flight makes room.
+        // Clients that quit without DELETE keep their session until the idle timeout, so at the
+        // cap the least recently used idle session makes room.
         var evicted: MCPSession?
         if sessions.count >= Self.maxSessions {
             let busy = busySessions
@@ -540,8 +508,7 @@ final class AgentHub {
         }
         let arguments = params["arguments"] ?? [:]
         let started = Date()
-        // The id is what notifications/cancelled names, so two calls in flight under one id
-        // would make cancelling ambiguous; MCP forbids reusing an id within a session anyway.
+        // notifications/cancelled names the id, so two calls under one id would be ambiguous.
         let key = CallKey(session: session.id, request: id)
         guard calls[key] == nil else {
             return Self.error(.invalidRequest, "A call with this id is already in flight in this session.", id: id)
@@ -583,8 +550,7 @@ final class AgentHub {
         return Self.result(Self.toolResult(result), id: id)
     }
 
-    /// Runs one step of a `batch` as a call of its own: its own notes, its own log line and panel
-    /// line, its errors naming its tab. Rethrows a cancellation (Stop) once the step is logged.
+    /// Runs one step of a `batch` as a call of its own. Rethrows a cancellation once logged.
     func step(_ name: String, _ arguments: JSONValue, session: MCPSession) async throws -> Result<AgentToolOutput, AgentToolError> {
         let started = Date()
         let notes = CallNotes()
@@ -613,8 +579,7 @@ final class AgentHub {
         tools.first { $0.name == name }
     }
 
-    /// The call's line in the action log and the panel, its arguments redacted (design section
-    /// 7.6), and its error naming the tab it concerns.
+    /// The call's line in the action log and the panel, its arguments redacted (design section 7.6).
     private func record(_ name: String, _ arguments: JSONValue, _ result: Result<AgentToolOutput, AgentToolError>, notes: CallNotes, session: MCPSession, started: Date) async -> Result<AgentToolOutput, AgentToolError> {
         var result = result
         let ms = Int(Date().timeIntervalSince(started) * 1000)
@@ -635,9 +600,8 @@ final class AgentHub {
             "result": .object(logged),
             "ms": .int(ms),
         ]
-        // A private tab saves nothing: its calls are logged without their arguments (an address,
-        // a search typed) nor the tab's address and host, marked instead. A call that opens a private
-        // tab is private even when it fails before that tab exists.
+        // A private tab's calls are logged without arguments, address or host. A call opening one
+        // is private even when it fails before that tab exists.
         let isPrivate = tabID.map { tabIDs.isEphemeral($0) } == true || (["tab_open", "batch"].contains(name) && arguments["ephemeral"] == .bool(true))
         if isPrivate {
             entry["ephemeral"] = true
@@ -651,7 +615,6 @@ final class AgentHub {
         return result
     }
 
-    /// The tab as the log names it: its id, and its host and redacted address while it is open.
     private func loggedTab(_ id: String) -> JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id)]
         if let tabID = tabIDs.tabID(for: id), let url = browser?.tabs.first(where: { $0.id == tabID })?.url {
@@ -666,20 +629,17 @@ final class AgentHub {
         if recentLog.count > Self.recentLogLength { recentLog.removeFirst(recentLog.count - Self.recentLogLength) }
     }
 
-    /// The log page's Clear also empties the panel's lines, which repeat the log.
     func clearRecentLog() {
         recentLog = []
     }
 
     // MARK: Tabs
 
-    /// The id agents know `tab` by, given the first time any agent sees it. Only for open tabs
-    /// (listing, opening): a call already holding a tab names it by the `NamedTab` it started with.
+    /// Only for open tabs: a call already holding a tab names it by its `NamedTab`.
     func id(for tab: Tab) -> String {
         tabIDs.id(for: tab.id, isEphemeral: tab.isEphemeral)
     }
 
-    /// The open tab an agent named, or the reason it can't be used.
     func tab(named id: String) throws -> NamedTab {
         if let closed = tabIDs.closed[id] {
             throw AgentToolError(code: "tab_closed", message: "\(id) was closed at \(closed.formatted(date: .omitted, time: .standard)).")
@@ -694,8 +654,7 @@ final class AgentHub {
         browser?.tabs.contains { $0 === tab } == true
     }
 
-    /// The tab's agent state, made on first use. Nil for a closed tab: `didClose` has already
-    /// dropped its state, which would otherwise outlive it.
+    /// Made on first use. Nil for a closed tab, so its state doesn't outlive it.
     func agentTab(for tab: Tab) -> AgentTab? {
         if let state = tabs[tab.id] { return state }
         guard isOpen(tab) else { return nil }
@@ -721,30 +680,24 @@ final class AgentHub {
         if let session = Self.callSession { state.holder = session.id }
     }
 
-    /// An agent acted in the tab in the last 10 minutes; the sleep pass leaves it be.
     func holds(_ tab: Tab) -> Bool {
         guard let last = tabs[tab.id]?.lastAction else { return false }
         return now().timeIntervalSince(last) < 10 * 60
     }
 
-    /// A connected session holds the tab: its call runs there, or it acted there in the last 10 minutes.
     func isHeldBySession(_ tab: Tab) -> Bool {
         guard let holder = tabs[tab.id]?.holder, sessions.contains(where: { $0.id == holder }) else { return false }
         return isBusy(tab) || holds(tab)
     }
 
-    /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`; a call
-    /// waiting on the tab ends with the same error as it sees the tab gone. The tab's
-    /// `dialogOwner` answers its dialog.
+    /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`.
     func didClose(_ tab: Tab) {
         confirmations.cancel(tab: tab.id)
         tabIDs.retire(tab.id, at: now())
         tabs[tab.id] = nil
     }
 
-    /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins over an
-    /// agent call running in it, and a prompt about it (the tab's `dialogOwner` answers the
-    /// agent's dialog in it).
+    /// The user sent the tab elsewhere (address bar, Back, Reload, Stop): the user wins.
     func userNavigated(_ tab: Tab) {
         guard let state = tabs[tab.id] else { return }
         state.drive = nil
@@ -752,43 +705,36 @@ final class AgentHub {
         if state.isBusy { state.interruption = .user }
     }
 
-    /// The user clicked, typed or scrolled in the tab's page: their input wins over an agent
-    /// action running there. A load the agent started stays the agent's.
+    /// User input wins over an agent action; a load the agent started stays the agent's.
     func userInput(in tab: Tab) {
         guard let state = tabs[tab.id], state.acting != nil, state.interruption == nil else { return }
         state.interruption = .userInput
     }
 
-    /// The user clicked in the tab's page, or pressed Enter there: a load the page starts next
-    /// may be theirs. Scrolling, arrows and typing never are.
+    /// A click or Enter: a load the page starts next may be the user's.
     func userActivated(in tab: Tab) {
         tabs[tab.id]?.drive?.userActivated = true
     }
 
-    /// The user's own click or Enter, pressed since the agent's load started, started a load in
-    /// the tab's page: what it downloads is theirs.
+    /// The user's own click or Enter started a load: what it downloads is theirs.
     func userStartedLoad(in tab: Tab) {
         guard tabs[tab.id]?.drive?.userActivated == true else { return }
         tabs[tab.id]?.drive = nil
     }
 
-    /// The label of the session whose action runs in `tab`, when the agent pressed last in its
-    /// page: what the page opens is the agent's. The user's own click meanwhile opens theirs.
+    /// The acting session's label, when the agent pressed last in the page: what it opens is the agent's.
     func actingSession(in tab: Tab) -> String? {
         guard let acting = tabs[tab.id]?.acting, (tab.loadedWebView as? PageWebView)?.agentPressedLast == true else { return nil }
         return sessions.first { $0.id == acting.session }?.label
     }
 
-    /// A tab the page opened during an agent action, for the action's result.
     func didOpen(_ tab: Tab, from opener: Tab) {
         tabs[opener.id]?.opened.append(tab)
         touch(tab)
     }
 
-    /// A tab an agent action in `opener` asks for without a popup (a ⌘-click), or for an address
-    /// it can't open as it is: as `tab_open` opens one, in the Agent group, unselected, after
-    /// `checkOpenable`, and named in the action's result. False when no agent action runs in
-    /// `opener`, or the user pressed last in it: the tab is the user's to open.
+    /// Opens a tab an agent action asks for without a popup (a ⌘-click) as `tab_open` would.
+    /// False when the tab is the user's to open.
     func open(_ url: URL, from opener: Tab) async -> Bool {
         guard actingSession(in: opener) != nil, let acting = tabs[opener.id]?.acting, let session = sessions.first(where: { $0.id == acting.session }), let browser else { return false }
         guard (try? await checkOpenable(url, in: nil, isPrivate: opener.isEphemeral, session: session, until: .now + AgentConfirmations.timeout)) != nil else { return true }
@@ -802,48 +748,40 @@ final class AgentHub {
         tabs[tab.id]?.acting != nil
     }
 
-    /// The tab's page went (it slept, or its process died), and any load with it. Its
-    /// `dialogOwner` gives its dialog the safe default, which nobody reads, so agents no longer
-    /// see `dialog_open` for a page that isn't there.
+    /// The tab's page went (it slept, or its process died), and any load with it.
     func pageGone(_ tab: Tab) {
         tabs[tab.id]?.drive = nil
         tabs[tab.id]?.capture?.reset()
         tabs[tab.id]?.pageGone()
     }
 
-    /// The agent's navigation still under way in `tab`, for a session still connected.
     func drive(of tab: Tab) -> AgentDrive? {
         guard let drive = tabs[tab.id]?.drive, drive.isUnderWay(in: tab), sessions.contains(where: { $0.id == drive.session.id }) else { return nil }
         return drive
     }
 
-    /// An agent's `stop`, which doesn't queue: it ends the call running in the tab, unless the
-    /// user already did.
+    /// An agent's `stop`, which doesn't queue.
     func agentStopped(_ tab: Tab) {
         guard let state = tabs[tab.id], state.isBusy, state.interruption == nil else { return }
         state.interruption = .agentStop
     }
 
-    /// Hooked from `Tab.applyProtections`: every frame of the page says hello to the hub, and in
-    /// a tab agents use, the console and error scripts go in too.
+    /// Hooked from `Tab.applyProtections`.
     func install(on controller: WKUserContentController, for tab: Tab) {
         frameHandler.install(on: controller)
         if tabs[tab.id]?.capture != nil { consoleHandler.install(on: controller, bodies: capturesBodies) }
     }
 
-    /// Hooked from `Tab` as it shows one of Lithium's own pages, which takes none of the scripts
-    /// `install` adds: the page doesn't find the console handler either.
+    /// Lithium's own pages take none of the scripts `install` adds, nor the console handler.
     func removeConsole(from controller: WKUserContentController) {
         consoleHandler.remove(from: controller)
     }
 
-    /// Hooked from `Tab`: the main frame's load ended without a page.
     func loadEndedUnshown(in tab: Tab) {
         tabs[tab.id]?.capture?.loadEndedUnshown()
     }
 
-    /// Runs `body` once no other agent call runs in the tab: one action at a time per tab, in
-    /// turn. Waiting in line counts against the call's own deadline. Its errors name the tab.
+    /// One action at a time per tab; waiting in line counts against the call's own deadline.
     func exclusive<Value>(_ named: NamedTab, until deadline: ContinuousClock.Instant, timeout: Duration, _ body: () async throws -> Value) async throws -> Value {
         do {
             guard let state = agentTab(for: named.tab) else { throw named.closedError }
@@ -881,7 +819,6 @@ final class AgentHub {
         ["id": .string(session.label), "client": .string(session.clientName), "version": .string(session.clientVersion), "selfReported": true]
     }
 
-    /// Text content with the same data as `structuredContent`, for clients that read only text.
     private static func toolResult(_ result: Result<AgentToolOutput, AgentToolError>) -> JSONValue {
         switch result {
         case .success(let output):
@@ -907,8 +844,7 @@ final class AgentHub {
         AgentReply(status: status, body: ["jsonrpc": "2.0", "id": id, "error": ["code": .int(code.rawValue), "message": .string(message)]])
     }
 
-    /// What `initialize` tells the client, which most put in front of the model: how to work in
-    /// Lithium, and what it won't do, so an agent doesn't try what is refused.
+    /// What `initialize` tells the client, which most put in front of the model.
     static let instructions = """
         Lithium is the user’s own browser, with their tabs and sign-ins. The user sees every agent action, it is logged, and the user can stop agents at any time.
         Work like this: tab_open returns its page’s snapshot (ephemeral: true for a private tab with none of the user’s cookies), or tabs_list then snapshot; act on element refs (e12, f1:e3) with click, type, fill_form, select_option, press. Actions and navigations return diff, what changed in the viewport since your last snapshot, so a new snapshot is rarely needed. find_text gives refs you can click.
@@ -928,7 +864,7 @@ final class AgentHub {
 
     // MARK: Tools
 
-    /// Always listed; the tab and reading tools (`AgentTabTools.swift`, `AgentReadTools.swift`) come with a browser.
+    /// Always listed; the other tools come with a browser.
     static let statusTool = AgentTool(
         name: "lithium_status",
         description: "Report Lithium’s version and this agent session.",

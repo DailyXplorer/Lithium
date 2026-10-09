@@ -107,9 +107,7 @@ struct CaptureSelectionOverlay: View {
 }
 
 /// SwiftUI leaves a view's pointer style showing when the view goes away under a still pointer,
-/// and Lithium's own chrome never sets the arrow back: after a capture, the crosshair stayed over
-/// the toolbar and sidebar (pages set their own pointer as it moves over them). Behind a view that
-/// shows the crosshair, this sets the arrow back as the view leaves.
+/// and Lithium's chrome never sets the arrow back. This sets the arrow back as the view leaves.
 struct PointerReset: NSViewRepresentable {
     func makeNSView(context: Context) -> ResetView { ResetView() }
 
@@ -141,7 +139,6 @@ struct CaptureComposition: View {
         let renderer = ImageRenderer(content: CaptureComposition(shot: shot, style: style))
         renderer.scale = shot.scale
         guard let composed = renderer.cgImage else { return nil }
-        // The screenshot sits in the middle, even when a badge wider than it widens the image.
         let offset = CGPoint(
             x: (CGFloat(composed.width) / shot.scale - shot.size.width) / 2,
             y: (CGFloat(composed.height) / shot.scale - shot.size.height) / 2
@@ -149,11 +146,8 @@ struct CaptureComposition: View {
         return marked(composed, scale: shot.scale, offset: offset, with: style.annotations)
     }
 
-    /// Blend modes mix colors in the color space they draw into. The preview window blends the mark
-    /// being drawn in the screen's Display P3, so the marks are drawn into the image in Display P3
-    /// too, and a highlight looks the same before and after the mouse is let go. The marked image
-    /// goes back to its own color space, so the exported image is in the same format. `offset` is
-    /// where the screenshot's top-left corner is in the image, in points.
+    /// Marks are drawn in Display P3, as the preview blends them, so a highlight looks the same
+    /// before and after the mouse is let go. `offset` is the screenshot's top-left, in points.
     private static func marked(_ screenshot: CGImage, scale: CGFloat, offset: CGPoint, with annotations: [Annotation]) -> CGImage {
         let pixels = CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height)
         func context(_ space: CGColorSpace, bits: Int) -> CGContext? {
@@ -220,8 +214,7 @@ struct CaptureComposition: View {
     }
 }
 
-/// Marks over a screenshot. Highlights go under the ink and multiply with what they cover, like a
-/// marker on paper: dark text stays dark. `transform` maps the screenshot's points to the layer's.
+/// Marks over a screenshot. Highlights multiply under the ink, so dark text stays dark.
 struct AnnotationLayer: View {
     let annotations: [Annotation]
     var transform = CGAffineTransform.identity
@@ -277,12 +270,11 @@ struct CapturePreview: View {
     @State private var annotations: [Annotation] = []
     @State private var past: [Step] = []
     @State private var future: [Step] = []
-    /// The mark being drawn, moved or reshaped, shown over the preview until the render that includes it replaces the preview.
+    /// The mark being drawn, moved or reshaped, shown over the preview until a render includes it.
     @State private var draft: Annotation?
     @State private var drag: Drag?
-    /// The shape showing its handles.
     @State private var selection: Annotation.ID?
-    /// Resets when a drag ends and also when it is cancelled (Cmd-Tab away mid-stroke), which skips `onEnded`.
+    /// Also resets when a drag is cancelled (Cmd-Tab away mid-stroke), which skips `onEnded`.
     @GestureState private var isDragging = false
 
     static let colors: KeyValuePairs<String, String> = [
@@ -295,14 +287,12 @@ struct CapturePreview: View {
         "#0A84FF": "Blue", "#1D1D1F": "Black", "#FFFFFF": "White",
     ]
 
-    /// The marks as they were before a change, for undo and redo. A change the backdrop made also
-    /// keeps the backdrop, which goes back with the marks; other changes leave it as it is.
+    /// The marks before a change, for undo and redo, with the backdrop if the change was the backdrop's.
     private struct Step {
         var annotations: [Annotation]
         var backdrop: CaptureBackdrop?
     }
 
-    /// What the drag under way does.
     private enum Drag: Equatable {
         case drawing
         /// Moves `original`, or with a handle reshapes it. The preview leaves it out once `draft` differs from it.
@@ -313,12 +303,10 @@ struct CapturePreview: View {
 
     private var tool: AnnotationTool? { AnnotationTool(rawValue: toolName) }
 
-    /// The shape being moved or reshaped, if it has changed yet.
     private var edited: Annotation.ID? {
         if case .editing(let original, _) = drag, draft != original { original.id } else { nil }
     }
 
-    /// The highlighter only comes in fluorescent yellow; the other tools draw in the chosen ink.
     private var color: String { tool == .highlighter ? Annotation.highlightHex : ink }
 
     private var style: CaptureStyle {
@@ -382,16 +370,13 @@ struct CapturePreview: View {
             if drag == nil { draft = nil }
         }
         .onChange(of: backdrop) { previous, current in
-            // Without a backdrop the image is only the screenshot: marks drawn wholly on the old margin
-            // would stay in the list unseen, unexported and out of reach. Undo brings them back, and
-            // the backdrop they were drawn on with them.
+            // Without a backdrop, marks wholly on the old margin would be unseen and out of reach.
             guard current == .none, annotations.contains(where: { !$0.touches(screenshotBounds) }) else { return }
             change(restoringBackdrop: previous) { $0.removeAll { !$0.touches(screenshotBounds) } }
             if !annotations.contains(where: { $0.id == selection }) { selection = nil }
         }
         .onChange(of: toolName) {
-            // Each tool has its own drawing surface: changing tools mid-drag removes the surface, which
-            // cancels the drag without ending it, and the next surface only takes drags that start on it.
+            // Changing tools mid-drag removes the drawing surface, which cancels the drag without ending it.
             drag = nil
             draft = nil
         }
@@ -417,9 +402,7 @@ struct CapturePreview: View {
         }
     }
 
-    /// Takes drags on the preview: on a shape or its handles they move or reshape it, elsewhere they
-    /// draw with the picked tool. The preview is the whole finished image, scaled to fit, with the
-    /// screenshot in its middle.
+    /// Drags on a shape or its handles move or reshape it; elsewhere they draw with the picked tool.
     private func drawingSurface(over rendered: CGImage) -> some View {
         GeometryReader { proxy in
             let scale = proxy.size.width * shot.scale / CGFloat(rendered.width)
@@ -468,7 +451,8 @@ struct CapturePreview: View {
         }
     }
 
-    /// `inShot` turns a place in the preview into the screenshot's points, `scale` preview points per screenshot point.
+    /// `inShot` turns a place in the preview into the screenshot's points, `scale` preview points
+    /// per screenshot point.
     private func drawing(_ tool: AnnotationTool, scale: CGFloat, inShot: @escaping (CGPoint) -> CGPoint) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space))
             .updating($isDragging) { _, dragging, _ in dragging = true }
@@ -483,8 +467,7 @@ struct CapturePreview: View {
             .onEnded { _ in
                 drag = nil
                 guard let mark = draft else { return }
-                // Without a backdrop, a mark wholly off the screenshot (an ellipse dragged out past
-                // a corner) could never be seen or grabbed, so it isn't kept.
+                // Without a backdrop, a mark wholly off the screenshot could never be seen or grabbed.
                 if mark.isVisible, style.backdrop != .none || mark.touches(screenshotBounds) {
                     change { $0.append(mark) }
                     if mark.isEditable { selection = mark.id }
@@ -506,7 +489,6 @@ struct CapturePreview: View {
                 }
                 guard case .editing(let original, let handle) = drag else { return }
                 let constrained = NSEvent.modifierFlags.contains(.shift)
-                // The shape with `fraction` of the drag so far.
                 func changed(_ fraction: CGFloat) -> Annotation {
                     let offset = CGSize(width: value.translation.width / scale * fraction, height: value.translation.height / scale * fraction)
                     var shape = original
@@ -518,10 +500,8 @@ struct CapturePreview: View {
                     return shape
                 }
                 var result = changed(1)
-                // Without a backdrop, a shape wholly off the screenshot could no longer be seen or
-                // grabbed: it goes as far along the drag as it can while still touching it. A frame
-                // touches only by its outline, so it can stop and start touching along the way: the
-                // drag is sampled from its end back, then the last touching sample is refined.
+                // Without a backdrop, the shape stops where it last touches the screenshot. A frame
+                // touches only by its outline, so the drag is sampled from its end back, then refined.
                 if style.backdrop == .none, !result.touches(screenshotBounds) {
                     let samples = 32
                     let last = (0..<samples).reversed().first { changed(CGFloat($0) / CGFloat(samples)).touches(screenshotBounds) } ?? 0
@@ -545,7 +525,6 @@ struct CapturePreview: View {
             }
     }
 
-    /// Resize arrows on the corners of a frame, a hand on an arrow's ends and middle.
     private func pointer(for handle: AnnotationHandle, of mark: Annotation) -> PointerStyle {
         guard case .corner(let x, let y) = handle, mark.tool != .arrow else { return .grabIdle }
         let top = mark.points[y].y < mark.points[1 - y].y
@@ -553,8 +532,7 @@ struct CapturePreview: View {
         return .frameResize(position: top ? (leading ? .topLeading : .topTrailing) : (leading ? .bottomLeading : .bottomTrailing))
     }
 
-    /// Undo, redo and erasing change the marks, which drops the one being drawn while the drag
-    /// goes on and would start another from where it began: they wait for the drag to end.
+    /// Undo, redo and erasing wait for the drag to end: mid-drag they would drop the mark being drawn.
     private var isDrawing: Bool { draft != nil }
 
     private var annotationBar: some View {
@@ -601,8 +579,7 @@ struct CapturePreview: View {
             }
         }
         .background {
-            // ⌫ removes the selected shape. The button is only there for its shortcut; the key types
-            // U+007F, which `KeyEquivalent.delete` (U+0008) doesn't match.
+            // Only here for ⌫: the key types U+007F, which `KeyEquivalent.delete` (U+0008) doesn't match.
             Button("Delete Shape") { change { $0.removeAll { $0.id == selection } } }
                 .keyboardShortcut(KeyEquivalent("\u{7F}"), modifiers: [])
                 .disabled(!annotations.contains { $0.id == selection } || isDrawing)
@@ -630,13 +607,11 @@ struct CapturePreview: View {
         restore(next)
     }
 
-    /// Where things are now, to come back to after going to `other`: with the backdrop if `other` moves it.
     private func step(toward other: Step) -> Step {
         Step(annotations: annotations, backdrop: other.backdrop == nil ? nil : backdrop)
     }
 
-    /// Without a backdrop, marks wholly off the screenshot can't be seen or grabbed, so they aren't
-    /// brought back (after Erase All, then no backdrop, say).
+    /// Without a backdrop, marks wholly off the screenshot aren't brought back.
     private func restore(_ step: Step) {
         if let restored = step.backdrop { backdrop = restored }
         annotations = (step.backdrop ?? backdrop) == .none ? step.annotations.filter { $0.touches(screenshotBounds) } : step.annotations
@@ -679,7 +654,6 @@ struct CapturePreview: View {
     }
 }
 
-/// One row of round swatches: the wallpaper, preset colors, any color, and no background.
 private struct BackdropPicker: View {
     @Binding var selection: CaptureBackdrop
     let wallpaper: CGImage?
@@ -765,7 +739,6 @@ private struct ToolButton: View {
     }
 }
 
-/// A handle of the selected shape: a white dot ringed in the accent color, easy to see on any screenshot.
 private struct HandleKnob: View {
     var body: some View {
         Circle()

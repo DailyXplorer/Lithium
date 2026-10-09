@@ -1,9 +1,8 @@
 import Foundation
 import WebKit
 
-/// What a pinned tab's page tells Lithium through `pinned-page.js`: its unread badge, its
-/// notifications (a dot, nothing shown on the Mac) and its icon when it changes. Only pinned tabs
-/// get the script and the channel, which any script of the page could see.
+/// Badge, notification and icon signals from a pinned tab's page via `pinned-page.js`. Only pinned
+/// tabs get the script and the channel, which any script of the page could see.
 @MainActor
 final class PinnedPages: NSObject, WKScriptMessageHandler {
     static let name = "lithiumPinned"
@@ -24,14 +23,12 @@ final class PinnedPages: NSObject, WKScriptMessageHandler {
         /// this, and a count that came with the icon must be known before the icon is fetched.
         case icon(URL, title: String?)
 
-        /// Badges above this read "99+" anyway.
         static let largestCount = 1_000_000
         /// A data: icon past this is no icon a page means to show.
         static let longestIcon = 512 * 1024
 
-        /// A message as the script posts it. Any script of the page can post one, so only a
-        /// count that is a number (not a boolean), finite and not negative, and an icon address
-        /// Lithium fetches icons from, get through.
+        /// Any script of the page can post one, so only a finite, non-negative number (not a
+        /// boolean) count and a fetchable icon address get through.
         init?(message body: Any) {
             guard let body = body as? [String: Any], let type = body["type"] as? String else { return nil }
             switch type {
@@ -60,11 +57,10 @@ final class PinnedPages: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// The content controllers that have the channel. Each tab has its own, a popup too
-    /// (`Privacy.harden` replaces the one WebKit copied from its opener).
+    /// Each tab has its own controller, a popup too (`Privacy.harden` replaces the one WebKit
+    /// copied from its opener).
     private let channels = NSHashTable<WKUserContentController>.weakObjects()
 
-    /// Opens the channel when a tab is pinned, closes it when it is unpinned; nothing otherwise.
     func setChannel(_ open: Bool, on controller: WKUserContentController) {
         guard open != channels.contains(controller) else { return }
         if open {

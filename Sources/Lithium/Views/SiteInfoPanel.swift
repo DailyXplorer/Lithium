@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Opened from the lock in the address bar: the site's connection, cookies and permissions; the
-/// rest is in its settings.
 struct SiteInfoPanel: View {
     let tab: Tab
 
@@ -76,7 +74,6 @@ struct SiteInfoView: View {
     let cookieCount: Int?
     let canClear: Bool
     let permissions: [PermissionKind: PermissionDecision]
-    /// The ⋯ menu's Site Protections switch, here too: no toolbar button holds it any more.
     var protections: Binding<Bool>?
     /// Nil where the website font wouldn't apply anyway.
     var usesSiteFont: Binding<Bool>?
@@ -201,8 +198,7 @@ private struct Row<Value: View>: View {
     }
 }
 
-/// A switch laid out as a `Row`: label on the left with the others, switch on the right with
-/// their values. A bare `Toggle` only takes its own width, so the column centred it.
+/// A bare `Toggle` only takes its own width, so the column centred it.
 private struct SwitchRow: View {
     let label: String
     @Binding var isOn: Bool

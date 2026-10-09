@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// What the user sees while an agent acts in the tab shown (design section 5.7): a thin accent
-/// border around the page, a caption saying what the agent does, and a dot where its pointer
-/// is. The system cursor stays where the user left it. It never takes a click.
+/// Shown while an agent acts in the tab (design section 5.7). The system cursor stays where the
+/// user left it, and the overlay never takes a click.
 struct AgentActingOverlay: View {
     let acting: AgentActing
 
@@ -30,7 +29,6 @@ struct AgentActingOverlay: View {
                     .overlay(Circle().strokeBorder(.white, lineWidth: 2))
                     .frame(width: 14, height: 14)
                     .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                    // The web view's points run from its top left, as SwiftUI's do.
                     .position(pointer)
             }
         }

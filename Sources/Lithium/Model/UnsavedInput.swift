@@ -1,9 +1,8 @@
 import Foundation
 import WebKit
 
-/// What `unsaved-input.js` tells Lithium: the user may have work in the page that leaving it
-/// would lose, so idle sleep passes the tab by. Any script of the page can post the same, which
-/// only keeps its own tab awake, as playing sound would.
+/// `unsaved-input.js` reports unsaved work, so idle sleep passes the tab by. Any page script can post this,
+/// which only keeps its own tab awake, as playing sound would.
 @MainActor
 final class UnsavedInput: NSObject, WKScriptMessageHandler {
     static let shared = UnsavedInput()
@@ -16,7 +15,6 @@ final class UnsavedInput: NSObject, WKScriptMessageHandler {
         injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page
     )
 
-    /// The content controllers that have the channel.
     private let channels = NSHashTable<WKUserContentController>.weakObjects()
 
     /// Gives the controller the script before each page, and the channel once.

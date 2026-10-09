@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// "Open Zoom?" along the top of the page, like the permission prompt: no button has a key, so
-/// Return typed for the page never opens the app, and Escape cancels (`Browser.dismissOverlay`).
+/// "Open Zoom?" along the top of the page. No button has a key, so Return typed for the page never
+/// opens the app.
 struct AppLinkPrompt: View {
     let request: AppLinkRequest
     @Environment(Browser.self) private var browser
@@ -36,8 +36,7 @@ struct AppLinkPrompt: View {
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in protection.rearm() }
     }
 
-    /// A click within half a second of the prompt appearing or moving was aimed at the page or at
-    /// the strip that was there (the second click of a double click): it does nothing.
+    /// A click within half a second of the prompt appearing or moving was aimed elsewhere: it does nothing.
     private func answer(open: Bool) {
         guard protection.accepts() else { return }
         browser.appLinks.answer(request, open: open, always: always)

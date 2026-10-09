@@ -1,13 +1,10 @@
 import Foundation
 import Observation
 
-/// Waits on the browser's observed state (a tab's address, loading flag, commits, the tab list)
-/// without polling: `check` runs again only when something it read changes. Cancelling the
-/// task (Stop, the client cancelling) ends the wait with `CancellationError`.
+/// Waits on observed state without polling: `check` runs again only when something it read changes.
 @MainActor
 enum AgentWait {
-    /// The first value `check` returns, or nil once `deadline` passes. `check` throws to end
-    /// the wait with an error (the tab closed under the agent, say).
+    /// The first non-nil value `check` returns, or nil once `deadline` passes.
     static func until<Value>(_ deadline: ContinuousClock.Instant, _ check: @escaping @MainActor () throws -> Value?) async throws -> Value? {
         while true {
             try Task.checkCancellation()
@@ -23,7 +20,6 @@ enum AgentWait {
         }
     }
 
-    /// One wake-up: whichever comes first of a change, the deadline, or cancellation.
     @MainActor
     private final class Signal {
         private var fired = false

@@ -3,10 +3,8 @@ import Observation
 @preconcurrency import ScreenCaptureKit
 import WebKit
 
-/// Screenshots of Lithium's own window, whole or a dragged area, dressed up on the wallpaper
-/// or a solid color. The window is captured through ScreenCaptureKit's current-process content,
-/// which needs no Screen Recording permission and sees exactly what is on screen (web content,
-/// translucent sidebar, traffic lights).
+/// Screenshots of Lithium's own window, whole or a dragged area. ScreenCaptureKit's current-process
+/// content needs no Screen Recording permission and sees exactly what is on screen.
 @MainActor
 @Observable
 final class ScreenCapture {
@@ -67,9 +65,8 @@ final class ScreenCapture {
         }
     }
 
-    /// Both looks, so the preview can switch the sidebar instantly. The current look goes first,
-    /// and the sidebar ends as it was.
-    /// In Zen mode, the look with the sidebar is the window out of Zen mode.
+    /// Both looks, so the preview can switch the sidebar instantly; in Zen mode, the look with the
+    /// sidebar is the window out of Zen mode.
     private func windowWithAndWithoutSidebar(_ window: NSWindow) async throws -> Shot.Content {
         let original = (sidebar: browser.isSidebarVisible, zen: browser.isZenMode)
         defer { (browser.isSidebarVisible, browser.isZenMode) = original }
@@ -86,10 +83,8 @@ final class ScreenCapture {
         return .window(sidebarOpen: images[true]!, sidebarClosed: images[false]!)
     }
 
-    /// Toggling the sidebar resizes the page, and a page like X lays itself out again in script
-    /// over several frames: shot too early, its menu and columns come out overlapping. Waits
-    /// until no page in the window has changed for a moment, or a second has passed. A page stuck
-    /// in a script never answers, so the capture goes ahead after 1.5 s regardless.
+    /// Toggling the sidebar resizes pages, which may lay out again in script over several frames:
+    /// waits until none has changed for a moment, and goes ahead after 1.5 s for a page stuck in a script.
     private static func settle(_ window: NSWindow) async {
         window.contentView?.layoutSubtreeIfNeeded()
         let pages = webViews(in: window.contentView)
@@ -191,7 +186,6 @@ struct Shot: Identifiable {
 
     let id = UUID()
     let content: Content
-    /// Pixels per point of the images.
     let scale: CGFloat
     let wallpaper: CGImage?
 

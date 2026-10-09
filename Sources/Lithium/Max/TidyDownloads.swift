@@ -1,9 +1,7 @@
 import Foundation
 
-/// Max feature: a clear name for a download whose file name says nothing, chosen before WebKit
-/// writes it, so the file lands in Downloads already named. Rules first; Apple's on-device model
-/// when it answers within `budget`. Off until turned on: a rename the user didn't ask for is a
-/// surprise, and the downloads list keeps the original name to go back to.
+/// Names a download whose file name says nothing, before WebKit writes it: rules first, the
+/// on-device model when it answers within `budget`. Off by default: an unasked rename surprises.
 @MainActor
 final class TidyDownloads {
     static let preferenceKey = "tidyDownloads"
@@ -26,7 +24,6 @@ final class TidyDownloads {
         self.isEnabled = isEnabled
     }
 
-    /// Whether a download of this name waits to be named.
     func applies(to filename: String) -> Bool {
         isEnabled && DownloadNames.isGeneric(filename)
     }

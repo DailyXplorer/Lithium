@@ -5,8 +5,7 @@ struct Pin: Codable, Identifiable, Equatable {
     var url: URL
     var title: String
     var favicon: Data?
-    /// The icon the page last declared, fetched again each day while the tab sleeps (a
-    /// calendar's icon shows the date). Missing from favorites saved before it existed.
+    /// The icon the page last declared, fetched again each day while the tab sleeps (a calendar's shows the date).
     var iconURL: URL? = nil
     /// The space whose grid shows it; nil for the main space (`Space.saved`).
     var spaceID: Space.ID? = nil
@@ -19,8 +18,6 @@ enum PinStore {
         URL.applicationSupportDirectory.appending(path: "Lithium/pins.json")
     }
 
-    /// A favorite that can't be read doesn't take the others with it, and the file is kept aside
-    /// before the next change writes over it (`StoredFile`).
     static func load(from url: URL = fileURL) -> [Pin] {
         StoredFile.readList(Pin.self, at: url)
     }

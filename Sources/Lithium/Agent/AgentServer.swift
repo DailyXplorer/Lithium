@@ -1,11 +1,9 @@
 import Foundation
 import Network
 
-/// One HTTP request that passed every check of `AgentServer`, as `AgentHub` sees it.
+/// One HTTP request that passed every check of `AgentServer`.
 enum AgentRequest: Sendable {
-    /// `POST /mcp` with a JSON body.
     case message(JSONValue, session: String?, protocolVersion: String?)
-    /// `DELETE /mcp`.
     case endSession(String?)
 }
 
@@ -16,9 +14,8 @@ struct AgentReply: Sendable {
     var body: JSONValue?
 }
 
-/// The MCP endpoint: Streamable HTTP on 127.0.0.1, with just enough HTTP/1.1 for MCP clients
-/// (keep-alive, Content-Length bodies). It checks Origin, Host, and the bearer token before
-/// anything reaches `AgentHub`, and never touches `Browser`.
+/// The MCP endpoint: Streamable HTTP on 127.0.0.1, with just enough HTTP/1.1 for MCP clients.
+/// It checks Origin, Host, and the bearer token before anything reaches `AgentHub`.
 ///
 /// Every stored property is confined to `queue`, which is what makes the class Sendable.
 final class AgentServer: @unchecked Sendable {
@@ -32,15 +29,12 @@ final class AgentServer: @unchecked Sendable {
     /// How long a connection may stay in one `Phase`. Without them, a local process that opens
     /// sockets and sends nothing would hold the 16 slots for good.
     struct Timeouts: Sendable {
-        /// From the accept, or from the first byte after an answer, to the end of the request head.
         var head: TimeInterval = 10
-        /// From the end of the head to the end of the body.
         var body: TimeInterval = 30
         /// Between an answer and the next request, on a connection that presented the token.
         var idle: TimeInterval = 60
     }
 
-    /// Where a connection stands; each phase but `busy` closes the connection when it lasts too long.
     private enum Phase {
         case head, body, idle, busy
     }
@@ -56,11 +50,11 @@ final class AgentServer: @unchecked Sendable {
     /// The listener a pending `start` waits on; only its own events may settle that start.
     private var starting: (listener: NWListener, continuation: CheckedContinuation<UInt16, any Error>)?
     private var isStopped = false
-    /// Runs on `queue` when the listener dies after it was ready (sleep, a network change), so
-    /// the hub can listen again. A listener this server cancelled itself never reports here.
+    /// Runs on `queue` when the live listener dies (sleep, a network change), so the hub can
+    /// listen again.
     private let listenerDidFail: @Sendable (NWError?) -> Void
-    /// Tests only: runs on `queue` once a listener starts, before it can report `.ready`, which
-    /// is where a late event from an earlier listener lands in the race tests reproduce.
+    /// Tests only: runs on `queue` before the listener can report `.ready`, where the race tests
+    /// land a late event from an earlier listener.
     var listenerDidStart: (@Sendable (AgentServer, NWListener) -> Void)?
 
     /// Confined to `queue`, like the server.
@@ -68,25 +62,19 @@ final class AgentServer: @unchecked Sendable {
         let connection: NWConnection
         /// Accept order, so eviction takes the oldest.
         let serial: Int
-        /// The port of the listener that accepted it: a client keeps naming that port in Host
-        /// after a relisten moved the server to another one.
+        /// A client keeps naming this port in Host after a relisten moved the server.
         let port: UInt16
         var buffer = Data()
-        /// Sent the token at least once: a client rather than a stranger holding a slot.
         var isAuthenticated = false
-        /// The client's EOF arrived: the whole requests in `buffer` are the last to answer.
         var inputEnded = false
         var phase: Phase?
         var deadline: DispatchWorkItem?
-        /// A request is with `AgentHub`; answers go out in order, so the next one waits.
+        /// Answers go out in order, so the next request waits.
         var isBusy = false
-        /// Off while a request is with `AgentHub`, but for a one-byte read that notices the
-        /// client leaving: what the client sends meanwhile stays in the socket instead of
-        /// growing `buffer` without bound.
+        /// Off while busy (but for a one-byte read), so a client's extra input stays in the
+        /// socket instead of growing `buffer` without bound.
         var isReceiving = false
         var closesAfterReply = false
-        /// The request with `AgentHub`, cancelled when the connection fails or the client closes
-        /// under it.
         var request: Task<Void, Never>?
 
         init(_ connection: NWConnection, serial: Int, port: UInt16) {
@@ -107,7 +95,7 @@ final class AgentServer: @unchecked Sendable {
         case failed(NWError)
     }
 
-    /// Listens on 127.0.0.1 only, on `port` or on any free port when it is 0, and returns the port.
+    /// Listens on 127.0.0.1 only; 0 picks any free port.
     func start(port requested: UInt16) async throws -> UInt16 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: requested) ?? .any)
@@ -132,8 +120,7 @@ final class AgentServer: @unchecked Sendable {
     /// another port is pending; the identity check keeps that late event away from the retry.
     func listener(_ listener: NWListener, changedTo state: NWListener.State, port requested: UInt16) {
         guard let starting, starting.listener === listener else {
-            // A listener this server cancelled is no longer `self.listener`, so only an
-            // unexpected death of the live one gets here.
+            // Only an unexpected death of the live listener gets past this.
             guard self.listener === listener else { return }
             switch state {
             case .failed(let error), .waiting(let error):
@@ -166,7 +153,6 @@ final class AgentServer: @unchecked Sendable {
         }
     }
 
-    /// Settles a pending start and cancels the listener it waited on.
     private func abandonStart() {
         listener?.cancel()
         listener = nil
@@ -188,7 +174,7 @@ final class AgentServer: @unchecked Sendable {
         }
     }
 
-    /// Tests only: the largest amount of unparsed input held for one connection.
+    /// Tests only.
     var bufferedBytes: Int {
         queue.sync { connections.values.map(\.buffer.count).max() ?? 0 }
     }
@@ -198,12 +184,12 @@ final class AgentServer: @unchecked Sendable {
         queue.sync { connections.count }
     }
 
-    /// Tests only: every open connection fails the way it does when the client resets it.
+    /// Tests only.
     func failConnections(_ error: NWError) {
         queue.sync { connections.values.forEach { connection($0, changedTo: .failed(error)) } }
     }
 
-    /// Closes the listener and every connection, for good: a start still pending throws.
+    /// For good: a start still pending throws.
     func stop() {
         queue.sync {
             isStopped = true
@@ -212,7 +198,6 @@ final class AgentServer: @unchecked Sendable {
         }
     }
 
-    /// Ends every connection once its answers are out, including one still waiting on `AgentHub`.
     func closeConnections() {
         queue.sync {
             for entry in connections.values {
@@ -240,9 +225,8 @@ final class AgentServer: @unchecked Sendable {
         updateDeadline(entry)
     }
 
-    /// Makes room at the cap so strangers can't lock a client out: the oldest connection that
-    /// never sent the token goes first, then the oldest idle client, which reconnects. A call in
-    /// flight or a client partway through a request is never cut.
+    /// Makes room at the cap so strangers can't lock a client out: unauthenticated first, then
+    /// idle clients, oldest first. A request in progress is never cut.
     private func evictOne() -> Bool {
         let candidates = connections.values.filter { !$0.isAuthenticated || $0.phase == .idle }
         guard let victim = candidates.min(by: { ($0.isAuthenticated ? 1 : 0, $0.serial) < ($1.isAuthenticated ? 1 : 0, $1.serial) }) else {
@@ -252,8 +236,7 @@ final class AgentServer: @unchecked Sendable {
         return true
     }
 
-    /// Arms the deadline of the phase the connection just entered. Staying in a phase keeps the
-    /// deadline it had, so a client dribbling bytes can't push it back.
+    /// Staying in a phase keeps its deadline, so a client dribbling bytes can't push it back.
     private func updateDeadline(_ entry: Connection) {
         guard connections[ObjectIdentifier(entry)] != nil else { return }
         let phase: Phase
@@ -284,15 +267,13 @@ final class AgentServer: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
     }
 
-    /// Network.framework holds a failed connection's resources until it is cancelled. Every
-    /// path that cancels a connection also drops it, so `.cancelled` has nothing left to do.
+    /// Network.framework holds a failed connection's resources until it is cancelled.
     private func connection(_ entry: Connection, changedTo state: NWConnection.State) {
         if case .failed = state { close(entry) }
     }
 
-    /// Reads only while no request is with `AgentHub`, so `buffer` never holds more than one
-    /// request (bounded by `processNext`) plus one read. While one is, and the client sent
-    /// nothing after it, a one-byte read watches for the client going away.
+    /// Reads only while not busy, so `buffer` stays bounded; while busy, a one-byte read watches
+    /// for the client going away.
     private func receive(on entry: Connection) {
         entry.isReceiving = true
         entry.connection.receive(minimumIncompleteLength: 1, maximumLength: entry.isBusy ? 1 : 65_536) { [weak self, weak entry] data, _, isComplete, error in
@@ -300,15 +281,13 @@ final class AgentServer: @unchecked Sendable {
             entry.isReceiving = false
             if let data { entry.buffer.append(data) }
             if isComplete || error != nil { entry.inputEnded = true }
-            // A killed client, or one that gave up on the call, closes with nothing after the
-            // request: nobody waits for the answer, so the call (and a banner it shows) ends now.
+            // EOF with nothing after the request: nobody waits for the answer, so the call ends now.
             // A client that half-closes behind pipelined requests still gets every answer.
             if entry.isBusy, entry.inputEnded, entry.buffer.isEmpty {
                 self.close(entry)
                 return
             }
-            // Every whole request sent before the EOF gets its answer, the last one with
-            // `Connection: close` (see `respond`); a request cut by the EOF is dropped.
+            // A request cut by the EOF is dropped.
             self.process(entry)
             if entry.inputEnded {
                 if !entry.isBusy { self.closeAfterSending(entry) }
@@ -323,8 +302,6 @@ final class AgentServer: @unchecked Sendable {
         receive(on: entry)
     }
 
-    /// Once per connection: a connection already dropped was already cancelled, or will be
-    /// once its last answer is sent.
     private func close(_ entry: Connection) {
         guard connections.removeValue(forKey: ObjectIdentifier(entry)) != nil else { return }
         entry.deadline?.cancel()
@@ -351,15 +328,12 @@ final class AgentServer: @unchecked Sendable {
         let headers: [String: String]
     }
 
-    /// Answers the requests waiting in the buffer, in order. A refused request keeps the
-    /// connection open and the loop goes on to the next one; a request that went to `AgentHub`
-    /// stops it until `finish`, and a malformed one closes the connection.
+    /// Answers the buffered requests in order; one that went to `AgentHub` stops the loop until `finish`.
     private func process(_ entry: Connection) {
         while !entry.isBusy, connections[ObjectIdentifier(entry)] != nil, processNext(entry) {}
         updateDeadline(entry)
     }
 
-    /// Takes one request off the buffer; false when the buffer doesn't hold a whole one yet.
     private func processNext(_ entry: Connection) -> Bool {
         switch Self.frame(entry.buffer) {
         case .partial:
@@ -376,14 +350,12 @@ final class AgentServer: @unchecked Sendable {
     }
 
     private enum Frame {
-        /// Not a whole request yet.
         case partial
         /// Answered with this status, then the connection closes.
         case malformed(Int)
         case request(Head, body: Range<Data.Index>)
     }
 
-    /// The first request in `buffer`, without taking it off.
     private static func frame(_ buffer: Data) -> Frame {
         guard let end = buffer.firstRange(of: Data("\r\n\r\n".utf8)) else {
             return buffer.count > maxHeaderBytes ? .malformed(431) : .partial
@@ -426,7 +398,7 @@ final class AgentServer: @unchecked Sendable {
         case "DELETE":
             request = .endSession(session)
         default:
-            // No server-initiated stream (GET) in this version.
+            // No server-initiated stream (GET).
             return respond(entry, status: 405, headers: [("Allow", "POST, DELETE")])
         }
         entry.isBusy = true

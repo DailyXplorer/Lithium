@@ -1,6 +1,6 @@
 import Foundation
 
-/// What an agent can't do without the user's Allow (design section 7.3).
+/// What an agent can't do without the user's Allow.
 enum ConfirmationKind: String, CaseIterable {
     case payment, password, download, upload, file
 
@@ -8,8 +8,7 @@ enum ConfirmationKind: String, CaseIterable {
     var allowsSiteGrant: Bool { self != .payment && self != .file }
 }
 
-/// Payment providers' hosts: a frame or a tab on one of them, or under one, is a payment. The
-/// list ships with Lithium; tests give their own, so a local server can stand in for a provider.
+/// Payment providers' hosts: a frame or a tab on one of them, or under one, is a payment.
 struct PaymentProviders: Equatable {
     let hosts: [String]
 
@@ -33,9 +32,8 @@ struct PaymentProviders: Equatable {
 }
 
 /// Which agent actions need the user's Allow, from the facts `agent.js` reports per frame. Pure:
-/// no AppKit, no page; the snapshot marks elements with it, and input tools ask before acting.
+/// no AppKit, no page.
 enum Guardrails {
-    /// An element as the snapshot shows it.
     struct Element {
         var role: String
         var name: String?
@@ -43,16 +41,12 @@ enum Guardrails {
         var field: String?
         /// An Apple Pay or Google Pay button.
         var wallet = false
-        /// A password field that isn't empty is in its document, whoever filled it: a sign-in
-        /// may send it without a form, from a plain button or link or on Enter.
+        /// A sign-in may send a filled password without a form, from any button or link or on Enter.
         var passwordFilled = false
-        /// A file input: it shows as a button, but a click on it only opens the file chooser,
-        /// which `upload_files` asks about. Enter on it may still send the password.
+        /// A file input: a click only opens the chooser, which `upload_files` asks about.
         var setsFiles = false
-        /// In a payment provider's frame, at any depth.
         var inPaymentFrame = false
-        /// In a frame Lithium can't read, of an origin it can't tell: keys there may fill a
-        /// card or a password.
+        /// In a frame Lithium can't read: keys there may fill a card or a password.
         var inUnknownFrame = false
     }
 
@@ -74,20 +68,17 @@ enum Guardrails {
     /// The form an action submits.
     struct Form {
         var cardField = false
-        /// A password field that isn't empty, whoever filled it.
         var filledPassword = false
     }
 
     enum Action: Equatable {
         case type, select, check
-        /// A key pressed in the element; `enter` when it is Enter or types Enter's carriage return.
         case press(enter: Bool)
         /// A click, or Enter or Space on a button or link.
         case activate
     }
 
-    /// The confirmation `action` needs, nil when it is free. `form` is the form the action submits,
-    /// if it submits one. A payment wins over a password.
+    /// The confirmation `action` needs, nil when it is free. A payment wins over a password.
     static func confirmation(for action: Action, on element: Element, page: Page, submitting form: Form? = nil) -> ConfirmationKind? {
         if page.isProviderTab || element.inPaymentFrame { return .payment }
         if element.inUnknownFrame { return page.isPaymentPage ? .payment : .password }
@@ -98,24 +89,20 @@ enum Guardrails {
             if element.field == "password", action == .type { return .password }
         case .press(let enter):
             if element.field == "payment" { return .payment }
-            // Beside a filled password, Enter on a button is a press too (`ActionTarget.guarded`):
-            // a wallet or commit control still asks for the payment a click on it would.
+            // Enter on a wallet or commit control asks for the payment a click on it would.
             if enter, element.wallet || isCommitControl(role: element.role, name: element.name) && (page.isPaymentPage || hasAmount(element.name)) { return .payment }
             if enter, element.field == "password" || element.passwordFilled { return .password }
         case .activate:
             if element.wallet { return .payment }
             if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
-            // A script can send the filled password from any click, form or not, and the target's
-            // own role often hides it: a span inside a button, a div that only has a click
-            // listener. Only a field's own controls are left out, and only from a click: Enter on
-            // them beside a filled password is a `.press` (`ActionTarget.guarded`).
+            // A script can send the filled password from any click, and the target's role often
+            // hides it (a span in a button, a div with a listener); only field controls are free.
             if element.passwordFilled, !element.setsFiles, !Self.fieldRoles.contains(element.role) { return .password }
         }
         return form?.filledPassword == true ? .password : nil
     }
 
-    /// The `guard` the snapshot shows on an element: what its usual action (typing into a field,
-    /// activating anything else) would need, as `confirmation(for:)` decides it.
+    /// The `guard` the snapshot shows: what the element's usual action would need.
     static func mark(_ element: Element, page: Page) -> ConfirmationKind? {
         if element.field != nil { return confirmation(for: .type, on: element, page: page) }
         guard actionable.contains(element.role) || element.wallet else { return nil }
@@ -134,7 +121,6 @@ enum Guardrails {
 
     static let paymentPaths: Set<String> = ["checkout", "payment", "paiement", "pay", "kasse", "zahlung", "pago", "pagamento", "billing", "place-order"]
 
-    /// A button or link whose name, amounts and punctuation taken out, says it pays or orders.
     static func isCommitControl(role: String, name: String?) -> Bool {
         guard ["button", "link", "clickable"].contains(role), let name else { return false }
         return commitNames.contains(normalized(stripping(amountsIn: name)))
@@ -152,7 +138,7 @@ enum Guardrails {
         name.lowercased().replacing(symbolAmount, with: " ").replacing(codeAmount, with: " ")
     }
 
-    /// Lowercased, accents and punctuation gone, spaces collapsed: "S’abonner" is "sabonner".
+    /// "S’abonner" is "sabonner".
     private static func normalized(_ text: String) -> String {
         let folded = text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).lowercased()
         let kept = folded.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }

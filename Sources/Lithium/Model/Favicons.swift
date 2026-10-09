@@ -2,17 +2,15 @@ import AppKit
 import ImageIO
 import WebKit
 
-/// Finds a site's icon and normalizes it to a 64 px PNG that is known to contain visible pixels.
-/// Icons are kept per host on disk, so history and suggestions show them across launches, and in
-/// memory for the hosts last asked about: the history page and suggestions go through thousands.
+/// Finds a site's icon and normalizes it to a 64 px PNG known to contain visible pixels.
+/// Kept per host on disk, and in memory for the hosts last asked about.
 @MainActor
 final class Favicons {
     static let shared = Favicons()
 
     private var cache: [String: (data: Data, lastUse: Int)] = [:]
     private var uses = 0
-    /// Hosts with no icon, not asked again this session. Emptied past `missingLimit`: the
-    /// history page goes through thousands of hosts.
+    /// Hosts with no icon, not asked again this session.
     private(set) var missing: Set<String> = []
     private var inFlight: [String: Task<Data?, Never>] = [:]
     /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
@@ -45,9 +43,8 @@ final class Favicons {
             .map(link => [link.href, link.getAttribute('sizes') || '', link.rel, link.type || '']) };
         """
 
-    /// Lets the page's own engine draw an icon it references. SVG favicons often style
-    /// themselves with CSS, which AppKit's SVG renderer ignores, leaving a blank image.
-    /// Runs in Lithium's isolated world, so the page's scripts (and our farbling) never touch it.
+    /// The page's engine draws the icon: SVG favicons often style themselves with CSS, which AppKit
+    /// ignores. In Lithium's isolated world, so the page's scripts (and our farbling) never touch it.
     private static let drawScript = """
         const image = new Image();
         image.crossOrigin = 'anonymous';
@@ -70,8 +67,7 @@ final class Favicons {
         return data
     }
 
-    /// Past the limit, drops only the least recently used icon. The scan is linear, but it only
-    /// runs on a miss and the cache holds a few hundred entries.
+    /// Drops the least recently used icon: a linear scan, but only on a miss over a few hundred entries.
     private func remember(_ data: Data, for host: String) {
         if cache[host] == nil, cache.count >= cacheLimit,
            let oldest = cache.min(by: { $0.value.lastUse < $1.value.lastUse })?.key {
@@ -85,8 +81,7 @@ final class Favicons {
         host.flatMap(cachedData(host:)).flatMap(NSImage.init(data:))
     }
 
-    /// For pages not open in a tab (history): the stored icon, or one fetched from the site's
-    /// well-known locations. Failures are remembered for the session to avoid refetching.
+    /// For pages not open in a tab (history): the stored icon, or one from well-known locations.
     func icon(forHost host: String) async -> Data? {
         if let data = cachedData(host: host) { return data }
         guard !missing.contains(host), let site = URL(string: "https://\(host)/") else { return nil }
@@ -136,8 +131,8 @@ final class Favicons {
         return folder.appending(path: "\(safe).png")
     }
 
-    /// Clear History: the icon kept for every host visited would still list them, so they go too,
-    /// but for `hosts` (favorites and open tabs, which show theirs). Files are removed off the main thread.
+    /// Clear History: kept icons would still list the hosts visited, so all go but `hosts`'
+    /// (favorites, open tabs).
     func clear(keeping hosts: Set<String>) async {
         generation += 1
         for task in inFlight.values { task.cancel() }
@@ -159,10 +154,9 @@ final class Favicons {
         try? png.write(to: file(for: host), options: .atomic)
     }
 
-    /// While the page shows an unread count (in its title, or `counting` through `setAppBadge`),
-    /// its touch icon comes first when the host has no icon yet: sites draw the count into their
-    /// favicon, never their touch icon. Without one, the favicon is shown but not kept as the
-    /// host's: it may have the count in it, and would stay once the count is gone.
+    /// With an unread count (in the title, or `counting` via `setAppBadge`) the touch icon comes first:
+    /// sites draw the count into their favicon, never their touch icon. A favicon is then shown but
+    /// not kept, as the count in it would stay.
     func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
@@ -207,9 +201,8 @@ final class Favicons {
         return nil
     }
 
-    /// The icon a page declares, fetched afresh past the cache: a calendar's changes with the
-    /// date, at a new address or the same one. Stored for the host only when its pixels changed
-    /// and `keeping` still holds once it came.
+    /// Fetched past the cache: a calendar's icon changes with the date, even at the same address.
+    /// Stored only when its pixels changed and `keeping` still holds once it came.
     func refresh(host: String, from url: URL, keeping: () -> Bool = { true }) async -> Data? {
         let generation = generation
         guard Self.isFetchable(url), let png = await Self.fetch(url, with: session) else { return nil }
@@ -217,8 +210,7 @@ final class Favicons {
         return png
     }
 
-    /// The addresses icons are fetched from, as a page's `<link>` names them: never `file:` or
-    /// any other scheme that would have Lithium read something on the Mac for the page.
+    /// Never `file:` or another scheme that would have Lithium read something on the Mac for the page.
     nonisolated static func isFetchable(_ url: URL) -> Bool {
         ["http", "https", "data"].contains(url.scheme?.lowercased())
     }
@@ -228,8 +220,7 @@ final class Favicons {
         return await normalizedInBackground(data)
     }
 
-    /// The body, read as it comes and dropped past `limit` (or cut there, for a page read only
-    /// for its head), so a huge or endless answer is never held whole in Lithium's memory.
+    /// Read as it comes and dropped (or cut) past `limit`, so a huge answer is never held whole in memory.
     nonisolated static func download(_ url: URL, limit: Int, keepingPrefix: Bool = false, with session: URLSession) async -> Data? {
         guard let (bytes, response) = try? await session.bytes(from: url),
               (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
@@ -247,8 +238,7 @@ final class Favicons {
         return data
     }
 
-    /// Decoding, redrawing and encoding a large ICO or touch icon takes a few milliseconds, so it
-    /// runs off the main thread.
+    /// A large ICO or touch icon takes a few milliseconds to redraw: off the main thread.
     nonisolated private static func normalizedInBackground(_ data: Data) async -> Data? {
         await Task.detached(priority: .utility) { normalized(data) }.value
     }
@@ -300,8 +290,7 @@ final class Favicons {
         }
     }
 
-    /// The page writes `sizes`: a negative or huge value would overflow the distance to 64 px
-    /// when candidates are sorted, so only positive sizes count, and none past `largestSide`.
+    /// Page-written: only positive sizes up to `largestSide` count, so the distance to 64 px can't overflow.
     nonisolated static func size(sizes: String, rel: String) -> Int {
         if sizes.lowercased() == "any" { return 64 }
         let largest = sizes.split(separator: " ")

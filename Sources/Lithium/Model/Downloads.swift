@@ -27,8 +27,7 @@ final class DownloadItem: Identifiable {
     /// Asks where to save before it starts, as a download from the page menu does.
     @ObservationIgnored fileprivate let asksWhere: Bool
     @ObservationIgnored private var observation: NSKeyValueObservation?
-    /// The renamed file's volume and file number when it finished: "Use original name" moves
-    /// only that file, not another that took its name since.
+    /// The renamed file's identity when it finished: "Use original name" moves only that file.
     @ObservationIgnored fileprivate var fileIdentity: [Int]?
 
     fileprivate init(download: WKDownload, filename: String, asksWhere: Bool) {
@@ -45,7 +44,6 @@ final class DownloadItem: Identifiable {
         }
     }
 
-    /// A file Lithium already holds, written at once.
     init(filename: String, size: Int) {
         self.filename = filename
         asksWhere = false
@@ -88,8 +86,7 @@ final class DownloadItem: Identifiable {
     }
 }
 
-/// Every download of the session, newest first. Files land in ~/Downloads, or where the user
-/// picks for a download from the page menu.
+/// Every download of the session, newest first.
 @MainActor
 @Observable
 final class Downloads: NSObject, WKDownloadDelegate {
@@ -99,8 +96,6 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Set when a download finishes while the list is closed; the toolbar button shows a dot.
     var hasUnseen = false
 
-    /// Transfers still running. An entry goes when its download ends, and `track` replaces any
-    /// left by a download whose address a new one reuses.
     @ObservationIgnored private(set) var byDownload: [ObjectIdentifier: DownloadItem] = [:]
     /// Names taken by files still being written, which don't exist on disk yet.
     @ObservationIgnored private var reserved: Set<URL> = []
@@ -109,19 +104,16 @@ final class Downloads: NSObject, WKDownloadDelegate {
     @ObservationIgnored private var destinations: [ObjectIdentifier: URL] = [:]
     /// Where downloads replacing a file are written until they finish; the item shows the file replaced.
     @ObservationIgnored private var partials: [ObjectIdentifier: URL] = [:]
-    /// Asks where to save, starting from the name and folder given; nil when the user cancels.
-    /// Tests replace it, so no panel shows.
+    /// Asks where to save; nil when the user cancels. Tests replace it, so no panel shows.
     @ObservationIgnored var chooseDestination: @MainActor (URL, NSWindow?) async -> URL? = Downloads.savePanel(suggesting:in:)
     /// Names downloads whose file name says nothing, when turned on in Max.
     @ObservationIgnored let tidy = TidyDownloads()
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
 
-    /// Combined progress of running downloads, when their sizes are known.
     var overallFraction: Double? {
         let running = active
-        // In Double: the sizes come from the servers' Content-Length, and two near Int64.max
-        // would overflow an Int64 sum.
+        // In Double: two server-given sizes near Int64.max would overflow an Int64 sum.
         let total = running.reduce(0.0) { $0 + Double(max(0, $1.totalBytes)) }
         guard !running.isEmpty, total > 0 else { return nil }
         return running.reduce(0.0) { $0 + Double(max(0, $1.completedBytes)) } / total
@@ -133,8 +125,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         item.list = self
         byDownload[ObjectIdentifier(download)] = item
         destinations[ObjectIdentifier(download)] = nil
-        // Left by a cancelled download whose address this one reuses, it would be swapped in
-        // for this one's file when it finishes.
+        // One left by a cancelled download reusing this address would be swapped in at the finish.
         partials[ObjectIdentifier(download)] = nil
         items.insert(item, at: 0)
         tidy.prepare()
@@ -144,8 +135,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         items.removeAll { $0.state != .downloading }
     }
 
-    /// Bytes Lithium already has (a PDF it shows), saved like a download, from `source`. `title`
-    /// (the PDF's own) names a file whose name says nothing, when that is on.
+    /// Bytes Lithium already has (a PDF it shows), saved like a download.
     func save(_ data: Data, suggestedFilename: String, from source: URL?, title: String? = nil) {
         let item = DownloadItem(filename: suggestedFilename, size: data.count)
         item.list = self
@@ -179,9 +169,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         }
     }
 
-    /// Into a hidden file beside the destination, moved into place once complete: a disk that
-    /// fills up or a crash midway never leaves a truncated file under the real name. The move
-    /// never replaces a file that appeared there meanwhile. Quarantined like WebKit's downloads.
+    /// Into a hidden file moved into place once complete: a full disk or a crash midway never
+    /// leaves a truncated file under the real name.
     nonisolated static func write(_ data: Data, to destination: URL, from source: URL?) throws {
         let partial = partialFile(for: destination)
         do {
@@ -194,16 +183,13 @@ final class Downloads: NSObject, WKDownloadDelegate {
         }
     }
 
-    /// A hidden file beside `destination`, of a short fixed length: one named after the file
-    /// would pass the 255 bytes a file name can have when the file's own name nearly does.
+    /// Fixed length: a name built from the file's could pass the 255-byte limit.
     nonisolated private static func partialFile(for destination: URL) -> URL {
         destination.deletingLastPathComponent().appending(path: ".\(UUID().uuidString).lithium-download")
     }
 
-    /// Marks a file made of what a page sent as downloaded from the web, as WebKit does its
-    /// downloads: macOS asks before it first opens. The address is kept only for the web's: a
-    /// `data:` one would be the whole file again. Best effort, like WebKit's: a disk that keeps
-    /// no attributes still gets the file.
+    /// Quarantines the file as WebKit does its downloads, so macOS asks before it first opens.
+    /// Only a web address is kept: a `data:` one would be the whole file again.
     nonisolated static func quarantine(_ file: URL, from source: URL?) {
         var properties: [String: Any] = [kLSQuarantineTypeKey as String: kLSQuarantineTypeWebDownload as String]
         if let source, ["http", "https"].contains(source.scheme?.lowercased()) {
@@ -215,8 +201,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         try? file.setResourceValues(values)
     }
 
-    /// At most 255 bytes, the most a file name can have: a longer name is cut short before
-    /// `tail` (its number and extension), which stays whole.
+    /// At most 255 bytes: a longer name is cut before `tail` (number and extension), which stays whole.
     nonisolated static func fileName(_ name: String, _ tail: String = "") -> String {
         var name = name
         while name.utf8.count + tail.utf8.count > 255, !name.isEmpty { name.removeLast() }
@@ -227,7 +212,6 @@ final class Downloads: NSObject, WKDownloadDelegate {
         let id = ObjectIdentifier(download)
         var filename = suggestedFilename
         var original: String?
-        // A download that asks where to save is named by the user in the panel.
         if byDownload[id]?.asksWhere == false, tidy.applies(to: suggestedFilename) {
             let webView = download.webView
             // The page shown, not one still loading: a link that turned into this download.
@@ -250,13 +234,11 @@ final class Downloads: NSObject, WKDownloadDelegate {
             // Cancelled from the list while the panel was open.
             guard byDownload[id]?.state == .downloading else { return nil }
             destination = chosen
-            // Another running download holds that path (its file isn't on disk yet, so the panel
-            // didn't ask): this one gets a numbered name beside it.
+            // Another running download holds that path (not on disk yet, so the panel didn't ask).
             if takenDestinations().contains(chosen) {
                 destination = self.destination(for: chosen.lastPathComponent, in: chosen.deletingLastPathComponent())
             }
-            // The panel already asked whether to replace a file of that name. WebKit won't write
-            // over it, and the old one must stay until the new one is complete: the download goes
+            // The panel already asked to replace it, but WebKit won't write over a file: download
             // to a hidden file beside it, swapped in when it finishes.
             if FileManager.default.fileExists(atPath: destination.path) {
                 let partial = Self.partialFile(for: destination)
@@ -274,7 +256,6 @@ final class Downloads: NSObject, WKDownloadDelegate {
         destinations[id] = destination
     }
 
-    /// Gives a renamed download the name the site gave it back, numbered if that is taken now.
     /// Only while the file is where Lithium put it: one the user has moved or renamed is theirs.
     fileprivate func useOriginalName(_ item: DownloadItem) {
         guard item.canUseOriginalName, let original = item.originalFilename, let current = item.destination else { return }
@@ -287,8 +268,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         item.setDestination(target)
     }
 
-    /// The volume and file number of the file at `file`, which a rename or move within the
-    /// volume keeps; nil when there is none.
+    /// Volume and file number, which a rename or move within the volume keeps.
     nonisolated private static func fileIdentity(of file: URL) -> [Int]? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
               let volume = attributes[.systemNumber] as? Int, let number = attributes[.systemFileNumber] as? Int else { return nil }
@@ -303,7 +283,6 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return response == .OK ? panel.url : nil
     }
 
-    /// In ~/Downloads unless another folder is given, numbered when the name is taken.
     private func destination(for suggestedFilename: String, in folder: URL = .downloadsDirectory) -> URL {
         let name = (suggestedFilename as NSString).deletingPathExtension
         let pathExtension = (suggestedFilename as NSString).pathExtension
@@ -318,7 +297,6 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return destination
     }
 
-    /// Paths given to files still being written, which may not exist on disk yet.
     private func takenDestinations() -> Set<URL> {
         // A transfer cancelled from the list may never hear back from WebKit.
         destinations = destinations.filter { byDownload[$0.key]?.state == .downloading }
@@ -355,8 +333,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         }
     }
 
-    /// WebKit may never report a download cancelled from the list: the hidden file it was
-    /// writing to goes now, with its entry.
+    /// WebKit may never report a download cancelled from the list: remove its hidden file now.
     fileprivate func didCancel(_ download: WKDownload) {
         if let partial = partials.removeValue(forKey: ObjectIdentifier(download)) { try? FileManager.default.removeItem(at: partial) }
     }

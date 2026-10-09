@@ -8,8 +8,7 @@ struct DownloadFileName {
     let name: String
 }
 
-/// Apple's on-device model (Apple Intelligence), used to name a download whose file name says
-/// nothing, from the page it came from. Nothing leaves the Mac.
+/// Names a download from the page it came from, with Apple's on-device model. Nothing leaves the Mac.
 @available(macOS 26.0, *)
 @MainActor
 final class ModelFileNames {
@@ -37,8 +36,7 @@ final class ModelFileNames {
         readySession = session
     }
 
-    /// A fresh session per file: one session answers one request at a time, and two downloads
-    /// can start together.
+    /// A fresh session per file: a session answers one request at a time.
     func name(for source: DownloadSource) async -> String? {
         guard isAvailable, let title = source.title, !title.isEmpty else { return nil }
         let session = readySession ?? LanguageModelSession(model: model, instructions: Self.instructions)

@@ -1,21 +1,16 @@
 import Foundation
 
-/// What is known about a download when WebKit asks where to write it: the name the site gave,
-/// and the page it came from. Nothing of the file itself yet.
+/// What is known about a download when WebKit asks where to write it: nothing of the file itself yet.
 struct DownloadSource {
     var filename: String
     /// The title of the page showing when the download started.
     var title: String?
     var page: URL?
-    /// The file's own address.
     var file: URL?
 }
 
-/// Rule-based naming of downloads: no model, instant, always available. Only a name that says
-/// nothing ("document(3).pdf", "IMG_2041.jpg", a UUID) is replaced; any other is the site's
-/// choice and stays.
+/// Rule-based naming of downloads. Only a name that says nothing ("document(3).pdf", a UUID) is replaced.
 enum DownloadNames {
-    /// Words that say nothing about a file on their own.
     private static let vague: Set<String> = [
         "attachment", "audio", "blob", "content", "data", "default", "doc", "document", "documents",
         "download", "downloads", "dsc", "dscf", "dscn", "export", "fetch", "file", "files", "generated",
@@ -24,8 +19,7 @@ enum DownloadNames {
         "unnamed", "untitled", "video", "view", "viewer",
     ]
 
-    /// True for a name made only of vague words, numbers, codes and hex: "document(3).pdf",
-    /// "IMG_2041.JPG", "D092331.jpg", "550e8400-e29b-41d4-a716-446655440000.pdf".
+    /// True for a name made only of vague words, numbers, codes and hex: "IMG_2041.JPG", "D092331.jpg".
     static func isGeneric(_ filename: String) -> Bool {
         let stem = (filename as NSString).deletingPathExtension.lowercased()
         let words = stem.split { !$0.isLetter && !$0.isNumber }
@@ -66,8 +60,7 @@ enum DownloadNames {
         return sanitized(joined.prefix(1).uppercased() + joined.dropFirst())
     }
 
-    /// Safe as a file name: no "/" or ":", no line breaks, no leading dot that would hide the
-    /// file, and short enough to read in Finder, cut at a word.
+    /// Safe as a file name: no "/" or ":", no line breaks, no leading dot that would hide the file.
     static func sanitized(_ name: String) -> String? {
         var text = name.replacingOccurrences(of: ": ", with: " - ").replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
         text = text.components(separatedBy: .controlCharacters.union(.newlines)).joined(separator: " ")
@@ -91,9 +84,8 @@ enum DownloadNames {
         return name
     }
 
-    /// `name` with the extension of the site's file name, which never changes. An extension the
-    /// name ends in itself ("Invoice.pdf", from a page's title or the model) goes: Finder hides
-    /// the real one, so "Invoice.pdf.pkg" would pass for a PDF. `original` when nothing is left.
+    /// `name` with the site's extension. An extension `name` ends in itself goes: Finder hides the
+    /// real one, so "Invoice.pdf.pkg" would pass for a PDF.
     static func fileName(_ name: String, keepingExtensionOf original: String) -> String {
         // Trailing dots and spaces go before every check, not once at the end: "Invoice.pdf..x" or
         // "Invoice.pdf .x" would stop at the empty or spaced suffix, then end in ".pdf" once trimmed.

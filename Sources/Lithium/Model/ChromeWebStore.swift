@@ -1,10 +1,8 @@
 import AppKit
 import WebKit
 
-/// The Chrome Web Store (chromewebstore.google.com), made to install into Lithium. The store's own
-/// page drives its Add to Chrome button through `chrome.webstorePrivate`; `webstore.js` gives it one
-/// that talks to `WebstoreBridge`, which asks the user before anything is added. Extensions are
-/// downloaded from Google's update server, as Chrome does, and must be the one the store asked for.
+/// The Chrome Web Store, made to install into Lithium: `webstore.js` gives the page a
+/// `chrome.webstorePrivate` that talks to `WebstoreBridge`, which asks the user before adding anything.
 enum ChromeWebStore {
     static let host = "chromewebstore.google.com"
 
@@ -57,10 +55,8 @@ enum ChromeWebStore {
     }
 
     /// The ZIP archive inside a CRX3 package, once the package's signed header names extension `id`.
-    ///
-    /// Layout: "Cr24", format version 3 and the header's length (little-endian), the header (a
-    /// `CrxFileHeader` protobuf), then the archive. The header's `signed_header_data` (field 10000)
-    /// is a `SignedData` whose `crx_id` (field 1) is the 16 bytes the extension's id spells out.
+    /// Layout: "Cr24", version 3, header length (little-endian), a `CrxFileHeader` protobuf whose
+    /// `signed_header_data` (field 10000) has the 16-byte `crx_id` (field 1), then the archive.
     static func archive(fromPackage package: Data, id: String) throws -> Data {
         let bytes = [UInt8](package)
         guard bytes.count > 12, bytes.starts(with: Array("Cr24".utf8)),
@@ -124,24 +120,19 @@ enum ChromeWebStore {
     struct Access {
         var allSites = false
         var sites: Set<String> = []
-        /// In manifest order, without repeats.
         var permissions: [String] = []
         /// Whether a `file:` pattern gives it the files on this Mac, which no site name shows.
         var localFiles: Bool { patterns.contains { $0.scheme == "file" } }
-        /// Patterns that are neither a site nor local files, shown as written.
         var otherAccess: [String] { unreadPatterns.sorted() }
         /// What decides coverage: `sites` are only the names shown, without schemes or subdomain wildcards.
         private var patterns: Set<SitePattern> = []
-        /// Patterns `SitePattern` can't read, which only the same pattern covers: whatever they
-        /// reach, they are granted all the same.
+        /// Patterns `SitePattern` can't read, which only the same pattern covers.
         private var unreadPatterns: Set<String> = []
-        /// Also what decides coverage: `permissions` are only their warnings, and many have none
-        /// (`cookies`, `scripting`), though every one asked for is granted.
+        /// Also what decides coverage: many granted permissions (`cookies`, `scripting`) have no warning.
         private var apiPermissions: Set<String> = []
 
-        /// Lithium grants every site pattern WebKit finds in the manifest, optional ones and the
-        /// sites allowed to message the extension (`externally_connectable`) included, so all of them
-        /// are shown and compared, though Chrome warns about fewer.
+        /// WebKit grants every site pattern in the manifest, optional and `externally_connectable`
+        /// included, so all are shown and compared, though Chrome warns about fewer.
         init(manifest: [String: Any]) {
             let declared = (manifest["permissions"] as? [String] ?? []) + (manifest["optional_permissions"] as? [String] ?? [])
             var patterns = (manifest["host_permissions"] as? [String] ?? [])
@@ -173,7 +164,6 @@ enum ChromeWebStore {
             permission.contains("://") || permission == "<all_urls>"
         }
 
-        /// Whether the user, having agreed to `approved`, already agreed to all of this.
         func isCovered(by approved: Access) -> Bool {
             patterns.allSatisfy { pattern in approved.patterns.contains { $0.covers(pattern) } }
                 && unreadPatterns.isSubset(of: approved.unreadPatterns)
@@ -181,11 +171,9 @@ enum ChromeWebStore {
         }
     }
 
-    /// The scheme, host and path of a match pattern, which decide the pages it reaches.
     struct SitePattern: Hashable {
         /// Nil for `<all_urls>`, every scheme; "*" is http and https, as in Chrome.
         let scheme: String?
-        /// "*" for every host.
         let host: String
         /// The host and every subdomain of it, from a leading "*.".
         let withSubdomains: Bool
@@ -224,8 +212,7 @@ enum ChromeWebStore {
             return !other.withSubdomains && other.host == host
         }
 
-        /// Whether `text`, its own "*" taken as a plain character, matches `glob`: then every path
-        /// the text reaches as a pattern, the glob reaches too. Backtracks to the last "*" only,
+        /// Whether `text`, its "*" taken literally, matches `glob`. Backtracks to the last "*" only,
         /// so a manifest full of them can't stall the check.
         static func matches(_ glob: String, _ text: String) -> Bool {
             let wildcard = Array(glob), literal = Array(text)
@@ -253,7 +240,6 @@ enum ChromeWebStore {
         }
     }
 
-    /// What an extension will be able to do, from its manifest, in the words Chrome uses.
     static func warnings(for manifest: [String: Any]) -> [String] {
         let access = Access(manifest: manifest)
         var warnings: [String] = []
@@ -305,16 +291,14 @@ enum ChromeWebStore {
     ]
 }
 
-/// Answers the store page's `chrome.webstorePrivate` and `chrome.management` calls (`webstore.js`).
-/// It only exists while a tab shows the store, and only answers the store's own top frame. Adding
-/// or removing an extension always goes through a confirmation in Lithium's own UI first.
+/// Answers the store page's `chrome.webstorePrivate` and `chrome.management` calls, only from the
+/// store's top frame. Adding or removing an extension always asks in Lithium's own UI first.
 @MainActor
 final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "lithiumWebstore"
     private unowned let extensions: Extensions
-    /// Extensions the user agreed to add, with the access they were shown, waiting for the store's
-    /// `completeInstall`. The store calls it right away: an approval it leaves unused (it failed,
-    /// the tab moved on) lapses, so it can't add the extension much later without asking again.
+    /// Approvals awaiting the store's `completeInstall`. An unused one lapses, so the store can't
+    /// add the extension much later without asking again.
     private var approved: [String: (access: ChromeWebStore.Access, date: Date)] = [:]
     static let approvalLifetime: TimeInterval = 60
     /// Tests move it forward.
@@ -418,7 +402,7 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     /// iCloud Passwords would add, then fail at every sign-in: its helper app only answers the
-    /// browsers Apple lists. The Passwords app it stands for opens instead, if the user wants.
+    /// browsers Apple lists.
     private func offerPasswords(window: NSWindow?) async -> Reply {
         let alert = NSAlert()
         alert.messageText = "iCloud Passwords can’t work in Lithium"
@@ -472,7 +456,7 @@ final class WebstoreBridge: NSObject, WKScriptMessageHandlerWithReply {
         ]
     }
 
-    /// The store's icon for the extension, for the confirmation. Only Google's image servers.
+    /// Only from Google's image servers.
     private static func icon(at address: String?) async -> NSImage? {
         guard let url = address.flatMap(URL.init(string:)), url.scheme == "https",
               let host = url.host(), host.hasSuffix(".googleusercontent.com") || host.hasSuffix(".gstatic.com") else { return nil }

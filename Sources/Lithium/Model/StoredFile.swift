@@ -1,11 +1,8 @@
 import Foundation
 
-/// Reading the JSON files Lithium keeps its state in (the session, favorites, extensions). A file
-/// this build can't read (cut short by a crash, or written by a newer build) is never overwritten
-/// by an empty default: it is moved aside first, as `<name>.unreadable-<date>`, so nothing in it
-/// is lost for good.
+/// Reads Lithium's JSON state files. One this build can't read (cut short by a crash, or from a
+/// newer build) is moved aside as `<name>.unreadable-<date>` rather than overwritten by a default.
 enum StoredFile {
-    /// The decoded file; nil when there is none, or none that can be read, which is then moved aside.
     static func read<Value: Decodable>(_ type: Value.Type, at url: URL) -> Value? {
         guard let data = try? Data(contentsOf: url) else {
             // One there that can't be opened (its permissions) is kept aside too: the next save replaces it.
@@ -22,8 +19,7 @@ enum StoredFile {
         }
     }
 
-    /// A list read one entry at a time: an entry this build can't read doesn't take the others
-    /// with it. The whole file is moved aside then, and what could be read written in its place.
+    /// Read one entry at a time, so a bad entry doesn't take the others with it.
     static func readList<Element: Codable>(_ type: Element.Type, at url: URL) -> [Element] {
         guard let entries = read([Lossy<Element>].self, at: url) else { return [] }
         let readable = entries.compactMap(\.value)

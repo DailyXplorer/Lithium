@@ -1,15 +1,13 @@
 import Foundation
 
-/// One step of `batch` (or of `tab_open`'s `steps`), checked before any step runs. The tab it
-/// acts in is the batch's unless it names one, filled in when it runs: a batch given `url` has
-/// no tab yet when its steps are checked.
+/// One step of `batch` or `tab_open`, checked before any runs. Its tab is filled in when it runs:
+/// a batch given `url` has no tab yet when its steps are checked.
 struct BatchStep {
     let tool: String
     let arguments: [String: JSONValue]
     let takesTab: Bool
 }
 
-/// How a step of `batch` ended, as the result lists it.
 private enum BatchOutcome {
     case done([String: JSONValue])
     case failed(AgentToolError)
@@ -39,12 +37,8 @@ extension AgentHub {
     /// Tools a batch never runs: itself, and pictures, which can't come back in its result.
     private static let refusedInBatch: Set<String> = ["batch", "screenshot", "pdf"]
 
-    /// Several calls in one round trip, for sequences an agent can predict (fill and submit, add
-    /// three todos): each step runs as the tool alone would, through its own checks, prompts,
-    /// redaction and log line, and the batch answers with each step's small fields and one diff.
-    /// Other calls may run in the tab between two steps. Given `url` rather than `tab`, it opens
-    /// a background tab for its steps, and `close` closes it at the end, so a whole task that
-    /// reads a page and reports is one call.
+    /// Each step runs as the tool alone would, through its own checks, prompts, redaction and log
+    /// line. Other calls may run in the tab between two steps.
     static let batchTool = AgentTool(
         name: "batch",
         description: "Run up to 20 tool calls in order, each as if called alone, with one diff at the end.",
@@ -87,7 +81,6 @@ extension AgentHub {
         }
         guard let url else { throw Arguments.invalid("Give tab or url.") }
         let opened = try await hub.openAgentTab(url, ephemeral: ephemeral, session: session, until: deadline)
-        // On every way out, a cancellation (Stop) included.
         defer { if close, hub.isOpen(opened.tab) { hub.browser?.close(opened.tab) } }
         do {
             _ = try await hub.load(url, in: opened, wait: .domcontentloaded, snapshot: false, session: session, deadline: deadline, timeout: timeout)
@@ -101,9 +94,7 @@ extension AgentHub {
         }
     }
 
-    /// Runs `steps` in `named`, in order, each within what is left of `deadline`, and reads one
-    /// diff of the tab after the last. A step that loaded a page lets it fire `load`, within
-    /// `ready`, before the next acts on it.
+    /// A step that loaded a page lets it fire `load`, within `ready`, before the next acts on it.
     func runBatch(_ steps: [BatchStep], in named: NamedTab, stopOnError: Bool, diff: Bool, ready: Duration, deadline: ContinuousClock.Instant, timeout: Duration, session: MCPSession) async throws -> [String: JSONValue] {
         var outcomes: [BatchOutcome] = []
         var loadedPage = false
@@ -150,7 +141,6 @@ extension AgentHub {
             "ok": .int(outcomes.filter { if case .done = $0 { true } else { false } }.count),
         ]
         if diff, isOpen(named.tab) {
-            // A page read once after the last step; a page too busy to answer leaves it out.
             do {
                 let until = max(deadline, .now + .seconds(3))
                 result = try await exclusive(named, until: until, timeout: .seconds(3)) {
@@ -164,12 +154,9 @@ extension AgentHub {
         return result.merging(page(named, reached: nil).object ?? [:]) { _, now in now }
     }
 
-    /// Before the first step in a tab `batch` or `tab_open` opened: the page's `load`, within
-    /// `cap`, since handlers a page attaches once its scripts have loaded (jQuery's) aren't there
-    /// at DOMContentLoaded, and a click before them does nothing. A page that loaded with one of
-    /// its own site's scripts failed (a 503) is reloaded once. Past the cap the steps run anyway,
-    /// and the result says so in `note`; `reloaded` names the script, or is null when the reload
-    /// failed, `note` saying why.
+    /// Waits for `load` within `cap`: handlers attached once scripts load (jQuery's) aren't there at
+    /// DOMContentLoaded, so an early click does nothing. A page whose own site's script failed is
+    /// reloaded once.
     func readyForSteps(_ named: NamedTab, within cap: Duration, session: MCPSession, deadline: ContinuousClock.Instant) async throws -> [String: JSONValue] {
         guard try await loads(named, within: cap, until: deadline) else { return ["note": .string(Self.stillLoading(after: cap))] }
         let site = named.tab.url?.host().map(SiteInfo.registrable)
@@ -177,7 +164,6 @@ extension AgentHub {
         let left = Int((deadline - .now) / .milliseconds(1))
         guard left > 0 else { return [:] }
         var fields: [String: JSONValue] = ["reloaded": .string("script failed: \(failed.failure)")]
-        // A reload of its own, logged as one; still loading at the cap is a note, not a failure.
         let reload: JSONValue = ["tab": .string(named.id), "wait": "load", "diff": false, "timeoutMs": .int(max(1, min(Int(cap / .milliseconds(1)), left)))]
         switch try await step("reload", reload, session: session) {
         case .success: break
@@ -188,8 +174,7 @@ extension AgentHub {
         return fields
     }
 
-    /// Whether the tab's page has fired `load`, waiting for it within `cap` and the call's
-    /// deadline. A tab that closed or slept has nothing to wait for: the next step says why.
+    /// A tab that closed or slept has nothing to wait for: the next step says why.
     private func loads(_ named: NamedTab, within cap: Duration, until deadline: ContinuousClock.Instant) async throws -> Bool {
         let tab = named.tab
         return try await AgentWait.until(min(deadline, .now + cap)) { () -> Bool? in
@@ -203,9 +188,7 @@ extension AgentHub {
         return "page still loading after \(time)"
     }
 
-    /// The steps of a batch, refused before anything runs when one can't: an unknown tool, one a
-    /// batch never runs, `evaluate` while the user hasn't turned scripts on, `tab_close` of the
-    /// batch's own tab. `tab` is the batch's, nil when it opens one.
+    /// Refuses the whole batch before anything runs if any step can't. `tab` is nil when the batch opens one.
     func batchSteps(_ value: JSONValue?, tab: String?) throws -> [BatchStep] {
         guard case .array(let list)? = value, (1...Self.maxBatchSteps).contains(list.count) else {
             throw Arguments.invalid("steps must list 1 to \(Self.maxBatchSteps) steps.")
@@ -227,8 +210,7 @@ extension AgentHub {
         }
         let ownTab = arguments["tab"] == nil || arguments["tab"] == tab.map { .string($0) }
         if name == "tab_close", ownTab { throw Arguments.invalid("\(place): a batch can’t close its own tab\(tab.map { " \($0)" } ?? "").") }
-        // Times checked in the tool's own ranges before planning adds to them: an absurd one
-        // (Int.max) would otherwise overflow there, before the tool ever saw it.
+        // Checked here first: an absurd time (Int.max) would overflow in the planning below.
         do {
             let given = Arguments(value: .object(arguments))
             if name == "wait_for", (arguments["time"] ?? .null) != .null { arguments["time"] = .int(try given.int("time", default: 1, in: 1...59_000)) }
@@ -241,8 +223,7 @@ extension AgentHub {
         return BatchStep(tool: name, arguments: arguments, takesTab: tool.takes("tab"))
     }
 
-    /// What the step's tool gives itself alone, so a step in a batch never waits longer than it
-    /// would on its own.
+    /// So a step in a batch never waits longer than it would on its own.
     private static func ownTimeout(of step: BatchStep) -> Int {
         if let given = step.arguments["timeoutMs"], case .int(let milliseconds) = given { return milliseconds }
         switch step.tool {
@@ -257,15 +238,12 @@ extension AgentHub {
 }
 
 extension Arguments {
-    /// `readyTimeoutMs`: how long `batch` and `tab_open` let a page finish loading before a step
-    /// acts on it, 10 s by default, at most 30.
     func readyTimeout() throws -> Duration {
         .milliseconds(try int("readyTimeoutMs", default: 10_000, in: 0...30_000))
     }
 }
 
 extension AgentTool {
-    /// The tool's schema lists the argument.
     func takes(_ argument: String) -> Bool {
         inputSchema["properties"]?[argument] != nil
     }

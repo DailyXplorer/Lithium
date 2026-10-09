@@ -2,10 +2,8 @@ import AppKit
 import Observation
 import WebKit
 
-/// Window state. Every open page is a `Tab`; a tab whose `pinID` is set is the live page of a
-/// favorite and shows in the grid instead of the tab list. Pins and the open tabs are persisted.
-/// With no tab selected the window shows the start page, and the address bar opens a new
-/// tab, so empty tabs never pile up.
+/// Window state. Every open page is a `Tab`; one whose `pinID` is set is a favorite's live page.
+/// With no tab selected the window shows the start page, so empty tabs never pile up.
 @MainActor
 @Observable
 final class Browser {
@@ -17,16 +15,13 @@ final class Browser {
         didSet {
             guard oldValue != selectedTabID else { return }
             videoPopout.selectionChanged(from: tabs.first { $0.id == oldValue }, to: selectedTab)
-            // The summary popover is one tab's. Here rather than in its button, which a hidden Zen
-            // bar doesn't have.
+            // The summary popover is one tab's. Here, not in its button, which a hidden Zen bar lacks.
             if summaries.isPanelPresented { summaries.isPanelPresented = false }
         }
     }
     /// Empty until the user makes a second space (`Space`), then the main one first.
     private(set) var spaces: [Space] = []
-    /// The space the sidebar shows; the selected tab is in it.
     private(set) var currentSpaceID = Space.mainID
-    /// The tab each space showed when the user left it.
     @ObservationIgnored private var spaceSelections: [Space.ID: Tab.ID] = [:]
     @ObservationIgnored private var spaceStores: [Space.ID: WKWebsiteDataStore] = [:]
     /// The last switch went to a space further along: the sidebar slides that way.
@@ -34,18 +29,15 @@ final class Browser {
     /// Clearing a deleted space's store; awaited in tests.
     @ObservationIgnored private(set) var storeCleanup: Task<Void, Never>?
     private(set) var addressFocusToken = 0
-    /// Moves when the user switches to another tab or to the start page, not when closing one moves the selection
-    /// or switching spaces shows the space's own, so the peeked sidebar can slide back on a pick yet stay out while
-    /// tabs close or spaces switch in a row.
+    /// Moves only when the user picks a tab or the start page, so the peeked sidebar slides back on a
+    /// pick yet stays out while tabs close or spaces switch in a row.
     private(set) var tabPickToken = 0
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible = UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true
-    /// Zen mode: the page alone in the window's frame, the sidebar and the top bar peeking from
-    /// the edges. Kept apart from `isSidebarVisible`, so leaving it brings the sidebar back as it
-    /// was. Saved like the sidebar, by `toggleZenMode()` only.
+    /// Zen mode: the page alone, sidebar and top bar peeking from the edges. Kept apart from
+    /// `isSidebarVisible`, so leaving it brings the sidebar back as it was.
     var isZenMode = UserDefaults.standard.bool(forKey: Preference.zenMode)
-    /// Whether the sidebar takes its column, rather than peeking over the page.
     var showsSidebar: Bool { isSidebarVisible && !isZenMode }
     /// Set by the address bar as it starts and ends editing: Zen mode's top bar stays out meanwhile.
     var isEditingAddress = false
@@ -55,14 +47,12 @@ final class Browser {
     /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
     /// sidebar's field for the sidebar's own.
     @ObservationIgnored var renameDraft: String?
-    /// Settings › Advanced › Developer tools, on unless turned off. Pages already open follow at once.
     var developerTools = UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(developerTools, forKey: Preference.developerTools)
             for case let webView? in tabs.map(\.loadedWebView) { DeveloperTools.apply(developerTools, to: webView) }
         }
     }
-    /// For the window in front, as the menu's other page commands (`commandTab`).
     var canShowWebInspector: Bool { developerTools && commandTab != nil }
 
     let privacy = Privacy()
@@ -88,7 +78,6 @@ final class Browser {
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
 
     /// Present only while agent access is on, so with it off every agent hook is a nil check.
-    /// Observed, so the toolbar indicator appears and goes with the setting.
     private(set) var agent: AgentHub?
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
@@ -97,15 +86,12 @@ final class Browser {
     /// The window the browser shows in, set as it appears: the Escape monitor only acts there.
     @ObservationIgnored weak var window: NSWindow?
 
-    /// Something opened from a peeked panel (the sidebar, Zen mode's top bar) is still in use: a
-    /// tab's name being typed, a popover such as a space's editor, an alert, a menu or a drag.
-    /// The panel stays out meanwhile, as they would go with it. Read only as the panel would go,
-    /// so nothing watches for them.
+    /// Something opened from a peeked panel (a rename, popover, alert, menu or drag) is still in
+    /// use, so the panel stays out, as they would go with it.
     var holdsPeek: Bool {
         isRenaming || window.map(Self.hasOpenUI(in:)) == true
     }
 
-    /// A tab's or a folder's name is being typed in the sidebar.
     var isRenaming: Bool { renamingTabID != nil || folders.renamingID != nil }
 
     /// Popovers are the window's child windows and alerts its sheets; menus and drags run the
@@ -114,7 +100,6 @@ final class Browser {
         window.attachedSheet != nil || window.childWindows?.contains(where: \.isVisible) == true
             || RunLoop.main.currentMode == .eventTracking
     }
-    /// Observed, so Reopen Closed Tab is enabled as soon as there is one. Never saved.
     private var closedTabs: [ClosedTab] = []
     // Cancelled in deinit, which runs outside the main actor; both are safe to cancel from anywhere.
     @ObservationIgnored nonisolated(unsafe) private var sleepLoop: Task<Void, Never>?
@@ -122,7 +107,6 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
-    /// The write a change to the session waits for (`saveSession`).
     @ObservationIgnored private var sessionSave: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
@@ -136,7 +120,6 @@ final class Browser {
         /// Its place in its folder, or among the tabs outside folders; nil for a favorite's page.
         let index: Int?
         let folderID: TabFolder.ID?
-        /// From `Tab.history`.
         let history: Any?
     }
 
@@ -206,10 +189,8 @@ final class Browser {
         if let dayChange { dayChange.center.removeObserver(dayChange.observer) }
     }
 
-    /// A pass runs in one go on the main actor: nothing can change a tab between its check
-    /// and its sleep, and two passes can't overlap. A popup window (a sign-in or payment
-    /// window) and the page that opened it talk to each other, so neither sleeps while both
-    /// are open, unless memory is critical. Nor does a page holding the user's unsaved input.
+    /// Runs in one go on the main actor, so nothing changes a tab between its check and its sleep.
+    /// A popup and its opener talk to each other: neither sleeps while both are open, unless memory is critical.
     private func sleepIdleTabs(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool = { _ in true }) {
         tabs.forEach { $0.noteSound() }
         for tab in tabsThatCanSleep(idleFor: interval, sparingPopups: sparingPopups, among: candidates) {
@@ -236,8 +217,6 @@ final class Browser {
         }
     }
 
-    /// When macOS runs short of memory, Lithium gives some back before the system starts
-    /// compressing and swapping.
     private func watchMemoryPressure() {
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
@@ -251,9 +230,8 @@ final class Browser {
         memoryPressure = source
     }
 
-    /// For as long as memory is short, background tabs left alone for 5 minutes (or less, if
-    /// `tabIdleSeconds` says so) sleep when memory runs low, and every one that can (not playing
-    /// sound, recording or loading) when it is critical, like Firefox's tab unloading.
+    /// Like Firefox's tab unloading: when memory runs low, tabs idle for 5 minutes sleep; when it
+    /// is critical, every one that can.
     private func sleepTabs() {
         if memoryLevel.contains(.critical) {
             sleepIdleTabs(idleFor: 0, sparingPopups: false)
@@ -264,9 +242,7 @@ final class Browser {
         }
     }
 
-    /// Energy saving turned on or off: the open pages' timers follow, links' windows' too (made
-    /// under it, they would keep it, even once in the main window), and turning it on applies it
-    /// at once rather than at the next pass.
+    /// Links' windows follow too: made under it, they would keep it, even once in the main window.
     private func energyChanged() {
         for case let webView? in (tabs + quickLinks.tabs).map(\.loadedWebView) { BackgroundThrottling.apply(energy.isOn, to: webView) }
         guard energy.isOn else { return }
@@ -274,11 +250,8 @@ final class Browser {
         pauseSilentMedia()
     }
 
-    /// While energy saving is on, a background tab's media that makes no sound (a muted autoplay
-    /// video, a looping background) pauses: WebKit keeps decoding a video out of the window. A tab
-    /// shown, in the floating player, playing sound or heard lately (between tracks), muted by the
-    /// user, in a call or used by an agent is left alone, and so is every tab when WebKit can't
-    /// tell sound apart. The page can play it again; the next pass pauses it again.
+    /// While energy saving is on, a background tab's silent media pauses: WebKit keeps decoding a
+    /// video out of the window. Tabs heard lately (between tracks) or muted by the user are spared.
     func pauseSilentMedia() {
         guard energy.isOn else { return }
         let partner = shownPartner
@@ -296,19 +269,14 @@ final class Browser {
         memoryLevel = .normal
     }
 
-    /// The rest of the tab list sleeps now, sparing what any sleep pass spares: the tab shown, a
-    /// tab playing sound, in a call or loading, a popup and its opener, a page with unsaved
-    /// input. Favorites' pages and the Agent group are left alone.
     func sleepOtherTabs(than tab: Tab) {
         sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
     }
 
-    /// Whether Sleep Other Tabs would put any tab to sleep, with sound as last noted.
     func canSleepOtherTabs(than tab: Tab) -> Bool {
         !tabsThatCanSleep(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }.isEmpty
     }
 
-    /// Pages of an extension get that extension's configuration; everything else Lithium's own.
     func makeConfiguration(for url: URL? = nil) -> WKWebViewConfiguration {
         if let configuration = extensions.configuration(for: url) { return configuration }
         let configuration = privacy.makeConfiguration()
@@ -337,8 +305,8 @@ final class Browser {
 
     func openAgentLog() { openInternal(Internal.agentsURL) }
 
-    /// Settings › Agents. Off by default; the choice outlives the app. `folder` holds the endpoint
-    /// file and the log: a test gives its own, so another test's calls can't land in the log it reads.
+    /// `folder` holds the endpoint file and the log: a test gives its own, so another test's calls
+    /// can't land in the log it reads.
     func setAgentAccess(_ enabled: Bool, folder: URL = AgentFiles.folder) async {
         UserDefaults.standard.set(enabled, forKey: Preference.agentAccess)
         if enabled, agent == nil {
@@ -355,28 +323,21 @@ final class Browser {
         guard let tab, let host = Privacy.siteHost(tab.url) else { return }
         let (session, space) = (tab.privateSession, tab.siteSpace)
         guard session != nil || space != nil else { return setProtections(enabled, host: host) }
-        // A private tab's choice holds for its private session only, a separate space's for that
-        // space, and so do the reloads.
+        // A private tab's choice holds for its session only, a separate space's for that space.
         privacy.setEnabled(enabled, for: tab.url, privateSession: session, space: space)
         pages.filter { !$0.isAsleep && $0.privateSession == session && $0.siteSpace == space && Privacy.siteHost($0.url) == host }
             .forEach { navigate($0, .reload) }
     }
 
-    /// Reloads every open page of the site, not just the one the user changed it from, so their
-    /// content blockers and scripts match the new setting. Sleeping tabs get it when they wake.
+    /// Reloads every open page of the site, so their content blockers and scripts match.
     func setProtections(_ enabled: Bool, host: String) {
         privacy.setEnabled(enabled, host: host)
         pages.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
 
-    /// The tabs, and the pages of links' windows (`QuickLinks`), which the menu's page commands
-    /// can change too.
     private var pages: [Tab] { tabs + quickLinks.tabs }
 
-    /// Settings' font choices (the fonts, "Use … on websites", a site's own font) reach the open
-    /// pages they change without a reload: the font script runs again there with the new font, or
-    /// turns itself off. Their next load sets it up from the start. Lithium's own pages are left
-    /// out, and sleeping tabs get it when they wake.
+    /// Applies a font setting to open pages without a reload; sleeping tabs get it when they wake.
     func changePageFont(_ change: () -> Void) {
         let font = { (tab: Tab, url: URL) in
             PageStyle.usesPageFont(url, privateSession: tab.privateSession, space: tab.siteSpace) ? PageStyle.websiteFamily : nil
@@ -394,7 +355,6 @@ final class Browser {
         }
     }
 
-    /// Reuses a tab already showing that internal page, moving it to the requested section.
     private func openInternal(_ url: URL) {
         if let existing = tabs.first(where: { $0.url?.host() == url.host() && Internal.isInternal($0.url) }) {
             if url.fragment() != nil, existing.url != url { navigate(existing, .open(url)) }
@@ -427,7 +387,6 @@ final class Browser {
                 !NativeInput.isAgents(event) && self.ownsEscape(in: event.window) && self.dismissOverlay()
             } ? nil : event
         }
-        // A click only moves focus when it lands on something that takes focus (like the page).
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
         let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
@@ -444,7 +403,6 @@ final class Browser {
         event.charactersIgnoringModifiers == "=" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
     }
 
-    /// Zoom In and Zoom Out: the PDF viewer's own steps, or the page's zoom.
     func zoomSelectedTab(by delta: Double) {
         guard let tab = commandTab else { return }
         if let pdf = tab.pdf {
@@ -455,8 +413,7 @@ final class Browser {
         webView.pageZoom = PageZoom.stepped(webView.pageZoom, by: delta)
     }
 
-    /// Ends text editing when a click lands outside the field being edited. The click then goes
-    /// on as usual; the field commits on its own (a tab rename keeps the new name).
+    /// Ends text editing when a click lands outside the field being edited; the field commits on its own.
     private static func endEditingIfOutside(_ event: NSEvent) {
         guard let window = event.window,
               let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
@@ -467,8 +424,7 @@ final class Browser {
         window.makeFirstResponder(nil)
     }
 
-    /// Whether an Escape in `window` is Lithium's to handle. Not in another window (a save panel)
-    /// or under a sheet (the capture preview), and not while a text field edits (the address bar
+    /// Not in another window or under a sheet, and not while a text field edits (the address bar
     /// ends its editing itself), unless it is the find field or a tab's name, which Escape closes.
     func ownsEscape(in window: NSWindow?) -> Bool {
         guard let window, window.attachedSheet == nil else { return false }
@@ -478,7 +434,6 @@ final class Browser {
         return find.isFieldFocused || isRenaming
     }
 
-    /// Closes the topmost Lithium overlay. Returns false when there was none.
     func dismissOverlay() -> Bool {
         // A link's window has only its find bar: a tab's name editing in the main window stays.
         if quickLinks.keyTab != nil { return closeFindBar() }
@@ -507,7 +462,6 @@ final class Browser {
             permissions.dismiss(request)
             return true
         }
-        // Likewise "Open <App>?", cancelled.
         if agent?.confirmations.front(selected: selectedTabID) == nil,
            let request = appLinks.pending.first(where: { $0.tabID == selectedTabID }) {
             appLinks.answer(request, open: false)
@@ -516,16 +470,14 @@ final class Browser {
         return false
     }
 
-    /// Hands the keyboard back to the page shown once a field of Lithium's own closes (the find
-    /// bar, a tab's name), as ⌘F does: the field leaving would leave it on the window, where keys
-    /// beep. Unless that field had it, a field still editing (the address bar) keeps it.
+    /// Hands the keyboard back to the page once a field of Lithium's own closes: left on the
+    /// window, keys beep. Unless that field had it, a field still editing keeps it.
     func returnKeyboardToPage(fieldHadKeyboard: Bool) {
         guard let page = commandTab?.contentView, let window = page.window else { return }
         if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
 
-    /// Escape: closes the find bar of the window in front, if it has it. Not while the page has
-    /// the keyboard: the Escape is the page's (its menu, its dialog), and the bar stays open.
+    /// Not while the page has the keyboard: the Escape is the page's, and the bar stays open.
     private func closeFindBar() -> Bool {
         guard findBarIsInFront, !(commandTab?.contentView.window?.firstResponder is WKWebView) else { return false }
         let hadKeyboard = find.isFieldFocused
@@ -534,8 +486,7 @@ final class Browser {
         return true
     }
 
-    /// ⌘F. Find acts on the window in front, as the other page commands do (`commandTab`): a
-    /// link's window finds in its own page, and ⌘F there moves the bar from the main window.
+    /// Acts on the window in front (`commandTab`): ⌘F in a link's window moves the bar from the main one.
     func toggleFind() {
         if findBarIsInFront {
             find.hide()
@@ -545,25 +496,21 @@ final class Browser {
         }
     }
 
-    /// ⌘G and ⇧⌘G, which open the bar without taking the keyboard.
     func findStep(forward: Bool) async {
         guard let tab = commandTab else { return }
         find.show(focusingField: false, inLink: quickLinks.keyTab)
         await find.step(forward: forward, in: tab.findTarget)
     }
 
-    /// Whether the find bar shows over `tab`: the window it was opened in keeps it while another
-    /// is in front, so going back to it doesn't search again or take the keyboard. In the main
-    /// window it follows the selected tab (in split view, the focused pane).
+    /// The window the bar was opened in keeps it while another is in front, so going back to it
+    /// doesn't search again or take the keyboard.
     func showsFindBar(over tab: Tab) -> Bool {
         find.isVisible && (find.linkTab ?? selectedTab) === tab
     }
 
-    /// Whether the window in front shows the find bar: ⌘F there hides it rather than moving it.
     var findBarIsInFront: Bool { commandTab.map(showsFindBar(over:)) ?? false }
 
-    /// In Zen mode, Show Sidebar (⌘B, the top bar's button) asks for the sidebar back, which takes
-    /// the window out of Zen mode.
+    /// In Zen mode, asking for the sidebar back takes the window out of Zen mode.
     func toggleSidebar() {
         if isZenMode {
             toggleZenMode()
@@ -583,14 +530,12 @@ final class Browser {
     }
 
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
-    /// The page the menu's page commands (Reload, Back, Print…) act on: a link's own window
-    /// while it is in front, the selected tab otherwise.
+    /// The page the menu's page commands (Reload, Back, Print…) act on.
     var commandTab: Tab? { quickLinks.keyTab ?? selectedTab }
     /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabList(in: currentSpaceID) }
     var agentTabs: [Tab] { agentGroup(in: currentSpaceID) }
-    /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within: the
-    /// Agent group for its tabs, the tab list for the rest, in the tab's space.
+    /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within.
     func peers(of tab: Tab) -> [Tab] {
         tab.isInAgentGroup ? agentGroup(in: tab.spaceID) : tabList(in: tab.spaceID)
     }
@@ -607,8 +552,7 @@ final class Browser {
 
     // MARK: Tabs
 
-    /// `opener` is the tab whose page opened this one (a link, ⌘-click or `window.open`). The tab
-    /// goes in `space`, else its opener's, else the space shown.
+    /// `opener` is the tab whose page opened this one (a link, ⌘-click or `window.open`).
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil, space: Space.ID? = nil) -> Tab {
         let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore, space: space ?? opener?.spaceID ?? currentSpaceID)
@@ -618,13 +562,11 @@ final class Browser {
         return tab
     }
 
-    /// A link from another app (`onOpenURL`): in a small window of its own when Settings says so,
-    /// leaving the tab list alone; in a new tab otherwise. Either way in the space shown.
+    /// A link from another app: in a small window of its own when Settings says so, else a new tab.
     func openFromOtherApp(_ url: URL) {
         if quickLinks.isEnabled, QuickLinks.takes(url) { quickLinks.open(url) } else { newTab(url: url) }
     }
 
-    /// A page made outside the tab list (a link's own window) joins its space's at the top, selected.
     func adopt(_ tab: Tab) {
         tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs, space: tab.spaceID))
         extensions.didOpen(tab)
@@ -632,8 +574,6 @@ final class Browser {
     }
 
     /// `index` is a place in the space's tab list (in `folder`, or outside folders), clamped to it.
-    /// `tabs` also holds favorites' pages and other spaces' tabs, so the new tab goes just before
-    /// the one it pushes down.
     private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID, folder: TabFolder.ID? = nil) -> Tab {
         let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore, space: space)
         tab.folderID = folder
@@ -648,9 +588,7 @@ final class Browser {
     }
 
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
-    /// stay as they were. Agents open only web pages, which load in Lithium's own configuration.
-    /// With `privateStore` the tab is private (`Tab.privateStore`). In the space shown, unless
-    /// opened from a page of another.
+    /// stay as they were.
     func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, space: Space.ID? = nil) -> Tab {
         let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore, space: space ?? currentSpaceID)
         tab.openedByAgent = session
@@ -659,8 +597,7 @@ final class Browser {
         return tab
     }
 
-    /// Dragged or moved by the user into the tab list, a tab the agent opened becomes theirs:
-    /// at `index` in the list, or at its end, just above the Agent group it leaves.
+    /// Moved by the user into the tab list, a tab the agent opened becomes theirs.
     func keep(_ tab: Tab, at index: Int? = nil) {
         guard tab.isInAgentGroup, let from = tabs.firstIndex(where: { $0 === tab }) else { return }
         extensions.moving(tab) {
@@ -680,10 +617,8 @@ final class Browser {
         case agentGroup
     }
 
-    /// A tab from the Agent group dropped on the tab list joins it there, and one from a folder
-    /// leaves it for that place. Dropped on a folder, a tab goes in, or moves within it. The tab
-    /// list outside folders has no drag order of its own: a tab already there stays, as one
-    /// dropped among the Agent group does.
+    /// The tab list outside folders has no drag order of its own: a tab already there stays, as
+    /// one dropped among the Agent group does.
     func dropTab(_ items: [String], on target: TabDropTarget) -> Bool {
         endTabDrag()
         guard let tab = (regularTabs + agentTabs).first(where: { $0.id.uuidString == items.first }) else { return false }
@@ -700,9 +635,8 @@ final class Browser {
         return true
     }
 
-    /// Into a folder of its space, or out of folders with nil: before the tab at `index` of that
-    /// folder (or of the tabs outside folders), at its end without one. An agent's tab becomes
-    /// the user's, as with `keep`; a split's other side comes along, so the pair stays one row.
+    /// Into a folder of its space, or out of folders with nil. A split's other side comes along,
+    /// so the pair stays one row.
     func moveTab(_ tab: Tab, toFolder folder: TabFolder.ID?, at index: Int? = nil) {
         guard tab.pinID == nil, folder.map({ folderExists($0, in: tab.spaceID) }) ?? true else { return }
         let partner = split(of: tab)?.partner(of: tab.id).flatMap { id in tabs.first { $0.id == id } }
@@ -714,8 +648,7 @@ final class Browser {
         place(moving, inFolder: folder, before: anchor)
     }
 
-    /// Its tabs close (Reopen Closed Tab brings them back), or stay, at the top of the tabs
-    /// outside folders, where the folder was. Either way the selection stays put when it can.
+    /// Its tabs close, or stay at the top of the tabs outside folders, where the folder was.
     func deleteFolder(_ id: TabFolder.ID, closingTabs: Bool) {
         let members = tabs.filter { $0.folderID == id && $0.isInTabList }
         if closingTabs, let selected = selectedTab, members.contains(where: { $0 === selected }) {
@@ -735,7 +668,6 @@ final class Browser {
         removeFolder(id)
     }
 
-    /// Moves `moving` into `folder` (nil: out of folders), just before `anchor`, or at the end.
     private func place(_ moving: [Tab], inFolder folder: TabFolder.ID?, before anchor: Tab?) {
         reportingMoves(of: moving[...]) {
             var reordered = tabs.filter { listed in !moving.contains { $0 === listed } }
@@ -774,7 +706,6 @@ final class Browser {
         open(input, in: selectedTab)
     }
 
-    /// Into `tab`, brought to the front if it no longer is; a new tab when nil.
     private func open(_ input: String, in tab: Tab?) {
         guard let url = AddressInput.url(for: input) else { return }
         open(url, in: tab)
@@ -793,9 +724,8 @@ final class Browser {
 
     enum Step { case open(URL), back, forward, reload, stop }
 
-    /// Every navigation the user asks of an open tab (the address bar, Back, Forward, Reload and
-    /// Stop, a reload after a change to the site's settings or data): it wins over an agent
-    /// waiting on that tab. What Lithium or an extension does on its own doesn't come here.
+    /// Every navigation the user asks of an open tab: it wins over an agent waiting on that tab.
+    /// What Lithium or an extension does on its own doesn't come here.
     func navigate(_ tab: Tab?, _ step: Step) {
         guard let tab else { return }
         // Back or Forward with nowhere to go does nothing: an agent waiting on the tab goes on.
@@ -815,8 +745,8 @@ final class Browser {
 
     func addressTextChanged(_ text: String) {
         let edited = suggestions.editedTabID.flatMap { id in tabs.first { $0.id == id } }
-        // A space keeping its cookies apart shows only its own tabs and favorites, and its own
-        // stay out of the others: their titles and addresses are another identity's.
+        // A space keeping its cookies apart is kept out of the others' suggestions, and they out of
+        // its: their titles and addresses are another identity's.
         let (current, apart) = (currentSpaceID, Set(spaces.filter(\.separatesData).map(\.id)))
         let shown = { (space: Space.ID) in space == current || !apart.contains(space) && !apart.contains(current) }
         suggestions.update(query: text, tabs: tabs.filter { shown($0.spaceID) }, pins: pins.filter { shown($0.space) }, history: history, actions: barActions(for: edited))
@@ -826,9 +756,8 @@ final class Browser {
         submitAddress(text, editing: selectedTabID)
     }
 
-    /// Return in the address bar: the highlighted suggestion, or the typed text as is. It goes to
-    /// `tabID`, the tab shown when editing began, even if the selection moved on its own since (a
-    /// download-only tab closing hands it back to its opener); to a new tab once that one is gone.
+    /// Goes to `tabID`, the tab shown when editing began, even if the selection moved on its own
+    /// since; to a new tab once that one is gone.
     func submitAddress(_ text: String, editing tabID: Tab.ID?) {
         let tab = tabID.flatMap { id in tabs.first { $0.id == id } }
         if let suggestion = suggestions.selected, suggestions.selectedIndex > 0 {
@@ -866,7 +795,6 @@ final class Browser {
             shownPartner?.markActive()
             recentTabs.didShow(tab, after: previous)
         }
-        // A tab of another space (a suggestion, a link's own window moved in) brings its space.
         if tab.spaceID != currentSpaceID, spaces.contains(where: { $0.id == tab.spaceID }) { enterSpace(tab.spaceID) }
         selectedTabID = tab.id
         tab.markActive()
@@ -876,11 +804,8 @@ final class Browser {
         extensions.didSelect(tab)
     }
 
-    /// The selection falls back on the tab's group, never on a favorite: the tab below the
-    /// closed one (above, at the bottom). Once the Agent group is empty it falls on the bottom of
-    /// the tab list, just above, and once the list is empty on the start page. Closing a
-    /// favorite's page selects the top of the list. A tab the user went to straight from the one
-    /// that opened it, and left for no other, goes back to its opener instead.
+    /// The selection falls back on the tab's group, never on a favorite. A tab the user went to
+    /// straight from its opener, and left for no other, goes back to its opener instead.
     func close(_ tab: Tab) {
         close(tab, remembering: true)
     }
@@ -902,14 +827,12 @@ final class Browser {
             closedTabs.append(closed)
             if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
         }
-        // In split view the other side fills the window.
         let partner = leaveSplit(tab)
         let wasSelected = tab.id == selectedTabID
         if wasSelected {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
-            // In split view the partner wins: it is already on screen.
             selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
                 : remaining[min(position, remaining.count - 1)].id)
             // The tab shown next may be asleep.
@@ -933,8 +856,7 @@ final class Browser {
         dropPrivateData(of: tab)
     }
 
-    /// The last open tab of a private store gone, its cookies and storage go at once, rather
-    /// than whenever WebKit frees the store, and so do its permission answers and site settings.
+    /// Once a private store's last tab is gone, its data goes at once, not whenever WebKit frees it.
     private func dropPrivateData(of tab: Tab) {
         guard let store = tab.privateStore, !tabs.contains(where: { $0.privateStore === store }) else { return }
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
@@ -947,9 +869,8 @@ final class Browser {
         if let tab = selectedTab { close(tab) }
     }
 
-    /// ⌘W, which the menu sends whichever window is key: the selected tab only when that is the
-    /// browser's window. Another one in front (a detached Web Inspector, a sheet) closes instead.
-    /// A video in full screen is in WebKit's own window, holding the page: that is the tab's too.
+    /// ⌘W closes the selected tab only when the browser's window is key; another window closes
+    /// instead. A full-screen video is in WebKit's own window, which counts as the tab's.
     func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
         guard let keyWindow else { return }
         let page = selectedTab?.loadedWebView
@@ -958,8 +879,7 @@ final class Browser {
         if window == nil || keyWindow === window || isTabs { closeSelectedTab() } else { keyWindow.performClose(nil) }
     }
 
-    /// The others of its group: favorites' pages stay open, as Chrome keeps pinned tabs, and so
-    /// does the Agent group for a tab of the list, or the list for an agent's tab. Tabs close
+    /// The others of its group; favorites' pages stay, as Chrome keeps pinned tabs. Tabs close
     /// bottom up, so ⇧⌘T brings them back top down, each where it was.
     func closeOtherTabs(than tab: Tab) {
         select(tab, picked: false)
@@ -973,7 +893,6 @@ final class Browser {
         below.reversed().forEach(close)
     }
 
-    /// Below it in its group.
     func tabs(below tab: Tab) -> ArraySlice<Tab> {
         let list = peers(of: tab)
         guard let index = list.firstIndex(where: { $0 === tab }) else { return [] }
@@ -987,7 +906,6 @@ final class Browser {
         above.reversed().forEach(close)
     }
 
-    /// Above it in its group.
     func tabs(above tab: Tab) -> ArraySlice<Tab> {
         let list = peers(of: tab)
         guard let index = list.firstIndex(where: { $0 === tab }) else { return [] }
@@ -997,8 +915,7 @@ final class Browser {
     var canReopenClosedTab: Bool { !closedTabs.isEmpty }
 
     /// Like Chrome: back in its place, with its history. A favorite's page goes back to its
-    /// favorite if that has no page open, or else to the top of the list. In its own space,
-    /// which comes back with it, and its folder; at the top of the list if that is gone.
+    /// favorite if that has no page open, or else to the top of the list.
     func reopenClosedTab() {
         guard let closed = closedTabs.popLast() else { return }
         let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
@@ -1011,9 +928,7 @@ final class Browser {
         select(tab)
     }
 
-    /// Just below the original, with its history and name, in its folder; a favorite's page has
-    /// its copy at the top of the list. The copy is never a favorite, nor an agent's: an agent's
-    /// tab has its copy at the bottom of the list, next to it.
+    /// Just below the original, with its history and name. The copy is never a favorite, nor an agent's.
     func duplicate(_ tab: Tab) {
         guard let url = tab.url else { return }
         let list = tabList(in: tab.spaceID, folder: tab.folderID)
@@ -1029,7 +944,6 @@ final class Browser {
         copyLinks(of: tab.map { [$0] } ?? [])
     }
 
-    /// One address per line, in the order given; tabs without one are skipped.
     func copyLinks(of tabs: [Tab]) {
         let links = Self.links(of: tabs)
         guard !links.isEmpty else { return }
@@ -1041,9 +955,8 @@ final class Browser {
         tabs.compactMap { $0.url?.absoluteString }.joined(separator: "\n")
     }
 
-    /// Empty or whitespace-only names give the tab back its page title. A tab without a name of
-    /// its own keeps none when left with the title its field `shown` (a double-click, then a click
-    /// away): that would freeze the page's title on it.
+    /// A tab without a name of its own keeps none when left with the title its field `shown`:
+    /// that would freeze the page's title on it.
     func rename(_ tab: Tab, to name: String, shown: String? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if tab.customTitle != nil || trimmed != shown?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -1056,17 +969,14 @@ final class Browser {
         addressFocusToken &+= 1
     }
 
-    /// Live favorites first (in grid order), then the tab list and the Agent group, which is how
-    /// the sidebar reads top to bottom; space after space. Extensions and agents see every space.
+    /// The sidebar's order, top to bottom, space after space. Extensions and agents see every space.
     var navigationOrder: [Tab] {
         spaces.isEmpty ? navigationOrder(in: Space.mainID) : spaces.flatMap { navigationOrder(in: $0.id) }
     }
 
-    /// Next Tab and Previous Tab stay in the space shown, as the sidebar does.
     func selectAdjacentTab(_ offset: Int) {
         let order = navigationOrder(in: currentSpaceID)
         guard !order.isEmpty else { return }
-        // From the start page, forward starts at the first item and backward at the last.
         guard let current = order.firstIndex(where: { $0.id == selectedTabID }) else {
             select(offset > 0 ? order[0] : order[order.count - 1])
             return
@@ -1074,9 +984,8 @@ final class Browser {
         select(order[(current + offset + order.count) % order.count])
     }
 
-    /// Control-Tab and Control-Shift-Tab: through the tabs in the order they were last shown, as
-    /// long as Control is held, and to the highlighted one when it is let go. Without Control held
-    /// (the menu clicked), one step and done.
+    /// Through the tabs in the order last shown while Control is held; without it (the menu
+    /// clicked), one step and done.
     func cycleRecentTabs(backward: Bool, holdingControl: Bool = NSEvent.modifierFlags.contains(.control)) {
         recentTabs.step(backward: backward, among: navigationOrder(in: currentSpaceID), current: selectedTab)
         if holdingControl {
@@ -1091,9 +1000,8 @@ final class Browser {
         select(tab)
     }
 
-    /// ⌘1…⌘9 walk the favorites grid, then the rows of the tab list and the Agent group, as the
-    /// sidebar shows them: a split pair is one row, and its number shows the pair. Folder headers
-    /// and the tabs of a collapsed folder have none.
+    /// ⌘1…⌘9 walk the favorites grid, then the rows as the sidebar shows them: a split pair is
+    /// one row. Folder headers and the tabs of a collapsed folder have none.
     func selectItem(at index: Int) {
         let rows = tabListRows.compactMap(\.entry?.tab) + agentTabs
         let pins = spacePins
@@ -1163,13 +1071,11 @@ final class Browser {
         }
     }
 
-    /// The main space comes first, whatever the file says. A favorite of a space no longer saved
-    /// (a session file that couldn't be read) goes back to the main space rather than vanish.
+    /// A favorite of a space no longer saved goes back to the main space rather than vanish.
     private func restoreSpaces(_ session: Session) {
         if let saved = session.spaces, !saved.isEmpty {
             let main = saved.first { $0.id == Space.mainID } ?? .main
-            // No build saves more than `Space.limit`: an edited file's extra spaces are left out,
-            // and their tabs and favorites go back to the main space, as an unknown space's do.
+            // An edited file's spaces past `Space.limit` are left out; their tabs go to the main space.
             spaces = Array(([main] + saved.filter { $0.id != Space.mainID }).prefix(Space.limit))
             if let id = session.spaceID, spaces.contains(where: { $0.id == id }) { currentSpaceID = id }
         }
@@ -1183,9 +1089,8 @@ final class Browser {
         }
     }
 
-    /// Writes the session now, and again a moment after a tab it describes changes: a page that
-    /// retitles itself (an unread count, a clock) costs one write a second at most. Nothing runs
-    /// while nothing changes.
+    /// Writes the session now, and again a moment after it changes: a page that retitles itself
+    /// (an unread count, a clock) costs one write a second at most.
     private func saveSession() {
         sessionSave?.cancel()
         sessionSave = nil
@@ -1193,8 +1098,7 @@ final class Browser {
             Task { @MainActor in self?.sessionChanged() }
         }
         guard session != savedSession else { return }
-        // A failed write (a full disk) leaves the old file: the next save, the one at quit
-        // included, tries again rather than taking it as written.
+        // A failed write leaves the old file: the next save tries again rather than taking it as written.
         if SessionStore.save(session) { savedSession = session }
     }
 
@@ -1209,22 +1113,19 @@ final class Browser {
 
     static let sessionSaveDelay = Duration.seconds(1)
 
-    /// What waits to be written, at once: when the app quits.
     func saveNow() {
         saveSession()
         history.writeTitles()
     }
 
-    /// "Clear history": the visits, their icons, and the closed tabs ⇧⌘T would bring back with
-    /// their back and forward lists.
+    /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists.
     func clearHistory() async {
         await history.clear()
         await clearIcons()
         closedTabs.removeAll()
     }
 
-    /// With the history cleared, the icons kept for the sites in it; favorites and open tabs
-    /// keep theirs. A private tab's host doesn't count: keeping it would keep an earlier visit.
+    /// A private tab's host doesn't count: keeping its icon would keep an earlier visit.
     func clearIcons() async {
         let hosts = pins.map(\.url) + tabs.filter { !$0.isEphemeral }.compactMap(\.url)
         await favicons.clear(keeping: Set(hosts.compactMap { $0.host() }))
@@ -1232,14 +1133,11 @@ final class Browser {
 
     // MARK: Spaces
 
-    /// Every store that holds the user's (non-private) site data: the default one, and those of
-    /// the spaces that keep theirs apart.
     var siteDataStores: [WKWebsiteDataStore] {
         [.default()] + spaces.filter(\.separatesData).compactMap { spaceStore(for: $0.id) }
     }
 
-    /// The store of a space that keeps its data apart, made on first use and kept while the space
-    /// is. Nil for the main space and those sharing its data, whose tabs use the default store.
+    /// Nil for the main space and those sharing its data, whose tabs use the default store.
     func spaceStore(for id: Space.ID) -> WKWebsiteDataStore? {
         guard id != Space.mainID, spaces.contains(where: { $0.id == id && $0.separatesData }) else { return nil }
         if let store = spaceStores[id] { return store }
@@ -1248,7 +1146,6 @@ final class Browser {
         return store
     }
 
-    /// Made and shown, empty, with the keyboard in the address bar to go somewhere.
     func addSpace(_ space: Space) {
         guard canAddSpace, !allSpaces.contains(where: { $0.id == space.id }) else { return }
         var space = space
@@ -1260,7 +1157,6 @@ final class Browser {
         if space.separatesData { storeCleanup = Task { await removeUnusedStores() } }
     }
 
-    /// Its name, color and icon. Whether it keeps its data apart stays as chosen.
     func updateSpace(_ space: Space) {
         guard let index = spaces.firstIndex(where: { $0.id == space.id }) else { return }
         var updated = space
@@ -1269,9 +1165,8 @@ final class Browser {
         if updated != spaces[index] { spaces[index] = updated }
     }
 
-    /// Back to the tab last shown in the space, or to the start page. An edit in the address bar
-    /// or a tab's name ends first: its field would be left editing a tab no longer shown. Not a
-    /// pick (`tabPickToken`): a peeked sidebar stays out on the space switched to.
+    /// An edit in the address bar or a tab's name ends first: its field would be left editing a
+    /// tab no longer shown. Not a pick (`tabPickToken`).
     func switchToSpace(_ id: Space.ID) {
         guard id != currentSpaceID, spaces.contains(where: { $0.id == id }) else { return }
         if isEditingAddress || isRenaming { window?.makeFirstResponder(nil) }
@@ -1293,8 +1188,6 @@ final class Browser {
         currentSpaceID = id
     }
 
-    /// Its tabs close, kept out of Reopen Closed Tab, and its favorites go; then its store, when
-    /// it has one. The window moves to the space before it first.
     func deleteSpace(_ id: Space.ID) {
         guard id != Space.mainID, let index = spaces.firstIndex(where: { $0.id == id }) else { return }
         let space = spaces[index]
@@ -1316,9 +1209,8 @@ final class Browser {
         }
     }
 
-    /// Its cookies, logins and storage go at once, even while WebKit still holds the store; its
-    /// folder goes with any other no space uses once WebKit lets go: it refuses while a web view
-    /// of the store lives. One still held now goes when the next space with its own data is made.
+    /// Its data goes at once; its folder only once WebKit lets go, which it refuses while a web
+    /// view of the store lives. One still held goes when the next space with its own data is made.
     private func removeStore(of id: Space.ID) {
         let store = spaceStores.removeValue(forKey: id) ?? WKWebsiteDataStore(forIdentifier: id)
         storeCleanup = Task {
@@ -1327,7 +1219,6 @@ final class Browser {
         }
     }
 
-    /// The stores on disk no space keeps its data in.
     private func removeUnusedStores() async {
         let kept = Set(spaces.filter(\.separatesData).map(\.id))
         for id in await WKWebsiteDataStore.allDataStoreIdentifiers where !kept.contains(id) {
@@ -1355,8 +1246,7 @@ final class Browser {
         return grid.last.flatMap { last in pins.firstIndex { $0.id == last.id } }.map { $0 + 1 } ?? pins.count
     }
 
-    /// Without an index the favorite goes at the end of its space's grid; with one it takes that
-    /// slot. A private tab can't be pinned: a favorite is saved, with its address and icon.
+    /// A private tab can't be pinned: a favorite is saved, with its address and icon.
     func pin(_ tab: Tab, at index: Int? = nil) {
         guard tab.pinID == nil, !tab.isEphemeral, let url = tab.url else { return }
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData, spaceID: Space.saved(tab.spaceID))
@@ -1376,9 +1266,8 @@ final class Browser {
         if let tab = tabs.first(where: { $0.id.uuidString == id }) { pin(tab, at: index) }
     }
 
-    /// Moves a favorite into the slot at `index`, the others shifting around it, as on a home screen.
-    /// Built on a copy so `pins` is saved once, never without the moving favorite.
-    /// `index` is a slot of the favorite's own space's grid.
+    /// `index` is a slot of the favorite's own space's grid. Built on a copy so `pins` is saved
+    /// once, never without the moving favorite.
     func movePin(id: UUID, to index: Int) {
         guard let from = pins.firstIndex(where: { $0.id == id }) else { return }
         let space = pins[from].space
@@ -1411,9 +1300,8 @@ final class Browser {
         storeIcon(data, from: nil, inPinAt: index)
     }
 
-    /// Saved once, and only when something changed. `url` is where the page said its icon is;
-    /// only an http(s) one is kept, the only kind fetched again later: a `data:` icon the page
-    /// redraws would otherwise rewrite the favorites at each new address, pixels unchanged.
+    /// Only an http(s) `url` is kept: a `data:` icon the page redraws would otherwise rewrite the
+    /// favorites at each new address, pixels unchanged.
     private func storeIcon(_ data: Data, from url: URL?, inPinAt index: Int) {
         var pin = pins[index]
         pin.favicon = data
@@ -1423,16 +1311,14 @@ final class Browser {
         pins[index] = pin
     }
 
-    /// The icon a pinned tab's page last named, for the tab to fetch when it wakes.
     func savedIconURL(of tab: Tab) -> URL? {
         guard let pin = pins.first(where: { $0.id == tab.pinID }), pin.url.host() == tab.url?.host(),
               let url = pin.iconURL, ["http", "https"].contains(url.scheme?.lowercased()) else { return nil }
         return url
     }
 
-    /// The pinned page's icon, fetched afresh from where it says it is. A fetch that outlasts
-    /// the page's site, the pin or the icon (a later one may come back first) isn't theirs; nor
-    /// one named just before the page's count came in, likely the copy with the count drawn in.
+    /// A fetch that outlasts the page's site, the pin or the icon isn't theirs; nor one named just
+    /// before the page's count came in, likely the copy with the count drawn in.
     func refreshIcon(of tab: Tab, from url: URL) async {
         guard let pinID = tab.pinID, let host = tab.url?.host(),
               let data = await favicons.refresh(host: host, from: url, keeping: { tab.unread.shown == nil }),
@@ -1444,8 +1330,7 @@ final class Browser {
     }
 
     /// A sleeping tab runs no script, so at each new day the icon its page last named is fetched
-    /// once more for each favorite asleep or without a page; it stays asleep. Favorites whose
-    /// page never named one are left alone.
+    /// once more for each favorite asleep or without a page; it stays asleep.
     private func refreshSleepingPinIcons() {
         let due = pins.compactMap { pin -> (Pin.ID, URL)? in
             guard liveTab(for: pin)?.isAsleep != false, let url = pin.iconURL,

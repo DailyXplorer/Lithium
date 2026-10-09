@@ -3,13 +3,9 @@ import UniformTypeIdentifiers
 import WebKit
 
 /// Lithium's own pages (`lithium://settings`, `lithium://history`), served from the app bundle.
-///
-/// Safety rules, since these pages can change settings:
-/// - Only the user or the app can open one (see `Tab`'s navigation policy); web pages cannot.
-/// - Files are served only to documents that are themselves `lithium://` pages, so a website
-///   cannot probe for Lithium by loading its resources.
-/// - The message bridge exists only while a tab shows a `lithium://` page, and it answers
-///   main-frame messages from a `lithium://` origin only.
+/// Since they can change settings: only the user or the app can open one (see `Tab`'s navigation
+/// policy); files are served only to `lithium://` documents, so a website cannot probe for Lithium;
+/// the message bridge exists only while a tab shows one, and answers its main frame only.
 enum Internal {
     static let scheme = "lithium"
     static let settingsURL = URL(string: "lithium://settings")!
@@ -55,15 +51,13 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         respond(task, url: url, data: data, fileExtension: fileExtension)
     }
 
-    /// Types the system doesn't name.
     private static let mimeTypes = ["woff2": "font/woff2"]
 
     private func respond(_ task: any WKURLSchemeTask, url: URL, data: Data, fileExtension: String) {
         let type = Self.mimeTypes[fileExtension] ?? UTType(filenameExtension: fileExtension)?.preferredMIMEType ?? "application/octet-stream"
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
             "Content-Type": type,
-            // Pages share files across lithium:// hosts; masks and fonts are fetched with CORS.
-            // Only lithium:// documents get here (checked above).
+            // Masks and fonts are fetched with CORS across lithium:// hosts; only lithium:// documents get here.
             "Access-Control-Allow-Origin": "*",
             "Content-Security-Policy": "default-src lithium:; style-src lithium: 'unsafe-inline'; script-src lithium: 'unsafe-inline'; img-src lithium: data:",
         ])!
@@ -95,16 +89,14 @@ final class InternalSchemeHandler: NSObject, WKURLSchemeHandler {
         return (data, file.pathExtension)
     }
 
-    /// Lithium's own pages are its interface: they take the interface font, DM Sans behind it.
-    /// Nothing for DM Sans, which the style sheet already names.
+    /// The interface font for Lithium's pages; nothing for DM Sans, which the style sheet already names.
     static func interfaceFontCSS(_ family: String?) -> String {
         guard let family else { return "" }
         return #"body { font-family: "\#(family.replacingOccurrences(of: "\"", with: ""))", "DM Sans", -apple-system, sans-serif; }"#
     }
 }
 
-/// The internal pages' line to the app. Settings calls return the full settings state;
-/// history calls return the matching visits.
+/// The internal pages' line to the app. Settings calls return the full settings state.
 @MainActor
 final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "lithium"
@@ -173,14 +165,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "fonts":
             return (FontChoice.families(), nil)
         case "setInterfaceFont":
-            // Websites that follow the interface font change with it.
             browser.changePageFont { FontChoice.shared.setInterface(value as? String) }
         case "setWebsiteFamily":
             browser.changePageFont { FontChoice.shared.setWebsite(value as? String) }
         case "setReaderButton":
             browser.setReaderButton(value as? Bool ?? true)
         case "setSiteFont":
-            // Typed in by the user: a bare domain, or anything with one in it.
             guard let entry = value as? [String: Any], let text = entry["site"] as? String,
                   let host = Self.siteFontHost(text) else { return (nil, "No site") }
             browser.changePageFont { PageStyle.setKeepsSiteFont(entry["keep"] as? Bool ?? true, for: host) }
@@ -296,7 +286,6 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         return host
     }
 
-    /// A "#RRGGBB" color from a page, uppercased; nil for anything else.
     private static func hex(_ value: Any?) -> String? {
         guard let hex = value as? String, hex.range(of: "^#[0-9A-Fa-f]{6}$", options: .regularExpression) != nil else { return nil }
         return hex.uppercased()
@@ -340,11 +329,9 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    /// Every settings action answers with the whole state, many a second while a color is dragged:
-    /// what can't change meanwhile is read once. The WebKit Lithium runs is the one it launched
-    /// with, whatever Safari update comes after.
+    /// Read once: the state is sent many times a second while a color is dragged, and the WebKit
+    /// Lithium runs is the one it launched with, whatever Safari update comes after.
     private static let safariVersion = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")?["CFBundleShortVersionString"] as? String ?? ""
-    /// Extension icons as PNG data URLs, by extension and version.
     private var icons: [String: String] = [:]
 
     private func icon(of entry: InstalledExtension, context: WKWebExtensionContext?) -> String {

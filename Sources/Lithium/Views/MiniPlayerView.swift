@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The bottom of the sidebar: what the last tab heard plays, with its controls. Clicking the
-/// picture or the title goes to the tab.
+/// The bottom of the sidebar: what the last tab heard plays, with its controls.
 struct MiniPlayer: View {
     let nowPlaying: NowPlaying
     let tab: Tab
@@ -73,7 +72,6 @@ private struct Artwork: View {
     }
 }
 
-/// A thin bar between the time played and the length; a live stream has neither.
 private struct Progress: View {
     let media: NowPlaying.Media
     let time: Double

@@ -5,13 +5,12 @@ import Observation
 struct AgentConfirmation: Identifiable, Equatable {
     let id = UUID()
     let kind: ConfirmationKind
-    /// The session that asked, by its `Mcp-Session-Id`, its label and its self-reported name.
+    /// The `Mcp-Session-Id` that asked.
     let session: String
     let sessionLabel: String
     let client: String
     /// The tab it is about; nil for a tab not open yet (`tab_open` of a file).
     let tabID: Tab.ID?
-    /// What the user is asked to allow, as the banner says it: "open notes.html".
     let action: String
     /// The registrable domain a site grant covers; nil for a `file:` address, which has none.
     let site: String?
@@ -35,9 +34,8 @@ enum ConfirmationAnswer: Equatable {
     case cancelled
 }
 
-/// The prompts waiting for the user and the site grants given, in memory only: grants end with
-/// their session, on Stop, and when Lithium quits. One banner per tab at a time; the rest wait
-/// their turn. Modeled on `SitePermissions`, but nothing here is remembered.
+/// Pending prompts and site grants, in memory only: grants end with their session, on Stop, and
+/// when Lithium quits.
 @MainActor
 @Observable
 final class AgentConfirmations {
@@ -46,7 +44,6 @@ final class AgentConfirmations {
 
     private(set) var pending: [AgentConfirmation] = []
     private(set) var grants: [AgentGrant] = []
-    /// Answers given, until the wait on each takes it.
     private(set) var answers: [AgentConfirmation.ID: ConfirmationAnswer] = [:]
 
     func grant(for kind: ConfirmationKind, site: String?, session: String) -> AgentGrant? {
@@ -69,7 +66,6 @@ final class AgentConfirmations {
         }
     }
 
-    /// The wait on it is over, answered or not.
     func finish(_ id: AgentConfirmation.ID) {
         pending.removeAll { $0.id == id }
         answers[id] = nil
@@ -79,7 +75,6 @@ final class AgentConfirmations {
         pending.filter { $0.tabID == tab }.forEach { answer($0.id, .cancelled) }
     }
 
-    /// The session ended (Stop, disconnect, access off): its grants go, its prompts are cancelled.
     func end(session: String) {
         grants.removeAll { $0.session == session }
         pending.filter { $0.session == session }.forEach { answer($0.id, .cancelled) }
@@ -99,7 +94,6 @@ final class AgentConfirmations {
     }
 }
 
-/// How an action was allowed: once, or by a site grant.
 enum ConfirmationGrant: String {
     case once, site
 }
@@ -111,11 +105,8 @@ enum AgentOpenPanel: Equatable {
 }
 
 extension AgentHub {
-    /// Asks the user to allow `action`, unless the session's grant for the site covers it, and
-    /// waits for the answer within `deadline` and `AgentConfirmations.timeout`. Deny is
-    /// `denied_by_user`, no answer `confirmation_timeout`; the tab closing, the user navigating it,
-    /// Stop and the session ending end the wait as they end any other. Every prompt and its
-    /// answer goes in the log; `isPrivate` says a tab not open yet will be private.
+    /// Asks the user to allow `action` unless a site grant covers it, and waits for the answer.
+    /// `isPrivate` says a tab not open yet will be private.
     func confirm(_ kind: ConfirmationKind, _ action: String, subject: String, site: String?, in named: NamedTab?, isPrivate: Bool = false, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
         let started = Date()
         var logged: (answer: String, grant: ConfirmationGrant?) = ("cancelled", nil)
@@ -123,7 +114,6 @@ extension AgentHub {
             let entry = confirmationEntry(kind, subject: subject, site: site, tab: named?.id, isPrivate: isPrivate || named?.tab.isEphemeral == true, session: session, answer: logged, waited: Date().timeIntervalSince(started))
             Task { await self.log.append(entry, at: started) }
         }
-        // Stop, or the session ending, refuses whatever it would still ask.
         guard sessions.contains(where: { $0.id == session.id }) else {
             logged.answer = "agent_stopped"
             throw AgentToolError(code: "agent_stopped", message: "This agent session has ended.")
@@ -192,9 +182,7 @@ extension AgentHub {
         return entry
     }
 
-    /// `file:` addresses ask each time; other addresses agents may open go through, and the
-    /// rest are `blocked_page`. `named` is the tab the address loads in, nil for a tab not open
-    /// yet, which `isPrivate` says will be private.
+    /// `file:` addresses ask each time. `named` is nil for a tab not open yet.
     func checkOpenable(_ url: URL, in named: NamedTab?, isPrivate: Bool = false, session: MCPSession? = AgentHub.callSession, until deadline: ContinuousClock.Instant) async throws {
         try checkNotBlocked(url)
         guard AgentURLs.verdict(for: url) == .needsConfirmation else { return }
@@ -209,10 +197,8 @@ extension AgentHub {
 
     // MARK: Downloads
 
-    /// Hooked from `Tab` before a download starts. One the agent started (its navigation still
-    /// under way, and from PR 5 its input, for a session still connected) waits for the user's
-    /// Allow: true to download, false to cancel. Nil: not the agent's, so Lithium goes on as for
-    /// the user's own. The call that started it, if it still waits, learns the answer.
+    /// Hooked from `Tab` before a download starts: true to download, false to cancel, nil when
+    /// the agent didn't start it.
     func confirmDownload(in tab: Tab, fileName: String?, size: Int64?, from url: URL?) async -> Bool? {
         guard let state = tabs[tab.id], let drive = drive(of: tab) else { return nil }
         let named = NamedTab(tab: tab, id: id(for: tab))
@@ -236,8 +222,8 @@ extension AgentHub {
 
     // MARK: Uploads
 
-    /// Asks the user to let the page have `files` (design section 5.4) and arms the tab's file
-    /// chooser with them, for one use within 5 seconds. `upload_files` (PR 5) clicks the input next.
+    /// Asks the user to let the page have `files` and arms the tab's file chooser with them, for
+    /// one use within 5 seconds.
     func confirmUpload(_ files: [URL], in named: NamedTab, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> ConfirmationGrant {
         guard !files.isEmpty else { throw Arguments.invalid("paths must name at least one file.") }
         var described: [String] = []
@@ -266,10 +252,8 @@ extension AgentHub {
         return grant
     }
 
-    /// Hooked from `Tab.runOpenPanelWith`. Files the user allowed for the agent answer it once,
-    /// within 5 seconds of the Allow. A chooser the agent's own action opened without them is
-    /// cancelled and noted, never shown: an agent can't use the user's panel. Nil: the user's
-    /// chooser, shown as before.
+    /// Hooked from `Tab.runOpenPanelWith`. A chooser the agent opened without armed files is
+    /// cancelled, never shown: an agent can't use the user's panel. Nil: the user's own chooser.
     func openPanel(for tab: Tab) -> AgentOpenPanel? {
         guard let state = tabs[tab.id] else { return nil }
         if let armed = state.armedUpload {

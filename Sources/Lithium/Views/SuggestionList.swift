@@ -16,14 +16,12 @@ struct SuggestionList: View {
             ForEach(Array(suggestions.items.enumerated()), id: \.element.id) { index, suggestion in
                 SuggestionRow(suggestion: suggestion, isSelected: index == suggestions.selectedIndex)
                     .contentShape(Rectangle())
-                    // Every move, not only on entering: a row that came up under the pointer is
-                    // picked once the pointer moves within it.
+                    // Every move, not only on entering: a row may come up under a still pointer.
                     .onContinuousHover { if case .active = $0 { suggestions.hover(suggestion) } }
                     .onTapGesture { browser.accept(suggestion) }
             }
         }
         .padding(6)
-        // Same surface as the focused address field, so the list reads as its continuation.
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.primary.opacity(0.08)))
         .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
@@ -102,7 +100,6 @@ struct SuggestionRow: View {
         switch suggestion {
         case .openTab: "Switch to Tab"
         case .pin: "Pinned"
-        // Tells a command from a page or a search, as Safari's and Chrome's bars do.
         case .action: "Action"
         default: nil
         }

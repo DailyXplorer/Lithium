@@ -1,14 +1,12 @@
 import AppKit
 import Observation
 
-/// The order tabs were last shown in, for Control-Tab, and the tab a tab was opened from, for
-/// closing it. A switch stamps the tab shown and nothing more: the order is only worked out when
-/// Control-Tab is pressed, and nothing watches the keyboard until then.
+/// The order tabs were last shown in, for Control-Tab, and each tab's opener, for closing it.
+/// A switch only stamps the tab: the order is worked out, and the keyboard watched, on Control-Tab.
 @MainActor
 @Observable
 final class RecentTabs {
-    /// While Control is held after Control-Tab: the tabs, the one shown first and then the most
-    /// recently shown. Empty otherwise.
+    /// While Control is held after Control-Tab: the tabs, most recently shown first. Empty otherwise.
     private(set) var cycle: [Tab] = []
     /// The tab in `cycle` that letting go of Control goes to.
     private(set) var cycleIndex = 0
@@ -17,8 +15,7 @@ final class RecentTabs {
     @ObservationIgnored private var shown: [Tab.ID: Int] = [:]
     @ObservationIgnored private var clock = 0
     @ObservationIgnored private var openings: [Tab.ID: Opening] = [:]
-    /// The tab the user went to straight from the one that opened it, with no other switch in
-    /// between, and that opener: closing the first goes back to the second.
+    /// A tab gone to straight from its opener: closing it goes back to the opener.
     @ObservationIgnored private weak var opened: Tab?
     @ObservationIgnored private weak var opener: Tab?
     @ObservationIgnored private var monitor: Any?
@@ -56,9 +53,8 @@ final class RecentTabs {
         openings[tab.id] = nil
     }
 
-    /// The first press starts from `current`: forward goes to the tab shown before it, back to the
-    /// one shown longest ago. From the start page forward goes to the last tab shown. Tabs never
-    /// shown keep their order at the end.
+    /// Forward goes to the tab shown before `current`, back to the one shown longest ago; tabs
+    /// never shown keep their order at the end.
     func step(backward: Bool, among tabs: [Tab], current: Tab?) {
         if cycle.isEmpty {
             var order = tabs.filter { $0 !== current }.enumerated()
@@ -72,10 +68,8 @@ final class RecentTabs {
         cycleIndex = (cycleIndex + (backward ? -1 : 1) + cycle.count) % cycle.count
     }
 
-    /// Only while a cycle is open. Letting go of Control ends it on the highlighted tab, as does a
-    /// key pressed without Control (it was let go outside the window); a click ends it where it was,
-    /// and so does the window losing the keyboard, since Control may then be let go where Lithium
-    /// never hears it.
+    /// A key pressed without Control means it was let go outside the window. Losing the keyboard
+    /// ends the cycle too, since Control may then be let go where Lithium never hears it.
     func watchControl(_ end: @escaping @MainActor (_ commit: Bool) -> Void) {
         guard monitor == nil, !cycle.isEmpty else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown]) { event in
@@ -94,7 +88,6 @@ final class RecentTabs {
         }
     }
 
-    /// The tab the cycle was on, and the keyboard is left alone again.
     func endCycle() -> Tab? {
         let tab = target
         cycle = []

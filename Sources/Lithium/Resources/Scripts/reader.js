@@ -1,12 +1,10 @@
-// Body of an async function run by ReaderMode in Lithium's own content world, only when the user
-// asks for the reader. Puts a <body> holding its article alone before the page's, which waits
-// behind it, hidden, and takes it away again: nothing of the page leaves the document, so leaving
-// returns to it as it was, without a reload. Taken out, its custom elements would tear down what
-// they built (disconnectedCallback), its frames would lose their document, and its sheets couldn't
-// be put back exactly (below). The page's sheets are off while reading.
+// Body of an async function run by ReaderMode in Lithium's own content world. Puts a <body> holding
+// the article before the page's, which waits behind it, hidden: nothing of the page leaves the
+// document, so leaving returns to it without a reload. Taken out, its custom elements would tear
+// down what they built, its frames would lose their document, and its sheets couldn't be put back.
 // Arguments: action ('enter', 'exit' or 'style'), style ({ size, theme, font }), css and font (DM
 // Sans as base64) for 'enter'.
-// The article is found by Mozilla Readability, Firefox's reader, bundled at the end of this file.
+// The article is found by Mozilla Readability, bundled at the end of this file.
 
 const applyStyle = (root) => {
   root.dataset.theme = style.theme;
@@ -14,14 +12,9 @@ const applyStyle = (root) => {
   root.style.setProperty('--reader-size', `${style.size}px`);
 };
 
-// A <style> or <link> taken out of the document loses its sheet, and gets a new one, read again
-// from its text or address, when put back. What scripts did to the old one (rules CSS-in-JS added
-// with insertRule, a theme sheet turned off) lives on that object alone, so it goes to the new one,
-// as text: close, not exact, since a rule written `font: var(--a); font-feature-settings: normal`
-// reads back without its font. Only <style>s the page adds to the reader's <body> go that way.
-// A <link> still loading takes it once loaded; another site's sheet, which scripts can't change,
-// just keeps its on or off. So does one whose text or address the page changed meanwhile (more text
-// from a CSS-in-JS library, another theme): read anew, the new sheet is the page's.
+// A <style> or <link> taken out of the document gets a new sheet when put back. What scripts did to
+// the old one (insertRule, disabled) is copied to the new one as text: close, not exact. A sheet
+// whose text or address the page changed meanwhile just keeps its on or off.
 const sourceOf = (node) => node.localName === 'link' ? node.href : node.textContent;
 const restoreSheet = ({ node, sheet, source }) => {
   const fresh = node.sheet;
@@ -43,15 +36,12 @@ const restoreSheet = ({ node, sheet, source }) => {
     }
   } catch {}
 };
-// The sheets of a document or shadow root, and of the shadow roots within, with their elements:
-// a sheet forgets its element once that leaves the document.
+// With their elements: a sheet forgets its element once that leaves the document.
 const ownedSheets = (root) => [
   ...[...root.styleSheets].filter((sheet) => sheet.ownerNode).map((sheet) => ({ node: sheet.ownerNode, sheet, source: sourceOf(sheet.ownerNode) })),
   ...[...root.querySelectorAll('*')].filter((element) => element.shadowRoot).flatMap((element) => ownedSheets(element.shadowRoot)),
 ];
-// The page's scripts ran on while the reader was on, and what they wrote to the <body> reached the
-// reader's: the page gets it back. Its classes and attributes ("fonts loaded") join the page's,
-// elements added to it (styles, dialogs) move there.
+// What the page's scripts wrote to the reader's <body> while it was on goes back to the page's.
 const carry = (from, to, ours) => {
   for (const { name, value } of from.attributes) {
     if (ours.includes(name)) continue;
@@ -64,9 +54,8 @@ const carry = (from, to, ours) => {
   for (const node of [...from.childNodes]) if (!ours.includes(node)) to.append(node);
 };
 
-// WebKit picks the window's scrollbars, the page's own (::-webkit-scrollbar) or the system's, as it
-// makes them, not as the document changes: the reader's <body> hides them a moment, on its way in or
-// out, so they are made again for the document shown.
+// WebKit picks the scrollbar style (::-webkit-scrollbar or the system's) when it makes them, not as
+// the document changes: hiding them a moment makes them again for the document shown.
 const hideScrollbars = (body) => {
   const overflow = [body.style.getPropertyValue('overflow'), body.style.getPropertyPriority('overflow')];
   body.style.setProperty('overflow', 'hidden', 'important');
@@ -103,31 +92,25 @@ if (action === 'style') {
 if (saved) return true;
 if (!document.body) return false;
 
-// Readability takes apart the document it reads, so it reads a copy: one without a window, which
-// runs and loads nothing. The copy first loses what the page hides and the small boxes named like
-// ads, sign-ups or links elsewhere, which Readability keeps when they read like a sentence; and
-// its images take the picture the page shows: only the page knows that.
+// Readability takes apart the document it reads, so it reads a copy, without a window. The copy
+// first loses what the page hides and small clutter boxes; its images take the picture the page shows.
 const unrendered = new Set(['script', 'style', 'noscript', 'template', 'link', 'meta']);
 const unlikely = /(^|[\s_-])ads?([\s_-]|$)|advert|sponsor|promo|newsletter|subscribe|signup|related|recommend|share|social|cookie|popup|modal|comment|sidebar|breadcrumb|pagination|footer|menu|carousel|slider|swiper|slick|splide|glide/i;
 const likely = /article|content|story|post|entry|main|body|text/i;
-// A cookie consent box, or the one that stands for an embed until cookies are accepted, is never
-// the article, whatever else it is named ("consent-overlay__content").
+// Never the article, whatever else it is named ("consent-overlay__content").
 const consent = /consent|didomi|onetrust/i;
 const isClutter = (element) => {
   const name = `${typeof element.className === 'string' ? element.className : ''} ${element.id}`;
   return (consent.test(name) || unlikely.test(name) && !likely.test(name)) && element.textContent.length < 1000;
 };
-// Page furniture Readability keeps when it reads like a sentence: carousels and their slides,
-// tabs, sliders, what the page reads out to screen readers ("Slide 1 of 5") or shows them alone
-// (a box clipped to a pixel), counters in a box of their own: not "1/2" in a recipe, nor "3 of 4"
-// in a sentence, a table or a tutorial's heading ("Step 2 of 5"); and "Learn more" links on their
-// own, not within a sentence.
+// Page furniture Readability keeps when it reads like a sentence: carousels, tabs, live regions,
+// screen-reader-only boxes, counters in a box of their own ("Slide 1 of 5", not in a table or
+// heading), and "Learn more" links on their own.
 const furnitureRoles = new Set(['tablist', 'tab', 'slider', 'progressbar', 'status', 'timer', 'marquee', 'toolbar', 'menubar', 'menu']);
 const counter = /^\s*((slide|item|image|photo|picture|page|step)\s*\d+\s*(of|\/)|\d+\s+of)\s*\d+\s*$/i;
 const teaser = /^\s*(learn|read|see|find out|discover) more\s*$/i;
-// Within a sentence when its nearest sibling that shows something, either way, is text or an inline
-// element with some ("see <em>this</em> <a>learn more</a>"), not a card's paragraph or heading, nor
-// another link or button beside it ("<a>Learn more</a> <a>Buy</a>").
+// Within a sentence when its nearest non-empty sibling is text or an inline element with some,
+// not another link or button.
 const inText = (node, step) => {
   while (node && (node.nodeType === Node.COMMENT_NODE || node.nodeType === Node.TEXT_NODE && node.textContent.trim() === '')) node = node[step];
   if (node?.nodeType === Node.TEXT_NODE) return true;
@@ -145,8 +128,7 @@ const isFurniture = (element, computed) => {
   return computed.display !== 'inline' && !/^(td|th|h[1-6])$/.test(element.localName)
     && element.childElementCount < 4 && element.textContent.length < 40 && counter.test(element.textContent);
 };
-// A section the page folds away, an accordion's closed panel, is the article's still: the reader
-// shows it open. Not a menu's, a search box's list or a dialog.
+// An accordion's closed panel is still the article's: the reader shows it open. Not a menu or dialog.
 const folded = new Set([...document.querySelectorAll('[aria-expanded=false][aria-controls]')]
   .filter((control) => !control.closest('nav, header, [role=navigation], [role=menubar], [role=menu], [role=combobox]'))
   .flatMap((control) => control.getAttribute('aria-controls').split(/\s+/).map((id) => document.getElementById(id)))
@@ -179,8 +161,7 @@ for (let index = 0; index < copies.length; index++) {
 const found = new (mozillaReadability())(copy, { serializer: (element) => element }).parse();
 if (!found) return false;
 
-// Rebuilt from new elements: no page script, handler, frame, form or custom element comes along,
-// and of the attributes, only addresses and table spans.
+// Rebuilt from new elements, so no page script, handler, frame or custom element comes along.
 const skipped = [
   'script', 'style', 'link', 'meta', 'noscript', 'template', 'iframe', 'frame', 'object', 'embed', 'canvas', 'svg',
   'video', 'audio', 'source', 'track', 'map', 'form', 'input', 'button', 'select', 'textarea', 'label', 'nav', 'aside',
@@ -206,7 +187,7 @@ const address = (value, isImage) => {
   } catch {}
   return null;
 };
-// The picture the page showed, or the one a lazy page has yet to load rather than its placeholder.
+// A lazy page's real picture rather than its placeholder.
 const imageSource = (image) => {
   const sources = [image.getAttribute('src'), image.dataset.src, image.dataset.lazySrc, image.dataset.original]
     .map((value) => address(value, true)).filter(Boolean);
@@ -262,8 +243,7 @@ const byline = clean(found.byline).length < 100 ? clean(found.byline) : '';
 const site = clean(found.siteName) || location.hostname.replace(/^www\./, '');
 const minutes = Math.max(1, Math.round(clean(content.textContent).split(' ').length / 230));
 
-// A constructed sheet and a font made from its bytes: the page's Content-Security-Policy, which
-// outlives its document, blocks a <style> element and a data: font, but neither of these.
+// A constructed sheet and a font from bytes: the page's CSP blocks a <style> and a data: font.
 const sheet = new CSSStyleSheet();
 sheet.replaceSync(css);
 if (font && ![...document.fonts].some((face) => face.family.replace(/"/g, '') === 'Lithium DM Sans')) {
@@ -291,9 +271,7 @@ body.dir = found.dir || document.documentElement.dir;
 body.append(article);
 applyStyle(body);
 
-// The page's sheets left in the document go off, and so do those its scripts add while reading (a
-// <style> in the head, more text in one, a <link> that loads): the page's styles never reach the
-// reader, and each comes back on, or off, as it was.
+// The page's sheets go off, and so do those its scripts add while reading; each comes back as it was.
 const off = new Map();
 const switchOff = () => {
   for (const sheet of document.styleSheets) {
@@ -303,7 +281,7 @@ const switchOff = () => {
   }
 };
 const quiet = new MutationObserver(switchOff);
-// A copy of the page's adopted sheets: the array is live, and would hold the reader's instead.
+// A copy: the adopted sheets array is live.
 window.__lithiumReader = {
   body: document.body, reader: body, adopted: [...document.adoptedStyleSheets], owned: ownedSheets(document),
   off, quiet, switchOff, sheet, article, x: scrollX, y: scrollY,
@@ -312,7 +290,6 @@ document.adoptedStyleSheets = [sheet];
 const showScrollbars = hideScrollbars(body);
 // The first <body> is the document's: the page's scripts, find, translation and summaries see the reader's.
 document.body.before(body);
-// A video or sound the page plays waits for it, hidden.
 window.__lithiumReader.playing = [...window.__lithiumReader.body.querySelectorAll('video, audio')].filter((media) => !media.paused);
 for (const media of window.__lithiumReader.playing) media.pause();
 switchOff();

@@ -1,7 +1,7 @@
 import SwiftUI
 @preconcurrency import Translation
 
-/// The selected text, translated on the Mac by Apple's Translation, in the context menu's popover.
+/// The selected text, translated on the Mac by Apple's Translation.
 struct TranslationPanel: View {
     let text: String
     @State var target: Locale.Language

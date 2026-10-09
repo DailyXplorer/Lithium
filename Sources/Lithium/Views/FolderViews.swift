@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A folder's row in the tab list: a click collapses or expands it, a double-click renames it,
-/// and a tab dropped on it goes in at its end. Collapsed, it shows how many tabs it holds.
 struct FolderHeader: View {
     let folder: TabFolder
     /// Asks before a folder with tabs goes (`SidebarView`).
@@ -60,8 +58,7 @@ struct FolderHeader: View {
     }
 }
 
-/// A folder's name, typed in place like a tab's (`TabNameField`). Return or a click elsewhere
-/// keeps it; Escape (`Browser.dismissOverlay`) leaves the name as it was.
+/// Return or a click elsewhere keeps the name; Escape (`Browser.dismissOverlay`) leaves it as it was.
 private struct FolderNameField: View {
     let folder: TabFolder
     @Environment(Browser.self) private var browser
@@ -93,8 +90,6 @@ private struct FolderNameField: View {
     }
 }
 
-/// A tab's folders to move it to, a new one, or out of its own: in the tab's menu and in the Tabs
-/// menu, which gives New Folder its shortcut.
 struct MoveToFolderMenu: View {
     let browser: Browser
     let tab: Tab
@@ -112,7 +107,6 @@ struct MoveToFolderMenu: View {
             }
             if tab.folderID != nil {
                 Divider()
-                // To the top of the tabs outside folders, just below the folders.
                 Button("Remove from Folder") { withAnimation(.snappy(duration: 0.2)) { browser.moveTab(tab, toFolder: nil, at: 0) } }
             }
         }

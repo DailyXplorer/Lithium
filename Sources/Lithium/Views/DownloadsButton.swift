@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Toolbar button with a progress ring while files download; opens the list of the session's downloads.
 struct DownloadsButton: View {
     private let downloads = Downloads.shared
     @State private var isPresented = false

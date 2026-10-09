@@ -1,8 +1,7 @@
 // Body of an async function run by VideoPopout in Lithium's own content world.
 // Arguments: command, and value for "seek" and "mute".
-// The popped out video goes into the top layer (a manual popover) and fills the viewport, so
-// the tab's web view, shrunk to the mini player, shows only the video. The page keeps its own
-// player: nothing is moved or reloaded, and the video never stops.
+// The video goes into the top layer (a manual popover) and fills the shrunk web view: nothing is
+// moved or reloaded, so it never stops.
 
 const store = globalThis.lithiumVideoPopout ??= { video: null, style: null, addedPopover: false };
 const mark = 'data-lithium-popout';
@@ -14,7 +13,6 @@ const area = (video) => {
   return rect.width * rect.height;
 };
 
-// The one worth watching: playing before paused, with sound before muted, then the largest.
 const best = () => {
   const rank = (video) => [isPlaying(video), isAudible(video), area(video)];
   const before = (a, b) => {
@@ -30,7 +28,6 @@ const best = () => {
 const state = (video) => video && video.isConnected ? {
   paused: video.paused || video.ended,
   time: video.currentTime,
-  // A live stream has no end.
   duration: Number.isFinite(video.duration) ? video.duration : null,
   muted: !isAudible(video),
   width: video.videoWidth,
@@ -74,9 +71,8 @@ const raise = (video) => {
   try { video.showPopover(); } catch {}
 };
 
-// A page that moves its player leaves the top layer: removing an element closes its popover.
-// YouTube does it when its window narrows to the player's size, which shows its whole page
-// shrunk instead of the video. Every frame, the video goes back up.
+// Removing an element closes its popover: YouTube moves its player when its window narrows.
+// Every frame, the video goes back up.
 const keepRaised = (video) => {
   cancelAnimationFrame(store.frame);
   const check = () => {
@@ -100,8 +96,7 @@ const hide = () => {
 };
 
 switch (command) {
-  // Whether leaving the tab should pop its video out: one is playing, with sound, big enough
-  // to be what the user watches (not a muted loop or a thumbnail preview).
+  // Not a muted loop or a thumbnail preview.
   case 'playing': {
     const video = best();
     return !!video && isPlaying(video) && isAudible(video) && area(video) >= 200 * 112;

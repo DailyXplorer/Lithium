@@ -1,20 +1,17 @@
 import AppKit
 import WebKit
 
-/// Styles Lithium adds to every page, whatever the protection settings: no horizontal page
-/// scrolling, and the user's font (DM Sans unless they picked another) instead of the site's
-/// (a setting, always on for Brave Search, Lithium's start page and search engine).
+/// Styles Lithium adds to every page: no horizontal page scrolling, and the user's font instead
+/// of the site's (a setting, always on for Brave Search).
 @MainActor
 enum PageStyle {
-    /// Wide layouts are clipped instead of making the whole page scroll sideways.
     /// Scrollable regions inside the page (tables, code blocks, carousels) keep working.
     private static let baseCSS = "html, body { overflow-x: clip !important; }"
 
     private static let baseScript = script(css: baseCSS)
 
-    /// DM Sans travels inline, since web pages cannot reach the app bundle. Every page decodes
-    /// it again, so it goes as WOFF2: the same font as DMSans.ttf, compressed to about a third
-    /// (`scripts/make-web-font.py`).
+    /// Inline, since web pages cannot reach the app bundle; as WOFF2, about a third of the TTF,
+    /// since every page decodes it again (`scripts/make-web-font.py`).
     static let fontBase64 = Resources.bundle.url(forResource: "DMSans", withExtension: "woff2")
         .flatMap { try? Data(contentsOf: $0) }?.base64EncodedString() ?? ""
 
@@ -27,18 +24,16 @@ enum PageStyle {
     private static let fontSource = Resources.bundle.url(forResource: "page-font", withExtension: "js")
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
 
-    /// The script for the website font the user picked, built again only when that changes.
+    /// Built again only when the choice changes.
     static var fontScript: WKUserScript { currentFont().script }
 
-    /// The family websites get, DM Sans unless the user picked another.
     static var websiteFamily: String { currentFont().family }
 
-    /// Run in an open page, turns its font script off; running the script again turns it back on.
+    /// Turns an open page's font script off; running the script again turns it back on.
     static let fontOffSource = "window.__lithiumFont?.stop();"
 
     private static var builtFont: (choice: String?, family: String, script: WKUserScript)?
-    /// Fonts installed or removed while Lithium runs (Font Book): the font is checked again at
-    /// its next use, so one no longer on the Mac gives way to DM Sans. Nothing is read meanwhile.
+    /// Fonts installed or removed while Lithium runs: the font is checked again at its next use.
     private static var fontSetObserver: (any NSObjectProtocol)?
 
     private static func currentFont() -> (family: String, script: WKUserScript) {
@@ -55,8 +50,7 @@ enum PageStyle {
         return (family, script)
     }
 
-    /// DM Sans travels in the script; any other family is installed on the Mac, where pages find
-    /// it by name, so they decode nothing.
+    /// DM Sans travels in the script; any other family is installed, so pages find it by name.
     static func fontScript(family: String) -> WKUserScript {
         let isBundled = family == FontChoice.dmSans
         let source = fontSource
@@ -85,7 +79,6 @@ enum PageStyle {
         return choosesPageFont(host)
     }
 
-    /// Sites that keep their own font, by registrable domain.
     static var siteFontDomains: [String] {
         UserDefaults.standard.stringArray(forKey: siteFontKey) ?? []
     }
@@ -95,8 +88,7 @@ enum PageStyle {
         ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) || host.hasSuffix(".localhost")
     }
 
-    /// `privateSession` is set for a private tab, `space` for a tab of a space that keeps its data
-    /// apart (`Tab.siteSpace`): their own choice wins, then the saved one.
+    /// A private session's or separate space's (`Tab.siteSpace`) own choice wins, then the saved one.
     static func keepsSiteFont(_ host: String, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> Bool {
         if isLoopback(host) { return true }
         let domain = SiteInfo.registrable(host)
@@ -105,8 +97,7 @@ enum PageStyle {
         return siteFontDomains.contains(domain)
     }
 
-    /// A private tab's choice stays in memory for its private session only: saved, it would
-    /// record the site it visited. A separate space's is saved for that space.
+    /// A private tab's choice stays in memory: saved, it would record the site it visited.
     static func setKeepsSiteFont(_ keeps: Bool, for host: String, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) {
         let domain = SiteInfo.registrable(host)
         if let privateSession {
@@ -129,7 +120,6 @@ enum PageStyle {
         privateSiteFonts[privateSession] = nil
     }
 
-    /// The space was deleted, its store with it.
     static func forget(space: Space.ID) {
         var choices = spaceSiteFonts
         guard choices.removeValue(forKey: space) != nil else { return }
@@ -138,19 +128,16 @@ enum PageStyle {
 
     private static let siteFontKey = "siteFontDomains"
     private static let spaceSiteFontKey = "spaceSiteFontDomains"
-    /// Site fonts chosen in spaces that keep their data apart, by space, then registrable domain.
-    /// Read from the defaults, as `siteFontDomains` is.
     private static var spaceSiteFonts: [Space.ID: [String: Bool]] {
         Space.siteChoices(UserDefaults.standard.dictionary(forKey: spaceSiteFontKey))
     }
-    /// Site fonts chosen in private tabs, by private session, then registrable domain; never saved.
+    /// Never saved.
     private static var privateSiteFonts: [ObjectIdentifier: [String: Bool]] = [:]
 
     private static func choosesPageFont(_ host: String) -> Bool {
         usesFontEverywhere || host == "search.brave.com" || host.hasSuffix(".search.brave.com")
     }
 
-    /// A JavaScript string literal.
     private static func literal(_ text: String) -> String {
         (try? String(data: JSONEncoder().encode(text), encoding: .utf8)) ?? "\"\""
     }

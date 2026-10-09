@@ -1,9 +1,8 @@
 import Foundation
 import WebKit
 
-/// Renders Markdown files (local or served as plain text) as formatted documents.
-/// The file loads as usual, so its address, reload and history stay those of the file;
-/// a script then swaps the raw text for the rendered document.
+/// Renders Markdown files as documents: the file loads as usual, then a script swaps the raw
+/// text for the rendered document.
 @MainActor
 enum MarkdownReader {
     private static let extensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]

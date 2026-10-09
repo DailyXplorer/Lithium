@@ -1,8 +1,7 @@
 import PDFKit
 import SwiftUI
 
-/// Lithium's PDF viewer, over the tab's web view: a strip of controls, the pages or the outline
-/// on the side, and the document.
+/// Lithium's PDF viewer, over the tab's web view.
 struct PDFReaderView: View {
     let reader: PDFReader
     /// False on the split side the keyboard isn't on: its password prompt waits for it.
@@ -30,7 +29,6 @@ struct PDFReaderView: View {
             .animation(.snappy(duration: 0.2), value: showsSidebar)
         }
         .background(Color(nsColor: .pdfCanvas))
-        // The page area sits on the window's own background, not the sidebar color, so it takes the system's ink.
         .foregroundStyle(Color.primary)
         .font(Theme.font(13))
     }
@@ -92,7 +90,6 @@ struct PDFToolbar: View {
     }
 }
 
-/// The current page, typed over to jump, and the page count.
 private struct PageField: View {
     let reader: PDFReader
     @State private var text = ""
@@ -179,7 +176,6 @@ private struct MoreMenu: View {
     }
 }
 
-/// Like the toolbar's buttons, drawn for the page area's own background.
 private struct PDFButton: View {
     let icon: Phosphor
     let help: String
@@ -381,8 +377,7 @@ private struct PasswordPrompt: View {
                 .fill(Color(nsColor: .textBackgroundColor))
                 .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         )
-        // The document locks only once loaded, maybe while the user types on the other split side,
-        // or in a field of the window (the address bar, the find bar, a tab's name): that keeps the keyboard.
+        // The document locks only once loaded, maybe while the user types elsewhere: that keeps the keyboard.
         .onAppear { if takesKeyboard, !isEditingText(in: NSApp.keyWindow) { claimFocus($isFocused) } }
         .onChange(of: takesKeyboard) { if takesKeyboard { claimFocus($isFocused) } }
     }

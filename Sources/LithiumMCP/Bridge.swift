@@ -1,6 +1,5 @@
 import Foundation
 
-/// One line from the client, read just enough to route it.
 struct Message: Sendable {
     let data: Data
     let isObject: Bool
@@ -29,7 +28,6 @@ struct Message: Sendable {
     static let initialized = Data(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.utf8)
 }
 
-/// The client's MCP session as Lithium knows it at the moment.
 struct Session: Sendable {
     let endpoint: Endpoint
     let id: String
@@ -37,12 +35,8 @@ struct Session: Sendable {
     let generation: Int
 }
 
-/// Relays newline-delimited JSON-RPC from stdin to Lithium's Streamable HTTP endpoint and the
-/// answers back to stdout. The client keeps one session for as long as the bridge runs: when
-/// Lithium relaunches, moves to another port, gets a new token or ends the session, the bridge
-/// opens a new one with the client's own `initialize` (and `notifications/initialized` if the
-/// client sent it) and sends the request again. Lithium's state for the old session (snapshot
-/// baselines, site grants, calls in flight) doesn't carry over.
+/// Relays stdin JSON-RPC to Lithium's HTTP endpoint. When Lithium's session goes away, it replays the
+/// client's `initialize` in a new one; Lithium's per-session state (baselines, grants) doesn't carry over.
 actor Bridge {
     private let file: URL
     private let launcher: Launcher
@@ -128,8 +122,7 @@ actor Bridge {
         throw .notReady
     }
 
-    /// The endpoint to use: the file's, once the Lithium that wrote it runs. `stale`, the
-    /// endpoint that just refused the connection, is waited past.
+    /// The file's endpoint, once its Lithium runs; `stale`, which just refused, is waited past.
     private func discover(avoiding stale: Endpoint?) async throws(Failure) -> Endpoint {
         let endpoint = try Endpoint.read(file)
         if !endpoint.isRunning(as: lithium) {
@@ -147,7 +140,6 @@ actor Bridge {
         }
     }
 
-    /// The one wait the bridge has: Lithium writes a fresh file once its server listens.
     private func waitForEndpoint(_ isFresh: (Endpoint) async -> Bool) async throws(Failure) -> Endpoint {
         let deadline = ContinuousClock.now + launchTimeout
         while true {
@@ -234,16 +226,13 @@ actor Bridge {
         case answered(status: Int, session: String?, body: Data)
         /// Nothing listens: the request never left.
         case refused
-        /// The connection closed before an answer.
         case lost
         /// Timed out or otherwise failed; Lithium may have run it.
         case failed
     }
 
     private func post(_ body: Data?, to endpoint: Endpoint, session: String?, method: String = "POST", timeout: TimeInterval? = nil) async -> Outcome {
-        // The token only goes to the Lithium that wrote it: once that one quits, anyone may hold
-        // its port, and so may anyone once that one moves to another port (the file then names
-        // the new one). A refusal reads the file again, which starts Lithium if needed.
+        // The token only goes to the Lithium that wrote it: once it quits or moves, anyone may hold its port.
         guard endpoint.isRunning(as: lithium), (try? Endpoint.read(file))?.url == endpoint.url,
               let url = URL(string: endpoint.url) else { return .refused }
         var request = URLRequest(url: url)

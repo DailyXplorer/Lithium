@@ -1,7 +1,5 @@
-// Runs at document start in every frame, in the lithium-agent content world, while agent access
-// is on. The page's world sees none of it. It names the document with a random token, tells
-// Lithium the frame exists (so agent.js can be called in it later), and notes every input that
-// ever had type=password, from the first parsed byte: a "show password" toggle doesn't unlock it.
+// Runs at document start in the lithium-agent content world. Notes every input that ever had
+// type=password, from the first parsed byte: a "show password" toggle doesn't unlock it.
 (() => {
   if (globalThis.lithiumAgentFrame) return;
   const bytes = crypto.getRandomValues(new Uint8Array(12));

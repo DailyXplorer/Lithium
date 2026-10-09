@@ -9,10 +9,8 @@ struct Session: Codable, Equatable {
         var pinID: Pin.ID?
         /// Nil for the main space (`Space.saved`).
         var spaceID: Space.ID? = nil
-        /// The tab last shown in its space, another than the one shown at quit: switching back
-        /// brings it back.
+        /// The tab last shown in a space other than the one shown at quit.
         var lastShown: Bool? = nil
-        /// The sidebar folder it is in (`TabFolder`); nil outside folders.
         var folderID: TabFolder.ID? = nil
     }
 
@@ -21,7 +19,6 @@ struct Session: Codable, Equatable {
     var splits: [Split]?
     /// Nil until the user makes a second space, then the main one first.
     var spaces: [Space]? = nil
-    /// The space shown at quit; nil for the main one.
     var spaceID: Space.ID? = nil
     /// Nil until the user makes a folder, so files written without folders stay as they were.
     var folders: [TabFolder]? = nil
@@ -35,8 +32,7 @@ enum SessionStore {
         URL.applicationSupportDirectory.appending(path: "Lithium/session.json")
     }
 
-    /// Read whole: tabs and splits refer to each other by index. A file that can't be read is
-    /// kept aside before launch writes the new session over it (`StoredFile`).
+    /// Read whole, not per entry: tabs and splits refer to each other by index.
     static func load(from url: URL = fileURL) -> Session {
         StoredFile.read(Session.self, at: url) ?? Session()
     }

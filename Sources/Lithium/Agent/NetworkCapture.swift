@@ -6,11 +6,11 @@ import WebKit
 struct NetworkEntry {
     let id: Int
     let loadID: UInt64
-    /// WebKit's id of the child frame that made it; nil for the main frame.
+    /// Nil for the main frame.
     let frameID: UInt64?
     let type: String
     let method: String
-    /// The method the page asked for, which a redirect may have changed: its script reports that one.
+    /// Before redirects changed it: the page's script reports that one.
     let askedMethod: String
     let url: String
     let requestHeaders: [String: String]
@@ -26,12 +26,10 @@ struct NetworkEntry {
     var redirectedTo: String?
     var body: CapturedBody?
 
-    /// An HTTP error, or the network failing.
     var failed: Bool {
         (status ?? 0) >= 400 || (error != nil && !cancelled)
     }
 
-    /// The address and why it failed, as `batch` and `failedScripts` name it.
     var failure: String {
         "\(url) \(status.map(String.init) ?? error ?? "failed")"
     }
@@ -43,11 +41,9 @@ struct CapturedBody {
     let truncated: Bool
 }
 
-/// One console message or uncaught error, its text redacted.
 struct ConsoleEntry {
     let id: Int
     let level: String
-    /// `exception` or `rejection` for an error the page didn't catch.
     let kind: String?
     let text: String
     let source: String?
@@ -56,23 +52,20 @@ struct ConsoleEntry {
     let frameID: UInt64?
 }
 
-/// A tab's network log and console, from the first agent use of the tab until it closes or
-/// access is turned off. Each is a ring buffer; a new page, or the tab sleeping, drops what the
-/// page before left. `inFlight` and `lastActivity` are observed, for `networkIdle` waits.
+/// A tab's network log and console as ring buffers, cleared on a new page or sleep.
+/// `inFlight` and `lastActivity` are observed, for `networkIdle` waits.
 @MainActor
 @Observable
 final class TabCapture {
     static let maxEntries = 1000
     static let maxMessages = 500
     static let maxBody = 256 * 1024
-    /// Bodies kept per tab, all together; the oldest go first.
     static let maxBodies = 2 * 1024 * 1024
 
     @ObservationIgnored private(set) var entries: [NetworkEntry] = []
     @ObservationIgnored private(set) var messages: [ConsoleEntry] = []
     /// Requests of the page shown still loading: WebKit's load id to the entry's.
     private(set) var inFlight: [UInt64: Int] = [:]
-    /// The last request that started or ended, or the capture starting.
     private(set) var lastActivity = ContinuousClock.now
     @ObservationIgnored private var nextEntry = 1
     @ObservationIgnored private var nextMessage = 1
@@ -90,8 +83,7 @@ final class TabCapture {
 
     // MARK: Network
 
-    /// `askedMethod`: the next leg of a request already listed, which a new page keeps from its
-    /// first, and the method its first asked for.
+    /// `askedMethod` is set for a redirect's next leg: the method the first leg asked for.
     func requestStarted(_ load: ResourceLoadSpy.Load, method: String, url: URL?, headers: [AnyHashable: Any], askedMethod: String? = nil) {
         if url?.scheme?.lowercased() == Extensions.scheme {
             if !load.isMainFrame, load.type == "document", let frame = load.frameID { extensionFrames.insert(frame) }
@@ -105,7 +97,6 @@ final class TabCapture {
         lastActivity = .now
     }
 
-    /// A redirect ends the request with its status and starts the next one, under the same load.
     func redirected(_ load: ResourceLoadSpy.Load, response: URLResponse, to request: URLRequest) {
         guard let index = index(of: load.id), let next = request.url else { return }
         responded(at: index, response, fromCache: false)
@@ -160,9 +151,8 @@ final class TabCapture {
         if inFlight[gone.loadID] == gone.id { inFlight[gone.loadID] = nil }
     }
 
-    /// A fetch or XHR body the page's script saw, kept with the latest request it fits that
-    /// has none yet: the last leg of its redirects, at the address the body came from, under the
-    /// method the page asked for. The text was redacted off the main thread.
+    /// A fetch or XHR body the page's script saw, kept with the latest matching request that has
+    /// none yet (the last leg of its redirects). The text was redacted off the main thread.
     func attach(_ body: CapturedBody, url: String, method: String, frameID: UInt64?) {
         let address = AgentURLs.redacted(url)
         guard let index = entries.lastIndex(where: { $0.body == nil && $0.url == address && $0.askedMethod == method && $0.frameID == frameID && ["fetch", "xhr"].contains($0.type) }) else { return }
@@ -175,8 +165,7 @@ final class TabCapture {
         }
     }
 
-    /// The main frame's scripts that failed on the page loading, or the page shown when none is:
-    /// handlers they would have attached are missing, and a button may do nothing.
+    /// Handlers failed scripts would have attached are missing, so a button may do nothing.
     var failedScripts: [NetworkEntry] {
         entries.filter { $0.id >= (pageMark?.entry ?? 0) && $0.frameID == nil && $0.type == "script" && $0.failed }
     }
@@ -189,16 +178,13 @@ final class TabCapture {
         if messages.count > Self.maxMessages { messages.removeFirst() }
     }
 
-    /// What the page may post in a burst, and again each second. The console script keeps to 100
-    /// a second, but a page can call the handler itself, or fire error events, at any rate.
+    /// The console script keeps to 100 a second, but a page can call the handler itself at any rate.
     static let messagesPerSecond = 200
     @ObservationIgnored private var allowance = TabCapture.messagesPerSecond
     @ObservationIgnored private var allowanceFilled = ContinuousClock.now
     @ObservationIgnored private var refused = 0
 
-    /// A token bucket, filled whole once a second: whether a message from the page (console,
-    /// error, body) may cost anything now. The first one let through after some were refused
-    /// says how many, so a page that keeps flooding adds one such line a second.
+    /// A token bucket refilled once a second; after refusals, one warning line says how many were dropped.
     func admitsMessage() -> Bool {
         let now = ContinuousClock.now
         if now - allowanceFilled >= .seconds(1) {
@@ -219,9 +205,8 @@ final class TabCapture {
 
     // MARK: Pages
 
-    /// The main frame shows a new document: what the page before left goes. The new page's own
-    /// request, and what it started before saying hello, stay. A page Back brings from WebKit's
-    /// cache (`restored`), or one without a request seen (no resource load delegate), keeps nothing.
+    /// Drops the previous page's entries, keeping the new page's own request onward. A page restored
+    /// from WebKit's back cache, or with no request seen, keeps nothing.
     func newPage(restored: Bool = false) {
         let mark = (restored ? nil : pageMark) ?? (nextEntry, nextMessage)
         pageMark = nil
@@ -232,13 +217,11 @@ final class TabCapture {
         extensionFrames = []
     }
 
-    /// The main frame's load ended without a page (a download, a stopped load): the page shown
-    /// stays, and the next one starts from its own request.
+    /// The main frame's load ended without a page (a download, a stopped load).
     func loadEndedUnshown() {
         pageMark = nil
     }
 
-    /// The tab slept or its page's process died: its page and its requests are gone.
     func reset() {
         entries = []
         messages = []
@@ -250,9 +233,8 @@ final class TabCapture {
     }
 }
 
-/// The web view's resource load delegate (`_WKResourceLoadDelegate`, private WebKit, set only on
-/// a web view that has `_setResourceLoadDelegate:`): every load of every frame, cross-origin ones
-/// included, with the headers the page set and the response's status. Pages can't see it.
+/// The private `_WKResourceLoadDelegate`: every load of every frame, cross-origin included, with
+/// headers and status. Pages can't see it.
 @MainActor
 final class ResourceLoadSpy: NSObject {
     private static let setter = NSSelectorFromString("_setResourceLoadDelegate:")
@@ -274,7 +256,6 @@ final class ResourceLoadSpy: NSObject {
         property(webView, "_resourceLoadDelegate") as AnyObject?
     }
 
-    /// What `_WKResourceLoadInfo` says of a load, each property read only if it is there.
     struct Load {
         let id: UInt64
         let frameID: UInt64?
@@ -282,13 +263,12 @@ final class ResourceLoadSpy: NSObject {
         let type: String
         let fromCache: Bool
 
-        /// `_WKResourceLoadInfoResourceType`; 3, 5 and 12 were seen in the design's prototype.
+        /// `_WKResourceLoadInfoResourceType`; 3, 5 and 12 were seen in a prototype.
         private static let types = [0: "manifest", 1: "beacon", 2: "csp-report", 3: "document", 4: "image", 5: "fetch", 6: "font", 7: "media", 8: "object", 9: "ping", 10: "script", 11: "stylesheet", 12: "xhr", 13: "xslt"]
 
         init?(_ info: NSObject) {
             guard let id = (ResourceLoadSpy.property(info, "resourceLoadID") as? NSNumber)?.uint64Value else { return nil }
             self.id = id
-            // The main frame's loads have no parent frame.
             isMainFrame = info.responds(to: NSSelectorFromString("parentFrame")) && ResourceLoadSpy.property(info, "parentFrame") == nil
             frameID = isMainFrame ? nil : ResourceLoadSpy.frameID(of: ResourceLoadSpy.property(info, "frame") as? NSObject)
             type = (ResourceLoadSpy.property(info, "resourceType") as? NSNumber).flatMap { Self.types[$0.intValue] } ?? "other"
@@ -301,7 +281,7 @@ final class ResourceLoadSpy: NSObject {
         handle.flatMap { (property($0, "frameID") as? NSNumber)?.uint64Value }
     }
 
-    /// A frame's id as `Load` gives it, through `WKFrameInfo._handle`; nil for the main frame.
+    /// Through `WKFrameInfo._handle`; nil for the main frame.
     static func frameID(of frame: WKFrameInfo) -> UInt64? {
         frame.isMainFrame ? nil : frameID(of: property(frame, "_handle") as? NSObject)
     }

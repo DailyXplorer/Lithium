@@ -1,9 +1,8 @@
 import AppKit
 import MachO
 
-/// Every hand-off from Lithium to another app: an address of another app's scheme (`mailto:`), a
-/// file to open, one to show in Finder. In tests nothing opens: the hand-off is only recorded, so a
-/// test can't launch the user's mail app or PDF viewer on their screen.
+/// Every hand-off from Lithium to another app. In tests the hand-off is only recorded, so a test
+/// can't launch the user's apps on their screen.
 @MainActor
 enum ExternalApps {
     enum HandOff: Equatable {
@@ -12,9 +11,8 @@ enum ExternalApps {
         case reveal(URL)
     }
 
-    /// Fails closed: anything but the Lithium app itself, out of any test, only records.
-    /// `scripts/test` sets `LITHIUM_NO_EXTERNAL_OPEN`; a test bundle loaded some other way
-    /// (`swift test` run directly, Xcode) is caught by what the process has loaded.
+    /// Fails closed: anything but the Lithium app itself, out of any test, only records. A test
+    /// bundle not run by `scripts/test` (`swift test`, Xcode) is caught by what the process has loaded.
     static let isRecording = ProcessInfo.processInfo.environment["LITHIUM_NO_EXTERNAL_OPEN"] != nil
         || runsTests
         || !Bundle.main.bundlePath.hasSuffix(".app")
@@ -28,8 +26,7 @@ enum ExternalApps {
         }
     }()
 
-    /// Whole names only: every AppKit app loads the system's RecapPerformanceTesting.framework,
-    /// which once made Lithium itself record its hand-offs and open nothing.
+    /// Whole names only: every AppKit app loads the system's RecapPerformanceTesting.framework.
     static func isTestImage(_ path: String) -> Bool {
         let components = path.split(separator: "/")
         return components.contains { $0 == "XCTest.framework" || $0 == "Testing.framework" || $0.hasSuffix(".xctest") }

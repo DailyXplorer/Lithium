@@ -10,9 +10,8 @@ enum AgentURLs {
         case blocked(String)
     }
 
-    /// Lithium's pages could turn protections off, an extension's pages hold its UI and data,
-    /// and `javascript:`, `data:` and `blob:` documents would run whatever the agent wrote with
-    /// the opener's rights or none to check. Only the web and an empty page are left.
+    /// Lithium's pages could turn protections off, extension pages hold their data, and
+    /// `javascript:`, `data:` and `blob:` would run agent-written code. Only the web and about:blank are left.
     static func verdict(for url: URL) -> Verdict {
         switch url.scheme?.lowercased() {
         case "http", "https":
@@ -32,8 +31,7 @@ enum AgentURLs {
         }
     }
 
-    /// Opening `url` from `current` scrolls to an anchor of the document shown instead of loading
-    /// another: the two differ only in a fragment, which `url` has.
+    /// The two differ only in a fragment, which `url` has: opening it scrolls instead of loading.
     static func isMoveWithinPage(from current: URL?, to url: URL) -> Bool {
         guard let current, url.fragment != nil else { return false }
         return withoutFragment(current) == withoutFragment(url)
@@ -55,12 +53,9 @@ enum AgentURLs {
         return [Internal.scheme, Extensions.scheme].contains(url.scheme?.lowercased())
     }
 
-    /// Query (and `key=value` fragment) parameters whose values are secrets as often as not:
-    /// sign-in links, OAuth redirects, signed downloads.
     private static let secretName = /token|secret|password|passwd|pwd|session|sig|signature|key|code|auth/.ignoresCase()
 
-    /// The address as the log keeps it: no user name or password, and secret-looking parameter
-    /// values replaced. Strings that aren't addresses come back unchanged.
+    /// No user name or password, and secret-looking parameter values replaced. Non-addresses come back unchanged.
     static func redacted(_ string: String) -> String {
         guard string.contains(":"), var parts = URLComponents(string: string), parts.scheme != nil else { return string }
         guard parts.user != nil || parts.password != nil || parts.percentEncodedQuery != nil || parts.percentEncodedFragment != nil else { return string }
@@ -86,7 +81,6 @@ enum AgentURLs {
         }.joined(separator: "&")
     }
 
-    /// Every string in a tool's arguments, as the log keeps it.
     static func redacted(_ value: JSONValue) -> JSONValue {
         switch value {
         case .string(let string): .string(redacted(string))
@@ -96,9 +90,8 @@ enum AgentURLs {
         }
     }
 
-    /// `wait_for`'s URL condition: a glob where `*` is any run of characters and `?` one
-    /// character, matched against the whole address. Nil for a `/regex/`: one can backtrack for
-    /// minutes on the main thread, where nothing can interrupt it.
+    /// `wait_for`'s URL glob (`*`, `?`) against the whole address. Nil for a `/regex/`: one can
+    /// backtrack for minutes on the main thread, where nothing can interrupt it.
     static func matcher(for pattern: String) -> ((String) -> Bool)? {
         if pattern.count > 2, pattern.hasPrefix("/"), pattern.hasSuffix("/") { return nil }
         let pattern = Array(pattern)

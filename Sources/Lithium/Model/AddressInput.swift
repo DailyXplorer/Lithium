@@ -56,7 +56,6 @@ enum AddressInput {
         case search(String)
     }
 
-    /// Whether typed text is an address to open or words to search for.
     static func target(for rawInput: String) -> Target? {
         let input = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return nil }
@@ -64,13 +63,11 @@ enum AddressInput {
         if let url = URL(string: input), let scheme = url.scheme?.lowercased() {
             if ["http", "https"].contains(scheme), url.host() != nil { return .address(url) }
             if ["about", "file", "data", Internal.scheme].contains(scheme) { return .address(url) }
-            // Handed to Mail by the browser. Read as `http://` below, "mailto:alice@…" would open
-            // a website with the typed text as its credentials.
+            // Read as `http://` below, "mailto:alice@…" would open a website with credentials.
             if scheme == "mailto" { return .address(url) }
         }
 
-        // "alice@example.com" would open example.com with "alice" as its login: an email
-        // address, like "user:password@host", is searched instead.
+        // "alice@example.com" would open example.com with "alice" as its login: searched instead.
         if !input.contains(" "), let url = URL(string: "http://" + input), let host = url.host(), url.user == nil, url.password == nil {
             if host == "localhost" || isIPAddress(host) {
                 return .address(url)
@@ -80,14 +77,12 @@ enum AddressInput {
                 if url.port != nil { return .address(url) }
                 if let secure = URL(string: "https://" + input) { return .address(secure) }
             }
-            // A local network name with a port ("nas:5000", "router:8080") opens.
             if let port = url.port, port >= 10, isLocalName(host) { return .address(url) }
         }
         return .search(input)
     }
 
-    /// One label that starts and ends with a letter: "nas" or "jenkins", not a time ("10:30")
-    /// or a verse ("john3:16").
+    /// "nas" or "jenkins", not a time ("10:30") or a verse ("john3:16").
     private static func isLocalName(_ host: String) -> Bool {
         guard let first = host.first, let last = host.last, first.isLetter, last.isLetter else { return false }
         return host.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
@@ -101,7 +96,6 @@ enum AddressInput {
         }
     }
 
-    /// Names that aren't public suffixes but are used on local networks ("mac-mini.local", "router.lan").
     private static let localSuffixes: Set<String> = ["local", "localhost", "internal", "lan", "home", "test"]
 
     /// A host ending in a real suffix, so "node.js" and "config.json" stay searches. The suffix list

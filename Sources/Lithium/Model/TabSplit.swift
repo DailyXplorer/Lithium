@@ -1,10 +1,8 @@
 import AppKit
 import Observation
 
-/// Two tabs of the tab list shown together, Arc-like: side by side, or one above the other.
-/// The selected tab is the focused side, so the address bar, the toolbar and the menus act on
-/// it as they would on a lone tab. Selecting another tab shows that tab alone; selecting either
-/// side of the pair shows both again.
+/// Two tabs of the tab list shown together. The selected tab is the focused side, so the address
+/// bar, the toolbar and the menus act on it as they would on a lone tab.
 struct TabSplit: Equatable {
     enum Side { case first, second }
 
@@ -29,8 +27,7 @@ struct TabSplit: Equatable {
     }
 }
 
-/// The window's splits, and the tab being dragged from the sidebar, which brings the page's
-/// drop zones in until the next click.
+/// The window's splits, and the tab dragged from the sidebar, which shows the page's drop zones.
 @MainActor
 @Observable
 final class TabSplits {
@@ -48,8 +45,7 @@ extension Session {
     }
 }
 
-/// One row of the tab list: a tab alone, or the pair it leads. `index` is the tab's place in its
-/// folder, or among the tabs outside folders, which drops are measured against.
+/// `index` is the tab's place in its folder (or among tabs outside folders), for measuring drops.
 struct TabListEntry: Identifiable {
     let index: Int
     let tab: Tab
@@ -64,13 +60,12 @@ extension Browser {
         return splits.pairs.first { $0.contains(tab.id) }
     }
 
-    /// The other side of the selected tab's split, which is on screen too.
     var shownPartner: Tab? {
         guard let selected = selectedTab, let id = split(of: selected)?.partner(of: selected.id) else { return nil }
         return tabs.first { $0.id == id }
     }
 
-    /// The selected tab, and its partner in split view; a link in its own window too.
+    /// A link in its own window counts too.
     func isOnScreen(_ tab: Tab) -> Bool {
         tab.id == selectedTabID || shownPartner === tab || quickLinks.contains(tab)
     }
@@ -100,15 +95,13 @@ extension Browser {
         return index + 1 < list.count ? list[index + 1] : index > 0 ? list[index - 1] : nil
     }
 
-    /// The tab list's "Open in Split View": beside the selected tab, on the side its partner
-    /// leaves free, and focused.
+    /// Opens on the side the partner leaves free.
     func openInSplit(_ tab: Tab) {
         guard let partner = splitPartner(for: tab) else { return }
         let side: TabSplit.Side = split(of: partner)?.side(of: partner.id) == .second ? .first : .second
         pair(tab, with: partner, on: side)
     }
 
-    /// A tab dragged onto the left or right of the page goes there, beside the selected one.
     func dropForSplit(_ item: String, on side: TabSplit.Side) -> Bool {
         defer { splits.draggedTabID = nil }
         guard let tab = tabs.first(where: { $0.id.uuidString == item }), let selected = selectedTab,
@@ -117,8 +110,7 @@ extension Browser {
         return true
     }
 
-    /// Takes `tab` out of any split, and `partner` out of its own; the split `partner` leaves
-    /// lends the new one its orientation and divider.
+    /// The split `partner` leaves lends the new one its orientation and divider.
     private func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) {
         shownPartner?.markActive()
         var split = split(of: partner) ?? TabSplit(first: partner.id, second: tab.id)
@@ -153,8 +145,7 @@ extension Browser {
         change(&splits.pairs[index])
     }
 
-    /// Called as a tab closes or leaves the tab list: its split ends, and the partner is returned
-    /// so it can fill the window.
+    /// Returns the partner, so it can fill the window.
     @discardableResult
     func leaveSplit(_ tab: Tab) -> Tab? {
         guard let index = splits.pairs.firstIndex(where: { $0.contains(tab.id) }) else { return nil }
@@ -162,20 +153,17 @@ extension Browser {
         return tabs.first { $0.id == partner }
     }
 
-    /// The tab list's drag source: the page's drop zones show while it is on its way.
     func startDragging(_ tab: Tab) -> String {
         splits.draggedTabID = tab.id
         return tab.id.uuidString
     }
 
-    /// A tab dropped in the sidebar (on the tab list, the favorites) ends its drag there.
     func endTabDrag() {
         if splits.draggedTabID != nil { splits.draggedTabID = nil }
     }
 
-    /// Whether a drag over the page carries the tab dragged from the sidebar. Anything else (a
-    /// link or text from another app) means that tab's drag ended without a click to say so: the
-    /// drop zone stands down, and the page gets the drop.
+    /// Any other drag (a link or text from another app) means the tab's drag ended without a
+    /// click to say so: the drop zone stands down, and the page gets the drop.
     func carriesDraggedTab(_ item: String?) -> Bool {
         guard let dragged = splits.draggedTabID, item == dragged.uuidString else {
             endTabDrag()
@@ -184,12 +172,9 @@ extension Browser {
         return true
     }
 
-    /// From the window's click monitor, before the click goes on. A click in the other side of
-    /// the split focuses it, as Arc does; any click ends a tab drag that was dropped elsewhere.
-    /// The other side's video popped out, its web view is in the player: a click there is the player's.
-    /// Only a click the page itself or its PDF viewer gets (`SplitPDFReader`): one on whatever lies
-    /// over it (the peeked sidebar, the address bar's suggestions) is that view's, and selecting the
-    /// partner there slid the peeked sidebar away under a right-click's menu.
+    /// From the window's click monitor: a click in the other side focuses it. Only a click the page
+    /// or its PDF viewer gets counts, not one on a view over it (selecting the partner there slid the
+    /// peeked sidebar away under a right-click's menu). A popped-out video's web view is the player's.
     func noteClick(_ event: NSEvent) {
         endTabDrag()
         guard let partner = shownPartner, partner !== videoPopout.tab, !NativeInput.isAgents(event),

@@ -1,15 +1,12 @@
 import SwiftUI
 
-/// A tab row or a favorite tile, whichever the pointer rests on.
 enum HoverTarget: Hashable {
     case tab(Tab.ID)
     case pin(Pin.ID)
 }
 
-/// Which card is shown, the one source of truth for every row's hover. Opening waits for the
-/// pointer to rest, so brushing past a row doesn't open it; closing waits a moment, so the gap
-/// between two rows doesn't close it. Once a card is up it follows the pointer from row to row
-/// at once, like Chrome's.
+/// Which card is shown, for every row. Opening waits for the pointer to rest; closing waits a
+/// moment, so the gap between two rows doesn't close it.
 @MainActor
 @Observable
 final class TabHover {
@@ -33,7 +30,6 @@ final class TabHover {
         update()
     }
 
-    /// A click, like Chrome's, puts the card away until the pointer comes back.
     func dismiss() {
         pending?.cancel()
         pointer = nil
@@ -55,7 +51,6 @@ final class TabHover {
     }
 }
 
-/// Where the sidebar and the shown card's row are, for the card to sit beside the sidebar.
 struct TabHoverAnchors: PreferenceKey {
     struct Value {
         var sidebar: Anchor<CGRect>?
@@ -93,7 +88,6 @@ private struct TabHoverTargetModifier: ViewModifier {
             }
             // A row closed or scrolled away under the pointer never hears it leave.
             .onDisappear { hover.pointer(target, isInside: false) }
-            // Any click, even on the row already selected, which changes nothing the layer watches.
             // Simultaneous, so the row's own tap, double-click and drag still get theirs.
             .simultaneousGesture(TapGesture().onEnded { hover.dismiss() })
             .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { value, anchor in
@@ -102,8 +96,7 @@ private struct TabHoverTargetModifier: ViewModifier {
     }
 }
 
-/// The card over the window, beside the sidebar at the height of the row. It never takes a
-/// click: the page and the sidebar below get them all.
+/// The card over the window, beside the sidebar. It never takes a click.
 struct TabHoverLayer: View {
     let anchors: TabHoverAnchors.Value
     @Environment(TabHover.self) private var hover
@@ -113,7 +106,6 @@ struct TabHoverLayer: View {
         GeometryReader { proxy in
             if let target = hover.shown, let row = anchors.row[target], let sidebar = anchors.sidebar {
                 let row = proxy[row]
-                // A row low in the window gets the card above its bottom edge, so it stays inside.
                 let isLow = row.midY > proxy.size.height / 2
                 LiveTabHoverCard(target: target)
                     .id(target)
@@ -129,8 +121,7 @@ struct TabHoverLayer: View {
     }
 }
 
-/// The card for a tab in the window, measured once a second while it is shown. The sampler
-/// lives in the task, so closing the card stops the sampling and forgets the samples.
+/// Measured once a second while shown. The sampler lives in the task, so closing the card stops it.
 private struct LiveTabHoverCard: View {
     let target: HoverTarget
     @Environment(Browser.self) private var browser
@@ -152,8 +143,7 @@ private struct LiveTabHoverCard: View {
         }
     }
 
-    /// The tab, and what the card names it: the full page title, which the row may shorten or
-    /// replace with the user's own name.
+    /// The full page title, which the row may shorten or replace with the user's own name.
     private var page: (tab: Tab?, title: String, host: String)? {
         switch target {
         case let .tab(id):
@@ -167,7 +157,6 @@ private struct LiveTabHoverCard: View {
         }
     }
 
-    /// Whether an agent had a hand in the tab, which the sidebar's badge only hints at.
     private func agentNote(for tab: Tab) -> String? {
         if tab.openedByAgent != nil { return "Opened by an agent" }
         return browser.agent?.isTouched(tab) == true ? "Used by an agent" : nil
@@ -187,13 +176,11 @@ private struct LiveTabHoverCard: View {
     }
 }
 
-/// Chrome's tab hover card: the page's full title and site, then what its process uses. Plain
-/// values in, so it renders without a browser.
+/// Plain values in, so it renders without a browser.
 struct TabHoverCard: View {
     let title: String
     let host: String
     let usage: TabUsage?
-    /// "Opened by an agent" or "Used by an agent"; nil for a tab no agent touched.
     var agent: String?
     @Environment(\.sidebarPalette) private var palette
 

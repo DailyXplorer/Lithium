@@ -1,13 +1,9 @@
 import AppKit
 
-/// A tab list of its own (Personal, Work), with its own favorites, color and icon, Arc-like. The
-/// sidebar shows one space at a time. A space can keep its cookies, logins and site storage apart
-/// in a WebKit store of its own, so a site can be signed in with another account there; its site
-/// permissions and per-site choices are then its own too (`Tab.siteSpace`). History, downloads and
-/// extensions stay shared, as WebKit's stores don't cover them.
-///
-/// Until a second space is made, `Browser.spaces` is empty and every tab and favorite is in the
-/// main space: nothing is saved, observed or watched for spaces.
+/// A tab list of its own (Personal, Work), with its own favorites, color and icon. A space can keep
+/// cookies, logins and site storage in a WebKit store of its own, with its own site permissions
+/// (`Tab.siteSpace`); history, downloads and extensions stay shared, as WebKit's stores don't cover them.
+/// Until a second space is made, `Browser.spaces` is empty and nothing is saved or watched for spaces.
 struct Space: Codable, Identifiable, Equatable {
     typealias ID = UUID
 
@@ -15,15 +11,13 @@ struct Space: Codable, Identifiable, Equatable {
     var name: String
     /// The sidebar's color while the space is shown; nil follows Settings › Appearance.
     var color: String?
-    /// A bundled Phosphor icon's name (`SpaceIconCatalog`), or an emoji an earlier version's
-    /// picker offered: those still show, but can't be picked anymore.
+    /// A Phosphor icon's name (`SpaceIconCatalog`), or an emoji saved by an earlier version.
     var icon: String
-    /// Cookies, logins and site storage of its own (`WKWebsiteDataStore(forIdentifier:)`, the
-    /// space's id). Chosen when the space is made: data can't move between stores afterwards.
+    /// A `WKWebsiteDataStore(forIdentifier:)` of the space's id. Chosen when the space is made:
+    /// data can't move between stores afterwards.
     var separatesData = false
 
-    /// The space every tab and favorite is in until the user makes another. It keeps WebKit's
-    /// default store, and is never deleted. Saved tabs and favorites leave its id out.
+    /// Keeps WebKit's default store and is never deleted. Saved tabs and favorites leave its id out.
     static let mainID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
     static let main = Space(id: mainID, name: "Personal", color: nil, icon: Phosphor.globe.rawValue)
 
@@ -39,12 +33,10 @@ struct Space: Codable, Identifiable, Equatable {
         !icon.unicodeScalars.allSatisfy(\.isASCII)
     }
 
-    /// What a saved tab or favorite records: nothing for the main space, so files written
-    /// without spaces stay as they were.
+    /// Nil for the main space, so files written without spaces stay as they were.
     static func saved(_ id: ID) -> ID? { id == mainID ? nil : id }
 
-    /// Per-site choices of separate spaces (protections, site fonts) as saved in the defaults:
-    /// by space id, then site.
+    /// Separate spaces' per-site choices as saved in the defaults: by space id, then site.
     static func siteChoices(_ stored: [String: Any]?) -> [ID: [String: Bool]] {
         var choices: [ID: [String: Bool]] = [:]
         for (key, value) in stored ?? [:] {
@@ -63,20 +55,16 @@ struct Space: Codable, Identifiable, Equatable {
     }
 }
 
-/// A two-finger swipe across the sidebar moves one space over, once per gesture: the fingers
-/// lifting and the momentum after them change nothing more. A mouse wheel (no phase) and a mostly
-/// vertical scroll (the tab list's own) never switch.
+/// A two-finger swipe across the sidebar moves one space over, once per gesture, momentum included.
+/// A mouse wheel (no phase) and a mostly vertical scroll never switch.
 struct SpaceSwipe {
     enum Outcome: Equatable {
-        /// Not a space swipe: the event goes on to the sidebar.
         case pass
         /// Part of a swipe that switched: kept from the tab list, which would scroll along.
         case consume
-        /// Switch by this many spaces: 1 to the next, -1 to the previous.
         case step(Int)
     }
 
-    /// Horizontal travel, in points, that makes a swipe.
     static let distance: CGFloat = 40
 
     private var travel = CGSize.zero
@@ -85,8 +73,8 @@ struct SpaceSwipe {
     /// The last gesture switched: the momentum after it is kept from the tab list too.
     private var swallowsMomentum = false
 
-    /// `inverted` is `NSEvent.isDirectionInvertedFromDevice` (natural scrolling): the fingers'
-    /// direction, not the content's, picks the space. Fingers to the left bring the next one.
+    /// `inverted` is `NSEvent.isDirectionInvertedFromDevice`: the fingers' direction, not the
+    /// content's, picks the space. Fingers to the left bring the next one.
     mutating func handle(phase: NSEvent.Phase, momentumPhase: NSEvent.Phase, dx: CGFloat, dy: CGFloat, inverted: Bool) -> Outcome {
         if !momentumPhase.isEmpty { return swallowsMomentum ? .consume : .pass }
         if phase.contains(.began) || phase.contains(.mayBegin) {
@@ -121,33 +109,29 @@ struct SpaceSwipe {
 }
 
 extension Browser {
-    /// Every space, the main one first; just the main one until the user makes another.
     var allSpaces: [Space] { spaces.isEmpty ? [.main] : spaces }
     var currentSpace: Space { allSpaces.first { $0.id == currentSpaceID } ?? .main }
     /// More than one space: the sidebar shows the switcher and watches for swipes.
     var hasSpaces: Bool { spaces.count > 1 }
     var canAddSpace: Bool { allSpaces.count < Space.limit }
 
-    /// Whether the space keeps its cookies apart (`Space.separatesData`); never the main one.
     func separatesData(_ id: Space.ID) -> Bool {
         id != Space.mainID && spaces.contains { $0.id == id && $0.separatesData }
     }
 
-    /// The favorites of the space shown, in grid order.
     var spacePins: [Pin] { pins(in: currentSpaceID) }
 
     func pins(in space: Space.ID) -> [Pin] {
         spaces.isEmpty ? pins : pins.filter { $0.space == space }
     }
 
-    /// A space's tab list, in order: each folder's tabs, then those outside folders (`TabFolder`).
     func tabList(in space: Space.ID) -> [Tab] {
         let spaceFolders = folders(in: space)
         guard !spaceFolders.isEmpty else { return tabs.filter { $0.isInTabList && $0.spaceID == space } }
         return spaceFolders.flatMap { tabList(in: space, folder: $0.id) } + tabList(in: space, folder: nil)
     }
 
-    /// The tabs of a folder, or with nil those outside folders, in order.
+    /// With a nil folder, the tabs outside folders.
     func tabList(in space: Space.ID, folder: TabFolder.ID?) -> [Tab] {
         tabs.filter { $0.isInTabList && $0.spaceID == space && $0.folderID == folder }
     }
@@ -161,7 +145,6 @@ extension Browser {
         pins(in: space).compactMap(liveTab(for:)) + tabList(in: space) + agentGroup(in: space)
     }
 
-    /// A draft for the space editor: the next color and icon no space has yet.
     func newSpaceDraft() -> Space {
         let all = allSpaces
         let colors = Set(all.compactMap(\.color))
@@ -180,7 +163,6 @@ extension Browser {
         switchToSpace(spaces[index].id)
     }
 
-    /// A swipe: the next or previous space, stopping at either end.
     func switchSpace(by offset: Int) {
         guard hasSpaces, let index = spaces.firstIndex(where: { $0.id == currentSpaceID }) else { return }
         switchToSpace(at: min(max(index + offset, 0), spaces.count - 1))

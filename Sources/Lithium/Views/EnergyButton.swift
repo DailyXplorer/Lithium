@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A leaf in the toolbar while energy saving is on, so background tabs sleeping sooner and their
-/// videos pausing never comes as a surprise. Its panel says why and leads to the setting.
+/// Shown while energy saving is on, so tabs sleeping sooner never comes as a surprise.
 struct EnergyButton: View {
     @Environment(Browser.self) private var browser
     @State private var isPresented = false

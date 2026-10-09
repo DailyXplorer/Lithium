@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// In the toolbar while an agent is connected (`AgentHub.isConnected`), so one is never
-/// connected unseen: a filled robot, accent-colored and pulsing while it acts. Its panel lists
-/// the sessions and holds Stop; the ⋯ menu opens the same panel the rest of the time.
+/// In the toolbar while an agent is connected, so one is never connected unseen.
 struct AgentButton: View {
     let agent: AgentHub
     @State private var isPresented = false
@@ -109,7 +107,6 @@ private struct SessionRow: View {
     }
 }
 
-/// "The agent needs you": a CAPTCHA or bot check in a tab, with the way to it.
 private struct ChallengeRow: View {
     let tab: Tab
     let challenge: AgentChallenge
@@ -137,7 +134,6 @@ private struct ChallengeRow: View {
     }
 }
 
-/// A prompt waiting for the user's answer, which the banner over the page takes.
 private struct PendingRow: View {
     let confirmation: AgentConfirmation
     let tab: Tab?
@@ -207,7 +203,6 @@ private struct LogLineRow: View {
     }
 }
 
-/// One sentence on agent access, shared by the toolbar panel and Settings.
 enum AgentStatus {
     @MainActor static func text(_ agent: AgentHub?) -> String {
         guard let agent else { return "Off. Agents can’t reach Lithium." }

@@ -1,10 +1,8 @@
 import FilterEngine
 import Foundation
 
-/// Rules WebKit's content blocker cannot express (uBO scriptlets, procedural cosmetics, CSS
-/// injection). AdGuard's engine finds the rules for a page; Lithium turns them into one script
-/// injected at document start, before any page code runs. Scriptlets from uBO's lists run
-/// uBO's own code (`UBOScriptlets`); the rest run AdGuard's.
+/// Rules WebKit's content blocker cannot express, found by AdGuard's engine and injected as one
+/// script at document start. Scriptlets from uBO's lists run uBO's own code (`UBOScriptlets`).
 @MainActor
 final class AdvancedBlocking {
     private var engine: WebExtension?
@@ -28,11 +26,8 @@ final class AdvancedBlocking {
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     }
 
-    /// Builds AdGuard's index from a filter folder (`advanced.txt`, and uBO's `+js()` filters in
-    /// `scriptlets.txt`) the first time that folder, or a new uBO scriptlet library, is seen.
-    /// Each build gets its own directory, renamed into place once complete: AdGuard's engine
-    /// holds a file lock while it builds, and an engine in use that shared it would make every
-    /// page opened meanwhile wait on the main thread.
+    /// Each build gets its own directory, renamed into place once complete: AdGuard's engine holds
+    /// a file lock while it builds, which would make pages opened meanwhile wait on the main thread.
     func load(folder: URL, stamp filterStamp: String) async {
         let ubo = ubo
         let stamp = "\(filterStamp)-ubo-\(ubo?.version ?? "none")"
@@ -66,8 +61,7 @@ final class AdvancedBlocking {
         }
     }
 
-    /// The script for a page at `url`, or, given `page`, for a frame of that page showing `url`:
-    /// looked up for the frame's own site, and only run in frames of that host, never the page itself.
+    /// Given `page`, the script is for a frame showing `url`, and runs only in frames of that host.
     func script(for url: URL, inFrameOf page: URL? = nil) -> String? {
         guard ["http", "https"].contains(url.scheme), page.map({ ["http", "https"].contains($0.scheme) }) ?? true,
               let configuration = engine?.lookup(pageUrl: url, topUrl: page) else { return nil }

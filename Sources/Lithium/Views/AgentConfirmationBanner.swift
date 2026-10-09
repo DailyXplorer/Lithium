@@ -1,18 +1,15 @@
 import SwiftUI
 
-/// An agent's request for the user's Allow, as a strip along the top of the page like the site
-/// permission prompt: in Lithium's own UI, out of the page's reach, never a modal that takes the
-/// focus. Deny is the default: Escape denies, Return does nothing.
+/// An agent's request for the user's Allow, in Lithium's own UI, out of the page's reach.
+/// Deny is the default: Escape denies, Return does nothing.
 struct AgentConfirmationBanner: View {
     let confirmation: AgentConfirmation
     let confirmations: AgentConfirmations
     /// The tab it is about when another one is shown, for Show Tab.
     var otherTab: Tab?
-    /// Prompts waiting behind this one.
     var queued = 0
     @Environment(Browser.self) private var browser
-    /// The next prompt in the queue takes this one's place, with Allow once where it was: the
-    /// second click of a double click, or one more quick click, must not answer it.
+    /// The next prompt takes this one's place: the second click of a double click must not answer it.
     @State private var protection = ClickProtection()
 
     var body: some View {
@@ -93,7 +90,6 @@ extension ConfirmationKind {
         }
     }
 
-    /// What a site grant lets the agent do, for the button's help.
     var verb: String {
         switch self {
         case .payment: "pay"

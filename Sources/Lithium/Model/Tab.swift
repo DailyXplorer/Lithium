@@ -832,7 +832,7 @@ final class Tab: NSObject, Identifiable {
         if inMainFrame { endedUnshown(.download(fileName: fileName)) }
         // A tab opened just to fetch a file has no page to show once the download starts; like
         // Safari, close it, without a Reopen Closed Tab entry that would only download it again.
-        if !hasHadPage, webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false) }
+        if !hasHadPage, webView.backForwardList.currentItem == nil { browser?.close(self, remembering: false, goingBack: true) }
     }
 
     private func endedUnshown(_ load: UnshownLoad) {

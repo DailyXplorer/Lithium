@@ -223,10 +223,12 @@ final class Browser {
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
         // Unsaved input is spared for one more idle interval: typed on screen, it is never newer than the
         // tab's going idle, so `interval` alone would never spare it. "Sleep Other Tabs" (none) is the user's own choice.
+        // A favorite's page is spared too: asleep, it can't update its unread badge, which would stay as it was.
         return tabs.filter { tab in
             candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
                 && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
                 && !(sparingPopups && tab.hasUnsavedInput(within: 2 * interval))
+                && !(sparingPopups && tab.pinID != nil)
                 && tab.canSleep(idleFor: interval)
         }
     }
@@ -573,7 +575,7 @@ final class Browser {
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil, space: Space.ID? = nil) -> Tab {
         let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore, space: space ?? opener?.spaceID ?? currentSpaceID)
-        if let opener { recentTabs.didOpen(tab, from: opener) }
+        if let opener { recentTabs.didOpen(tab, from: opener) } else if selecting { recentTabs.didOpen(tab, replacing: selectedTab) }
         if let url { tab.load(url) }
         if selecting { select(tab) }
         return tab
@@ -834,8 +836,9 @@ final class Browser {
     }
 
     /// `remembering` false keeps the tab out of Reopen Closed Tab: a tab that closed itself once
-    /// its address became a download would only start the download again.
-    func close(_ tab: Tab, remembering: Bool) {
+    /// its address became a download would only start the download again. `goingBack` shows again
+    /// what such a tab was opened over, rather than its neighbour, which may be asleep and unrelated.
+    func close(_ tab: Tab, remembering: Bool, goingBack: Bool = false) {
         if quickLinks.contains(tab) { return quickLinks.close(tab) }
         let order = peers(of: tab)
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
@@ -856,8 +859,13 @@ final class Browser {
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }
-            selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
-                : remaining[min(position, remaining.count - 1)].id)
+            if partner == nil, goingBack, let before = recentTabs.shownBefore(tab),
+               before.map({ id in tabs.contains { $0.id == id && $0 !== tab && $0.spaceID == tab.spaceID } }) ?? true {
+                selectedTabID = before
+            } else {
+                selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
+                    : remaining[min(position, remaining.count - 1)].id)
+            }
             // The tab shown next may be asleep.
             selectedTab?.markActive()
             if let selectedTab { recentTabs.didShow(selectedTab, after: nil) }

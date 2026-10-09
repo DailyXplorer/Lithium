@@ -325,6 +325,30 @@ struct BrowserTests {
         if let reopened = browser.selectedTab { browser.close(reopened) }
     }
 
+    /// A tab opened by no page (a typed address, a link from another app) that only fetched a file
+    /// gives back what it was opened over, a tab or the start page, not the tab at the top of the list.
+    @Test func aTabClosedByItsDownloadGoesBackToWhatWasShown() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/file": ("Content-Type: application/octet-stream", "Lithium")])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let shown = browser.newTab(url: URL(string: "data:text/html,shown")!)
+        let top = browser.newTab(url: URL(string: "data:text/html,top")!)
+        defer { [shown, top].forEach(browser.close) }
+        browser.select(shown)
+        let before = Downloads.shared.items.count
+        defer { Downloads.shared.items.prefix(Downloads.shared.items.count - before).compactMap(\.destination).forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let first = browser.newTab(url: base.appending(path: "file"))
+        #expect(await waitUntil(30) { !browser.tabs.contains { $0 === first } })
+        #expect(browser.selectedTab === shown)
+
+        browser.newTabFocusingAddress()
+        let second = browser.newTab(url: base.appending(path: "file"))
+        #expect(await waitUntil(30) { !browser.tabs.contains { $0 === second } })
+        #expect(browser.selectedTabID == nil)
+        #expect(await waitUntil(30) { Downloads.shared.items.prefix(2).allSatisfy { $0.state != .downloading } })
+    }
+
     /// A tab from the last session wakes without its history: if its address now answers with a
     /// file, the file downloads and the tab stays, unlike one opened just to fetch it.
     @Test func aRestoredTabWhoseAddressNowDownloadsStays() async throws {
@@ -800,6 +824,29 @@ struct BrowserTests {
         #expect(!background.isAsleep, "a tab used a moment ago stays awake while memory is only low")
         browser.relieveMemoryPressure(critical: true)
         #expect(background.isAsleep)
+        #expect(!visible.isAsleep)
+    }
+
+    /// An open favorite stays awake through idle sleep, or its unread badge would stay as it was
+    /// while the page can no longer change it; critical memory still puts it to sleep.
+    @Test func idleSleepSparesAnOpenFavorite() async throws {
+        let browser = Browser()
+        let favorite = browser.newTab(url: URL(string: "data:text/html,favorite")!, selecting: false)
+        let other = browser.newTab(url: URL(string: "data:text/html,other")!, selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        defer { [favorite, other, visible].forEach(browser.close) }
+        #expect(await waitUntil(120) { [favorite, other, visible].allSatisfy(loaded) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        UserDefaults.standard.set(1, forKey: "tabIdleSeconds")
+        defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
+
+        try await Task.sleep(for: .seconds(1.2))
+        browser.relieveMemoryPressure(critical: false)
+        #expect(other.isAsleep)
+        #expect(!favorite.isAsleep)
+        browser.relieveMemoryPressure(critical: true)
+        #expect(favorite.isAsleep)
         #expect(!visible.isAsleep)
     }
 

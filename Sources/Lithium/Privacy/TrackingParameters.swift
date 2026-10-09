@@ -15,10 +15,17 @@ enum TrackingParameters {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let query = components.percentEncodedQuery, !query.isEmpty else { return nil }
         let items = query.split(separator: "&", omittingEmptySubsequences: false)
-        let kept = items.filter { item in
+        let itemNames = items.map { item in
             let name = String(item.prefix { $0 != "=" })
-            return !names.contains((name.removingPercentEncoding ?? name).lowercased())
+            return (name.removingPercentEncoding ?? name).lowercased()
         }
+        // Marketo's unsubscribe and "view in browser" pages need `mkt_tok` to know who the
+        // recipient is: without it, unsubscribing asks for the address or fails.
+        let path = components.percentEncodedPath.lowercased()
+        let keepsMarketoToken = itemNames.contains("mkt_unsubscribe") || path.contains("unsubscribe") || path.contains("emailwebview")
+        let kept = zip(items, itemNames).filter { _, name in
+            !names.contains(name) || (keepsMarketoToken && name == "mkt_tok")
+        }.map(\.0)
         guard kept.count != items.count else { return nil }
         components.percentEncodedQuery = kept.isEmpty ? nil : kept.joined(separator: "&")
         return components.url

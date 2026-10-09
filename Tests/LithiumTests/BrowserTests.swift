@@ -78,6 +78,31 @@ struct BrowserTests {
         #expect(await waitUntil(10) { browser.find.matchCount == 1 && browser.find.currentMatch == 1 })
     }
 
+    /// A wide page clips sideways overflow; a split pane's width or zooming in leaves it scrollable,
+    /// so a fixed-width layout's right side can still be reached.
+    @Test func onlyWideViewsClipSidewaysOverflow() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>Wide</title><div style='width:1500px'>wide</div>")])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.title == "Wide" && !tab.isLoading })
+        let overflow = { (expected: String) in
+            await self.pollValue(10) {
+                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+                return value == expected ? value : nil
+            } != nil
+        }
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        #expect(await overflow("clip"))
+        tab.webView.pageZoom = 1.5
+        #expect(await overflow("visible"))
+        tab.webView.pageZoom = 1
+        #expect(await overflow("clip"))
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 700, height: 800)
+        #expect(await overflow("visible"))
+    }
+
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
     @Test func restoresAnInternalTabAtLaunch() throws {
         SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))
@@ -799,8 +824,9 @@ struct BrowserTests {
     }
 
     /// Idle sleep passes by a page the user typed in, or pressed a key in while it has a
-    /// `beforeunload` handler; a handler alone, with no interaction, keeps no tab awake. Critical
-    /// memory still sleeps them all, and a page woken afresh holds nothing unsaved.
+    /// `beforeunload` handler, for an idle interval from that input; a handler alone, with no
+    /// interaction, keeps no tab awake. "Sleep Other Tabs" sleeps them anyway, and a page woken
+    /// afresh holds nothing unsaved.
     @Test func idleSleepSparesAPageWithUnsavedInput() async throws {
         let guarded = "<script>addEventListener('beforeunload', event => event.preventDefault())</script><title>Guarded</title><p>guarded"
         let (listener, base) = try await LocalHTTP.serve([
@@ -815,11 +841,15 @@ struct BrowserTests {
         let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
         defer { [typed, pressed, untouched, visible].forEach(browser.close) }
         #expect(await waitUntil(120) { [typed, pressed, untouched, visible].allSatisfy(loaded) })
+        UserDefaults.standard.set(3, forKey: "tabIdleSeconds")
+        defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
+        // Idle for longer than that since opened: only input spares them.
+        try await Task.sleep(for: .seconds(3.2))
 
         _ = try await typed.webView.callAsyncJavaScript("document.getElementById('field').focus()", contentWorld: .page)
         let client = try #require(typed.webView as NSView as? NSTextInputClient)
         client.insertText("draft", replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(await waitUntil(10) { typed.hasUnsavedInput })
+        #expect(await waitUntil(10) { typed.unsavedInputAt != nil })
 
         // Off screen and never ordered in: the key goes to the page as a real one.
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -834,21 +864,25 @@ struct BrowserTests {
             ))
             if type == .keyDown { pressed.webView.keyDown(with: key) } else { pressed.webView.keyUp(with: key) }
         }
-        #expect(await waitUntil(10) { pressed.hasUnsavedInput })
-        #expect(!untouched.hasUnsavedInput)
+        #expect(await waitUntil(10) { pressed.unsavedInputAt != nil })
+        #expect(untouched.unsavedInputAt == nil)
 
-        UserDefaults.standard.set(0.002, forKey: "tabIdleSeconds")
-        defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
         browser.relieveMemoryPressure(critical: false)
         #expect(untouched.isAsleep)
         #expect(!typed.isAsleep && !pressed.isAsleep)
 
-        browser.relieveMemoryPressure(critical: true)
-        #expect(typed.isAsleep && pressed.isAsleep)
+        browser.sleepOtherTabs(than: pressed)
+        #expect(typed.isAsleep)
+        #expect(!pressed.isAsleep && !visible.isAsleep)
+
+        // Left alone for an idle interval, the input no longer counts.
+        try await Task.sleep(for: .seconds(3.2))
+        browser.relieveMemoryPressure(critical: false)
+        #expect(pressed.isAsleep)
         #expect(!visible.isAsleep)
         browser.select(typed)
         #expect(await waitUntil(10) { loaded(typed) && typed.webView.title == "Form" })
-        #expect(!typed.hasUnsavedInput)
+        #expect(typed.unsavedInputAt == nil)
     }
 
     /// An `onbeforeunload` that throws when read is the page's own code at leaving: a key pressed
@@ -875,7 +909,7 @@ struct BrowserTests {
             ))
             if type == .keyDown { tab.webView.keyDown(with: key) } else { tab.webView.keyUp(with: key) }
         }
-        #expect(await waitUntil(10) { tab.hasUnsavedInput })
+        #expect(await waitUntil(10) { tab.unsavedInputAt != nil })
     }
 
     /// A page that retitles itself again and again writes the session once, a moment later and

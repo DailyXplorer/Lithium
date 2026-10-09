@@ -93,15 +93,16 @@ final class HistoryStore {
         }
     }
 
-    func visits(matching query: String, limit: Int = 500) -> [Visit] {
+    /// `before`: the id of the last visit already shown, to go on with older ones.
+    func visits(matching query: String, before: Int64? = nil, limit: Int = 500) -> [Visit] {
         writeTitles()
-        return Self.visits(in: db, matching: query, limit: limit)
+        return Self.visits(in: db, matching: query, before: before, limit: limit)
     }
 
     /// Off the main thread (a query few visits match reads them all); nil when a newer query replaced this one.
-    func visitsInBackground(matching query: String, limit: Int = 500) async -> [Visit]? {
+    func visitsInBackground(matching query: String, before: Int64? = nil, limit: Int = 500) async -> [Visit]? {
         writeTitles()
-        return await search.visits(matching: query, limit: limit)
+        return await search.visits(matching: query, before: before, limit: limit)
     }
 
     /// Escapes LIKE wildcards. SQLite folds the case of ASCII letters only, so a query with other
@@ -119,18 +120,20 @@ final class HistoryStore {
         }, nil, nil, nil)
     }
 
-    nonisolated fileprivate static func visits(in db: OpaquePointer?, matching query: String, limit: Int) -> [Visit] {
+    nonisolated fileprivate static func visits(in db: OpaquePointer?, matching query: String, before: Int64?, limit: Int) -> [Visit] {
         let (text, column) = searchTerms(query.trimmingCharacters(in: .whitespaces))
         let pattern = "%\(text)%"
         var statement: OpaquePointer?
         let sql = """
-            SELECT id, url, title, visited_at FROM visits WHERE \(column("url")) LIKE ?1 ESCAPE '\\' OR \(column("title")) LIKE ?1 ESCAPE '\\'
+            SELECT id, url, title, visited_at FROM visits WHERE (\(column("url")) LIKE ?1 ESCAPE '\\' OR \(column("title")) LIKE ?1 ESCAPE '\\')
+            \(before == nil ? "" : "AND visited_at < (SELECT visited_at FROM visits WHERE id = ?3)")
             ORDER BY visited_at DESC LIMIT ?2
             """
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_text(statement, 1, pattern, -1, Self.transient)
         sqlite3_bind_int(statement, 2, Int32(limit))
+        if let before { sqlite3_bind_int64(statement, 3, before) }
 
         var visits: [Visit] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -303,8 +306,8 @@ private final class HistorySearch: @unchecked Sendable {
         await run(.topSites) { HistoryStore.topSites(in: $0, matching: query, limit: limit) }
     }
 
-    func visits(matching query: String, limit: Int) async -> [Visit]? {
-        await run(.visits) { HistoryStore.visits(in: $0, matching: query, limit: limit) }
+    func visits(matching query: String, before: Int64?, limit: Int) async -> [Visit]? {
+        await run(.visits) { HistoryStore.visits(in: $0, matching: query, before: before, limit: limit) }
     }
 
     private func run<Result: Sendable>(_ kind: Kind, _ read: @escaping @Sendable (OpaquePointer?) -> Result) async -> Result? {

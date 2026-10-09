@@ -37,6 +37,7 @@
       <input type="search" id="query" placeholder="Search history" autofocus>
     </div>
     <div id="list"></div>
+    <div id="end"></div>
   </div>
 </main>
 
@@ -58,47 +59,99 @@
     return box;
   };
 
+  // Lithium sends visits a page at a time (InternalBridge.historyPageLength): a full page means there may be more.
+  const pageLength = 500;
+  let shown = [];
+  let query = '';
+  let complete = true;
+  let loading = false;
+  // Bumped by each new search, so a page asked for the one before is dropped.
+  let generation = 0;
+
+  const row = (visit) => {
+    const host = new URL(visit.url).hostname;
+    const remove = el('button', { className: 'remove', title: 'Remove from history' }, [
+      Object.assign(el('div', { className: 'icon' }), { style: '--src: url(lithium://pages/icon/x); width: 14px; height: 14px' }),
+    ]);
+    const link = el('a', { className: 'visit', href: visit.url, title: visit.url }, [
+      favicon(host),
+      el('span', { className: 'text' }, [
+        el('span', { className: 'title', textContent: visit.title || visit.url }),
+        el('span', { className: 'host', textContent: host.replace(/^www\./, '') }),
+      ]),
+      el('time', { textContent: new Date(visit.time).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }) }),
+      remove,
+    ]);
+    // Removed in place: reloading would drop the older pages scrolled to.
+    remove.onclick = (event) => {
+      event.preventDefault();
+      call('deleteVisit', visit.id).then(() => {
+        shown = shown.filter((other) => other !== visit);
+        const day = link.parentElement;
+        link.remove();
+        if (day.childElementCount === 1) day.remove();
+        if (!shown.length) render([]);
+      });
+    };
+    return link;
+  };
+
+  // Added under the last day shown when they continue it.
+  const append = (visits) => {
+    const list = $('#list');
+    for (const visit of visits) {
+      const label = dayLabel(visit.time);
+      let day = list.lastElementChild;
+      if (!day || day.dataset.label !== label) {
+        day = el('div', { className: 'day' }, [el('h3', { textContent: label, style: 'margin-top: 0' })]);
+        day.dataset.label = label;
+        list.append(day);
+      }
+      day.append(row(visit));
+    }
+    shown.push(...visits);
+    complete = visits.length < pageLength;
+  };
+
   const render = (visits) => {
-    const query = $('#query').value.trim();
+    shown = [];
     if (!visits.length) {
+      complete = true;
       $('#list').replaceChildren(el('div', { className: 'empty', style: 'margin-top: 24px', textContent: query ? 'No results.' : 'No history yet.' }));
       return;
     }
-    const groups = new Map();
-    for (const visit of visits) {
-      const label = dayLabel(visit.time);
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(visit);
-    }
-    $('#list').replaceChildren(...[...groups].map(([label, items]) => el('div', { className: 'day' }, [
-      el('h3', { textContent: label, style: 'margin-top: 0' }),
-      ...items.map((visit) => {
-        const host = new URL(visit.url).hostname;
-        const remove = el('button', { className: 'remove', title: 'Remove from history' }, [
-          Object.assign(el('div', { className: 'icon' }), { style: '--src: url(lithium://pages/icon/x); width: 14px; height: 14px' }),
-        ]);
-        remove.onclick = (event) => { event.preventDefault(); call('deleteVisit', visit.id).then(load); };
-        return el('a', { className: 'visit', href: visit.url, title: visit.url }, [
-          favicon(host),
-          el('span', { className: 'text' }, [
-            el('span', { className: 'title', textContent: visit.title || visit.url }),
-            el('span', { className: 'host', textContent: host.replace(/^www\./, '') }),
-          ]),
-          el('time', { textContent: new Date(visit.time).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' }) }),
-          remove,
-        ]);
-      }),
-    ])));
+    $('#list').replaceChildren();
+    append(visits);
   };
 
   // No answer for a search a newer one replaced: the newer one renders.
-  const load = () => call('history', $('#query').value.trim()).then((visits) => visits && render(visits));
+  const load = () => {
+    const current = ++generation;
+    query = $('#query').value.trim();
+    loading = false;
+    return call('history', query).then((visits) => visits && current === generation && render(visits));
+  };
+
+  const more = () => {
+    if (complete || loading || !shown.length) return;
+    const current = generation;
+    loading = true;
+    call('history', { query, before: shown[shown.length - 1].id }).then((visits) => {
+      if (current !== generation) return;
+      loading = false;
+      if (visits) append(visits);
+    });
+  };
+  // Asked for well before the end comes into view, so scrolling rarely waits.
+  new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) more(); }, { rootMargin: '1200px' }).observe($('#end'));
+
   let timer = null;
   $('#query').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 120); };
   $('#clear').onclick = () => {
     if (confirm('Clear all browsing history? This can’t be undone.')) call('clearHistory').then(load);
   };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  // Back on the page, new visits show, unless older pages were scrolled to: that would lose the place.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && shown.length <= pageLength) load(); });
   load();
 </script>
 </body>

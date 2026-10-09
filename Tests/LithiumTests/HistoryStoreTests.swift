@@ -63,6 +63,20 @@ struct HistoryStoreTests {
         #expect(store.visits(matching: "").isEmpty)
     }
 
+    /// The History page shows a page of visits at a time: the next one starts after the last shown,
+    /// for a search too, and none is left out or repeated.
+    @Test func pagesGoOnFromTheLastVisitShown() async throws {
+        let store = makeStore()
+        for index in 0..<5 { store.record(URL(string: "https://example.com/\(index)")!, title: "Page \(index)") }
+        store.record(URL(string: "https://swift.org/")!, title: "Swift")
+        let first = store.visits(matching: "", limit: 2)
+        #expect(first.map(\.title) == ["Swift", "Page 4"])
+        let last = try #require(first.last)
+        #expect(store.visits(matching: "", before: last.id, limit: 2).map(\.title) == ["Page 3", "Page 2"])
+        #expect(await store.visitsInBackground(matching: "example", before: last.id, limit: 10)?.map(\.title) == ["Page 3", "Page 2", "Page 1", "Page 0"])
+        #expect(store.visits(matching: "swift", before: last.id).isEmpty)
+    }
+
     /// Clearing a long history deletes and rewrites the whole file: on a connection of its own,
     /// off the main thread. Both of the store's connections see it done, and visits recorded
     /// afterwards are kept.

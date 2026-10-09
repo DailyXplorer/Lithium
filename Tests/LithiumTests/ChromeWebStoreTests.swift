@@ -64,6 +64,37 @@ struct ChromeWebStoreTests {
         #expect(items.first { $0.name == "prodversion" }?.value == ChromeWebStore.chromeVersion)
     }
 
+    /// One request names every installed extension and its version; the answer lists newer versions only.
+    @Test func checksForUpdatesLikeChrome() throws {
+        let installed = [
+            InstalledExtension(id: "mnjggcdmjocbbbhaepdhchncahnbgone", name: "SponsorBlock", version: "5.4.1", isEnabled: true),
+            InstalledExtension(id: "aeblfdkhhhdcdjpifhhbdiojplfjncoa", name: "1Password", version: "8.11.4", isEnabled: false),
+        ]
+        let url = ChromeWebStore.updateCheckURL(for: installed)
+        let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.filter { $0.name == "x" }.map(\.value) == ["id=mnjggcdmjocbbbhaepdhchncahnbgone&v=5.4.1&uc", "id=aeblfdkhhhdcdjpifhhbdiojplfjncoa&v=8.11.4&uc"])
+        #expect(items.first { $0.name == "response" }?.value == "updatecheck")
+
+        let response = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0" server="prod">
+              <daystart elapsed_days="6855" elapsed_seconds="1000"/>
+              <app appid="mnjggcdmjocbbbhaepdhchncahnbgone" cohort="1::" status="ok">
+                <updatecheck codebase="https://clients2.googleusercontent.com/crx/blobs/a.crx" fp="1.abc" protocol="2.0" size="100" status="ok" version="5.5.0"/>
+              </app>
+              <app appid="aeblfdkhhhdcdjpifhhbdiojplfjncoa" cohort="1::" status="ok">
+                <updatecheck status="noupdate"/>
+              </app>
+            </gupdate>
+            """
+        #expect(ChromeWebStore.updates(in: Data(response.utf8)) == ["mnjggcdmjocbbbhaepdhchncahnbgone": "5.5.0"])
+    }
+
+    @Test(arguments: [("1.10", "1.9", true), ("2.0", "1.99.9", true), ("1.0.1", "1.0", true), ("1.0", "1.0.0", false), ("1.2", "1.10", false)])
+    func comparesVersionsNumberByNumber(version: String, installed: String, isNewer: Bool) {
+        #expect(ChromeWebStore.isNewer(version, than: installed) == isNewer)
+    }
+
     @Test func recognizesTheStore() {
         #expect(ChromeWebStore.isStore(URL(string: "https://chromewebstore.google.com/detail/x/mnjggcdmjocbbbhaepdhchncahnbgone")))
         #expect(!ChromeWebStore.isStore(URL(string: "http://chromewebstore.google.com/")))

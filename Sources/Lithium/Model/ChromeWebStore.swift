@@ -39,6 +39,60 @@ enum ChromeWebStore {
         return data
     }
 
+    /// The update check Chrome makes, for every extension in one request: each names its version,
+    /// so the answer lists only those with a newer one.
+    static func updateCheckURL(for installed: [InstalledExtension]) -> URL {
+        var components = URLComponents(string: "https://clients2.google.com/service/update2/crx")!
+        let versions = installed.map { entry in
+            "x=" + "id=\(entry.id)&v=\(entry.version)&uc".addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: ".-_")))!
+        }
+        components.percentEncodedQuery = (["response=updatecheck", "acceptformat=crx3", "prodversion=\(chromeVersion)"] + versions).joined(separator: "&")
+        return components.url!
+    }
+
+    /// The newer versions offered, by extension id.
+    static func latestVersions(of installed: [InstalledExtension]) async throws -> [String: String] {
+        let (data, response) = try await session.data(from: updateCheckURL(for: installed))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PackageError.unavailable }
+        return updates(in: data)
+    }
+
+    /// Read from `<app appid="…"><updatecheck status="ok" version="…"/></app>`; "noupdate" has no version.
+    static func updates(in response: Data) -> [String: String] {
+        let reader = UpdateCheckReader()
+        let parser = XMLParser(data: response)
+        parser.delegate = reader
+        parser.parse()
+        return reader.versions
+    }
+
+    private final class UpdateCheckReader: NSObject, XMLParserDelegate {
+        var versions: [String: String] = [:]
+        private var app: String?
+
+        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
+            if name == "app" { app = attributes["appid"] }
+            if name == "updatecheck", let app, ChromeWebStore.isExtensionID(app), attributes["status"] == "ok", let version = attributes["version"] {
+                versions[app] = version
+            }
+        }
+
+        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            if name == "app" { app = nil }
+        }
+    }
+
+    /// Whether `version` comes after `installed`, both numbers separated by dots, as manifests write them.
+    static func isNewer(_ version: String, than installed: String) -> Bool {
+        let new = version.split(separator: ".").map { Int($0) ?? 0 }
+        let old = installed.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(new.count, old.count) {
+            let a = index < new.count ? new[index] : 0, b = index < old.count ? old[index] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+
     private static let session = URLSession(configuration: .ephemeral)
 
     enum PackageError: LocalizedError {

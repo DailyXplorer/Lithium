@@ -291,4 +291,49 @@ struct ExtensionsTests {
         #expect(extensions.contexts[id] == nil)
         #expect(extensions.installed.first?.isEnabled == false)
     }
+
+    /// Nothing updated an extension, and Remove then Add deletes its data. A newer version from the
+    /// store replaces it in place, on or off as it was, and the store is asked once a day at most.
+    @Test(.timeLimit(.minutes(1))) func newerVersionsReplaceTheInstalledOnceADay() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        await extensions.setEnabled(false, id: id)
+        var asked: [[InstalledExtension]] = []
+        extensions.latestVersions = { installed in
+            asked.append(installed)
+            return [self.id: "1.10"]
+        }
+        let newer = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "1.10"}"#)
+        extensions.downloadArchive = { _ in newer }
+
+        await extensions.updateIfDue()
+        #expect(asked.map { $0.map(\.version) } == [["1.0"]])
+        #expect(extensions.installed == [InstalledExtension(id: id, name: "Tiny", version: "1.10", isEnabled: false)])
+        #expect(extensions.contexts[id] == nil)
+
+        await extensions.updateIfDue()
+        #expect(asked.count == 1)
+        await extensions.updateIfDue(now: .now + Extensions.updateInterval + 60)
+        #expect(asked.count == 2)
+        // Offered again, the same version isn't installed again.
+        #expect(extensions.installed.first?.version == "1.10")
+    }
+
+    /// The user agreed to what the installed version asks for: a version asking for more is
+    /// refused, and the installed one keeps running.
+    @Test(.timeLimit(.minutes(1))) func anUpdateAskingForMoreIsRefused() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        extensions.latestVersions = { _ in [self.id: "2.0"] }
+        let greedy = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "2.0", "host_permissions": ["<all_urls>"]}"#)
+        extensions.downloadArchive = { _ in greedy }
+
+        await extensions.updateIfDue()
+        #expect(extensions.installed.first?.version == "1.0")
+        #expect(extensions.contexts[id] != nil)
+    }
 }

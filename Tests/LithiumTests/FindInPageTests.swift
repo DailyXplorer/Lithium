@@ -80,6 +80,57 @@ struct FindInPageTests {
         #expect(find.currentMatch == 5)
     }
 
+    /// Each count reads the whole page text: a burst of keystrokes counts once, for the last text.
+    @Test func typingCountsOnceThePauseComes() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        let keystrokes = ["l", "li", "lic", "lice"].map { text in Task { await find.type(query: text, in: page) } }
+        for keystroke in keystrokes { await keystroke.value }
+        #expect(page.counted == ["lice"])
+        #expect(find.query == "lice" && find.matchCount == 2)
+    }
+
+    /// Return right after typing searches the new text at once, and the pending search doesn't run again.
+    @Test func searchingBeforeThePauseDropsThePendingSearch() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        let typed = Task { await find.type(query: "licence", in: page) }
+        // The keystroke came first: its task waits out the pause before Return.
+        await Task.yield()
+        await find.update(query: "licence", in: page)
+        await typed.value
+        #expect(page.counted == ["licence"])
+    }
+
+    /// A page finishing loading during the pause searches the old text again: the new text still searches after.
+    @Test func searchingTheOldTextAgainKeepsThePendingSearch() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        await find.update(query: "lic", in: page)
+        let typed = Task { await find.type(query: "lice", in: page) }
+        await Task.yield()
+        await find.update(query: find.query, in: page)
+        await typed.value
+        #expect(page.counted == ["lic", "lic", "lice"])
+        #expect(find.query == "lice")
+    }
+
+    /// Closing the bar during the pause drops the pending search.
+    @Test func closingTheBarDropsThePendingSearch() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        find.show()
+        let typed = Task { await find.type(query: "licence", in: page) }
+        await Task.yield()
+        find.hide()
+        await typed.value
+        #expect(page.counted.isEmpty)
+    }
+
     /// Only Find… gives the find field the keyboard: Find Next and Use Selection for Find show the
     /// bar but leave the keyboard where it was, such as a form field in the page.
     @Test func onlyFindTakesTheKeyboard() async {
@@ -180,6 +231,8 @@ struct FindInPageTests {
         let knowsPosition: Bool
         private(set) var shown = 0
         private(set) var cleared = false
+        /// The queries counted, each a read of the whole page text in a web page.
+        private(set) var counted: [String] = []
         var canShow = true
         /// Like a PDF: nothing to show once cleared, until counted again.
         var forgetsClearedMatches = false
@@ -208,6 +261,7 @@ struct FindInPageTests {
         }
 
         func countMatches(of query: String) async -> Int {
+            counted.append(query)
             wasAsked = true
             asked?.resume()
             asked = nil

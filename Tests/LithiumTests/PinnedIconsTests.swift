@@ -405,6 +405,35 @@ struct PinnedIcons {
         #expect(requests["/badged.png"] == 0)
     }
 
+    /// A site with no touch icon, first opened while it counts: its favicon, which may have the
+    /// count drawn in, shows but is not kept as the site's icon. Once the count goes from the
+    /// title alone, the icon the page names is fetched again for the tile.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func theCleanIconComesBackWhenTheCountGoes() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>(3) Chat</title><link rel="icon" href="/badged.png">"#)
+        defer { server.cancel() }
+        let favicons = Self.favicons()
+        let browser = Browser(favicons: favicons, notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(url: base, selecting: false)
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let badged = try #require(Favicons.normalized(Self.badged))
+        let red = try #require(Favicons.normalized(Self.red))
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        #expect(await waitUntil(30) { tab.faviconData == badged && tab.unread.shown == .count(3) })
+        #expect(favicons.cachedData(host: try #require(base.host())) == nil)
+
+        // The page names its clean icon while it still counts, then only its title changes.
+        _ = try await tab.webView.evaluateJavaScript("document.querySelector('link[rel=icon]').href = '/red.png'; 0")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(tab.faviconData == badged)
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Chat'; 0")
+        #expect(await waitUntil(10) { tab.unread.shown == nil })
+        #expect(await waitUntil(15) { tab.faviconData == red && pin()?.favicon == red })
+        #expect(favicons.cachedData(host: try #require(base.host())) == red)
+    }
+
     /// The touch icon comes first only while the page counts something, in its title or through
     /// `setAppBadge`; otherwise the icon closest to the tile's size does, as before.
     @Test(arguments: [("(3) Chat", false), ("Chat", true), ("Chat", false)])

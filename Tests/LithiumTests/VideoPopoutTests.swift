@@ -107,13 +107,15 @@ struct VideoPopoutTests {
         #expect(try await looping() == false, "no frame loop while paused")
 
         let start = Date()
-        let waiting = Task { try await VideoPopout.run("state", in: webView, value: VideoPopout.pausedWait) as? [String: Any] }
+        let waiting = Task {
+            (try await VideoPopout.run("state", in: webView, value: VideoPopout.pausedWait) as? [String: Any])?["paused"] as? Bool
+        }
         try await Task.sleep(for: .milliseconds(500))
         _ = try await webView.callAsyncJavaScript("document.querySelector('video').play()", contentWorld: .page)
-        let state = try #require(try await waiting.value)
+        let paused = try await waiting.value
         let elapsed = Date().timeIntervalSince(start)
         #expect(elapsed >= 0.4 && elapsed < 3, "answered when it played, not before")
-        #expect(state["paused"] as? Bool == false)
+        #expect(paused == false)
         #expect(try await looping() == true)
         _ = try await VideoPopout.run("hide", in: webView)
     }

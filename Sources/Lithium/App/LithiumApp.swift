@@ -25,9 +25,14 @@ struct LithiumApp: App {
     }
 }
 
-/// The Dock menu, which SwiftUI has no scene API for, and the session's last save as the app quits.
+/// The Dock menu, which SwiftUI has no scene API for, a question before quitting stops downloads,
+/// and the session's last save as the app quits.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Downloads.shared.shouldTerminate()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         LithiumApp.sharedBrowser.saveNow()
         LithiumApp.sharedBrowser.history.close()

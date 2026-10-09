@@ -3,8 +3,7 @@ import WebKit
 
 @main
 struct LithiumApp: App {
-    /// SwiftUI may build the App value more than once; the browser (and its background
-    /// filter updates and tab sleeping) must exist exactly once.
+    /// SwiftUI may build the App value more than once; the browser must exist exactly once.
     @MainActor static let sharedBrowser: Browser = {
         Theme.registerFonts()
         return Browser()
@@ -26,8 +25,7 @@ struct LithiumApp: App {
     }
 }
 
-/// The Dock menu, which SwiftUI has no scene API for: Stop Agent, reachable even when the
-/// window is hidden behind other apps. And the session's last changes, written as the app quits.
+/// The Dock menu, which SwiftUI has no scene API for, and the session's last save as the app quits.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
@@ -88,14 +86,12 @@ struct BrowserCommands: Commands {
                 .disabled(browser.commandTab == nil)
         }
         CommandGroup(after: .pasteboard) {
-            // The focused page's, through the responder chain: nothing happens in the address bar.
             // No shortcut: ⌥⇧⌘V is Paste and Match Style, which editors handle as a paste.
             Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
                 .disabled(browser.selectedTab == nil)
         }
         CommandGroup(after: .textEditing) {
             Divider()
-            // ⌘F toggles the bar; closing it hands the keyboard back to the page.
             Button(browser.findBarIsInFront ? "Hide Find Bar" : "Find…") { browser.toggleFind() }
                 .keyboardShortcut("f")
             Button("Find Next") { Task { await browser.findStep(forward: true) } }
@@ -123,7 +119,6 @@ struct BrowserCommands: Commands {
             Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")
                 .disabled(browser.commandTab == nil)
-            // As in Safari and Orion; Esc in the page leaves it too.
             Button(browser.commandTab?.isReading == true ? "Hide Reader" : "Show Reader") { browser.toggleReader(browser.commandTab) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.canRead != true)
@@ -189,9 +184,7 @@ struct BrowserCommands: Commands {
             Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Divider()
-            // As in the sidebar and the toolbar: a private tab is never pinned.
-            // Pin, Duplicate and Move act on the main window's tab list: not while a link's window
-            // is in front, where they would change a tab out of sight.
+            // Not while a link's window is in front, where they would change a tab out of sight.
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
                 .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true || browser.quickLinks.keyTab != nil)
@@ -222,7 +215,6 @@ struct BrowserCommands: Commands {
                 Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")))
             }
-            // ⌘1…⌘9 are the sidebar's items; spaces take ⌃1…⌃9, as in Arc.
             if browser.hasSpaces {
                 Divider()
                 // One digit each: `Character` traps on "10" (`restoreSpaces` keeps `Space.limit`).

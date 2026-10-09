@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// A strip along the top of the page, like Safari's, instead of a floating card. No button has a
-/// key: Return typed for the page or the address bar must never grant (and remember) a permission.
-/// Escape dismisses it without remembering anything (`Browser.dismissOverlay`).
+/// No button has a key: Return typed for the page or the address bar must never grant a permission.
 struct PermissionPrompt: View {
     let request: PermissionRequest
     @Environment(Browser.self) private var browser
@@ -46,9 +44,8 @@ struct PermissionPrompt: View {
     }
 }
 
-/// The prompt's buttons take clicks only once it has stayed in place a moment, like Chrome's
-/// input protection: a page can't make it appear, or move, under a pointer already clicking (a
-/// double click's second click, a game's rapid clicks) and have that click land on Allow.
+/// Buttons take clicks only once the prompt has stayed in place a moment: a page can't make it
+/// appear or move under a pointer already clicking and have that click land on Allow.
 struct ClickProtection {
     static let delay = Duration.milliseconds(500)
     private(set) var since: ContinuousClock.Instant

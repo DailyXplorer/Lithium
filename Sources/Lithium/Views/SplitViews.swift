@@ -36,11 +36,9 @@ struct SplitMenu: View {
     }
 }
 
-/// Two pages and the divider between them. The pages come from the caller, so a snapshot can
-/// lay out still images where the app has web views.
+/// Two pages and the divider. The pages come from the caller, so a snapshot can use still images.
 struct SplitLayout<Menu: View, First: View, Second: View>: View {
     let isStacked: Bool
-    /// The first page's share.
     let fraction: Double
     let focused: TabSplit.Side
     /// On release only: the split itself (and the saved session) changes once.
@@ -48,8 +46,7 @@ struct SplitLayout<Menu: View, First: View, Second: View>: View {
     @ViewBuilder let menu: Menu
     @ViewBuilder let first: First
     @ViewBuilder let second: Second
-    /// While the divider moves. Resets when the drag ends and also when it is cancelled (⌘-Tab
-    /// away mid-drag), which skips `onEnded` and would leave the divider stuck where it was let go.
+    /// Also resets when the drag is cancelled (⌘-Tab away mid-drag), which skips `onEnded`.
     @GestureState private var dragFraction: Double?
 
     static var gap: CGFloat { 8 }
@@ -86,7 +83,6 @@ struct SplitLayout<Menu: View, First: View, Second: View>: View {
     }
 }
 
-/// Rounded like the page card, with an accent ring on the side the keyboard and toolbar act on.
 private struct SplitPaneFrame<Content: View>: View {
     let isFocused: Bool
     @ViewBuilder let content: Content
@@ -149,15 +145,13 @@ private struct SplitPane: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        // Both sides wake as one of them is selected (`Browser.select`); this covers a split
-        // shown some other way, as the window opens.
+        // `Browser.select` wakes both sides; this covers a split shown as the window opens.
         .onAppear { tab.markActive() }
     }
 }
 
-/// A split side's PDF viewer in its own AppKit view, so a click on its controls (the toolbar, the
-/// pages on the side, the password) lands in it: the window's click monitor focuses that side for
-/// those (`Browser.noteClick`), and not for a click on the peeked sidebar over them.
+/// A split side's PDF viewer in its own AppKit view, so the window's click monitor
+/// (`Browser.noteClick`) can tell a click on its controls from one on the peeked sidebar.
 struct SplitPDFReader: NSViewRepresentable {
     let reader: PDFReader
     let tabID: Tab.ID
@@ -179,11 +173,8 @@ struct SplitPDFReader: NSViewRepresentable {
 
         required init(rootView: PDFReaderView) {
             super.init(rootView: rootView)
-            // Fills the side, whatever the viewer's own size.
             sizingOptions = []
-            // The window's content runs under its title bar, which the page reaches in Zen mode:
-            // like the rest of the window (`BrowserView` ignores the safe area), the viewer keeps
-            // its toolbar at its top rather than below a blank strip.
+            // In Zen mode the page runs under the title bar: keeps the toolbar at the top, not below a blank strip.
             safeAreaRegions = []
         }
 
@@ -191,7 +182,6 @@ struct SplitPDFReader: NSViewRepresentable {
     }
 }
 
-/// The tab list's row for a pair: each half shows its tab and selects it.
 struct SplitTabRow: View {
     let split: TabSplit
     @Environment(Browser.self) private var browser
@@ -219,7 +209,6 @@ struct SplitTabRow: View {
         }
     }
 
-    /// The side not focused is dimmed, so the row tells which one the toolbar acts on.
     private func half(_ tab: Tab, dimmed: Bool) -> some View {
         HStack(spacing: 6) {
             Favicon(image: tab.favicon, fallback: tab.url?.host() ?? "", size: 16)
@@ -236,8 +225,7 @@ struct SplitTabRow: View {
     }
 }
 
-/// Over the page while a tab is dragged from the sidebar: dropped on the left or right of the
-/// page, the tab opens there beside the selected one. Only in the window during such a drag.
+/// Over the page while a tab is dragged from the sidebar: dropped on either side, it opens there.
 struct SplitDropLayer: View {
     @Environment(Browser.self) private var browser
 
@@ -267,12 +255,10 @@ struct SplitDropZone: NSViewRepresentable {
     }
 
     final class DropView: NSView {
-        /// Read as the mouse goes down: a drag that ended off the page (in the sidebar, or with
-        /// Escape) is over once the click monitor has seen the next click, though SwiftUI has
-        /// yet to take this view away.
+        /// Read as the mouse goes down: a drag that ended off the page is over before SwiftUI
+        /// takes this view away.
         var isDragging: () -> Bool = { false }
-        /// Whether the drag's text is the dragged tab's; anything else (a file, an image, a link
-        /// from another app) ends that drag, and the view lets it through to the page.
+        /// Whether the drag's text is the dragged tab's; anything else goes through to the page.
         var carries: (String?) -> Bool = { _ in false }
         var drop: (String, TabSplit.Side) -> Bool = { _, _ in false }
         private let highlight = CALayer()
@@ -291,9 +277,8 @@ struct SplitDropZone: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Clicks go on to the page; only the dragged tab, with the button down, lands here. Asked
-        /// here rather than once the drag enters: the view only registers for text, so a drag
-        /// without any (a file from Finder) would never reach it, yet never reach the page either.
+        /// Only the dragged tab lands here. Decided here, not on drag enter: the view only registers
+        /// for text, so a file from Finder would never reach it, nor the page.
         override func hitTest(_ point: NSPoint) -> NSView? {
             takesMouse(buttons: NSEvent.pressedMouseButtons) ? super.hitTest(point) : nil
         }

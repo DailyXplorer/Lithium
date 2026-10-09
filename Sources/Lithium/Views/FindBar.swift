@@ -18,7 +18,6 @@ struct FindBar: View {
                     step(forward: !press.modifiers.contains(.shift))
                     return .handled
                 }
-            // With the arrows it steps through, like Safari and Chrome.
             Text(status(find))
                 .font(Theme.font(12))
                 .foregroundStyle(find.query.isEmpty || find.matchCount > 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.red.opacity(0.8)))
@@ -40,7 +39,6 @@ struct FindBar: View {
         .padding(.trailing, 6)
         .frame(maxWidth: 360)
         .frame(height: 40)
-        // The address suggestions' surface, since it floats over the page the same way.
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.primary.opacity(0.08)))
         .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
@@ -58,8 +56,7 @@ struct FindBar: View {
             guard text != find.query else { return }
             Task { await find.update(query: text, in: tab.findTarget) }
         }
-        // A new page to search (another tab, this tab going to or from a PDF, or a PDF whose
-        // pages just arrived or unlocked) is searched again, and the old one cleared.
+        // A new page to search (another tab, a PDF whose pages just arrived) is searched again.
         .onChange(of: ObjectIdentifier(tab.findTarget)) { searchAgain() }
         .onChange(of: tab.pdf?.pageCount) { searchAgain() }
     }

@@ -6,7 +6,6 @@ import FoundationModels
 enum ModelFailure {
     /// Refused for this input (guardrails, refusal, unsupported language): asking again won't help.
     case declined
-    /// The input doesn't fit the model's context.
     case tooLong
     /// Busy, rate limited, cancelled, timed out: fine to try again later.
     case transient

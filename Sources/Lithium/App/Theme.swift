@@ -27,8 +27,7 @@ enum Theme {
         nsFont(size, weight).map(Font.init) ?? .system(size: size, weight: weight)
     }
 
-    /// The interface font the user picked, else DM Sans. Reading the choice inside a view's body
-    /// makes the view redraw when it changes. A family no longer on this Mac falls back to DM Sans.
+    /// Reading the choice inside a view's body makes the view redraw when it changes.
     @MainActor static func nsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> NSFont? {
         if let family = FontChoice.shared.interface, let font = pickedFont(family, size, weight) { return font }
         guard let base = NSFont(name: baseFontName, size: size) else { return nil }
@@ -41,8 +40,7 @@ enum Theme {
         return NSFont(descriptor: descriptor, size: size) ?? base
     }
 
-    /// Matching a family's faces costs more than naming DM Sans's, and every view asks on each
-    /// redraw: each size and weight is matched once per family.
+    /// Every view asks on each redraw, so each size and weight is matched once per family.
     @MainActor private static var pickedFonts: (family: String, fonts: [String: NSFont]) = ("", [:])
 
     /// Nil for a family not on this Mac.
@@ -105,8 +103,7 @@ enum SidebarStyle: String, CaseIterable, Identifiable {
     }
 }
 
-/// How eagerly the collapsed sidebar slides out from the window's left edge, and how long it
-/// stays once the pointer wanders off it.
+/// How eagerly the collapsed sidebar slides out, and how long it stays once the pointer leaves.
 enum SidebarReveal: String, CaseIterable, Identifiable {
     case responsive, normal, calm
     var id: Self { self }
@@ -118,7 +115,6 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
         }
     }
 
-    /// How long the pointer rests on the edge before the panel opens, so brushing past it doesn't.
     var openDelay: Duration {
         switch self {
         case .responsive: .milliseconds(50)
@@ -127,7 +123,6 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
         }
     }
 
-    /// How long the pointer stays off the panel and its margin before the panel closes.
     var closeDelay: Duration {
         switch self {
         case .responsive: .milliseconds(300)
@@ -146,10 +141,8 @@ enum SidebarReveal: String, CaseIterable, Identifiable {
     }
 }
 
-/// Colors for everything drawn on the sidebar background (sidebar, toolbar, window margins).
-/// Surfaces are black laid over that background: the chosen color, only darker, in Solid and
-/// Translucent alike. White washed a colored sidebar out to grey. A near-black sidebar has no
-/// darker left, so there the surfaces are the same color lighter: a dark grey of its hue.
+/// Colors drawn on the sidebar background. Surfaces are black over it (white washed a colored
+/// sidebar out to grey); a near-black sidebar gets the same color lighter instead.
 struct SidebarPalette {
     let ink: Color
     let isDark: Bool
@@ -158,14 +151,11 @@ struct SidebarPalette {
 
     /// Favorites, the mini player and the address field at rest.
     var tile: Color { overlay.opacity(steps.tile) }
-    /// A hovered button takes a favorite's color: the sidebar has one raised surface.
     var hover: Color { tile }
-    /// Another hovered tab row, half a resting favorite, so it never looks like the current tab.
+    /// Half a resting favorite, so a hovered row never looks like the current tab.
     var rowHover: Color { overlay.opacity(steps.tile / 2) }
-    /// A hovered favorite, one step past its resting color.
     var tileHover: Color { overlay.opacity(steps.tileHover) }
-    /// The current favorite, well past hover. A dark color needs more black for a step
-    /// the eye still sees.
+    /// The current favorite. A dark color needs more black for a step the eye still sees.
     var selection: Color { overlay.opacity(steps.selection) }
     var field: Color { tile }
 
@@ -173,18 +163,14 @@ struct SidebarPalette {
         isSelected ? selection : isHovered ? tileHover : tile
     }
 
-    /// Nothing behind a tab row at rest. The current tab takes a resting favorite's color: it
-    /// only marks which tab is current, it need not stand out.
     func rowFill(isSelected: Bool, isHovered: Bool) -> Color {
         isSelected ? tile : isHovered ? rowHover : .clear
     }
 
-    /// Under this brightest channel a resting tile's 18 % black takes less than 0.018 off every
-    /// channel, under five 8-bit levels: the eye loses it. Luminance would call pure blue near-black.
-    /// `#1E1E24` (0.14) still darkens, `#0A0A14` (0.08) lifts.
+    /// Under this brightest channel a tile's 18 % black takes off under five 8-bit levels: the eye
+    /// loses it. Luminance would call pure blue near-black.
     private static let nearBlack = 0.1
-    /// Under this brightest channel, 12 % more black for hover takes off under five levels: dim
-    /// sidebars get wider steps.
+    /// Under this brightest channel, hover's 12 % more black is under five levels: wider steps.
     private static let dim = 0.2
 
     init(style: SidebarStyle, colorHex: String, scheme: ColorScheme) {
@@ -242,8 +228,7 @@ extension Color {
         return max(color.redComponent, color.greenComponent, color.blueComponent)
     }
 
-    /// The same hue at full brightness, halfway to white. Laid over the color it lightens without
-    /// shifting the hue, and it is never the color itself, even a saturated one. White for black.
+    /// The same hue at full brightness, halfway to white, so it lightens without shifting the hue.
     var lightTint: Color {
         let color = NSColor(self).usingColorSpace(.sRGB) ?? .white
         let peak = brightness

@@ -69,23 +69,19 @@ enum Phosphor: String {
         return image
     }
 
-    /// Space icons go beyond the cases, to the few hundred the space icon picker scrolls through:
-    /// only those lately on screen are kept.
+    /// Space icons go beyond the cases, to a few hundred: only those lately on screen are kept.
     @MainActor private static let named: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 120
         return cache
     }()
 
-    /// Names with no bundled file. Only names saved in spaces get here, so it stays tiny.
     @MainActor private static var missing: Set<String> = []
 
-    /// Any bundled icon by file name; nil if there's none.
     @MainActor static func image(named name: String) -> NSImage? {
         if let icon = Phosphor(rawValue: name) { return icon.image }
         if let cached = named.object(forKey: name as NSString) { return cached }
-        // A name with no file (an icon from a newer version, a typo) would be looked up on disk
-        // again at every render: remember the miss.
+        // A name with no file would be looked up on disk at every render: remember the miss.
         if missing.contains(name) { return nil }
         guard let image = load(name) else { missing.insert(name); return nil }
         named.setObject(image, forKey: name as NSString)

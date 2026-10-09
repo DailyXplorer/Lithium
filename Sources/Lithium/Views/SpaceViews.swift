@@ -1,8 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The foot of the sidebar: a button per space once there are two, then New Space. A click (or
-/// ⌃1…⌃9, or a two-finger swipe across the sidebar) switches; a right-click edits or deletes.
+/// The foot of the sidebar: a button per space once there are two, then New Space.
 struct SpaceBar: View {
     @Environment(Browser.self) private var browser
     @State private var editing: Space.ID?
@@ -49,8 +48,6 @@ struct SpaceBar: View {
     }
 }
 
-/// A space's icon. The one shown sits on the current tab row's light surface, the others on
-/// nothing and dimmed: one space is always current, so it needs marking, not a strong fill.
 struct SpaceButton: View {
     let space: Space
     let number: Int
@@ -78,14 +75,13 @@ struct SpaceButton: View {
         .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
-    /// The tab rows' fills: a hovered space gets half the current one's, so it never looks current.
+    /// A hovered space gets half the current one's fill, so it never looks current.
     static func fill(_ palette: SidebarPalette, isCurrent: Bool, isHovered: Bool) -> Color {
         palette.rowFill(isSelected: isCurrent, isHovered: isHovered)
     }
 }
 
-/// Name, color and icon of a space; for a new one, also whether it keeps its own cookies and
-/// logins, which can't change afterwards.
+/// For a new space, also whether it keeps its own cookies and logins, which can't change afterwards.
 struct SpaceEditor: View {
     @State var space: Space
     let isNew: Bool
@@ -150,15 +146,13 @@ struct SpaceEditor: View {
     }
 }
 
-/// The space editor's icons: a search field, a suggested row, then the rest in a lazy grid, so
-/// only the cells scrolled into view are made. The catalog is built off the main thread as the
+/// A lazy grid, so only visible cells are made. The catalog is built off the main thread as the
 /// editor opens, and goes when it closes.
 struct SpaceIconPicker: View {
     @Binding var icon: String
     @State private var catalog: SpaceIconCatalog?
     @State private var query = ""
 
-    /// Seven cells fill the editor's width.
     private static let columns = Array(repeating: GridItem(.fixed(28), spacing: 4), count: 7)
 
     /// `catalog` is for snapshots; the editor builds its own.
@@ -167,8 +161,7 @@ struct SpaceIconPicker: View {
         _catalog = State(initialValue: catalog)
     }
 
-    /// The suggested row, then every other icon. A lazy grid needs each cell's id once across its
-    /// sections: an icon in both drew as an empty cell, so the suggestions are left out below.
+    /// A lazy grid needs each id once across sections (a duplicate drew empty), so the rest omits the suggestions.
     static func sections(of icons: [SpaceIconCatalog.Entry]) -> (suggested: [SpaceIconCatalog.Entry], rest: [SpaceIconCatalog.Entry]) {
         let names = Space.icons.prefix(7)
         return (names.map { SpaceIconCatalog.icon($0) }, icons.filter { !names.contains($0.id) })
@@ -220,8 +213,7 @@ struct SpaceIconPicker: View {
     }
 }
 
-/// A space's icon: a bundled Phosphor icon, or an emoji saved by an earlier version. A name that
-/// isn't bundled shows the globe.
+/// A bundled Phosphor icon, or an emoji saved by an earlier version; an unknown name shows the globe.
 struct SpaceIcon: View {
     let icon: String
     let size: CGFloat
@@ -247,8 +239,8 @@ struct SpaceIcon: View {
     }
 }
 
-/// Two-finger swipes across the sidebar switch spaces (`SpaceSwipe`). Watched only while there
-/// are two spaces or more, and only in the sidebar's frame: the page keeps its own swipes.
+/// Two-finger swipes across the sidebar switch spaces. Only in the sidebar's frame: the page keeps
+/// its own swipes.
 struct SpaceSwipeArea: NSViewRepresentable {
     let isEnabled: Bool
     let step: (Int) -> Void
@@ -294,7 +286,6 @@ final class SpaceSwipeView: NSView {
         }
     }
 
-    /// Whether the event is the swipe's, kept from the views under it.
     private func takes(_ event: NSEvent) -> Bool {
         guard event.window === window else { return false }
         if event.phase.contains(.began) || event.phase.contains(.mayBegin) {

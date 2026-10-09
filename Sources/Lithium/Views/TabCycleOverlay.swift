@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The tabs Control-Tab goes through, most recently shown first, while Control is held. Only
-/// exists for that long.
+/// The tabs Control-Tab goes through, most recently shown first, while Control is held.
 struct TabCycleLayer: View {
     @Environment(Browser.self) private var browser
 

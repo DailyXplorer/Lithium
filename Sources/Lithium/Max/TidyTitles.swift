@@ -1,8 +1,7 @@
 import Foundation
 import Observation
 
-/// Max feature: short, readable tab titles. Rules first (instant, free); Apple's on-device model
-/// only for titles that are still too long, once per site and title.
+/// Short tab titles: rules first; the on-device model only for titles still too long, once per site and title.
 @MainActor
 @Observable
 final class TidyTitles {
@@ -14,10 +13,9 @@ final class TidyTitles {
 
     /// Keyed by host and rule-cleaned title, so a changing counter ("(3) Inbox") reuses the answer.
     @ObservationIgnored private var cache: [String: String] = [:]
-    /// Tabs waiting for the model's answer, by key: every tab that showed the title while it was
-    /// asked gets the answer, not only the one that asked.
+    /// Every tab that showed the title while it was asked gets the answer, not only the one that asked.
     @ObservationIgnored private var pending: [String: [WaitingTab]] = [:]
-    /// The last request for the model: each waits for the one before, one at a time.
+    /// The last model request: each waits for the one before.
     @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private let model: AnyObject?
     /// Stands in for Apple's model in tests.
@@ -42,7 +40,6 @@ final class TidyTitles {
         }
     }
 
-    /// What the settings page shows about Apple Intelligence on this Mac.
     var modelStatus: (available: Bool, message: String) {
         guard #available(macOS 26.0, *), let model = model as? ModelTitles else {
             return (false, "Requires macOS 26 or later. Basic tidying still works.")
@@ -61,9 +58,8 @@ final class TidyTitles {
         }
     }
 
-    /// Called when a page finishes loading or its title settles. `askingModel` false (a tab
-    /// restored asleep) applies the rules only: launch doesn't queue a request per tab, and the
-    /// model is asked once the page loads.
+    /// `askingModel` false (a tab restored asleep) applies the rules only, so launch doesn't queue
+    /// a request per tab.
     func update(_ tab: Tab, askingModel: Bool = true) {
         guard isEnabled, let host = tab.url?.host(), tab.url?.scheme?.hasPrefix("http") == true else { return }
         let original = tab.title
@@ -101,10 +97,8 @@ final class TidyTitles {
             // Wait for the title to settle: pages that animate or rewrite it shouldn't reach the model.
             try? await Task.sleep(for: .milliseconds(800))
             // Then for the requests before it, and look again: a title that changed meanwhile (a
-            // live count, a clock) never reaches the model, so a tab has at most one request
-            // there, for the title it shows, and other tabs' titles don't wait behind old ones.
+            // live count, a clock) never reaches the model.
             await previous?.value
-            // Turned off meanwhile: nothing more for the model.
             guard isEnabled, pending[key]?.contains(where: { $0.isCurrent }) == true else {
                 pending[key] = nil
                 return

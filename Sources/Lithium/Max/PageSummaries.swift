@@ -1,9 +1,8 @@
 import Foundation
 import Observation
 
-/// Max feature: a summary of the page, or of the selected text, by Apple's on-device model.
-/// Made only when asked (the toolbar button), then kept for the tab until it leaves the page.
-/// A summary keeps going when its popover closes.
+/// Summaries of the page or selection by the on-device model, kept for the tab until it leaves
+/// the page. A summary keeps going when its popover closes.
 @MainActor
 @Observable
 final class PageSummaries {
@@ -24,7 +23,6 @@ final class PageSummaries {
     var language: String? {
         didSet {
             UserDefaults.standard.set(language, forKey: Self.languageKey)
-            // Summaries already made are in the previous language.
             if language != oldValue { Array(entries.keys).forEach(discard) }
         }
     }
@@ -42,8 +40,7 @@ final class PageSummaries {
         case failed(String)
     }
 
-    /// One tab's summaries, for one page. The page's is kept alongside the latest selection's,
-    /// so selecting a passage doesn't throw away the page summary.
+    /// The page's summary is kept alongside the latest selection's, so selecting doesn't throw it away.
     private struct Entry {
         let url: URL
         /// What the tab's popover shows; nil while the page is being read.
@@ -62,7 +59,7 @@ final class PageSummaries {
         }
     }
 
-    /// The toolbar popover. Opening it, from the sparkle button or ⇧⌘S, starts the summary.
+    /// Opening the toolbar popover starts the summary.
     var isPanelPresented = false
 
     private var entries: [Tab.ID: Entry] = [:]
@@ -79,8 +76,7 @@ final class PageSummaries {
         }
     }
 
-    /// The page a summary belongs to: web pages and local files, without the fragment, so
-    /// jumping to a heading keeps the summary.
+    /// Without the fragment, so jumping to a heading keeps the summary.
     nonisolated static func page(of url: URL?) -> URL? {
         guard let url, let scheme = url.scheme?.lowercased(), ["http", "https", "file"].contains(scheme) else { return nil }
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
@@ -93,7 +89,6 @@ final class PageSummaries {
         if isPanelPresented { Task { await summarize(tab) } }
     }
 
-    /// Why summaries can't be made on this Mac; nil when Apple Intelligence is ready.
     var unavailableReason: String? {
         guard #available(macOS 26.0, *), let model = model as? ModelSummaries else {
             return "Summaries need macOS 26 or later with Apple Intelligence."
@@ -112,21 +107,20 @@ final class PageSummaries {
         }
     }
 
-    /// For the settings page: the languages summaries can be written in, and the one the
-    /// system's languages lead to.
+    /// The languages summaries can be written in, and the one the system's languages lead to.
     var languageChoices: (system: String, languages: [(code: String, name: String)]) {
         guard #available(macOS 26.0, *), let model = model as? ModelSummaries, model.isAvailable else { return ("English", []) }
         return (model.outputLanguage(nil), model.languages)
     }
 
-    /// What the tab's popover shows. Nil while the page is read, which takes a few milliseconds.
+    /// Nil while the page is read.
     func state(for tab: Tab) -> State? {
         guard let entry = entries[tab.id], entry.url == Self.page(of: tab.url) else { return nil }
         return entry.shownState
     }
 
-    /// The toolbar button: summarizes the selection when it's long enough, the page otherwise.
-    /// Shows a finished or running summary again rather than starting over; a failed one is retried.
+    /// The selection when it's long enough, the page otherwise. Shows a finished or running
+    /// summary again rather than starting over; a failed one is retried.
     func summarize(_ tab: Tab) async {
         guard isEnabled, unavailableReason == nil, let page = Self.page(of: tab.url) else { return }
         if entries[tab.id]?.url != page {
@@ -166,7 +160,6 @@ final class PageSummaries {
         }
     }
 
-    /// The tab left its page or closed: its summaries no longer apply.
     func discard(_ tab: Tab) {
         discard(tab.id)
     }

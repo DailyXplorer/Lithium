@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 import WebKit
 
-/// The corner of the page nearest the mini player. The player keeps its distance from it, so
-/// it stays in place when the window changes size, and that corner stays put as it resizes.
+/// The corner of the page nearest the mini player, which keeps its distance from it as the window resizes.
 enum PopoutCorner: String {
     case topLeading, topTrailing, bottomLeading, bottomTrailing
 
@@ -20,7 +19,6 @@ enum PopoutCorner: String {
     }
 }
 
-/// Where the player goes and how big it can be in a page of a given size.
 struct PopoutLayout {
     static let inset: CGFloat = 12
     static let minimumWidth: CGFloat = 220
@@ -29,15 +27,14 @@ struct PopoutLayout {
     let container: CGSize
     let aspectRatio: CGFloat
 
-    /// At most three quarters of the page either way, keeping the video's shape: narrower than
-    /// `minimumWidth` when a tall video wouldn't fit the page's height otherwise.
+    /// Narrower than `minimumWidth` when a tall video wouldn't fit the page's height otherwise.
     func size(width: CGFloat) -> CGSize {
         let largest = min(container.width * 0.75, container.height * 0.75 * aspectRatio)
         let width = min(max(width, min(Self.minimumWidth, largest)), largest)
         return CGSize(width: width, height: width / aspectRatio)
     }
 
-    /// `inset` is the distance from the corner's two edges. The player always stays whole in the page.
+    /// `inset` is the distance from the corner's two edges.
     func origin(of size: CGSize, in corner: PopoutCorner, inset: CGSize) -> CGPoint {
         clamped(CGPoint(
             x: corner.isTrailing ? container.width - inset.width - size.width : inset.width,
@@ -63,7 +60,6 @@ struct PopoutLayout {
     }
 }
 
-/// Floats over the page while a video is popped out.
 struct VideoPopoutLayer: View {
     @Environment(Browser.self) private var browser
 
@@ -87,8 +83,7 @@ private struct VideoPopoutPlayer: View {
     @AppStorage(Preference.videoPopoutWidth) private var storedWidth = Double(PopoutLayout.defaultWidth)
     @AppStorage(Preference.videoPopoutInsetX) private var insetX = Double(PopoutLayout.inset)
     @AppStorage(Preference.videoPopoutInsetY) private var insetY = Double(PopoutLayout.inset)
-    /// Gesture state resets when a drag ends and also when it is cancelled (⌘-Tab away
-    /// mid-drag), which skips `onEnded`: the player goes back where it was.
+    /// Also resets when a drag is cancelled (⌘-Tab away mid-drag), which skips `onEnded`.
     @GestureState private var dragOffset: CGSize = .zero
     @State private var resizeStart: CGFloat?
     @GestureState private var isResizing = false
@@ -119,8 +114,7 @@ private struct VideoPopoutPlayer: View {
         .overlay { resizeHandles(layout: layout, size: size) }
         // A cancelled resize keeps the size reached, but the next one starts from the player's size.
         .onChange(of: isResizing) { if !isResizing { resizeStart = nil } }
-        // Cast by a shape behind the player: a shadow on the web view's own layers made a
-        // playing video flash black whenever the pointer moved (see `ContentCard`).
+        // Cast by a shape: a shadow on the web view's layers made a playing video flash black.
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(.black)
@@ -131,8 +125,7 @@ private struct VideoPopoutPlayer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// The player goes wherever it is dropped. The drag is measured in the window, not in the
-    /// player, which moves under the pointer: measured there, it fed back on itself and shook.
+    /// Measured in the window, not the player, which moves under the pointer and made the drag shake.
     private func move(size: CGSize, origin: CGPoint, layout: PopoutLayout) -> some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .updating($dragOffset) { value, offset, _ in offset = value.translation }
@@ -145,9 +138,8 @@ private struct VideoPopoutPlayer: View {
             }
     }
 
-    /// The two edges facing the page, and the corner between them, resize; the corner the
-    /// player is tucked into stays put. The handles mostly sit outside the player, so they never
-    /// cover its buttons.
+    /// The two edges facing the page and their corner resize. Mostly outside the player, so they
+    /// never cover its buttons.
     private func resizeHandles(layout: PopoutLayout, size: CGSize) -> some View {
         let horizontal: HorizontalEdge = corner.isTrailing ? .leading : .trailing
         let vertical: VerticalEdge = corner.isBottom ? .top : .bottom
@@ -288,7 +280,6 @@ private struct PopoutButton: View {
     }
 }
 
-/// Phosphor's circular arrows, with the seconds they skip written inside.
 private struct SkipButton: View {
     let seconds: Double
     let popout: VideoPopout
@@ -312,7 +303,7 @@ private struct SkipButton: View {
     }
 }
 
-/// The time bar. Dragging shows where the video will go, and seeks there on release.
+/// The time bar. Seeks on release.
 private struct Scrubber: View {
     let popout: VideoPopout
     let time: Double
@@ -357,10 +348,9 @@ private struct Scrubber: View {
     }
 }
 
-/// Times as players show them: m:ss, or h:mm:ss past an hour.
+/// m:ss, or h:mm:ss past an hour.
 enum PlaybackTime {
-    /// About 115 days, longer than any real media. Pages report these numbers themselves, and a
-    /// finite one past `Int.max` would trap converting to `Int`, crashing the app.
+    /// About 115 days. Pages report these numbers, and one past `Int.max` would trap converting to `Int`.
     static let longest: Double = 1e7
 
     static func format(_ seconds: Double) -> String {
@@ -372,9 +362,8 @@ enum PlaybackTime {
     }
 }
 
-/// Holds the popped out tab's web view. SwiftUI may make a container it never shows, or keep
-/// one fading out after the page took its web view back: only a container in the window, for
-/// the video the player shows now, takes it. Keyboard focus doesn't follow the page here.
+/// Holds the popped out tab's web view. SwiftUI may make a container it never shows, or keep one
+/// fading out, so only a container in the window, for the current video, takes it.
 private struct PopoutWebView: NSViewRepresentable {
     let webView: WKWebView
     let popout: VideoPopout
@@ -419,7 +408,6 @@ final class PopoutContainerView: NSView {
     }
 }
 
-/// Where the page was, while its video plays in the player.
 struct PoppedOutPlaceholder: View {
     let popout: VideoPopout
 

@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Max: sums up the page, or the selected passage, with Apple Intelligence.
 struct SummaryButton: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser

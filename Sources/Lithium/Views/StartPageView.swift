@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Shown when no tab is selected. Nothing but the background: typing goes to the address bar,
-/// which keeps the keyboard, and a click on the page hands it back.
+/// Shown when no tab is selected. Typing goes to the address bar; a click on the page hands the keyboard back.
 struct StartPageView: View {
     @Environment(Browser.self) private var browser
     @AppStorage(Preference.startBackground) private var kind = StartBackground.lithium
@@ -27,8 +26,7 @@ struct StartPageView: View {
     }
 }
 
-/// Fills the page without stretching, cropping what overflows. The Lithium gradient shows
-/// until the picture is decoded, and stays if it can't be.
+/// The Lithium gradient shows until the picture is decoded, and stays if it can't be.
 private struct PictureBackground: View {
     let url: URL?
     @State private var image: CGImage?

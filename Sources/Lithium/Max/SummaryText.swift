@@ -13,13 +13,11 @@ struct SummaryContent: Equatable {
     let points: [String]
 }
 
-/// Model-free parts of page summaries: what to summarize, how to cut it, how to read the answer.
+/// Model-free parts of page summaries.
 enum SummaryText {
-    /// Shorter selections summarize the page instead, so a stray click-drag doesn't produce a
-    /// summary of four words.
+    /// Shorter selections summarize the page instead, so a stray click-drag doesn't count.
     static let minimumSelectionWords = 30
-    /// About two minutes of model time: the on-device model takes roughly 0.55 s per 1,000
-    /// characters on an M4 Pro (measured), one request at a time.
+    /// About two minutes of model time at roughly 0.55 s per 1,000 characters (measured, M4 Pro).
     static let maximumLength = 200_000
     private static let maximumPoints = 6
 
@@ -34,8 +32,7 @@ enum SummaryText {
         return count
     }
 
-    /// Pieces of at most `limit` characters, of similar sizes, cut between paragraphs where
-    /// possible, then between sentences, then between words.
+    /// Similar-sized pieces of at most `limit` characters, cut between paragraphs, sentences, then words.
     static func chunks(_ text: String, limit: Int) -> [String] {
         let length = text.count
         guard length > limit else { return [text] }
@@ -43,8 +40,7 @@ enum SummaryText {
         return pack(pieces(of: text, fitting: limit), target: length / parts, limit: limit)
     }
 
-    /// `chunks` and `wordCount` off the main thread: on a long page, in a script whose characters
-    /// take several bytes, counting them is a visible pause.
+    /// Off the main thread: on a long page in a multi-byte script, counting is a visible pause.
     static func chunksInBackground(_ text: String, limit: Int) async -> [String] {
         await Task.detached(priority: .userInitiated) { chunks(text, limit: limit) }.value
     }
@@ -63,9 +59,7 @@ enum SummaryText {
         }
     }
 
-    /// Fills each chunk up to `target`, never past `limit`. Lengths are kept as it goes:
-    /// `String.count` walks the whole string, and asked for every piece it made this quadratic.
-    /// Joining never makes more characters than its parts, so the kept length never falls short.
+    /// Lengths are kept as it goes: `String.count` walks the whole string, which made this quadratic.
     private static func pack(_ pieces: [String], target: Int, limit: Int) -> [String] {
         var chunks: [String] = []
         var current = ""
@@ -127,11 +121,8 @@ enum SummaryText {
         return parts
     }
 
-    /// Reads answers shaped like "One sentence.\n- A point\n- Another point". Tolerates the
-    /// usual drift: "•" or "1." bullets, doubled markers ("- - "), bold, headings, labels such
-    /// as "Summary:" or "Key points:" and points wrapped over several lines.
-    /// Lines with a link are dropped: a summary never needs one, and a page steering the model
-    /// would want one there.
+    /// Reads "One sentence.\n- A point\n- Another point", tolerating the usual drift in markers.
+    /// Lines with a link are dropped: a summary never needs one, and a page steering the model would.
     static func parse(_ answer: String) -> SummaryContent? {
         var overview: [String] = []
         var points: [String] = []
@@ -157,14 +148,12 @@ enum SummaryText {
     nonisolated(unsafe) private static let label = /^(?i:summary|overview|tl;?dr|résumé|resumen|zusammenfassung|riassunto)\s*:\s*/
 }
 
-/// What a page offers to summarize, read from the page itself.
 struct PageContent {
     let title: String
     let text: String
     let selection: String
     /// The page is longer than `SummaryText.maximumLength`; `text` is its beginning.
     let isTruncated: Bool
-    /// The same for `selection`.
     let isSelectionTruncated: Bool
 }
 

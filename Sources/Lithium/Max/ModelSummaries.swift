@@ -1,12 +1,8 @@
 import Foundation
 import FoundationModels
 
-/// Apple's on-device model, used to summarize a page or a selection. Nothing leaves the Mac.
-///
-/// Measured on an M4 Pro with macOS 27 (8,192-token context, 4,096 on macOS 26): about 11 s per
-/// 20,000 characters, and the model serves one request at a time even across sessions, so
-/// parts of a long page go one after another. Text that doesn't fit one request is summarized
-/// part by part, then the parts' notes are summarized together.
+/// Summarizes a page or a selection on device; nothing leaves the Mac. The model serves one request
+/// at a time even across sessions, so a long page's parts are noted in turn, then the notes summarized.
 @available(macOS 26.0, *)
 @MainActor
 final class ModelSummaries {
@@ -43,12 +39,10 @@ final class ModelSummaries {
         return false
     }
 
-    /// Characters per request, leaving room for the instructions, the prompt and the answer.
-    /// Three characters per token is below what was measured (3.5 in French, 4.4 in English);
-    /// denser text that still overflows is split again.
+    /// Characters per request. Three per token is below what was measured (3.5 in French, 4.4 in
+    /// English); denser text that still overflows is split again.
     var pieceLength: Int { max(2_000, (model.contextSize - 1_200) * 3) }
 
-    /// `language` is a language code the reader picked ("fr"); nil follows the system's languages.
     func summarize(_ text: String, source: SummarySource, title: String, host: String, language: String?) async -> Outcome {
         guard isAvailable else { return .failed }
         let request = Request(
@@ -151,7 +145,6 @@ final class ModelSummaries {
         return response.content
     }
 
-    /// Languages the model writes, as codes and English names, sorted by name.
     var languages: [(code: String, name: String)] {
         let codes = Set(model.supportedLanguages.compactMap { $0.languageCode?.identifier })
         let english = Locale(identifier: "en")
@@ -163,8 +156,7 @@ final class ModelSummaries {
         Self.outputLanguage(supported: model.supportedLanguages, preferred: (chosen.map { [$0] } ?? []) + Locale.preferredLanguages)
     }
 
-    /// The reader's language: the first of their preferred languages the model writes, in English
-    /// ("French"), since the prompt is in English.
+    /// Named in English ("French"), since the prompt is in English.
     nonisolated static func outputLanguage(supported: Set<Locale.Language>, preferred: [String] = Locale.preferredLanguages) -> String {
         for identifier in preferred {
             let language = Locale.Language(identifier: identifier)

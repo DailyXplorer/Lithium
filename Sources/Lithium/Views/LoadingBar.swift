@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// What the loading bar shows of a tab's load. Progress only moves forward within a load; at
-/// the end it runs to 100 %, and the bar stays until its exit animation is over.
+/// Progress only moves forward within a load; the bar stays until its exit animation is over.
 struct LoadingProgress: Equatable {
     enum Phase { case idle, loading, finishing }
 
@@ -29,8 +28,7 @@ struct LoadingProgress: Equatable {
         }
     }
 
-    /// The exit animation of load `generation` is over; a load that started meanwhile keeps
-    /// the bar, even if it is already finishing too.
+    /// A load that started meanwhile keeps the bar, even if it is already finishing too.
     mutating func finish(generation: Int) {
         guard phase == .finishing, generation == self.generation else { return }
         phase = .idle
@@ -38,9 +36,7 @@ struct LoadingProgress: Equatable {
     }
 }
 
-/// Page-load progress along the bottom edge of the address bar, after Helium's design
-/// (imputnet/helium#2463): a thin line with a pulsing glowing head, driven by the web view's
-/// `estimatedProgress`. At the end it sweeps away left to right, or with Reduce Motion, fades.
+/// Page-load progress along the address bar's bottom edge, after Helium's design (imputnet/helium#2463).
 struct LoadingBar: View {
     let tab: Tab
 
@@ -68,7 +64,6 @@ struct LoadingBar: View {
                     .fill(Color.accentColor.opacity(0.45 + 0.19 * fade))
                     .frame(width: head, height: 1.5)
                     .mask(alignment: .leading) {
-                        // The line dissolves from the left as the bar exits.
                         let fadeStart = -Self.exitFeather + exit * (head + Self.exitFeather)
                         LinearGradient(
                             stops: [.init(color: .clear, location: 0), .init(color: .black, location: 1)],

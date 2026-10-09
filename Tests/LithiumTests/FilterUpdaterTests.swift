@@ -178,6 +178,22 @@ struct FilterUpdateTests {
         #expect(try read("ads.json") == rules)
     }
 
+    /// A group over WebKit's rule limit would ship with rules silently dropped yet count as
+    /// complete: the update fails instead and the last set stays, as in scripts/update-filters.py.
+    @Test func aGroupOverWebKitsRuleLimitKeepsTheLastSet() async throws {
+        defer { try? FileManager.default.removeItem(at: destination) }
+        let updater = updater(["ads": ["main"]])
+        StubLists.serve("||small.example^", at: url("main"))
+        try await updater.update(into: destination)
+        let before = try read("manifest.json")
+
+        // 150,000 is the limit on every Safari the app runs on.
+        StubLists.serve((0...150_000).map { "||r\($0).example^" }.joined(separator: "\n"), at: url("main"))
+        await #expect(throws: (any Error).self) { try await updater.update(into: destination) }
+        #expect(try read("manifest.json") == before)
+        #expect(try read("ads.json").contains("small"))
+    }
+
     /// After an upgrade the bundled set can be newer than the downloaded one: a failing list then
     /// keeps the bundled copy, not the older download.
     @Test func aFailingListKeepsTheNewerCopy() async throws {

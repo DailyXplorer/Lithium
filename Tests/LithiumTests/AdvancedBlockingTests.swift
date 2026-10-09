@@ -41,6 +41,24 @@ struct AdvancedBlockingTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.appending(path: "engine").path).allSatisfy { $0.hasPrefix("two") })
     }
 
+    /// An engine built by an app whose rule conversion was older isn't kept for the same filter set:
+    /// it is built again with this app's conversion.
+    @Test func anEngineFromAnOlderConversionIsRebuilt() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try #"example.org#%#//scriptlet("set-constant", "lithiumProbe", "42")"#.write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        // What the older app left for this filter set: an engine without the rule.
+        let version = UBOScriptlets.bundled?.version ?? "none"
+        let old = folder.appending(path: "engine/one-ubo-\(version)")
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+
+        let blocking = AdvancedBlocking(container: folder.appending(path: "engine"))
+        await blocking.load(folder: folder, stamp: "one")
+        #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+    }
+
     @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
         let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))

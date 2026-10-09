@@ -98,6 +98,26 @@ struct ReaderModeTests {
         #expect(await ReaderMode.check(try await load(ReaderPages.short)) == .none)
     }
 
+    /// The check waits for the page to be idle before it reads the page: the button costs a page
+    /// nothing while it is busy, whether or not the reader is ever opened.
+    @Test func checksOnceThePageIsIdle() async throws {
+        let webView = try await load(ReaderPages.article)
+        // The check's world asks for an idle moment; this one says when it was asked, and holds it back.
+        _ = try await webView.callAsyncJavaScript("""
+            window.idleAsked = false;
+            window.requestIdleCallback = (callback) => { window.idleAsked = true; window.giveIdle = callback; };
+            """, contentWorld: .defaultClient)
+        let check = Task { await ReaderMode.check(webView) }
+        var asked = false
+        for _ in 0..<50 where !asked {
+            asked = try await webView.callAsyncJavaScript("return idleAsked", contentWorld: .defaultClient) as? Bool == true
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(asked)
+        _ = try await webView.callAsyncJavaScript("giveIdle()", contentWorld: .defaultClient)
+        #expect(await check.value == .article)
+    }
+
     @Test func showsTheArticleAlone() async throws {
         let webView = try await load(ReaderPages.article)
         #expect(await ReaderMode.enter(webView, style: ReaderStyle()))

@@ -17,7 +17,28 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
         window.orderFrontRegardless()
         window.makeKey()
         NSApp.activate()
+        // SwiftUI handles the link event after this and brings the main window forward, over
+        // this one. Bring this one back once that has run: on the next turns of the run loop and
+        // when Lithium becomes active (which can come later than the event).
+        for delay in [0.0, 0.15, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in window?.bringForward() }
+        }
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak window] _ in
+            if let token { NotificationCenter.default.removeObserver(token) }
+            MainActor.assumeIsolated { window?.bringForward() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
         return window
+    }
+
+    /// In front of the main window and of other apps, with the keyboard, while still open.
+    private func bringForward() {
+        guard isVisible else { return }
+        orderFrontRegardless()
+        makeKey()
     }
 
     private init(tab: Tab, browser: Browser) {

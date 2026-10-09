@@ -220,6 +220,11 @@ struct FingerprintingTests {
         let opaque = site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c")
         #expect(!opaque.isEmpty)
         #expect(opaque != site("blob:null/6f1c0a52-8d3e-4b7a-9c11-2f4e5d6a7b8c"))
+        // A blob inside a blob, however deep, is opaque too, and read at once.
+        let nested = site("blob:blob:https://www.example.co.uk/6f1c0a52")
+        #expect(!nested.isEmpty && nested != "example.co.uk")
+        let deep = site(String(repeating: "blob:", count: 30_000) + "https://www.example.co.uk/6f1c0a52")
+        #expect(!deep.isEmpty && deep != "example.co.uk")
 
         let privacy = Privacy()
         let script = { (address: String) in privacy.scripts(true, for: URL(string: address)!).first?.source }

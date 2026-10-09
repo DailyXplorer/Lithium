@@ -170,10 +170,13 @@ final class Privacy {
     /// `alice.github.io` and `bob.github.io` differ), or the address itself for an IP host.
     /// A blob's address has no host but holds its creator's origin, whose site it takes; one of an
     /// opaque origin ("blob:null/…") gets a site of its own, not the "" that every site's would share.
+    /// The creator is a web origin, read once: a `blob:` inside another, which a page could nest
+    /// thousands deep to stall the app, is as opaque as "null".
     nonisolated static func farblingSite(_ url: URL) -> String {
         if url.scheme?.lowercased() == "blob" {
-            let site = URL(string: String(url.absoluteString.dropFirst(5))).map(farblingSite) ?? ""
-            return site.isEmpty ? UUID().uuidString : site
+            let creator = URL(string: String(url.absoluteString.dropFirst(5)))
+            let host = creator.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0.host() : nil } ?? ""
+            return host.isEmpty ? UUID().uuidString : SiteInfo.registrable(host)
         }
         guard let host = url.host(), !host.isEmpty else { return "" }
         return SiteInfo.registrable(host)

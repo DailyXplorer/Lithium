@@ -45,6 +45,12 @@ struct UnreadBadge: Equatable {
         isNotified = false
     }
 
+    /// The page's counts go; a notification not yet opened still shows its dot.
+    mutating func pageSlept() {
+        appBadge = nil
+        titleCount = nil
+    }
+
     /// Another site's page: what the last one said through the page no longer applies.
     mutating func leaveSite() {
         appBadge = nil

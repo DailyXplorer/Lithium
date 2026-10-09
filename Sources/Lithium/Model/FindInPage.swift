@@ -35,6 +35,8 @@ final class FindInPage {
     @ObservationIgnored private weak var target: FindTarget?
     /// Only the newest search sets the count: an older one may finish later, even for the same text.
     @ObservationIgnored private var search = 0
+    /// Only the last keystroke of a burst searches (`type`).
+    @ObservationIgnored private var typing = 0
 
     func show(focusingField: Bool = true, inLink linkTab: Tab? = nil) {
         self.linkTab = linkTab
@@ -69,6 +71,19 @@ final class FindInPage {
         matchCount = count
         await step(forward: forward, in: target)
     }
+
+    /// Typing searches once the keys pause: each count reads the whole page text, and on a long
+    /// page one per keystroke queue up behind each other.
+    func type(query newQuery: String, in target: FindTarget) async {
+        typing &+= 1
+        let typed = typing, searched = search
+        try? await Task.sleep(for: Self.typingPause)
+        // Typed again, closed, or searched another way (Return) meanwhile.
+        guard typed == typing, searched == search else { return }
+        await update(query: newQuery, in: target)
+    }
+
+    static let typingPause: Duration = .milliseconds(120)
 
     func step(forward: Bool, in target: FindTarget) async {
         guard !query.isEmpty else { return }

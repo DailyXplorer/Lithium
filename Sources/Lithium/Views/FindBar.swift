@@ -54,7 +54,7 @@ struct FindBar: View {
         .onChange(of: find.query) { text = find.query }
         .onChange(of: text) {
             guard text != find.query else { return }
-            Task { await find.update(query: text, in: tab.findTarget) }
+            Task { await find.type(query: text, in: tab.findTarget) }
         }
         // A new page to search (another tab, a PDF whose pages just arrived) is searched again.
         .onChange(of: ObjectIdentifier(tab.findTarget)) { searchAgain() }
@@ -72,6 +72,11 @@ struct FindBar: View {
     }
 
     private func step(forward: Bool) {
+        // Text typed just now isn't searched yet: it is, rather than stepping through the last search.
+        if text != browser.find.query {
+            Task { await browser.find.update(query: text, in: tab.findTarget, forward: forward) }
+            return
+        }
         Task { await browser.find.step(forward: forward, in: tab.findTarget) }
     }
 }

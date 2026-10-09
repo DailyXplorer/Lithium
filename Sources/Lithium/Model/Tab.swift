@@ -106,6 +106,8 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var hasHadPage = false
     /// "Send the form again?", while it is on the window.
     @ObservationIgnored private var resubmissionSheet: NSWindow?
+    /// The page's alert, confirm or prompt, while it is on the window.
+    @ObservationIgnored private var dialogSheet: NSWindow?
     /// The old page of a sleeping tab an extension sent elsewhere: its load, started by putting
     /// the history back, is cancelled. Cleared at the next main-frame decision, whichever it is.
     @ObservationIgnored private var supersededURL: URL?
@@ -697,6 +699,7 @@ final class Tab: NSObject, Identifiable {
     func tearDown() {
         answerHiddenDialog()
         endResubmissionSheet()
+        endDialogSheet()
         observations.removeAll()
         // A favicon fetch holds the tab and its web view, and can last a minute on a page that
         // names many icons: a closed tab's page would keep running until it ends.
@@ -1639,7 +1642,17 @@ extension Tab: WKUIDelegate {
             guard await withCheckedContinuation({ hiddenDialog = $0 }) else { return nil }
         }
         guard let window = webView.userWindow else { return nil }
+        dialogSheet = alert.window
+        defer { if dialogSheet === alert.window { dialogSheet = nil } }
         return await alert.beginSheetModal(for: window)
+    }
+
+    /// An extension or an agent can close the tab while its dialog is up: the dialog goes with
+    /// it, answered Cancel, rather than staying on the window for a page that is gone.
+    private func endDialogSheet() {
+        guard let sheet = dialogSheet else { return }
+        dialogSheet = nil
+        sheet.sheetParent?.endSheet(sheet, returnCode: .abort)
     }
 
     /// Gives the dialog waiting for the tab to be shown its default answer.

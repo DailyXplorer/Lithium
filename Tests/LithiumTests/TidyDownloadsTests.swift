@@ -48,6 +48,21 @@ struct DownloadNamesTests {
         #expect(DownloadNames.fileName("October invoice", keepingExtensionOf: "download") == "October invoice")
     }
 
+    /// A name from the page never brings an extension of its own: the site's is the only one.
+    @Test func dropsAnExtensionInTheName() {
+        #expect(DownloadNames.fileName("Invoice.pdf", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
+        #expect(DownloadNames.fileName("Invoice.pdf.app", keepingExtensionOf: "file.dmg") == "Invoice.dmg")
+        #expect(DownloadNames.fileName("Setup.command", keepingExtensionOf: "download") == "Setup")
+        #expect(DownloadNames.fileName("Report v1.2", keepingExtensionOf: "file.pdf") == "Report v1.2.pdf")
+        #expect(DownloadNames.fileName(".pdf", keepingExtensionOf: "file.pkg") == "file.pkg")
+        // Dots or spaces left before a dropped suffix don't shield the extension behind them.
+        #expect(DownloadNames.fileName("Invoice.pdf..x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
+        #expect(DownloadNames.fileName("Invoice.pdf .x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
+        // Nor does the cut to 255 bytes: 60 emoji are 240 of them, and cutting " x" would leave ".pdf".
+        let emoji = String(repeating: "😀", count: 60)
+        #expect(DownloadNames.fileName(emoji + "Invoice.pdf x", keepingExtensionOf: "document(3).pkg") == emoji + "Invoice.pkg")
+    }
+
     @Test func acceptsOnlyAnswersAboutThePage() {
         let source = DownloadSource(filename: "document(3).pdf", title: "Your invoices · EDF", page: URL(string: "https://particulier.edf.fr/factures"), file: nil)
         #expect(DownloadNames.acceptable("“EDF invoice October 2026”", for: source) == "EDF invoice October 2026")
@@ -178,6 +193,31 @@ struct TidyDownloadFilesTests {
 
         item.useOriginalName()
         #expect(FileManager.default.fileExists(atPath: mine.path))
+        #expect(!FileManager.default.fileExists(atPath: URL.downloadsDirectory.appending(path: "download.pdf").path))
+        #expect(!item.canUseOriginalName)
+    }
+
+    /// Another file that took the renamed file's name since is not the download: undo leaves it.
+    @Test func undoLeavesAnotherFileOfThatName() async throws {
+        let tidy = Downloads.shared.tidy
+        tidy.isEnabled = true
+        tidy.namer = { _ in nil }
+        defer { tidy.isEnabled = false; tidy.namer = nil }
+        let token = UUID().uuidString.prefix(6)
+
+        Downloads.shared.save(Data("%PDF-1.4".utf8), suggestedFilename: "download.pdf", from: nil, title: "Deed \(token)")
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(5) { item.state == .finished })
+        let renamed = try #require(item.destination)
+        let mine = URL.downloadsDirectory.appending(path: "Mine \(token).pdf")
+        try FileManager.default.moveItem(at: renamed, to: mine)
+        defer { try? FileManager.default.removeItem(at: mine) }
+        let other = Data("someone else".utf8)
+        try other.write(to: renamed)
+        defer { try? FileManager.default.removeItem(at: renamed) }
+
+        item.useOriginalName()
+        #expect(try Data(contentsOf: renamed) == other)
         #expect(!FileManager.default.fileExists(atPath: URL.downloadsDirectory.appending(path: "download.pdf").path))
         #expect(!item.canUseOriginalName)
     }

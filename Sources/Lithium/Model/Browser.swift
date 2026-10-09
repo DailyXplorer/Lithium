@@ -151,8 +151,13 @@ final class Browser {
         return savingEnergy ? shortIdleInterval : 10 * 60
     }
 
-    /// `tabIdleInterval`, short while Lithium's energy saving is on too.
-    var idleInterval: TimeInterval { Self.idleInterval(savingEnergy: energy.isOn || Self.isSavingEnergy) }
+    /// `tabIdleInterval`, short while Lithium's energy saving is on too. Off is the user's choice
+    /// over the Mac's: Low Power Mode or heat don't shorten it then.
+    var idleInterval: TimeInterval { idleInterval(macSavesEnergy: Self.isSavingEnergy) }
+
+    func idleInterval(macSavesEnergy: Bool) -> TimeInterval {
+        Self.idleInterval(savingEnergy: energy.isOn || (energy.mode != .off && macSavesEnergy))
+    }
 
     private static var isSavingEnergy: Bool {
         let info = ProcessInfo.processInfo
@@ -259,10 +264,11 @@ final class Browser {
         }
     }
 
-    /// Energy saving turned on or off: the open pages' timers follow, and turning it on applies
-    /// it at once rather than at the next pass.
+    /// Energy saving turned on or off: the open pages' timers follow, links' windows' too (made
+    /// under it, they would keep it, even once in the main window), and turning it on applies it
+    /// at once rather than at the next pass.
     private func energyChanged() {
-        for case let webView? in tabs.map(\.loadedWebView) { BackgroundThrottling.apply(energy.isOn, to: webView) }
+        for case let webView? in (tabs + quickLinks.tabs).map(\.loadedWebView) { BackgroundThrottling.apply(energy.isOn, to: webView) }
         guard energy.isOn else { return }
         sleepTabs()
         pauseSilentMedia()
@@ -518,9 +524,10 @@ final class Browser {
         if fieldHadKeyboard { window.makeFirstResponder(page) } else { focusPage(page) }
     }
 
-    /// Escape: closes the find bar of the window in front, if it has it.
+    /// Escape: closes the find bar of the window in front, if it has it. Not while the page has
+    /// the keyboard: the Escape is the page's (its menu, its dialog), and the bar stays open.
     private func closeFindBar() -> Bool {
-        guard findBarIsInFront else { return false }
+        guard findBarIsInFront, !(commandTab?.contentView.window?.firstResponder is WKWebView) else { return false }
         let hadKeyboard = find.isFieldFocused
         find.hide()
         returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
@@ -719,7 +726,9 @@ final class Browser {
             if let next { select(next, picked: false) } else { showStartPage(picked: false) }
         }
         if closingTabs {
-            members.reversed().forEach(close)
+            // In list order: with the folder gone, each reopens at the top of the list, so the
+            // last closed coming back first puts them back in their order.
+            members.forEach(close)
         } else if !members.isEmpty {
             place(members, inFolder: nil, before: tabList(in: members[0].spaceID, folder: nil).first)
         }

@@ -938,13 +938,14 @@ final class Tab: NSObject, Identifiable {
     /// an unread badge nothing is fetched: Discord, Gmail or WhatsApp then name a copy of their
     /// icon with the count drawn in, which would show it twice. The clean one stays, and the
     /// page's next icon once the count is gone is followed again.
-    private func followIcon(_ url: URL) {
+    private func followIcon(_ url: URL, after delay: Duration = .zero) {
         guard url != liveIcon else { return }
         liveIcon = url
         guard iconFollow == nil, unread.shown == nil else { return }
         faviconLoad?.cancel()
         faviconLoad = nil
         iconFollow = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
             var fetched: URL?
             while !Task.isCancelled, let tab = self, tab.unread.shown == nil, let next = tab.liveIcon, next != fetched {
                 fetched = next
@@ -967,7 +968,16 @@ final class Tab: NSObject, Identifiable {
     private func updateUnread(_ change: (inout UnreadBadge) -> Void) {
         var next = unread
         change(&next)
-        if next != unread { unread = next }
+        guard next != unread else { return }
+        let wasShown = unread.shown != nil
+        unread = next
+        // The count is gone, often from the title alone: the icon the page names is followed
+        // again, in place of one shown while it counted (perhaps with the count drawn in). After
+        // `iconInterval`, so a new icon reported just after the title is the one fetched.
+        if wasShown, next.shown == nil, let icon = liveIcon {
+            liveIcon = nil
+            followIcon(icon, after: Self.iconInterval)
+        }
     }
 
     func receive(_ signal: PinnedPages.Signal) {
@@ -995,8 +1005,9 @@ final class Tab: NSObject, Identifiable {
     /// was saved with: the badge only says what a page said since launch.
     private func pinnedChanged() {
         if pinID == nil {
-            updateUnread { $0 = UnreadBadge() }
+            // The icon first: a badge going away would follow it again.
             forgetLiveIcon()
+            updateUnread { $0 = UnreadBadge() }
         }
         guard let browser, let webView = loadedWebView, !isAsleep else { return }
         browser.pinnedPages.setChannel(pinID != nil, on: webView.configuration.userContentController)
@@ -1277,8 +1288,8 @@ extension Tab: WKNavigationDelegate {
         browser?.nowPlaying.discard(self)
         // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {
-            updateUnread { $0.leaveSite() }
             forgetLiveIcon()
+            updateUnread { $0.leaveSite() }
             favicon = nil
             faviconData = nil
         }

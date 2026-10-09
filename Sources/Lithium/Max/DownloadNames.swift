@@ -91,9 +91,30 @@ enum DownloadNames {
         return name
     }
 
-    /// `name` with the extension of the site's file name, which never changes.
+    /// `name` with the extension of the site's file name, which never changes. An extension the
+    /// name ends in itself ("Invoice.pdf", from a page's title or the model) goes: Finder hides
+    /// the real one, so "Invoice.pdf.pkg" would pass for a PDF. `original` when nothing is left.
     static func fileName(_ name: String, keepingExtensionOf original: String) -> String {
+        // Trailing dots and spaces go before every check, not once at the end: "Invoice.pdf..x" or
+        // "Invoice.pdf .x" would stop at the empty or spaced suffix, then end in ".pdf" once trimmed.
+        func trimmingEnd(_ text: Substring) -> Substring {
+            var text = text
+            while text.last == "." || text.last?.isWhitespace == true { text.removeLast() }
+            return text
+        }
         let pathExtension = (original as NSString).pathExtension
-        return Downloads.fileName(name, pathExtension.isEmpty ? "" : ".\(pathExtension)")
+        let tail = pathExtension.isEmpty ? "" : ".\(pathExtension)"
+        // Cut to the 255-byte limit before the checks, not after: 80 emoji are 320 bytes, and a
+        // later cut could stop right after a ".pdf" the checks left because of what followed it.
+        var stem = Substring(name)
+        while stem.utf8.count + tail.utf8.count > 255, !stem.isEmpty { stem.removeLast() }
+        stem = trimmingEnd(stem)
+        while let dot = stem.lastIndex(of: "."), case let suffix = stem[stem.index(after: dot)...],
+              suffix.contains(where: \.isLetter), suffix.allSatisfy({ $0.isLetter || $0.isNumber }) {
+            stem = trimmingEnd(stem[..<dot])
+        }
+        let base = stem.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
+        guard !base.isEmpty else { return original }
+        return Downloads.fileName(base, tail)
     }
 }

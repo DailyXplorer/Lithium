@@ -146,6 +146,23 @@ struct WindowKeysTests {
         #expect(browser.dismissOverlay())
     }
 
+    /// With the find bar open but the page holding the keyboard, Escape is the page's (its menu,
+    /// its dialog) and the bar stays; from the find field it closes the bar.
+    @Test func escapeInThePageLeavesTheFindBarOpen() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+
+        browser.find.show()
+        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        #expect(window.makeFirstResponder(tab.webView))
+        #expect(!browser.dismissOverlay(), "the page gets the Escape")
+        #expect(browser.find.isVisible)
+
+        window.makeFirstResponder(nil)
+        #expect(browser.dismissOverlay())
+        #expect(!browser.find.isVisible)
+    }
+
     /// Hiding the sidebar (⌘B) during a rename ends it with the name typed, so it doesn't go on
     /// holding Escape, the agent's input and the sidebar's peek.
     @Test func hidingTheSidebarEndsARename() async throws {

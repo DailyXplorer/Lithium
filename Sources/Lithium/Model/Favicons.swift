@@ -161,7 +161,8 @@ final class Favicons {
 
     /// While the page shows an unread count (in its title, or `counting` through `setAppBadge`),
     /// its touch icon comes first when the host has no icon yet: sites draw the count into their
-    /// favicon, never their touch icon.
+    /// favicon, never their touch icon. Without one, the favicon is shown but not kept as the
+    /// host's: it may have the count in it, and would stay once the count is gone.
     func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
@@ -184,7 +185,7 @@ final class Favicons {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
             guard let png = await Self.fetch(candidate.url, with: session) else { continue }
-            if generation == self.generation { store(png, for: host) }
+            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
             return png
         }
 
@@ -200,7 +201,7 @@ final class Favicons {
                   let encoded = dataURL.split(separator: ",").last,
                   let data = Data(base64Encoded: String(encoded)),
                   let png = await Self.normalizedInBackground(data) else { continue }
-            if generation == self.generation { store(png, for: host) }
+            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
             return png
         }
         return nil

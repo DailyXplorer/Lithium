@@ -435,10 +435,13 @@ struct FilterUpdateTests {
             for name in ["ads.json", "advanced.txt", "scriptlets.txt", "lists/main.txt"]:
                 (built / name).write_text("")
             script.GROUPS = {"ads": ["main"]}
-            for sources in [script.SOURCES_DIGEST, "older", None]:
+            for sources, converter in [(script.SOURCES_DIGEST, script.CONVERTER_TAG), ("older", script.CONVERTER_TAG),
+                                       (None, script.CONVERTER_TAG), (script.SOURCES_DIGEST, "v0.0.1"), (script.SOURCES_DIGEST, None)]:
                 manifest = {"format": script.FORMAT, "groups": {"ads": {"lists": ["main"]}}}
                 if sources:
                     manifest["sources"] = sources
+                if converter:
+                    manifest["converter"] = converter
                 (built / "manifest.json").write_text(json.dumps(manifest))
                 print("complete", script.complete(built))
             """
@@ -461,6 +464,8 @@ struct FilterUpdateTests {
             env_safari && ( False
             ||neighbour.example^ ||main.example^
             complete True
+            complete False
+            complete False
             complete False
             complete False
 

@@ -205,6 +205,20 @@ struct CaptureCompositionTests {
         #expect(CaptureBackdrop.color("#CDE7D6").rawValue == "#CDE7D6")
     }
 
+    /// Decoding the desktop picture froze the window while it captured: it now decodes off the
+    /// main thread, still no larger than the screenshot needs.
+    @Test func theWallpaperDecodesOffTheMainThread() async throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "wallpaper-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let png = try #require(NSBitmapImageRep(cgImage: Self.image(red: 0, blue: 1)).representation(using: .png, properties: [:]))
+        try png.write(to: url)
+        // Called synchronously off the main actor: this wouldn't compile if it were isolated to it.
+        let image = await Task.detached { ScreenCapture.wallpaper(at: url, maxPixels: 100) }.value
+        let wallpaper = try #require(image)
+        #expect(wallpaper.width == 100)
+        #expect(wallpaper.height == 50)
+    }
+
     /// Each pick of another backdrop color renders the whole image again, so the color panel
     /// picks once the mouse is let go, not at every move across the wheel. Never shown here.
     @Test func theBackdropColorPanelPicksOnRelease() {

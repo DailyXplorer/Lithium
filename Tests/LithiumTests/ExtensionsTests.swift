@@ -336,4 +336,37 @@ struct ExtensionsTests {
         #expect(extensions.installed.first?.version == "1.0")
         #expect(extensions.contexts[id] != nil)
     }
+
+    /// Only launch checked for updates, so a Lithium left running never got any. Coming back to
+    /// it checks too, once a day at most, and checks overlapping ask the store once.
+    @Test(.timeLimit(.minutes(1))) func comingBackToLithiumChecksForUpdates() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        var asked = 0
+        extensions.latestVersions = { _ in
+            asked += 1
+            try await Task.sleep(for: .milliseconds(200))
+            return [:]
+        }
+        extensions.checksForUpdates = true
+
+        extensions.appDidChangeActive(false)
+        extensions.appDidChangeActive(true)
+        for _ in 0..<50 where asked == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(asked == 1)
+        // While the store hasn't answered, the last check's date is still old.
+        await extensions.updateIfDue()
+        #expect(asked == 1, "a second check while one is in flight")
+        try await Task.sleep(for: .milliseconds(300))
+
+        extensions.appDidChangeActive(false)
+        extensions.appDidChangeActive(true)
+        try await Task.sleep(for: .milliseconds(100))
+        await extensions.updateIfDue()
+        #expect(asked == 1, "checked less than a day ago")
+    }
 }

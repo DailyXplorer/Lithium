@@ -12,6 +12,9 @@ final class AdvancedBlocking {
 
     /// For tests.
     var hasReadLibrary: Bool { library != nil }
+    /// Part of each engine's folder name: bump it when the rules given to the engine change
+    /// (`UBOScriptlets.adguardRules`), or the engine built before keeps the old ones until the next filter set.
+    static let conversion = 1
 
     init(container: URL = URL.applicationSupportDirectory.appending(path: "Lithium/AdvancedEngine")) {
         self.container = container
@@ -28,7 +31,7 @@ final class AdvancedBlocking {
             self.library = library
         }
         let ubo = library.ubo
-        let stamp = "\(filterStamp)-ubo-\(ubo?.version ?? "none")"
+        let stamp = "\(filterStamp)-ubo-\(ubo?.version ?? "none")-c\(Self.conversion)"
         let directory = container.appending(path: stamp)
         if !FileManager.default.fileExists(atPath: directory.path) {
             let staging = container.appending(path: ".building-\(UUID().uuidString)")
@@ -48,9 +51,14 @@ final class AdvancedBlocking {
             }.value
             guard built else { return }
         }
-        // Off the main thread, which this runs at every launch. The old engines go once the new
-        // one has replaced them, as pages may be looking theirs up meanwhile.
-        engine = await Task.detached(priority: .userInitiated) { OpenedEngine(engine: try? WebExtension(containerURL: directory)) }.value.engine
+        // Off the main thread, which this runs at every launch. Opening only makes the folder: the
+        // engine is read by its first lookup, made here so the first page doesn't wait for it.
+        // The old engines go once the new one has replaced them, as pages may be looking theirs up meanwhile.
+        engine = await Task.detached(priority: .userInitiated) {
+            let engine = try? WebExtension(containerURL: directory)
+            _ = engine?.lookup(pageUrl: URL(string: "https://example.com/")!, topUrl: nil)
+            return OpenedEngine(engine: engine)
+        }.value.engine
         let container = container
         await Task.detached(priority: .userInitiated) {
             let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []

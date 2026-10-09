@@ -44,6 +44,11 @@ final class Extensions: NSObject {
     @ObservationIgnored private(set) var nativeHosts: [String: [NativeMessaging.Host]] = [:]
     /// Where hosts are looked up; tests use their own folder.
     @ObservationIgnored var nativeHostFolders = NativeMessaging.folders
+    /// The store's answers to `updateIfDue`; tests give their own.
+    @ObservationIgnored var latestVersions: ([InstalledExtension]) async throws -> [String: String] = ChromeWebStore.latestVersions
+    @ObservationIgnored var downloadArchive: (String) async throws -> Data = { id in
+        try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id)
+    }
     /// The ports `chrome.idle` listens on, per extension: password managers lock when the screen
     /// does, which only this tells them.
     @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
@@ -211,7 +216,48 @@ final class Extensions: NSObject {
         try await serially(id) { try await self.replace(id, with: archive, approved: approved) }
     }
 
-    private func replace(_ id: String, with archive: Data, approved: ChromeWebStore.Access?) async throws {
+    /// The store never offers an update, and Remove then Add deletes the extension's data: as
+    /// Chrome does, newer versions are fetched after launch, at most once a day.
+    func updateIfDue(now: Date = .now) async {
+        await waitUntilLoaded()
+        let checked = try? updateCheck.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        guard !installed.isEmpty, checked.map({ now.timeIntervalSince($0) >= Self.updateInterval }) ?? true,
+              let latest = try? await latestVersions(installed) else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? Data().write(to: updateCheck)
+        for entry in installed {
+            guard let version = latest[entry.id], ChromeWebStore.isNewer(version, than: entry.version) else { continue }
+            do {
+                let archive = try await downloadArchive(entry.id)
+                try await serially(entry.id) {
+                    // Removed while it downloaded: not added back.
+                    guard self.installed.contains(where: { $0.id == entry.id }) else { return }
+                    try await self.replace(entry.id, with: archive, approved: try await self.access(entry.id), isUpdate: true)
+                }
+            } catch {
+                NSLog("Lithium: couldn’t update extension %@: %@", entry.id, error.localizedDescription)
+            }
+        }
+    }
+
+    static let updateInterval: TimeInterval = 24 * 60 * 60
+
+    /// Its date is the last update check's.
+    private var updateCheck: URL { folder.appending(path: ".update-check") }
+
+    /// What the installed version may do, which the user agreed to: a version asking for more is
+    /// refused and the installed one kept, rather than granted access never shown.
+    private func access(_ id: String) async throws -> ChromeWebStore.Access {
+        try await unpackIfNeeded(id)
+        guard let data = try? Data(contentsOf: files(id).appending(path: "manifest.json")),
+              let manifest = try? JSONSerialization.jsonObject(with: data, options: .json5Allowed) as? [String: Any] else {
+            throw ChromeWebStore.PackageError.notAPackage
+        }
+        return ChromeWebStore.Access(manifest: manifest)
+    }
+
+    /// `isUpdate` leaves the extension on or off, as it is when the new version is in place.
+    private func replace(_ id: String, with archive: Data, approved: ChromeWebStore.Access?, isUpdate: Bool = false) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let package = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
         try archive.write(to: package)
@@ -243,9 +289,10 @@ final class Extensions: NSObject {
         try FileManager.default.moveItem(at: staging, to: files(id))
         // WebKit reads an extension's files from where it opened them, so it opens the final folder.
         let webExtension = try await open(id)
-        try activate(webExtension, id: id)
+        let isEnabled = isUpdate ? installed.first(where: { $0.id == id })?.isEnabled ?? false : true
+        if isEnabled { try activate(webExtension, id: id) }
 
-        let entry = InstalledExtension(id: id, name: webExtension.displayName ?? id, version: webExtension.version ?? "", isEnabled: true)
+        let entry = InstalledExtension(id: id, name: webExtension.displayName ?? id, version: webExtension.version ?? "", isEnabled: isEnabled)
         if let index = installed.firstIndex(where: { $0.id == id }) { installed[index] = entry } else { installed.append(entry) }
         if let saveError { throw saveError }
     }

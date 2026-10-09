@@ -102,14 +102,19 @@ enum DownloadNames {
             while text.last == "." || text.last?.isWhitespace == true { text.removeLast() }
             return text
         }
-        var stem = trimmingEnd(Substring(name))
+        let pathExtension = (original as NSString).pathExtension
+        let tail = pathExtension.isEmpty ? "" : ".\(pathExtension)"
+        // Cut to the 255-byte limit before the checks, not after: 80 emoji are 320 bytes, and a
+        // later cut could stop right after a ".pdf" the checks left because of what followed it.
+        var stem = Substring(name)
+        while stem.utf8.count + tail.utf8.count > 255, !stem.isEmpty { stem.removeLast() }
+        stem = trimmingEnd(stem)
         while let dot = stem.lastIndex(of: "."), case let suffix = stem[stem.index(after: dot)...],
               suffix.contains(where: \.isLetter), suffix.allSatisfy({ $0.isLetter || $0.isNumber }) {
             stem = trimmingEnd(stem[..<dot])
         }
         let base = stem.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
         guard !base.isEmpty else { return original }
-        let pathExtension = (original as NSString).pathExtension
-        return Downloads.fileName(base, pathExtension.isEmpty ? "" : ".\(pathExtension)")
+        return Downloads.fileName(base, tail)
     }
 }

@@ -58,6 +58,9 @@ struct DownloadNamesTests {
         // Dots or spaces left before a dropped suffix don't shield the extension behind them.
         #expect(DownloadNames.fileName("Invoice.pdf..x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
         #expect(DownloadNames.fileName("Invoice.pdf .x", keepingExtensionOf: "document(3).pkg") == "Invoice.pkg")
+        // Nor does the cut to 255 bytes: 60 emoji are 240 of them, and cutting " x" would leave ".pdf".
+        let emoji = String(repeating: "😀", count: 60)
+        #expect(DownloadNames.fileName(emoji + "Invoice.pdf x", keepingExtensionOf: "document(3).pkg") == emoji + "Invoice.pkg")
     }
 
     @Test func acceptsOnlyAnswersAboutThePage() {

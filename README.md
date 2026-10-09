@@ -112,6 +112,10 @@ Settings (`lithium://settings`, ⌘,) and History (`lithium://history`, ⌘Y) ar
 
 ⌘T new tab · ⌘W close tab · ⇧⌘T reopen closed tab · ⌘L address bar · ⌘B sidebar · ⌘D pin · ⌘1…9 go to item · ⌃Tab recent tabs (hold ⌃ to go further back) · ⌥⌘→ / ⌥⌘← next and previous tab · ⌘[ / ⌘] back and forward · ⌘R reload · ⌘F find · ⌘P print · ⌘G / ⇧⌘G next and previous match · ⌘Y history · ⇧⌘C copy link · ⇧⌘S summarize page · ⇧⌘P protections on or off for the site · ⌥⌘P pop out the video · ⌘, settings
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to open a pull request, the code style, tests and how to report a bug.
+
 ## License
 
 GPL-3.0 (see `LICENSE`). Lithium bundles GPL-3.0 components: AdGuard SafariConverterLib, Scriptlets and ExtendedCss, and uBlock Origin's filter lists and scriptlets. It also bundles [marked](https://github.com/markedjs/marked) (MIT) and Mozilla's [Readability](https://github.com/mozilla/readability) (Apache-2.0, at the end of `reader.js`). Icons are [Phosphor](https://phosphoricons.com) (MIT). The DM Sans font is under the SIL Open Font License.

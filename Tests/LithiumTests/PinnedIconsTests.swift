@@ -274,7 +274,35 @@ struct PinnedIcons {
         #expect(searched >= 1)
         #expect(await favicons.favicon(for: webView) == nil)
         #expect(requests["/favicon.ico"] == searched, "not fetched again")
-        #expect(favicons.missing.contains(try #require(base.host())))
+        #expect(favicons.iconless.contains(try #require(base.host())))
+    }
+
+    /// History's lookup (no cookies, `https` only) failing doesn't stop the open page's own search.
+    @Test func historyFindingNoIconDoesntStopTheTabsSearch() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Local</title><link rel="icon" href="/red.png">"#)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        let host = try #require(base.host())
+        #expect(await favicons.icon(forHost: host) == nil)
+        #expect(favicons.missing.contains(host))
+        #expect(await favicons.favicon(for: webView) == Favicons.normalized(Self.red))
+    }
+
+    /// A candidate whose server couldn't be reached may still be the site's icon: searched again.
+    @Test func anUnreachableIconIsSearchedAgain() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Offline</title><link rel="icon" href="http://127.0.0.1:1/icon.png">"#)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        #expect(await favicons.favicon(for: webView) == nil)
+        #expect(!favicons.iconless.contains(try #require(base.host())))
     }
 
     /// A page animating its icon gets it fetched, and the favorite saved, at most every

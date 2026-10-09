@@ -20,6 +20,10 @@ final class Favicons {
     /// Decoded for those rows too, by host, with the bytes they came from.
     private var images: [String: (data: Data, image: NSImage)] = [:]
     private static let imagesLimit = 64
+    /// Kept icons by the address they came from: pages of one host can name different icons
+    /// (Docs, Sheets), so an open page is never given its host's icon blindly, nor refetches its own.
+    private var byAddress: [URL: Data] = [:]
+    private static let byAddressLimit = 256
     private var inFlight: [String: Task<Data?, Never>] = [:]
     /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
     private var generation = 0
@@ -157,6 +161,7 @@ final class Favicons {
         inFlight = [:]
         missing = []
         iconless = []
+        byAddress = [:]
         cache = cache.filter { hosts.contains($0.key) }
         images = images.filter { hosts.contains($0.key) }
         let folder = folder
@@ -167,7 +172,12 @@ final class Favicons {
         }.value
     }
 
-    private func store(_ png: Data, for host: String) {
+    /// `address` only for http(s): a `data:` icon costs no fetch, and its address may be large.
+    private func store(_ png: Data, for host: String, from address: URL? = nil) {
+        if let address, ["http", "https"].contains(address.scheme?.lowercased()) {
+            if byAddress.count >= Self.byAddressLimit { byAddress.removeAll(keepingCapacity: true) }
+            byAddress[address] = png
+        }
         remember(png, for: host)
         missing.remove(host)
         iconless.remove(host)
@@ -180,13 +190,16 @@ final class Favicons {
     /// sites draw the count into their favicon, never their touch icon. A favicon is then shown but
     /// not kept, as the count in it would stay. A site that has none isn't searched again this
     /// session: each of its pages would cost a script and every candidate's fetch.
+    /// The page is always asked which icon it names, as pages of one host can name different ones;
+    /// an icon already kept from that address is reused, not fetched again.
     func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
-        if let cached = cachedData(host: host) { return cached }
-        guard !iconless.contains(host) else { return nil }
+        guard !iconless.contains(host) else { return cachedData(host: host) }
         let generation = generation
 
         let found = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [String: Any]
+        // A page that can't be asked keeps its host's icon, as before.
+        if found == nil, let cached = cachedData(host: host) { return cached }
         let links = found?["links"] as? [[String]] ?? []
         let preferringTouchIcon = counting || UnreadBadge.count(inTitle: found?["title"] as? String ?? "") != nil
         var candidates = links.compactMap { link -> Candidate? in
@@ -203,16 +216,18 @@ final class Favicons {
         for candidate in preferringTouchIcon ? sorted.filter(\.isTouchIcon) + sorted.filter { !$0.isTouchIcon } : sorted {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
+            if let kept = keptIcon(for: candidate, host: host, preferringTouchIcon: preferringTouchIcon) { return kept }
             var answered = false
             let png = await Self.fetch(candidate.url, with: session, answered: &answered)
             allAnswered = allAnswered && answered
             guard let png else { continue }
-            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
+            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host, from: candidate.url) }
             return png
         }
 
         for candidate in candidates {
             if Task.isCancelled { return nil }
+            if let kept = keptIcon(for: candidate, host: host, preferringTouchIcon: preferringTouchIcon) { return kept }
             let page = webView as? PageWebView
             page?.iconsDrawn.insert(candidate.url)
             let result = try? await webView.callAsyncJavaScript(
@@ -223,7 +238,7 @@ final class Favicons {
                   let encoded = dataURL.split(separator: ",").last,
                   let data = Data(base64Encoded: String(encoded)),
                   let png = await Self.normalizedInBackground(data) else { continue }
-            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
+            if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host, from: candidate.url) }
             return png
         }
         // Only once the page and every candidate's server answered and none had an icon: not for a
@@ -233,6 +248,13 @@ final class Favicons {
             iconless.insert(host)
         }
         return nil
+    }
+
+    /// While the page counts, a favicon may have the count drawn in: the host's kept icon, clean,
+    /// comes before it, as it did when every page of a host showed that one.
+    private func keptIcon(for candidate: Candidate, host: String, preferringTouchIcon: Bool) -> Data? {
+        if preferringTouchIcon, !candidate.isTouchIcon { return cachedData(host: host) }
+        return byAddress[candidate.url]
     }
 
     /// Fetched past the cache: a calendar's icon changes with the date, even at the same address.

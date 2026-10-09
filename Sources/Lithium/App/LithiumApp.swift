@@ -93,8 +93,9 @@ struct BrowserCommands: Commands {
         }
         CommandGroup(after: .pasteboard) {
             // No shortcut: ⌥⇧⌘V is Paste and Match Style, which editors handle as a paste.
+            // Sent to the window in front, a link's too, so it follows `commandTab` like the other page commands.
             Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
         }
         CommandGroup(after: .textEditing) {
             Divider()

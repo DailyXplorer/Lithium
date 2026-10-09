@@ -12,6 +12,11 @@ final class Favicons {
     private var uses = 0
     /// Hosts with no icon, not asked again this session.
     private(set) var missing: Set<String> = []
+    /// Hosts with no file kept: the address bar's rows ask at every keystroke, and would read the disk each time.
+    private var unstored: Set<String> = []
+    /// Decoded for those rows too, by host, with the bytes they came from.
+    private var images: [String: (data: Data, image: NSImage)] = [:]
+    private static let imagesLimit = 64
     private var inFlight: [String: Task<Data?, Never>] = [:]
     /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
     private var generation = 0
@@ -62,7 +67,12 @@ final class Favicons {
             cache[host]?.lastUse = uses
             return entry.data
         }
-        guard let data = try? Data(contentsOf: file(for: host)) else { return nil }
+        guard !unstored.contains(host) else { return nil }
+        guard let data = try? Data(contentsOf: file(for: host)) else {
+            if unstored.count >= missingLimit { unstored.removeAll(keepingCapacity: true) }
+            unstored.insert(host)
+            return nil
+        }
         remember(data, for: host)
         return data
     }
@@ -78,7 +88,12 @@ final class Favicons {
     }
 
     func cached(host: String?) -> NSImage? {
-        host.flatMap(cachedData(host:)).flatMap(NSImage.init(data:))
+        guard let host, let data = cachedData(host: host) else { return nil }
+        if let entry = images[host], entry.data == data { return entry.image }
+        guard let image = NSImage(data: data) else { return nil }
+        if images.count >= Self.imagesLimit { images.removeAll(keepingCapacity: true) }
+        images[host] = (data, image)
+        return image
     }
 
     /// For pages not open in a tab (history): the stored icon, or one from well-known locations.
@@ -143,6 +158,7 @@ final class Favicons {
         inFlight = [:]
         missing = []
         cache = cache.filter { hosts.contains($0.key) }
+        images = images.filter { hosts.contains($0.key) }
         let folder = folder
         let kept = Set(hosts.map { file(for: $0).lastPathComponent })
         await Task.detached(priority: .userInitiated) {
@@ -154,6 +170,7 @@ final class Favicons {
     private func store(_ png: Data, for host: String) {
         remember(png, for: host)
         missing.remove(host)
+        unstored.remove(host)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? png.write(to: file(for: host), options: .atomic)
     }

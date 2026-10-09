@@ -69,14 +69,15 @@ final class AddressSuggestions {
             title.localizedCaseInsensitiveContains(query) || url.absoluteString.localizedCaseInsensitiveContains(query)
         }
 
-        let openTabs = tabs.compactMap { tab -> Suggestion? in
+        // Lazy: at each keystroke, the scan ends with the third match, not at the last of hundreds of tabs.
+        let openTabs = Array(tabs.lazy.compactMap { tab -> Suggestion? in
             guard let url = tab.url, matches(tab.displayTitle, url), fresh(url) else { return nil }
             return .openTab(tab.id, title: tab.displayTitle, url: url)
-        }.prefix(Self.perSource)
-        let pinned = pins.compactMap { pin -> Suggestion? in
+        }.prefix(Self.perSource))
+        let pinned = Array(pins.lazy.compactMap { pin -> Suggestion? in
             guard matches(pin.title, pin.url), fresh(pin.url) else { return nil }
             return .pin(pin.id, title: pin.title, url: pin.url)
-        }.prefix(Self.perSource)
+        }.prefix(Self.perSource))
 
         let commands = named.map { Suggestion.action($0.action) }
         items = Array(([first] + commands + openTabs + pinned).prefix(Self.limit))

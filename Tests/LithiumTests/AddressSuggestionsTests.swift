@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Lithium
@@ -80,5 +81,42 @@ struct AddressSuggestionsTests {
         #expect(suggestions.selectedIndex == 0)
         suggestions.update(query: "  ", tabs: [], pins: [], history: history([]))
         #expect(suggestions.items.isEmpty)
+    }
+
+    /// Favorites past the first three that match aren't looked at: their pages may still come
+    /// from history, as they aren't listed anywhere else.
+    @Test func onlyTheFirstThreeMatchingFavoritesAreRead() async {
+        let pins = (1...5).map { Pin(id: UUID(), url: URL(string: "https://docs\($0).example/")!, title: "Docs \($0)") }
+        let store = history([("https://docs5.example/", "Docs 5", 1)])
+        let suggestions = AddressSuggestions()
+        suggestions.update(query: "docs", tabs: [], pins: pins, history: store)
+        #expect(suggestions.items.map(\.id) == ["search:docs"] + pins.prefix(3).map { "pin:\($0.id)" })
+        await suggestions.historyQuery?.value
+        #expect(suggestions.items.last?.id == "history:https://docs5.example/")
+    }
+}
+
+/// The address bar's rows ask for their icons at every keystroke.
+@MainActor
+struct SuggestionIconTests {
+    @Test func iconsAreDecodedOnceAndAMissingFileIsReadOnce() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "suggestion-icons-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+            NSColor.red.setFill()
+            rect.fill()
+            return true
+        }
+        let png = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
+        try png.write(to: folder.appending(path: "shown.example.png"))
+        let favicons = Favicons(folder: folder)
+
+        let first = try #require(favicons.cached(host: "shown.example"))
+        #expect(favicons.cached(host: "shown.example") === first, "decoded once")
+
+        #expect(favicons.cached(host: "none.example") == nil)
+        try png.write(to: folder.appending(path: "none.example.png"))
+        #expect(favicons.cached(host: "none.example") == nil, "the disk isn't read again for it")
     }
 }

@@ -1,9 +1,6 @@
-// Body of a function run by ReaderMode in the page's own world as the reader closes, which moves the
-// <style>s and <link>s the page added to the reader's <body> to its own: moved, each gets a new
-// sheet, while a CSS-in-JS library keeps writing to the one it holds (styled-components keeps it for
-// good). That one now passes what it's told on, to its element's sheet once the page is back. Only
-// while both hold as many rules, so that an index means the same rule in each. replace() and
-// replaceSync() throw on these sheets anyway.
+// Run in the page's world as the reader closes. The <style>s the page added to the reader's <body>
+// get new sheets when moved, while a CSS-in-JS library keeps writing to the old one: it now passes
+// writes on to the new one, while both hold as many rules so an index means the same rule.
 const latest = document[Symbol.for('lithium.readerSheets')] ??= new WeakMap();
 const owned = (root) => [
   ...[...root.styleSheets].filter((sheet) => sheet.ownerNode),

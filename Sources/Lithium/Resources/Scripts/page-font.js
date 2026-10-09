@@ -1,21 +1,16 @@
-// The user's font (DM Sans unless they picked another) on every element of the page, except where
-// the site's own font does a job a text font can't: icon fonts (Font Awesome, Material Symbols,
-// fontello…), code and math.
-// A layered !important rule sets the font everywhere; elements to leave alone get KEEP and are
-// excluded, with everything inside them. Deciding needs the font the site chose, so new content
-// briefly gets PROBE, which lifts the rule for it alone, while it is checked: at most once per
-// frame, before it paints, and without restyling the rest of the page. A class or style change
-// on a large element rechecks that element alone (PROBE_SELF) and the elements the page's font
-// rules for that class select; restyling its whole subtree twice on every toggle made class
-// changes three times slower than with DM Sans off.
-// Nothing is written inside an editable region: rich-text editors (ProseMirror, TipTap) re-render
-// on any attribute change in their content, whose new nodes were probed again, forever.
+// The user's font on every element of the page, except icon fonts, code and math.
+// A layered !important rule sets the font everywhere; elements to leave alone get KEEP. Deciding
+// needs the site's font, so new content briefly gets PROBE, which lifts the rule for it alone,
+// at most once per frame, before it paints. A class change on a large element rechecks only it
+// (PROBE_SELF) and what the page's font rules for that class select: restyling its subtree made
+// class changes three times slower.
+// Nothing is written inside an editable region: rich-text editors re-render on any attribute
+// change in their content, which would be probed again, forever.
 (() => {
   'use strict';
-  // The user's font; DM Sans goes by a name of its own, with its bytes in BASE64.
   const FAMILY = __LITHIUM_FAMILY__;
   const BUNDLED = 'Lithium DM Sans';
-  // Empty for any other family: it is installed on the Mac, where the page finds it by name.
+  // Empty for any family other than the bundled one: it is installed on the Mac.
   const BASE64 = '__LITHIUM_FONT__';
   // Run again in an open page when the font changes in Settings: the running copy takes it.
   if (window.__lithiumFont) {
@@ -24,7 +19,6 @@
   }
   const KEEP = 'data-lithium-font-keep';
   const PROBE = 'data-lithium-font-probe';
-  // Lifts the rule for the element alone, not its subtree.
   const PROBE_SELF = 'data-lithium-font-self';
   const ICON_FONT = /icon|awesome|glyph|symbol|fontello|icomoon|feather|lucide|phosphor|themify|entypo|dings|emoji|\bfa\b/;
   const CODE_FONT = /mono|consol|courier|menlo|monaco|\bcode\b|inconsolata|cascadia/;
@@ -58,7 +52,6 @@
   }`;
   sheet.replaceSync(rule(FAMILY));
 
-  // A page uses a handful of font stacks: each one is classified once.
   const specialStacks = new Map();
   const isSpecialStack = (stack) => {
     let special = specialStacks.get(stack);
@@ -86,7 +79,6 @@
 
   const OPTIONS = { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'], attributeOldValue: true };
   let shadowRoots = new WeakSet();
-  // Off while Settings has the font off: nothing is watched or checked.
   let running = true;
   const probed = [];
   let observer;
@@ -104,7 +96,6 @@
     if (!root.adoptedStyleSheets.includes(sheet)) root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
   };
 
-  // Returns whether to look inside the element.
   const visit = (element, seen) => {
     if (seen.has(element) || UNRENDERED.has(element.localName) || element.matches(EDITABLE)) return false;
     seen.add(element);
@@ -150,12 +141,9 @@
     }
   };
 
-  // A page that changes all the time (a chat, a live feed, an editor this script doesn't
-  // recognize answering every pass) is checked at most every THROTTLE ms rather than on every
-  // frame: past BUSY bursts of changes in two seconds without the user's input, until the user's
-  // next input or SILENCE ms without any change. A burst count can't lift it: the throttle itself
-  // lowers the count of a page that answers every pass. Changes keep accumulating meanwhile, so
-  // nothing is missed. A page still loading isn't counted, since it changes on every frame.
+  // A page that changes all the time is checked at most every THROTTLE ms: past BUSY bursts in two
+  // seconds without user input, until the next input or SILENCE ms without change. A burst count
+  // can't lift it, as the throttle itself lowers the count. Changes accumulate meanwhile.
   const BUSY = 30;
   const SILENCE = 4000;
   const THROTTLE = 500;
@@ -192,13 +180,11 @@
   const flush = () => {
     if (!scheduled) return;
     scheduled = false;
-    // A callback left waiting would flush the next pass early, and each early pass would leave
-    // one more: enough of them made a throttled page flush on every frame.
+    // A callback left waiting would flush the next pass early, piling up until every frame flushed.
     cancelAnimationFrame(frame);
     clearTimeout(timer);
     lastFlush = performance.now();
-    // The reader (reader.js, in this content world too) shows its own document in its own font;
-    // the page's, with its scan, comes back when the reader is left.
+    // The reader shows its own document in its own font.
     if (window.__lithiumReader) {
       changed.clear();
       pending.clear();
@@ -211,7 +197,6 @@
     }
     // Pages sometimes replace document.adoptedStyleSheets wholesale.
     adopt(document);
-    // Content added inside other new content is covered by its ancestor's probe and scan.
     const roots = [...pending].filter((root) => {
       if (!root.isConnected || inEditor(root)) return false;
       for (let node = root.parentNode; node; node = node.parentNode) if (pending.has(node)) return false;
@@ -252,7 +237,6 @@
     schedule();
   };
 
-  // Selectors of the rules that set a font, from the stylesheets of `root` the page can read.
   // A stylesheet from another origin can't be read: its rules are unknown.
   const fontRules = new WeakMap();
   const fontRulesOf = (root) => {
@@ -282,7 +266,7 @@
   };
 
   // Where the rules can't be read, the subtree is rechecked once the changes settle, a slice at a
-  // time: the old full rescan, without blocking the page and once per burst of changes.
+  // time, so the page isn't blocked.
   const settling = new Map();
   const recheckSubtreeLater = (root) => {
     clearTimeout(settling.get(root));
@@ -304,9 +288,7 @@
     }, 500));
   };
 
-  // A class change on a large element: the element itself, what the font rules naming a class
-  // that came or went select inside it, and what inside it keeps its own font (a rule that no
-  // longer applies selects nothing).
+  // Also what inside keeps its own font: a rule that no longer applies selects nothing.
   const classChanged = (element, oldValue) => {
     queueChange(element);
     const before = new Set((oldValue || '').split(/\s+/));
@@ -325,7 +307,6 @@
     if (rules.opaque) recheckSubtreeLater(element);
   };
 
-  // New styles can change any element's font: check the whole tree they apply to.
   const queueTreeOf = (node) => {
     const root = node.getRootNode();
     queue(root === document ? document.documentElement : root);
@@ -371,7 +352,6 @@
   addEventListener('load', () => findLateShadowRoots(document));
   queue(document.documentElement);
 
-  // Settings' font changes reach open pages without a reload.
   window.__lithiumFont = {
     use(family, base64) {
       addBundled(base64);
@@ -382,7 +362,7 @@
       observer.observe(document, OPTIONS);
       queue(document.documentElement);
     },
-    // The page gets its own fonts back. Its marks stay; the next start checks them all again.
+    // Marks stay; the next start checks them all again.
     stop() {
       if (!running) return;
       running = false;

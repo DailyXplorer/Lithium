@@ -3,20 +3,15 @@ import CryptoKit
 import Foundation
 
 /// Downloads the filter lists named in FilterSources.json and compiles them with AdGuard's
-/// converter, producing the same folder layout as scripts/update-filters.py:
-/// one WebKit JSON per group, advanced.txt for the in-page engine, scriptlets.txt for uBO's
-/// `+js()` filters (run by uBO's own scriptlets, not converted), and manifest.json.
+/// converter, producing the same folder layout as scripts/update-filters.py.
 struct FilterUpdater: Sendable {
     struct Sources: Decodable, Sendable {
         let lists: [String: URL]
         let groups: [String: [String]]
         let trueTokens: Set<String>
-        /// The SHA-256 of FilterSources.json, which scripts/update-filters.py writes too: a list's
-        /// new address or a changed token changes no group, and would wait for the next update.
+        /// SHA-256 of FilterSources.json: a list's new address or a changed token changes no group.
         var digest: String? = nil
 
-        /// Whether `manifest` was built from these groups and lists. A folder downloaded before a
-        /// list was added lacks it until refreshed, however recent it is.
         func built(_ manifest: Manifest) -> Bool {
             groups == manifest.groups.compactMapValues(\.lists) && (digest == nil || manifest.sources == digest)
         }
@@ -24,8 +19,7 @@ struct FilterUpdater: Sendable {
 
     let sources: Sources
     var session: URLSession = .shared
-    /// The set shipped with the app, whose `lists/` copies stand in for a failing list the
-    /// downloaded set doesn't hold yet (the first update after installing or upgrading).
+    /// Its `lists/` copies stand in for a failing list the downloaded set doesn't hold yet.
     var bundledFilters: URL? = Resources.bundle.url(forResource: "Filters", withExtension: nil)
     /// Rules a download needs to count as a list; the smallest real one holds well over this.
     var minimumRules = 10
@@ -38,14 +32,9 @@ struct FilterUpdater: Sendable {
         return FilterUpdater(sources: sources)
     }
 
-    /// Builds a complete filter folder in a temporary location, then swaps it into `destination`,
-    /// so a failed or interrupted update never leaves a half-written set behind.
-    /// A list that fails to download (a dead server, an error page, an empty or HTML body)
-    /// doesn't hold back the others:
-    /// it keeps the last good copy the newer of the folder and the bundled set holds for it (after
-    /// an upgrade, the bundled one), and is named in the manifest's `failedLists`. When every list
-    /// fails, or a failing one has no copy at all, nothing is written and the error thrown, so the
-    /// current set keeps that list's rules.
+    /// Builds the folder in a temporary location, then swaps it in, so a failed update never leaves
+    /// a half-written set. A list that fails to download keeps its last good copy and is named in
+    /// `failedLists`; if every list fails, or a failing one has no copy, nothing is written.
     func update(into destination: URL) async throws {
         Self.removeAbandonedStaging(beside: destination)
         var downloaded: [String: [String]] = [:]
@@ -57,8 +46,7 @@ struct FilterUpdater: Sendable {
             do {
                 var seen: Set<URL> = []
                 let lines = try await expand(url, seen: &seen)
-                // A captive portal, a parked domain or an emptied file answers 200 too: anything
-                // that doesn't look like a filter list fails, so it never replaces the last good copy.
+                // A captive portal, a parked domain or an emptied file answers 200 too.
                 guard lines.count >= minimumRules else { throw URLError(.cannotParseResponse) }
                 downloaded[name] = lines
             } catch {
@@ -123,8 +111,7 @@ struct FilterUpdater: Sendable {
         }
     }
 
-    /// Quitting during an update ends it before its `defer` removes the staging folder. One left
-    /// untouched for a day is such an update's, not one under way, and goes, as AdvancedBlocking's do.
+    /// Quitting during an update skips its `defer`; staging folders untouched for a day are removed.
     static func removeAbandonedStaging(beside destination: URL) {
         let folder = destination.deletingLastPathComponent()
         let others = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
@@ -140,20 +127,17 @@ struct FilterUpdater: Sendable {
         list.hasPrefix("ubo-") && (rule.contains("##+js(") || rule.contains("#@#+js("))
     }
 
-    /// Rules that run code in every matching page (uBO's `+js()`, AdGuard's `#%#` scriptlets and
-    /// JavaScript, and their exceptions) come only from uBO's own lists. The in-page engine can't
-    /// tell which list a rule came from, so another list's would run as trusted as uBO's.
+    /// Rules that run code in pages come only from uBO's own lists: the in-page engine can't tell
+    /// which list a rule came from, so another list's would run as trusted as uBO's.
     static func isAllowed(_ rule: String, list: String) -> Bool {
         list.hasPrefix("ubo-") || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
     }
 
-    /// Where a filter folder keeps a list as last downloaded, for when it next fails.
     private static func copy(of list: String, in folder: URL) -> URL {
         folder.appending(path: "lists/\(list).txt")
     }
 
-    /// Filter folders, the one with the newest manifest first, as the app picks the set it loads;
-    /// in the order given when their dates are equal.
+    /// Newest manifest first; in the order given when their dates are equal.
     static func newestFirst(_ folders: [URL], now: Date = Date()) -> [URL] {
         let dates = folders.map { Manifest.read(in: $0)?.comparableDate(now: now) ?? .distantPast }
         return folders.indices.sorted { dates[$0] != dates[$1] ? dates[$0] > dates[$1] : $0 < $1 }.map { folders[$0] }
@@ -161,8 +145,7 @@ struct FilterUpdater: Sendable {
 
     private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
         guard seen.insert(url).inserted else { return [] }
-        // A chain of ever new addresses would keep the update going for the whole launch. Real
-        // lists include a handful of files; past this the list fails and keeps its last good copy.
+        // A chain of ever new addresses would keep the update going for the whole launch.
         guard seen.count <= Self.maximumListFiles else { throw URLError(.cannotParseResponse) }
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
@@ -186,8 +169,7 @@ struct FilterUpdater: Sendable {
                 continue
             } else if line.hasPrefix("!#include ") {
                 let path = line.dropFirst(10).trimmingCharacters(in: .whitespaces)
-                // Only from the list's own server: an include elsewhere (another site, a file on
-                // the Mac) is skipped.
+                // Only from the list's own server: never another site or a local file.
                 if let included = URL(string: path, relativeTo: url)?.absoluteURL,
                    included.scheme?.lowercased() == url.scheme?.lowercased(),
                    included.host()?.lowercased() == url.host()?.lowercased(), included.port == url.port {
@@ -222,9 +204,8 @@ struct FilterUpdater: Sendable {
             }
         }
 
-        // Each `!` or `(` nests a call: thousands of them in a list would overflow the updater's
-        // small stack and take the app down at every launch. Real conditions nest a few levels;
-        // one nested deeper than this is malformed, and false.
+        // Each `!` or `(` nests a call: thousands would overflow the updater's small stack and
+        // crash the app at every launch. Deeper than the limit is malformed, and false.
         var position = 0
         var depth = 0
         var tooDeep = false
@@ -285,15 +266,13 @@ struct Manifest: Codable {
     let groups: [String: Group]
     let advancedRules: Int?
     var scriptletRules: Int? = nil
-    /// Lists that failed to download: their last good copy stands in, if there is one.
     var failedLists: [String]? = nil
-    /// The FilterSources.json it was built from (`FilterUpdater.Sources.digest`).
+    /// `FilterUpdater.Sources.digest` of the sources it was built from.
     var sources: String? = nil
 
     var date: Date? { ISO8601DateFormatter().date(from: updated) }
 
-    /// For choosing the newest set. A set dated in the future (built with the clock set ahead)
-    /// counts as the oldest: taken as built now, it would still outrank every set built after it.
+    /// A set dated in the future counts as the oldest, or it would outrank every set built after it.
     func comparableDate(now: Date = Date()) -> Date {
         guard let date, date <= now else { return .distantPast }
         return date

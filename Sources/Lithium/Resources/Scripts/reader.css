@@ -11,12 +11,10 @@
 }
 
 /* The page's <html> stays, with what its scripts set on it (a modal's overflow: hidden, a
-   background): the reader's own <body> paints the window, without fading in from the page's
-   color. Anything else <html> holds besides <head> and <body> (an overlay) waits with the page. */
+   background): the reader's own <body> paints the window. */
 html { background: none !important; overflow: visible !important; }
 html > :not(head, body) { display: none !important; }
-/* The page's own <body>, after the reader's: hidden, and in the window's frame, out of the way of
-   the reader's scrolling, so that what it shows at its top (what its scripts watch) stays there. */
+/* The page's own <body>: hidden and fixed, so what its scripts watch at its top stays there. */
 body ~ body {
   position: fixed !important; inset: 0 !important; z-index: -1 !important; overflow: hidden !important;
   visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; contain: strict;

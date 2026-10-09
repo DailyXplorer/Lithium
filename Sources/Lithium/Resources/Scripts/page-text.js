@@ -12,7 +12,6 @@ const fieldSelection = () => {
 
 const length = (element) => (element.innerText || '').length;
 
-// The article or main element when it holds the page's content; the whole body otherwise.
 const pickRoot = () => {
   const body = document.body;
   const total = length(body);
@@ -49,7 +48,6 @@ const readableText = (root) => {
     text = text.slice(0, index) + '\n' + text.slice(index + part.length);
     removed++;
   }
-  // A page built entirely from these elements still has something to summarize.
   return text.trim().length >= full.trim().length * 0.2 ? text : full;
 };
 

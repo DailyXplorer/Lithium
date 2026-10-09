@@ -1,9 +1,7 @@
-// Runs at document start in the lithium-agent world, in every frame of a tab an agent uses. The
-// page's uncaught errors and unhandled rejections reach this world's listeners too, with file and
-// line, so they need nothing in the page's world, where the page could see it.
+// Runs in the lithium-agent world: the page's uncaught errors reach this world's listeners too, so
+// nothing is needed in the page's world, where the page could see it.
 (() => {
-  // Once per document, so no error is posted twice when capture reaches a frame twice. This
-  // world's globals are out of the page's sight.
+  // Once per document, so no error is posted twice.
   if (globalThis.lithiumAgentErrors) return;
   globalThis.lithiumAgentErrors = true;
   const post = (message) => {

@@ -11,8 +11,7 @@ final class Privacy {
     private(set) var disabledHosts: Set<String>
     /// Protections turned on or off in private tabs, by private session, then host; never saved.
     private var privateExceptions: [ObjectIdentifier: [String: Bool]] = [:]
-    /// Those of spaces that keep their data apart, by space, then host: another store is another
-    /// identity, so a choice made there stays there.
+    /// The same for spaces that keep their data apart: another store is another identity.
     private var spaceExceptions: [Space.ID: [String: Bool]]
     private(set) var ruleCount = 0
     private(set) var filtersUpdated: Date?
@@ -23,27 +22,20 @@ final class Privacy {
     /// Set by tests too, for a rule of their own.
     @ObservationIgnored var ruleLists: [WKContentRuleList] = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
-    /// The rule-list load queued last. Each load waits for the one before: two at once (Update
-    /// now during the launch load) would remove each other's compiled lists and engine build.
+    /// Each load waits for the one before: two at once would remove each other's compiled lists.
     @ObservationIgnored private var lastLoad: Task<Void, Never>?
     @ObservationIgnored private var updateLoop: Task<Void, Never>?
-    /// False when the loaded filters predate a change to FilterSources.json, such as a new group:
-    /// they are then refreshed at once instead of when they turn a day old.
+    /// False when the loaded filters predate a change to FilterSources.json: refreshed at once.
     @ObservationIgnored private var filtersMatchSources = true
-    /// False when a list failed to download or a group failed to compile: the filters are stale
-    /// until an update gets them all.
     @ObservationIgnored private var filtersComplete = true
-    /// Automatic updates that failed in a row, and when the next may start: a list that stays
-    /// down is retried after 1, 2, 4… hours, up to a day, not with every other list each hour.
-    /// Kept across launches, or a list that stays down would bring a full download and rebuild
-    /// at every launch.
+    /// Backoff for failed automatic updates (1, 2, 4… hours, up to a day). Kept across launches,
+    /// or a list that stays down would bring a full download and rebuild at every launch.
     @ObservationIgnored private var failedUpdates: Int
     @ObservationIgnored private var nextUpdate: Date
     @ObservationIgnored private let farblingTemplate: String
     /// Drawn at launch, so the noise of a site changes from launch to launch.
     @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
-    /// Each private session farbles with a key of its own, drawn when it first needs one: nothing
-    /// in it matches the same site in a normal tab, or in another private session of the launch.
+    /// Per private session, so nothing in it matches the same site in another session or a normal tab.
     @ObservationIgnored private var privateFarblingKeys: [ObjectIdentifier: SymmetricKey] = [:]
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
@@ -52,8 +44,7 @@ final class Privacy {
     private static let spaceExceptionsKey = "spaceProtectionExceptions"
     private static let failedUpdatesKey = "failedFilterUpdates"
     private static let nextUpdateKey = "nextFilterUpdate"
-    /// Part of each compiled list's name: bumped when `prepared(_:)` changes, so lists compiled
-    /// the old way are rebuilt once instead of waiting for the next filter update.
+    /// Part of each compiled list's name: bump it when `prepared(_:)` changes, so lists are rebuilt.
     private static let preparation = 4
     private static let updateInterval: TimeInterval = 24 * 60 * 60
     private static let downloadedFilters = URL.applicationSupportDirectory.appending(path: "Lithium/Filters")
@@ -71,10 +62,8 @@ final class Privacy {
         userAgentSuffix = "Version/\(safariVersion) Safari/605.1.15"
     }
 
-    /// The script for pages of `site`: its noise seed is an HMAC of the site under the launch's
-    /// key, worked out here so a page that recovers it can't run it back to the key or on to
-    /// another site's. The marker name is an HMAC of the key alone: the copies of every site must
-    /// agree on it (a cross-site frame and the popup it opens), and pages never see it.
+    /// The seed is an HMAC of the site, so a page that recovers it can't reach the key or another
+    /// site's. The marker is an HMAC of the key alone: every site's copy must agree on it.
     static func farbling(_ template: String, key: SymmetricKey, site: String) -> String {
         template
             .replacingOccurrences(of: "__LITHIUM_SEED__", with: farblingValue("seed:\(site)", key: key))
@@ -82,8 +71,7 @@ final class Privacy {
             .replacingOccurrences(of: "__LITHIUM_ADOPT__", with: adopterName(key: key))
     }
 
-    /// The name of the function farbling leaves on a frame or popup it protected: keyed like the
-    /// marker, as a fixed one would tell every page it runs in Lithium.
+    /// Keyed like the marker, as a fixed name would tell every page it runs in Lithium.
     private static func adopterName(key: SymmetricKey) -> String {
         "a" + farblingValue("adopt", key: key)
     }
@@ -94,8 +82,7 @@ final class Privacy {
     }
 
     /// Whether a response's policies require Trusted Types: "enforce" when its enforced one does,
-    /// "report" when only its report-only one does. A page can't tell which applies; farbling
-    /// needs to, to check a write without filing a report or calling a policy the browser wouldn't.
+    /// "report" when only its report-only one does. A page can't tell which applies; farbling needs to.
     nonisolated static func trustedTypes(of response: URLResponse) -> String? {
         guard let response = response as? HTTPURLResponse else { return nil }
         let requires = { (header: String) in
@@ -110,14 +97,12 @@ final class Privacy {
         return requires("Content-Security-Policy-Report-Only") ? "report" : nil
     }
 
-    /// The script that hands `trustedTypes(of:)` to the farbling of the response's document, and
-    /// of no other: it goes to every frame and runs only in documents at the response's address.
+    /// Goes to every frame and runs only in documents at the response's address.
     static func trustedTypesScript(for response: URLResponse, key: SymmetricKey) -> String? {
         guard let mode = trustedTypes(of: response), let url = response.url else { return nil }
         return trustedTypesScript(modes: [trustedTypesAddress(url): mode], key: key)
     }
 
-    /// The same for several documents, by address (without the fragment).
     static func trustedTypesScript(modes: [String: String], key: SymmetricKey) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
@@ -149,10 +134,8 @@ final class Privacy {
     @ObservationIgnored private let trustedTypesScripts = NSMapTable<WKUserContentController, TrustedTypesScript>.weakToStrongObjects()
     private static let removeUserScript = Selector(("_removeUserScript:"))
 
-    /// Adds `trustedTypesScript` for a page's document or frame, keyed as that page's farbling is.
-    /// One script holds every address of the page and replaces the one before: a script per
-    /// address piled up for the page's life as frames of new addresses came. Without WebKit's
-    /// private call to remove one, each address still gets a script of its own, once.
+    /// One script holds every address of the page and replaces the one before, so they don't pile up.
+    /// Without WebKit's private call to remove one, each address gets a script of its own, once.
     func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
         guard enabled, let mode = Self.trustedTypes(of: response), let url = response.url else { return }
         // Gone with the rest of the scripts at a main-frame navigation: the new page starts afresh.
@@ -172,12 +155,9 @@ final class Privacy {
         trustedTypesScripts.setObject(TrustedTypesScript(script: script, modes: modes), forKey: controller)
     }
 
-    /// The site farbling is keyed on: the registrable domain from the public suffix list (so
-    /// `alice.github.io` and `bob.github.io` differ), or the address itself for an IP host.
-    /// A blob's address has no host but holds its creator's origin, whose site it takes; one of an
-    /// opaque origin ("blob:null/…") gets a site of its own, not the "" that every site's would share.
-    /// The creator is a web origin, read once: a `blob:` inside another, which a page could nest
-    /// thousands deep to stall the app, is as opaque as "null".
+    /// The registrable domain (so `alice.github.io` and `bob.github.io` differ). A blob takes its
+    /// creator's site; an opaque one gets a unique site, not the "" every site's would share.
+    /// Nested `blob:` is treated as opaque: a page could nest thousands deep to stall the app.
     nonisolated static func farblingSite(_ url: URL) -> String {
         if url.scheme?.lowercased() == "blob" {
             let creator = URL(string: String(url.absoluteString.dropFirst(5)))
@@ -192,8 +172,7 @@ final class Privacy {
         guard loadTask == nil else { return }
         loadTask = Task { await loadRuleLists() }
         lastLoad = loadTask
-        // scripts/test sets it: each test's Browser would download and convert the lists on its
-        // own, and a dozen of them landing at once stalled a later test for two minutes.
+        // Set by scripts/test: each test's Browser would otherwise download and convert the lists.
         guard ProcessInfo.processInfo.environment["LITHIUM_NO_FILTER_UPDATES"] != "1" else { return }
         updateLoop = Task { [weak self] in
             while !Task.isCancelled {
@@ -204,8 +183,7 @@ final class Privacy {
         }
     }
 
-    /// Marks the update as running before returning: the settings page that asked for it reads
-    /// the state in the same reply, and shows the update and follows it from there.
+    /// Marks the update as running before returning: the settings page reads the state in the same reply.
     func updateFiltersNow() {
         guard !isUpdatingFilters else { return }
         isUpdatingFilters = true
@@ -219,17 +197,14 @@ final class Privacy {
         await updateFilters()
     }
 
-    /// Whether the hourly check updates the filters: they are a day old, built from other
-    /// sources, or incomplete, and the wait after the last failed update is over. Filters dated
-    /// in the future (built with the clock set ahead) count as stale: they would otherwise stop
-    /// updates until the clock caught up.
+    /// Filters dated in the future (clock set ahead) count as stale, or updates would stop until
+    /// the clock caught up.
     static func needsUpdate(updated: Date?, matchesSources: Bool, complete: Bool, notBefore: Date, now: Date = Date()) -> Bool {
         guard now >= notBefore else { return false }
         let age = now.timeIntervalSince(updated ?? .distantPast)
         return !matchesSources || !complete || age > updateInterval || age < 0
     }
 
-    /// The wait before the next automatic update after `failures` failed ones in a row.
     static func retryDelay(afterFailures failures: Int) -> TimeInterval {
         min(60 * 60 * pow(2, Double(min(max(failures - 1, 0), 10))), updateInterval)
     }
@@ -251,7 +226,6 @@ final class Privacy {
         (failedUpdates, nextUpdate) = Self.saveBackoff(afterFailures: updated ? 0 : failedUpdates + 1, in: .standard)
     }
 
-    /// Stores the backoff after `failures` failed updates in a row and returns it.
     static func saveBackoff(afterFailures failures: Int, in defaults: UserDefaults, now: Date = Date())
         -> (failures: Int, notBefore: Date) {
         let notBefore = failures == 0 ? Date.distantPast : now.addingTimeInterval(retryDelay(afterFailures: failures))
@@ -260,15 +234,13 @@ final class Privacy {
         return (failures, notBefore)
     }
 
-    /// The backoff the last launch left. A wait more than a day away (the clock was turned back)
-    /// is cut to a day, the longest `retryDelay` gives.
+    /// A wait more than a day away (the clock was turned back) is cut to a day.
     static func savedBackoff(in defaults: UserDefaults, now: Date = Date()) -> (failures: Int, notBefore: Date) {
         guard defaults.object(forKey: nextUpdateKey) != nil else { return (0, .distantPast) }
         let saved = Date(timeIntervalSinceReferenceDate: defaults.double(forKey: nextUpdateKey))
         return (defaults.integer(forKey: failedUpdatesKey), min(saved, now.addingTimeInterval(updateInterval)))
     }
 
-    /// Loads the current filters once every load queued before has finished.
     private func reloadRuleLists() async {
         let previous = lastLoad
         let load = Task {
@@ -314,8 +286,6 @@ final class Privacy {
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
     }
 
-    /// `privateSession` is set for a private tab, `space` for a tab of a space that keeps its data
-    /// apart (`Tab.siteSpace`): their own choice wins, then the saved one.
     func isEnabled(for url: URL?, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> Bool {
         guard let host = Self.siteHost(url) else { return true }
         if let privateSession, let enabled = privateExceptions[privateSession]?[host] { return enabled }
@@ -323,8 +293,7 @@ final class Privacy {
         return !disabledHosts.contains(host)
     }
 
-    /// A private tab's choice stays in memory for its private session only: saved, it would
-    /// record the site it visited. A separate space's is saved for that space.
+    /// A private tab's choice stays in memory only: saved, it would record the site it visited.
     func setEnabled(_ enabled: Bool, for url: URL?, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) {
         guard let host = Self.siteHost(url) else { return }
         if let privateSession {
@@ -337,7 +306,6 @@ final class Privacy {
         }
     }
 
-    /// The private session's last tab closed: its choices go with its cookies.
     func forget(privateSession: ObjectIdentifier) {
         privateExceptions[privateSession] = nil
         privateFarblingKeys[privateSession] = nil
@@ -351,14 +319,12 @@ final class Privacy {
         return key
     }
 
-    /// The space was deleted, its store with it.
     func forget(space: Space.ID) {
         guard spaceExceptions.removeValue(forKey: space) != nil else { return }
         UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
     }
 
-    /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,
-    /// an IPv6 one may not parse back to the same host.
+    /// Takes the host as is: rebuilt into an address, an IPv6 one may not parse back to the same host.
     func setEnabled(_ enabled: Bool, host: String) {
         if enabled { disabledHosts.remove(host) } else { disabledHosts.insert(host) }
         UserDefaults.standard.set(disabledHosts.sorted(), forKey: Self.disabledHostsKey)
@@ -369,32 +335,29 @@ final class Privacy {
         if enabled { ruleLists.forEach(controller.add) }
     }
 
-    /// Adds the protection scripts for `url`; the caller has already reset the controller's scripts.
+    /// The caller has already reset the controller's scripts.
     func addScripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
         scripts(enabled, for: url, privateSession: privateSession).forEach(controller.addUserScript)
     }
 
-    /// The protection scripts for `url`.
     func scripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
         guard enabled else { return [] }
-        // Every frame gets the top page's site, as in Brave: a frame embedded on many sites farbles differently on each.
+        // Every frame gets the top page's site, as in Brave: a frame embedded on many sites
+        // farbles differently on each.
         let farbling = WKUserScript(source: Self.farbling(farblingTemplate, key: farblingKey(for: privateSession), site: Self.farblingSite(url)),
                                     injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }
 
-    /// The advanced rules for a frame of `page` showing `frame` (an embed, an ad, a consent
-    /// prompt), looked up for the frame's own site. The script goes to every frame and runs only
-    /// in frames of that host.
+    /// Advanced rules looked up for the frame's own site; the script runs only in frames of that host.
     func frameScript(_ enabled: Bool, for frame: URL, in page: URL) -> WKUserScript? {
         guard enabled, let source = advanced.script(for: frame, inFrameOf: page) else { return nil }
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
     }
 
-    /// WebKit's Advanced Tracking and Fingerprinting Protection (Safari's private-browsing
-    /// shield): engine-level canvas noise, window-sized `screen`, and link decoration filtering.
-    /// Private API, so it is applied only when this WebKit build has it.
+    /// WebKit's Advanced Tracking and Fingerprinting Protection. Private API, so it is applied
+    /// only when this WebKit build has it.
     static func setEngineProtections(_ enabled: Bool, on preferences: WKWebpagePreferences) {
         guard preferences.responds(to: Selector(("_setNetworkConnectionIntegrityEnabled:"))) else { return }
         preferences.setValue(enabled, forKey: "networkConnectionIntegrityEnabled")
@@ -405,18 +368,11 @@ final class Privacy {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    /// The list as WebKit gets it, with two changes to element hiding that keep what it hides:
-    /// - WebKit checks every load against each rule whose url-filter matches its URL, and AdGuard's
-    ///   converter gives the element hiding rules of particular sites the url-filter ".*". Thousands
-    ///   of them went through every image, script and request of every page, which made
-    ///   Speedometer's news sites 2.3 times slower. WebKit takes their selectors from the document
-    ///   load, so that is the only load they now match.
-    /// - "#x ~ *" makes WebKit walk the earlier siblings of every element at each style change:
-    ///   one such filter of uBO's badware list cost 44 ms per restyle of a page with 2,000 sibling
-    ///   elements, and 8 ms per run of Speedometer's SVG chart. It becomes "#x + *, #x + * + *,
-    ///   #x + * + * + *", which hides the three elements that follow #x (what these scam pages put
-    ///   after it) with one sibling check each. ":has(> #x) > *" was cheap for the chart but made
-    ///   list updates slower.
+    /// The list as WebKit gets it, with two performance changes to element hiding:
+    /// - Site-specific hiding rules with url-filter ".*" are limited to the document load: WebKit
+    ///   checked every subresource against them (2.3 times slower on Speedometer's news sites).
+    /// - "#x ~ *" makes WebKit walk earlier siblings at each style change (44 ms per restyle on a
+    ///   big page); it becomes "#x + *, #x + * + *, #x + * + * + *", one sibling check each.
     nonisolated static func prepared(_ file: URL) -> String? {
         guard let data = try? Data(contentsOf: file),
               var rules = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
@@ -476,15 +432,12 @@ final class Privacy {
         filtersComplete = groups.complete && (manifest.failedLists ?? []).isEmpty
         generation += 1
 
-        // Awaited, so pages also wait for the in-page engine (waitUntilReady). Without it, the tab
-        // restored at launch loads without uBO's scriptlets while the engine builds, and plays ads.
-        // A later rebuild swaps the new engine in without making pages wait.
+        // Awaited, so the tab restored at launch waits for uBO's scriptlets instead of playing ads.
         await advanced.load(folder: folder, stamp: stamp)
     }
 
-    /// Each group's compiled list, compiled now if this filter set is new, then removes the lists
-    /// no group uses any more. A group that fails to compile keeps the list compiled from an
-    /// earlier set, still loaded, but isn't counted, and makes the set incomplete so it is tried again.
+    /// A group that fails to compile keeps its list from an earlier set, uncounted, and marks the
+    /// set incomplete so it is tried again.
     static func loadGroups(from folder: URL, manifest: Manifest, into store: WKContentRuleListStore) async
         -> (lists: [WKContentRuleList], ruleCount: Int, complete: Bool) {
         let stamp = manifest.updated.filter(\.isNumber)
@@ -519,7 +472,6 @@ final class Privacy {
 
     private static func compiled(_ group: String, identifier: String, folder: URL, store: WKContentRuleListStore) async -> WKContentRuleList? {
         if let cached = try? await store.contentRuleList(forIdentifier: identifier) { return cached }
-        // Reading and rewriting ten megabytes of JSON happens off the main thread.
         let file = folder.appending(path: "\(group).json")
         guard let json = await Task.detached(priority: .utility, operation: { Self.prepared(file) }).value else {
             NSLog("Lithium: failed to read %@ filters", group)

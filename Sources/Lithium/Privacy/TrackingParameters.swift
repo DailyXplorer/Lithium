@@ -8,11 +8,9 @@ enum TrackingParameters {
         "oly_enc_id", "vero_id", "rb_clickid", "s_cid", "__s", "_openstat", "wickedid",
     ]
 
-    /// Returns the URL without known tracking parameters, or nil when there is nothing to strip.
-    /// The other parameters keep their exact encoding: decoded and encoded again, "%2B" would
-    /// come back as "+", which servers read as a space. The raw query is cut on "&" and joined
-    /// back: set as query items, each value is checked again, and a value Foundation rejects (a
-    /// token's literal "==") would stop the app. What is kept is part of a valid query, so it is too.
+    /// Returns nil when there is nothing to strip. The raw query is cut on "&" and joined back:
+    /// re-encoded, "%2B" would become "+" (a space), and query items Foundation rejects (a literal
+    /// "==") would stop the app.
     static func stripped(_ url: URL) -> URL? {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let query = components.percentEncodedQuery, !query.isEmpty else { return nil }

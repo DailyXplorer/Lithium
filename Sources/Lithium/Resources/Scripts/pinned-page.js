@@ -1,18 +1,14 @@
-// Injected by Tab for pinned tabs only, at document start in the main frame, in the page's own
-// world: the Badging API and web notifications are the page's to call. Every call is a message
-// to the app, which trusts none of them: any script of the page can post the same. A
-// notification shows nothing on the Mac, it only puts a dot on the tab. The icon is reported
-// when the page's <head> changes it, never on a timer.
+// Injected for pinned tabs only, in the page's own world, for the Badging API and notifications.
+// The app trusts none of its messages: any script of the page can post the same. A notification
+// only puts a dot on the tab.
 (() => {
   const key = Symbol.for('lithium.pinnedPage');
   // Taken now, before the page can replace it.
   const channel = globalThis.webkit?.messageHandlers?.lithiumPinned;
   if (!channel) return;
-  // Pinned again without a reload: what the first run installed posts to the new channel, the
-  // old one died with the unpinning.
+  // Pinned again without a reload: the first run posts to the new channel.
   if (globalThis[key]) return globalThis[key](channel);
   let post = channel.postMessage.bind(channel);
-  // Unpinned, the app drops the channel and the page goes on without it.
   const send = (message) => { try { post(message); } catch {} };
   const define = (target, name, value) => Object.defineProperty(target, name, { value, configurable: true, writable: true });
 
@@ -31,8 +27,7 @@
     return Promise.resolve();
   });
 
-  // WebKit's own is there but denies every page, with nothing in Lithium to show it; one that
-  // can show notifications is left alone.
+  // WebKit's own is there but denies every page; one that can show notifications is left alone.
   if (globalThis.Notification?.permission !== 'granted') {
     class Notification extends EventTarget {
       onclick = null;
@@ -63,7 +58,6 @@
     define(globalThis, 'Notification', Notification);
   }
 
-  // The last icon link wins, as a page swapping its icon adds or edits one.
   let lastIcon = '';
   const reportIcon = () => {
     const links = document.head?.querySelectorAll('link[rel~="icon" i]') ?? [];
@@ -73,7 +67,6 @@
     // Sites that draw their unread count into the icon change the title with it.
     send({ type: 'icon', href, title: document.title });
   };
-  // The app forgot the icon when it was unpinned, so it is told again.
   define(globalThis, key, (next) => {
     post = next.postMessage.bind(next);
     lastIcon = '';

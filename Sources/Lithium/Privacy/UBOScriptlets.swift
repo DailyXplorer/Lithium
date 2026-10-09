@@ -1,10 +1,8 @@
 import Foundation
 import JavaScriptCore
 
-/// uBlock Origin's own scriptlets, bundled by scripts/update-ubo-scriptlets.mjs.
-/// uBO's `+js()` filters are written for these implementations and uBO's argument syntax.
-/// AdGuard's look-alikes take different arguments and lack the newest ones, which are
-/// precisely the ones YouTube's ads are fought with.
+/// uBlock Origin's own scriptlets, bundled by scripts/update-ubo-scriptlets.mjs. AdGuard's
+/// look-alikes take different arguments and lack the newest ones, used against YouTube's ads.
 struct UBOScriptlets: Decodable, Sendable {
     struct Resource: Decodable, Sendable {
         let code: String
@@ -32,9 +30,7 @@ struct UBOScriptlets: Decodable, Sendable {
         return resources[name] == nil ? nil : name
     }
 
-    /// Rewrites uBO filters (`example.com##+js(set, a.b, 1)`, `example.com#@#+js(...)`) as AdGuard
-    /// scriptlet rules. Arguments are split by uBO's own parser, so quoting and escapes mean
-    /// exactly what they mean in uBO.
+    /// Rewrites uBO `+js()` filters as AdGuard scriptlet rules, split by uBO's own argument parser.
     func adguardRules(fromUBO filters: [String]) -> [String] {
         guard let context = JSContext() else { return [] }
         context.evaluateScript(argumentParser + Self.argumentsScript)
@@ -63,8 +59,7 @@ struct UBOScriptlets: Decodable, Sendable {
             if !isException { scriptlets.append((sites, content)) }
         }
 
-        // AdGuard's engine applies an exception only to the rules with exactly its content, and
-        // has no "every scriptlet" form, so the site gets one for each scriptlet that runs there.
+        // AdGuard has no "every scriptlet" exception, so the site gets one per scriptlet that runs there.
         var seen: Set<String> = []
         for site in noScriptlets {
             for scriptlet in scriptlets where Self.runs(on: scriptlet.sites, site: site) {
@@ -75,16 +70,14 @@ struct UBOScriptlets: Decodable, Sendable {
         return rules
     }
 
-    /// Whether a filter for `sites` can run on `site` or its subdomains: a generic one does, and so
-    /// does one for the site, one of its subdomains or a parent domain. An empty `site` is every site.
+    /// Whether a filter for `sites` can run on `site` or its subdomains. An empty `site` is every site.
     private static func runs(on sites: Substring, site: Substring) -> Bool {
         let permitted = sites.split(separator: ",").filter { !$0.hasPrefix("~") }
         guard !permitted.isEmpty, !site.isEmpty else { return true }
         return permitted.contains { $0 == site || $0.hasSuffix("." + site) || site.hasSuffix("." + $0) }
     }
 
-    /// One private scope holding every scriptlet the page needs and their helpers, then the calls,
-    /// highest priority first: the shape uBO itself injects.
+    /// One scope with the scriptlets and helpers, then the calls by priority, as uBO injects them.
     func script(for calls: [(name: String, arguments: [String])]) -> String? {
         var definitions: [String] = []
         var defined: Set<String> = []

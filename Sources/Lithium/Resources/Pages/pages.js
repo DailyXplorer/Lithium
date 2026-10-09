@@ -27,7 +27,6 @@ document.querySelector('nav')?.replaceChildren(
   ...NAV.map(([id, icon, label, page]) => {
     // On the settings page itself, sections are same-page anchors that settings.html switches between.
     const href = page ?? (location.host === 'settings' ? `#${id}` : `lithium://settings#${id}`);
-    // A page of its own (History, the agent log at lithium://agents) marks the entry of the same name.
     const link = el('a', { href, className: location.host === id ? 'active' : '' }, [el('span', { textContent: label })]);
     const image = el('div', { className: 'icon' });
     image.style.setProperty('--src', `url(lithium://pages/icon/${icon})`);

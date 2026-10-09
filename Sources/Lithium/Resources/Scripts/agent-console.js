@@ -1,9 +1,6 @@
-// Runs at document start in the page's own world, in every frame of a tab an agent uses: each
-// content world has its own console, so only this one sees the page's console calls. It passes
-// each message to Lithium, then calls the original with the same `this` and arguments, and
-// returns what it returns. It never throws into the page, defines no global, and its wrappers
-// report the originals' source, name and length. With response bodies on (Settings), fetch and
-// XMLHttpRequest pass their text bodies too.
+// Runs in the page's own world: each content world has its own console, so only this one sees the
+// page's console calls. It never throws into the page, defines no global, and its wrappers report
+// the originals' source, name and length.
 (() => {
   const handler = window.webkit?.messageHandlers?.lithiumAgentConsole;
   if (!handler) return;
@@ -59,7 +56,6 @@
     }
   };
 
-  // At most 100 messages a second reach Lithium; the next one says how many didn't.
   let second = -Infinity;
   let sent = 0;
   let dropped = 0;
@@ -107,8 +103,7 @@
       sendBody(method, response.url, response.status, type, read);
     } catch (_) {}
   };
-  // The promise the page gets settles as the original does: a rejection it leaves unhandled is
-  // still reported, from the promise it holds.
+  // A rejection the page leaves unhandled is still reported, from the promise it holds.
   wrap(window, 'fetch', (original) => ({ fetch(...args) {
     const promise = apply(original, this, args);
     try {

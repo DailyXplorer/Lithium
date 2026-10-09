@@ -1,10 +1,7 @@
-// Run by Lithium before an extension's background (ExtensionCompatibility). Chrome Web Store
-// builds use Chrome APIs WebKit doesn't have yet as soon as they start, without checking for
-// them: 1Password's background stopped at chrome.notifications.onClicked, and nothing answered
-// its content scripts. These are added as Chrome has them for an extension that gets nothing
-// from them: notifications never show, no managed policy, no window opened from a page reported,
-// no browser password saving to turn off (Lithium has none), no other extension. Only what is
-// missing is added, so WebKit's own APIs win once it has them.
+// Run before an extension's background (ExtensionCompatibility). Chrome Web Store builds use
+// Chrome APIs WebKit doesn't have yet without checking for them: 1Password's background stopped at
+// chrome.notifications.onClicked. These are inert stand-ins, added only where missing, so WebKit's
+// own APIs win once it has them.
 
 (() => {
   const event = () => ({ addListener() {}, removeListener() {}, hasListener() { return false; }, hasListeners() { return false; } });
@@ -29,8 +26,7 @@
   const setting = (value) => ({
     get: answer({ value, levelOfControl: 'controllable_by_this_extension' }), set: answer(undefined), clear: answer(undefined), onChange: event(),
   });
-  // Chrome has these only for an extension that asks for them. Password managers turn the
-  // browser's password saving off (`privacy`) and lock with the Mac's screen (`idle`) as they start.
+  // Chrome has these only for an extension that asks for them.
   const byPermission = {
     notifications: () => ({
       onClicked: event(), onButtonClicked: event(), onClosed: event(), onPermissionLevelChanged: event(), onShowSettings: event(),
@@ -41,9 +37,8 @@
       network: { networkPredictionEnabled: setting(false), webRTCIPHandlingPolicy: setting('default') },
       websites: { thirdPartyCookiesAllowed: setting(false), hyperlinkAuditingEnabled: setting(false), doNotTrackEnabled: setting(false) },
     }),
-    // Lithium tells `locked` and `active` through a port (Extensions.listenForIdle), opened once the
-    // extension asks; `idle` (no input for a while) is never told. Without native messaging there
-    // is no port, and the state stays `active`.
+    // Lithium tells `locked` and `active` through a port (Extensions.listenForIdle); `idle` is never
+    // told. Without native messaging the state stays `active`.
     idle: (api) => {
       const listeners = new Set();
       let state = 'active';

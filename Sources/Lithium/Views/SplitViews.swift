@@ -232,7 +232,9 @@ struct SplitDropLayer: View {
     var body: some View {
         if let dragged = browser.splits.draggedTabID, let selected = browser.selectedTab,
            selected.id != dragged, selected.isInTabList {
-            SplitDropZone(isDragging: { browser.splits.draggedTabID != nil }, carries: { browser.carriesDraggedTab($0) }) { item, side in
+            // A stacked split stays stacked, so its sides are top and bottom.
+            SplitDropZone(isStacked: browser.split(of: selected)?.isStacked == true,
+                          isDragging: { browser.splits.draggedTabID != nil }, carries: { browser.carriesDraggedTab($0) }) { item, side in
                 withAnimation(.snappy(duration: 0.2)) { browser.dropForSplit(item, on: side) }
             }
         }
@@ -242,6 +244,7 @@ struct SplitDropLayer: View {
 /// AppKit, not SwiftUI's drop modifiers: the web view under it takes text drops itself, and
 /// only a view above it in hit-testing order sees the drag first.
 struct SplitDropZone: NSViewRepresentable {
+    let isStacked: Bool
     let isDragging: () -> Bool
     let carries: (String?) -> Bool
     let drop: (String, TabSplit.Side) -> Bool
@@ -249,12 +252,15 @@ struct SplitDropZone: NSViewRepresentable {
     func makeNSView(context: Context) -> DropView { DropView() }
 
     func updateNSView(_ view: DropView, context: Context) {
+        view.isStacked = isStacked
         view.isDragging = isDragging
         view.carries = carries
         view.drop = drop
     }
 
     final class DropView: NSView {
+        /// Sides are top (first) and bottom (second), as the split shows them.
+        var isStacked = false
         /// Read as the mouse goes down: a drag that ended off the page is over before SwiftUI
         /// takes this view away.
         var isDragging: () -> Bool = { false }
@@ -287,18 +293,31 @@ struct SplitDropZone: NSViewRepresentable {
             buttons & 1 != 0 && isDragging() && carries(drag())
         }
 
-        /// The outer two fifths of each side; the middle drops nothing.
-        private func side(at location: NSPoint) -> TabSplit.Side? {
-            let x = convert(location, from: nil).x
-            return x < bounds.width * 0.4 ? .first : x > bounds.width * 0.6 ? .second : nil
+        /// The outer two fifths of each side; the middle drops nothing. Stacked, the top comes first
+        /// (the view isn't flipped: y grows upwards).
+        func side(at location: NSPoint) -> TabSplit.Side? {
+            let point = convert(location, from: nil)
+            if isStacked {
+                return point.y > bounds.height * 0.6 ? .first : point.y < bounds.height * 0.4 ? .second : nil
+            }
+            return point.x < bounds.width * 0.4 ? .first : point.x > bounds.width * 0.6 ? .second : nil
+        }
+
+        /// The half `side` stands for, where the highlight shows.
+        func frame(of side: TabSplit.Side) -> NSRect {
+            if isStacked {
+                let half = bounds.height / 2
+                return NSRect(x: 0, y: side == .first ? half : 0, width: bounds.width, height: half)
+            }
+            let half = bounds.width / 2
+            return NSRect(x: side == .second ? half : 0, y: 0, width: half, height: bounds.height)
         }
 
         private func show(_ side: TabSplit.Side?) -> NSDragOperation {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             highlight.isHidden = side == nil
-            let half = bounds.width / 2
-            highlight.frame = NSRect(x: side == .second ? half : 0, y: 0, width: half, height: bounds.height).insetBy(dx: 4, dy: 4)
+            if let side { highlight.frame = frame(of: side).insetBy(dx: 4, dy: 4) }
             CATransaction.commit()
             return side == nil ? [] : .move
         }

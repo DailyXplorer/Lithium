@@ -397,7 +397,7 @@ final class Browser {
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
         let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                Self.endEditingIfOutside(event)
+                self?.endEditingIfOutside(event)
                 self?.noteClick(event)
             }
             return event
@@ -421,7 +421,8 @@ final class Browser {
     }
 
     /// Ends text editing when a click lands outside the field being edited; the field commits on its own.
-    private static func endEditingIfOutside(_ event: NSEvent) {
+    /// The address bar hands the keyboard back to the page, as Return does: left on the window, keys beep.
+    func endEditingIfOutside(_ event: NSEvent) {
         guard let window = event.window,
               let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
               let field = editor.delegate as? NSView, field.window === window else { return }
@@ -429,6 +430,7 @@ final class Browser {
         let point = field.convert(event.locationInWindow, from: nil)
         guard !field.bounds.insetBy(dx: -10, dy: -8).contains(point) else { return }
         window.makeFirstResponder(nil)
+        if field is URLTextField { returnKeyboardToPage(fieldHadKeyboard: true) }
     }
 
     /// Not in another window or under a sheet, and not while a text field edits (the address bar

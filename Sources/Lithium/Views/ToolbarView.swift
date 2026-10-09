@@ -326,6 +326,8 @@ private struct AddressField: NSViewRepresentable {
                 // Submit before resigning: ending the edit clears the suggestions being read.
                 parent.browser.submitAddress(field.stringValue, editing: suggestions.editedTabID)
                 field.window?.makeFirstResponder(nil)
+                // Left on the window, keys beep and the page can't scroll until clicked.
+                parent.browser.returnKeyboardToPage(fieldHadKeyboard: true)
                 return true
             case #selector(NSResponder.moveDown(_:)) where !suggestions.items.isEmpty:
                 suggestions.move(by: 1)
@@ -335,6 +337,7 @@ private struct AddressField: NSViewRepresentable {
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 field.window?.makeFirstResponder(nil)
+                parent.browser.returnKeyboardToPage(fieldHadKeyboard: true)
                 return true
             default:
                 return false

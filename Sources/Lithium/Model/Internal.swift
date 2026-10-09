@@ -170,6 +170,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.changePageFont { FontChoice.shared.setWebsite(value as? String) }
         case "setReaderButton":
             browser.setReaderButton(value as? Bool ?? true)
+        case "setTranslateOffer":
+            browser.translator.setOffers(value as? Bool ?? true)
+        case "removeTranslateLanguage":
+            if let code = value as? String { browser.translator.setAlwaysTranslates(false, Locale.Language(identifier: code), privateSession: nil) }
+        case "removeTranslateSite":
+            if let site = value as? String { browser.translator.setNeverTranslates(false, site: site, privateSession: nil) }
         case "setSiteFont":
             guard let entry = value as? [String: Any], let text = entry["site"] as? String,
                   let host = Self.siteFontHost(text) else { return (nil, "No site") }
@@ -365,6 +371,10 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "websiteFamily": FontChoice.shared.website ?? "",
                 "websiteFontName": PageStyle.websiteFamily,
                 "readerButton": ReaderMode.showsButton,
+                "translateOffer": browser.translator.offers,
+                "translateLanguages": browser.translator.alwaysLanguages.map { (code: $0, name: PageTranslator.name(of: Locale.Language(identifier: $0))) }
+                    .sorted { $0.name < $1.name }.map { ["code": $0.code, "name": $0.name] },
+                "translateSites": browser.translator.neverSites,
                 "siteFontDomains": PageStyle.siteFontDomains,
                 "startPage": [
                     "background": defaults.string(forKey: Preference.startBackground) ?? StartBackground.lithium.rawValue,

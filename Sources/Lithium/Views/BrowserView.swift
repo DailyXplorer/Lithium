@@ -78,6 +78,7 @@ struct BrowserView: View {
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
         .background(WindowConfigurator(browser: browser, hidesLights: zen && !showsZenLights))
+        .background { TranslationHost(translator: browser.translator) }
         .ignoresSafeArea()
         .overlay {
             if browser.capture.isSelecting {

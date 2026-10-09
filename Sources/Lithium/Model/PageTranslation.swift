@@ -178,7 +178,7 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
     private let summaries: PageSummaries
     private var popover: NSPopover?
     /// The languages Translation translates into, which the summary language may not be one of.
-    private var supported: [Locale.Language] = []
+    private(set) var supported: [Locale.Language] = []
 
     init(summaries: PageSummaries) {
         self.summaries = summaries
@@ -233,9 +233,16 @@ final class PageTranslation: NSObject, WKScriptMessageHandler {
     nonisolated static func target(
         for text: String, chosen: String?, preferred: [String] = Locale.preferredLanguages, supported: [Locale.Language]
     ) -> Locale.Language? {
+        let source = NLLanguageRecognizer.dominantLanguage(for: text).flatMap { Locale.Language(identifier: $0.rawValue).languageCode }
+        return target(from: source, chosen: chosen, preferred: preferred, supported: supported)
+    }
+
+    /// The same choice for text known to be in `source`, a whole page's (`PageTranslator`).
+    nonisolated static func target(
+        from source: Locale.LanguageCode?, chosen: String?, preferred: [String] = Locale.preferredLanguages, supported: [Locale.Language]
+    ) -> Locale.Language? {
         let languages = ((chosen.map { [$0] } ?? []) + preferred).map(Locale.Language.init(identifier:))
             .filter { language in supported.isEmpty || supported.contains { $0.languageCode == language.languageCode } }
-        let source = NLLanguageRecognizer.dominantLanguage(for: text).map { Locale.Language(identifier: $0.rawValue).languageCode }
         return languages.first { $0.languageCode != source }
     }
 }

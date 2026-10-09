@@ -128,6 +128,8 @@ struct BrowserCommands: Commands {
             Button(browser.commandTab?.isReading == true ? "Hide Reader" : "Show Reader") { browser.toggleReader(browser.commandTab) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.canRead != true)
+            Button(browser.commandTab?.pageTranslation?.isActive == true ? "Show Original" : "Translate Page") { browser.toggleTranslation(browser.commandTab) }
+                .disabled(browser.commandTab?.canTranslate != true)
             Divider()
             // The popover is the main window's toolbar's: a link's window has none.
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {

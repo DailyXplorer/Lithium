@@ -269,9 +269,11 @@ struct PinnedIcons {
 
         let favicons = Self.favicons()
         #expect(await favicons.favicon(for: webView) == nil)
-        #expect(requests["/favicon.ico"] == 1)
+        // Fetched, then drawn by the page.
+        let searched = requests["/favicon.ico"]
+        #expect(searched >= 1)
         #expect(await favicons.favicon(for: webView) == nil)
-        #expect(requests["/favicon.ico"] == 1, "not fetched again")
+        #expect(requests["/favicon.ico"] == searched, "not fetched again")
         #expect(favicons.missing.contains(try #require(base.host())))
     }
 

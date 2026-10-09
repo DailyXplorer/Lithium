@@ -36,10 +36,9 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Keeps every point of the drag, rather than only where it started and ended.
     var isFreehand: Bool { self == .pen || self == .highlighter }
 
-    /// Line width in points as seen in the preview; the mark is drawn that thick whatever the screenshot's size.
+    /// In points as seen in the preview, whatever the screenshot's size.
     var lineWidth: CGFloat {
         switch self {
         case .pen, .rectangle, .ellipse: 3
@@ -51,15 +50,14 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
 
 /// A point of a shape that can be dragged to reshape it.
 enum AnnotationHandle: Hashable {
-    /// Moves `points[x].x` and `points[y].y`: a corner of a rectangle or ellipse, or with `x == y` an end of an arrow.
+    /// Moves `points[x].x` and `points[y].y`: a corner of a rectangle or ellipse, or with `x == y`
+    /// an end of an arrow.
     case corner(x: Int, y: Int)
-    /// The middle of an arrow, which bends it.
     case bend
 }
 
 /// A mark drawn over a screenshot, in the screenshot's points (top-left origin).
 struct Annotation: Equatable, Identifiable {
-    /// The highlighter's one color, a fluorescent yellow.
     static let highlightHex = "#FFFF00"
 
     let id = UUID()
@@ -72,9 +70,8 @@ struct Annotation: Equatable, Identifiable {
     /// How far an arrow's middle is from halfway between its ends; zero draws it straight.
     var bend = CGVector.zero
 
-    /// Adds where the drag is now. With `constrained` (Shift held), lines and arrows snap to
-    /// multiples of 45° and shapes become squares and circles. A freehand stroke goes straight
-    /// from where it was when Shift went down, keeping what was drawn before.
+    /// With `constrained` (Shift held), lines snap to 45° and shapes become squares and circles;
+    /// a freehand stroke goes straight from where it was when Shift went down.
     mutating func extend(to point: CGPoint, constrained: Bool) {
         guard let start = points.first else {
             points = [point]
@@ -95,8 +92,6 @@ struct Annotation: Equatable, Identifiable {
         points = [start, constrained ? constrain(point, from: start) : point]
     }
 
-    /// Where `point` goes when Shift is held and the shape is drawn from `anchor`: squares and
-    /// circles, lines and arrows at multiples of 45°.
     private func constrain(_ point: CGPoint, from anchor: CGPoint) -> CGPoint {
         switch tool {
         case .rectangle, .ellipse:
@@ -108,11 +103,9 @@ struct Annotation: Equatable, Identifiable {
         }
     }
 
-    /// Rectangles, ellipses and arrows can be moved and reshaped once drawn; hand-drawn lines can't.
     var isEditable: Bool { !tool.isFreehand }
 
-    /// Where the handles of an editable shape are, bottom to top. An arrow's ends come after its
-    /// middle, so on a short arrow, where the handles overlap, its ends can still be grabbed.
+    /// Bottom to top: an arrow's ends come after its middle, so they can be grabbed on a short arrow.
     var handles: [(AnnotationHandle, CGPoint)] {
         guard isEditable, points.count == 2 else { return [] }
         if tool == .arrow {
@@ -123,8 +116,6 @@ struct Annotation: Equatable, Identifiable {
         }
     }
 
-    /// Drags `handle` to `point`. With `constrained` (Shift held), the shape stays a square or a
-    /// circle, and an arrow's end turns in steps of 45° around its other end.
     mutating func drag(_ handle: AnnotationHandle, to point: CGPoint, constrained: Bool) {
         switch handle {
         case .bend:
@@ -149,7 +140,6 @@ struct Annotation: Equatable, Identifiable {
         return outline.strokedPath(StrokeStyle(lineWidth: width + tolerance * 2, lineCap: .round, lineJoin: .round))
     }
 
-    /// The point halfway along an arrow, which its bend handle sits on.
     private var middle: CGPoint { chordMiddle(pulled: 1) }
 
     /// The control point of the curve from an arrow's start to its end that goes through `middle`.
@@ -160,7 +150,6 @@ struct Annotation: Equatable, Identifiable {
         return CGPoint(x: (start.x + end.x) / 2 + bend.dx * pulled, y: (start.y + end.y) / 2 + bend.dy * pulled)
     }
 
-    /// `end`, moved around `start` to the nearest multiple of 45°.
     private static func snapped(_ start: CGPoint, _ end: CGPoint) -> CGPoint {
         let dx = end.x - start.x, dy = end.y - start.y
         let step = CGFloat.pi / 4
@@ -169,8 +158,7 @@ struct Annotation: Equatable, Identifiable {
         return CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
     }
 
-    /// Whether any of the mark, line width included, is drawn inside `rect`. Only what is drawn
-    /// counts: a frame around `rect` doesn't touch it.
+    /// Whether any drawn part of the mark, line width included, is inside `rect`.
     func touches(_ rect: CGRect) -> Bool {
         // A click's dot is a line of no length, which a stroked outline may leave out: its round cap is a disc.
         if tool.isFreehand, let first = points.first, points.allSatisfy({ $0 == first }) {
@@ -219,8 +207,7 @@ struct Annotation: Equatable, Identifiable {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
     }
 
-    /// Curves through the midpoints between the points, so a hand-drawn line has no corners.
-    /// A single point makes a zero-length line, which round caps draw as a dot.
+    /// Curves through the midpoints so a hand-drawn line has no corners; one point draws a dot.
     private static func smoothLine(through points: [CGPoint]) -> Path {
         var path = Path()
         guard let first = points.first, let last = points.last else { return path }
@@ -259,7 +246,6 @@ struct Annotation: Equatable, Identifiable {
         guard length > 0 else { return Path() }
         let headLength = min(width * 4, length * 0.6)
 
-        // The head points from where it starts on the curve to the tip.
         let shaftLength = length - headLength
         let index = distances.lastIndex { $0 <= shaftLength } ?? 0
         let span = distances[index + 1] - distances[index]

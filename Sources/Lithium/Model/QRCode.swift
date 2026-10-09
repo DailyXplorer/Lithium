@@ -32,7 +32,6 @@ enum QRCode {
         NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
-    /// "example.com QR code.png", for the save panel.
     static func fileName(for url: URL) -> String {
         "\(url.host(percentEncoded: false) ?? "Page") QR code.png"
     }

@@ -18,13 +18,11 @@ final class SiteInfo {
         case loading, found(Certificate), unavailable
     }
 
-    /// What the lock in the address bar and the panel say of the page shown.
     enum Connection: Equatable {
         case secure, notEncrypted, certificateNotValid, notLoaded
 
-        /// WebKit shows an https page only once its certificate checks out, and Lithium never
-        /// accepts one that doesn't. The web view's `serverTrust` can't tell: it is nil for a page a
-        /// service worker answered, or that came over a connection already open (youtube.com).
+        /// WebKit shows an https page only once its certificate checks out. `serverTrust` can't tell:
+        /// it is nil for a page a service worker answered, or over a connection already open.
         /// Lithium's error page keeps the address that failed, https or not: the error decides.
         init(url: URL?, loadError: NSError?) {
             if let loadError {
@@ -51,7 +49,6 @@ final class SiteInfo {
     let site: String
     let connection: Connection
     private(set) var certificate = CertificateLookup.loading
-    /// Where the certificate is asked for when the web view has none: the page's server.
     @ObservationIgnored private var certificateURL: URL?
     @ObservationIgnored var fetchTrust: (URL) async -> SecTrust? = SiteInfo.fetchTrust
 
@@ -61,7 +58,7 @@ final class SiteInfo {
 
     @ObservationIgnored private var cookies: [HTTPCookie] = []
     @ObservationIgnored private var records: [WKWebsiteDataRecord] = []
-    /// The tab's own: a private tab's panel reads and clears its private store, never the user's.
+    /// The tab's own: a private tab's panel never reads or clears the user's store.
     private let store: WKWebsiteDataStore
 
     init(host: String, connection: Connection = .secure, store: WKWebsiteDataStore = .default()) {
@@ -76,7 +73,6 @@ final class SiteInfo {
         certificateURL = Self.certificateURL(for: url)
     }
 
-    /// The page's server (scheme, host and port) without the rest of its address.
     nonisolated static func certificateURL(for url: URL) -> URL? {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false), components.host?.isEmpty == false else { return nil }
         components.user = nil
@@ -107,7 +103,6 @@ final class SiteInfo {
         hasData = !cookies.isEmpty || !records.isEmpty
     }
 
-    /// Removes every cookie and piece of storage of the site (all its subdomains).
     func clear() async {
         isClearing = true
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: records)
@@ -118,8 +113,7 @@ final class SiteInfo {
         await load()
     }
 
-    /// The certificate of the page shown, from its web view's trust; when the web view has none
-    /// to give, asked of the site over a new connection, without cookies.
+    /// From the web view's trust, else asked of the site over a new connection, without cookies.
     func loadCertificate(trust: SecTrust?) async {
         guard connection == .secure, certificate == .loading else { return }
         var trust = trust
@@ -166,8 +160,7 @@ final class SiteInfo {
     }
 }
 
-/// Keeps the trust the server presented, and lets the system judge it as usual. Redirects are
-/// not followed: the root of a site can redirect to another host, whose certificate isn't this one's.
+/// Redirects are not followed: another host's certificate isn't this site's.
 private final class TrustCatcher: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private(set) var trust: SecTrust?
 

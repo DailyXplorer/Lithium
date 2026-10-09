@@ -2,8 +2,7 @@ import Foundation
 import SwiftUI
 import WebKit
 
-/// A few browser commands the address bar offers, as Arc's command bar did. They never show on
-/// their own: only a row or two, once the typed words clearly name one (`matches`).
+/// Browser commands the address bar offers once the typed words clearly name one (`matches`).
 enum BarAction: Hashable, CaseIterable {
     case copyLink, newPrivateTab, duplicateTab, reopenClosedTab
     case pinTab, unpinTab, openSplitView, exitSplitView, enterZenMode, exitZenMode
@@ -26,7 +25,6 @@ enum BarAction: Hashable, CaseIterable {
         }
     }
 
-    /// Other names people type for it; matched like the title, never shown.
     private var aliases: [String] {
         switch self {
         case .copyLink: ["Copy URL", "Copy address"]
@@ -43,12 +41,11 @@ enum BarAction: Hashable, CaseIterable {
         }
     }
 
-    /// How well typed words name an action; lower sorts first.
+    /// Lower sorts first.
     struct Match: Comparable {
         /// Every word of a name typed out whole: Return runs it rather than the search.
         var isWhole: Bool
         var hasTypo: Bool
-        /// Matched from the name's first word ("copy" for Copy link, not "link").
         var fromStart: Bool
 
         fileprivate var rank: Int { (isWhole ? 0 : 4) + (hasTypo ? 2 : 0) + (fromStart ? 0 : 1) }
@@ -58,12 +55,8 @@ enum BarAction: Hashable, CaseIterable {
 
     static let shownLimit = 2
 
-    /// The actions among `available` the query clearly names, best first, at most `shownLimit`.
-    /// Each typed word starts a word of the name, in order, with at most one small typo in
-    /// the whole query. Four letters at least, three only for a whole name ("zen"), four to match
-    /// past a name's first word, and five for a lone word unless it is a title's first word or a
-    /// one-word alias, typed whole, so everyday searches ("new", "pin", "rest", "data") don't
-    /// bring actions up.
+    /// Each typed word starts a word of the name, in order, with at most one typo in the query.
+    /// Letter minimums keep everyday searches ("new", "pin", "rest", "data") from bringing actions up.
     static func matches(_ query: String, among available: [BarAction]) -> [(action: BarAction, match: Match)] {
         let typed = words(query)
         let letters = typed.joined().count
@@ -74,7 +67,6 @@ enum BarAction: Hashable, CaseIterable {
                 .filter { letters >= 4 || $0.isWhole }.min()
             return best.map { (action, $0) }
         }
-        // Stable: equal matches keep the catalogue's order.
         return found.enumerated()
             .sorted { ($0.element.1.rank, $0.offset) < ($1.element.1.rank, $1.offset) }
             .prefix(shownLimit).map { (action: $0.element.0, match: $0.element.1) }
@@ -96,9 +88,8 @@ enum BarAction: Hashable, CaseIterable {
             if position == 0 {
                 fromStart = index == 0
                 if !fromStart, word.count < 4 { return nil }
-                // "rest" starts restaurant as much as Restore tab, and "data", "site" or "side" are
-                // searches too: under five letters, a lone word names an action only as the title's
-                // first word typed whole ("copy", "exit") or a whole one-word alias ("zen").
+                // "rest" starts restaurant as much as Restore tab: under five letters, a lone word must be
+                // the title's first word typed whole ("copy") or a whole one-word alias ("zen").
                 if typed.count == 1, word.count < 5,
                    !(isWholeWord && fromStart && (isTitle || name.count == 1)) { return nil }
             }
@@ -111,8 +102,7 @@ enum BarAction: Hashable, CaseIterable {
     }
 
     /// Whether `typed` starts `word`, or would with one letter wrong, missing, extra or swapped
-    /// (five letters typed or more, first letter right, so "deli" or "clou" stay searches). Nil
-    /// when it doesn't.
+    /// (five letters typed or more, first letter right).
     private static func wordMatch(_ typed: String, _ word: String) -> (typo: Bool, whole: Bool)? {
         if word.hasPrefix(typed) { return (false, typed.count == word.count) }
         guard typed.count >= 5, word.count >= max(4, typed.count - 1), typed.first == word.first else { return nil }
@@ -127,8 +117,7 @@ enum BarAction: Hashable, CaseIterable {
         return nil
     }
 
-    /// Optimal string alignment distance: insertions, deletions, substitutions and swaps of two
-    /// neighbours each count one.
+    /// Optimal string alignment distance: a swap of two neighbours counts one.
     private static func editDistance(_ a: [Character], _ b: [Character]) -> Int {
         var table = Array(repeating: Array(repeating: 0, count: b.count + 1), count: a.count + 1)
         for i in 0...a.count { table[i][0] = i }
@@ -147,9 +136,7 @@ enum BarAction: Hashable, CaseIterable {
 }
 
 extension Browser {
-    /// What the bar can do now for `tab`, the one shown when editing began: only what the menus
-    /// would have enabled, and of a toggle only its current side (Pin or Unpin). Read as the
-    /// user types, from state already at hand.
+    /// Only what the menus would have enabled for `tab`; read as the user types, from state at hand.
     func barActions(for tab: Tab?) -> [BarAction] {
         var actions: [BarAction] = []
         let hasPage = tab?.url != nil
@@ -168,8 +155,6 @@ extension Browser {
         return actions
     }
 
-    /// Runs on `tab` as the menus and the lock panel do. A new private tab starts empty, with the
-    /// address bar focused for where it goes.
     func perform(_ action: BarAction, on tab: Tab?) {
         switch action {
         case .copyLink: copyLink(of: tab)
@@ -190,8 +175,7 @@ extension Browser {
         }
     }
 
-    /// As the lock panel's Clear: the site's cookies and data in the tab's own store (a private
-    /// tab's stays its own), then a reload. Returned for tests to await.
+    /// In the tab's own store (a private tab's stays its own), then a reload. Returned for tests to await.
     @discardableResult
     func clearSiteData(of tab: Tab?) -> Task<Void, Never>? {
         guard let tab, let url = tab.url else { return nil }

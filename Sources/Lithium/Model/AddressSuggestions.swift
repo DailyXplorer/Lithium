@@ -28,9 +28,7 @@ enum Suggestion: Hashable, Identifiable {
     }
 }
 
-/// What the address bar proposes while typing. The first row is always what Return does
-/// with the raw text (search or go to the address); the rest come from open tabs, pins and history,
-/// after at most `BarAction.shownLimit` actions the text clearly names.
+/// What the address bar proposes while typing. The first row is always what Return does with the raw text.
 @MainActor
 @Observable
 final class AddressSuggestions {
@@ -38,12 +36,11 @@ final class AddressSuggestions {
     private(set) var selectedIndex = 0
     /// The tab shown when the address bar's editing began: Return or a click on a row goes there.
     @ObservationIgnored var editedTabID: Tab.ID?
-    /// Visited pages arrive a moment after the rest, from a query that runs off the main thread.
     @ObservationIgnored private(set) var historyQuery: Task<Void, Never>?
-    /// Where the pointer was when the rows last changed. A row that comes up under a resting
-    /// pointer counts as hovered, but only a pointer moved since picks what Return opens.
+    /// A row that comes up under a resting pointer counts as hovered, but only a pointer moved
+    /// since picks what Return opens.
     @ObservationIgnored private var pointerAtChange: CGPoint?
-    /// Tests replace it, so the real pointer is never read or moved.
+    /// Tests replace it, so the real pointer is never read.
     @ObservationIgnored var pointerLocation: @MainActor () -> CGPoint = { NSEvent.mouseLocation }
 
     private static let perSource = 3
@@ -51,8 +48,7 @@ final class AddressSuggestions {
 
     var selected: Suggestion? { items.indices.contains(selectedIndex) ? items[selectedIndex] : nil }
 
-    /// `actions` are those that can run now (`Browser.barActions(for:)`); typed words that name
-    /// one whole, without a typo ("settings", "copy link"), have Return run it.
+    /// Typed words that name an action whole, without a typo ("copy link"), have Return run it.
     func update(query rawQuery: String, tabs: [Tab], pins: [Pin], history: HistoryStore, actions: [BarAction] = []) {
         let query = rawQuery.trimmingCharacters(in: .whitespaces)
         let first: Suggestion
@@ -82,7 +78,6 @@ final class AddressSuggestions {
             return .pin(pin.id, title: pin.title, url: pin.url)
         }.prefix(Self.perSource)
 
-        // Just below the typed text, within the usual length: the rows after keep their order.
         let commands = named.map { Suggestion.action($0.action) }
         items = Array(([first] + commands + openTabs + pinned).prefix(Self.limit))
         selectedIndex = named.first.map { $0.match.isWhole && !$0.match.hasTypo } == true ? 1 : 0
@@ -106,7 +101,6 @@ final class AddressSuggestions {
         selectedIndex = items.firstIndex(of: suggestion) ?? 0
     }
 
-    /// The pointer over a row: it is selected once the pointer has moved since the rows changed.
     func hover(_ suggestion: Suggestion) {
         if let resting = pointerAtChange {
             guard pointerLocation() != resting else { return }

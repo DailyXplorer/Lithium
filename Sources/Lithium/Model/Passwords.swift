@@ -1,11 +1,8 @@
 import AppKit
 
-/// Apple's Passwords app, as far as Lithium can reach it. Filling and saving its passwords in web
-/// pages takes either Safari's own WebKit hooks or Apple's iCloud Passwords extension, whose
-/// helper app macOS 15.5 and later only start for browsers Apple lists by team ID; a passkey sheet
-/// for any site takes an entitlement Apple grants to a developer team. Lithium has none of those,
-/// so it hands off to the app instead: Open Passwords in a field's menu and in Settings. Nothing
-/// here runs until one of them is used.
+/// Apple's Passwords app, as far as Lithium can reach it. AutoFill takes Safari's own WebKit hooks
+/// or the iCloud Passwords extension, whose helper macOS 15.5+ only starts for browsers Apple lists,
+/// and passkeys take an entitlement Apple grants: Lithium has none, so it hands off to the app.
 @MainActor
 enum Passwords {
     static let bundleIdentifier = "com.apple.Passwords"
@@ -13,13 +10,12 @@ enum Passwords {
     static let iCloudExtensionID = "pejdijmoenmkgeppbflobdenhhabjlaj"
     static let menuTitle = "Open Passwords"
 
-    /// Where the app is, looked up when a menu or the store asks; tests give their own.
+    /// Tests give their own.
     static var appURL: () -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) }
     static var openApp: (URL) -> Void = { url in
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    /// Brings the app forward, where the user can copy a password. False on a Mac without it.
     @discardableResult
     static func open() -> Bool {
         guard let url = appURL() else { return false }
@@ -29,8 +25,7 @@ enum Passwords {
 
     private static let pasteIdentifier = NSUserInterfaceItemIdentifier("WKMenuItemIdentifierPaste")
 
-    /// Open Passwords goes after Paste and Force Paste, so only in an editable field, where a
-    /// password would be typed, as macOS puts AutoFill there in its own text fields.
+    /// After Paste and Force Paste, so only in an editable field, as macOS puts AutoFill.
     static func addOpenPasswords(to menu: NSMenu) {
         guard let paste = menu.items.firstIndex(where: { $0.identifier == pasteIdentifier }), appURL() != nil else { return }
         let next = menu.items.index(after: paste)

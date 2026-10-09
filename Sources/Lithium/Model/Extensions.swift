@@ -10,9 +10,8 @@ struct InstalledExtension: Codable, Equatable, Identifiable {
     var isEnabled: Bool
 }
 
-/// Web extensions, run by WebKit's own extension support (`WKWebExtensionController`). Each one is
-/// kept as the ZIP archive of its Chrome Web Store package, with an unpacked copy loaded at launch.
-/// Lithium shows WebKit its window and tabs (`ExtensionWindow`, `Tab`), and one toolbar button lists them.
+/// Web extensions, run by `WKWebExtensionController`. Each is kept as the ZIP archive of its Chrome
+/// Web Store package, with an unpacked copy loaded at launch.
 @MainActor
 @Observable
 final class Extensions: NSObject {
@@ -31,28 +30,22 @@ final class Extensions: NSObject {
     @ObservationIgnored private let folder: URL
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// The last install or removal of each extension, which the next one waits for: both swap
-    /// its files and context across awaits, and overlapping, they left it running twice or
-    /// brought a removed one back without its files.
+    /// its files and context across awaits, and overlapping could leave it running twice.
     @ObservationIgnored private var changes: [String: Task<Void, Never>] = [:]
     /// Why the list couldn't be written last time: an install doesn't report success for an
     /// extension that would be gone after a relaunch.
     @ObservationIgnored private var saveError: Error?
-    /// The toolbar's extensions button, where their popups open.
     @ObservationIgnored weak var popupAnchor: NSView?
-    /// The tab WebKit was last told is active (`didSelect`), which `ExtensionWindow.activeTab(for:)`
-    /// answers: told one tab and answered another, WebKit failed extensions' tab calls.
+    /// The tab WebKit was last told is active: told one tab and answered another, WebKit fails
+    /// extensions' tab calls.
     @ObservationIgnored private(set) weak var activeTab: Tab?
-    /// Whether WebKit was last told the window is focused: from launch, then as the app comes
-    /// to the front or leaves it.
     @ObservationIgnored private(set) var isFocused = true
     @ObservationIgnored nonisolated(unsafe) private var activeObservers: [any NSObjectProtocol] = []
-    /// Native messaging hosts running for each extension (`NativeMessaging`), stopped with it.
     @ObservationIgnored private(set) var nativeHosts: [String: [NativeMessaging.Host]] = [:]
     /// Where hosts are looked up; tests use their own folder.
     @ObservationIgnored var nativeHostFolders = NativeMessaging.folders
-    /// The ports `chrome.idle` listens on (`extension-compat.js`), for each extension. Password
-    /// managers lock when the Mac's screen does, which only this tells them; the screen is watched
-    /// only while one is open.
+    /// The ports `chrome.idle` listens on, per extension: password managers lock when the screen
+    /// does, which only this tells them.
     @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
     @ObservationIgnored nonisolated(unsafe) private var lockObservers: [any NSObjectProtocol] = []
     /// Whether the screen is locked now; tests answer for the Mac.
@@ -65,9 +58,8 @@ final class Extensions: NSObject {
 
     static let scheme = "webkit-extension"
 
-    /// A file on the Mac would load with read access to its whole folder, and Lithium's own pages
-    /// can turn protections off: an extension opens neither (`tabs.create`, `tabs.update`), as
-    /// agents can't. The user still can.
+    /// A file would load with read access to its whole folder, and Lithium's own pages can turn
+    /// protections off: an extension opens neither, as agents can't.
     static func mayOpen(_ url: URL?) -> Bool {
         guard let scheme = url?.scheme?.lowercased() else { return true }
         return scheme != "file" && scheme != Internal.scheme
@@ -112,8 +104,8 @@ final class Extensions: NSObject {
         await loadTask?.value
     }
 
-    /// WebKit unpacks a ZIP archive again at every launch, which took 190 ms and froze the window
-    /// for 250 ms with 1Password's. Unpacked files open in 2 ms.
+    /// WebKit unpacks a ZIP archive at every launch (190 ms for 1Password's, freezing the window);
+    /// unpacked files open in 2 ms.
     private func files(_ id: String) -> URL {
         folder.appending(path: id, directoryHint: .isDirectory)
     }
@@ -123,8 +115,7 @@ final class Extensions: NSObject {
         folder.appending(path: "\(id).zip")
     }
 
-    /// Unpacks the archive when there are no files yet, or when a build that only writes the
-    /// archive replaced it since.
+    /// Also when a build that only writes the archive replaced it since.
     private func unpackIfNeeded(_ id: String) async throws {
         let modified = { (url: URL) in try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
         guard let archived = modified(archive(id)) else { return }
@@ -132,7 +123,6 @@ final class Extensions: NSObject {
         try await Self.unpack(archive(id), into: files(id))
     }
 
-    /// Unpacks with the system's `ditto` into a staging folder, moved into place once complete.
     nonisolated private static func unpack(_ archive: URL, into destination: URL) async throws {
         let staging = destination.deletingLastPathComponent().appending(path: ".unpacking-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: staging) }
@@ -170,8 +160,7 @@ final class Extensions: NSObject {
         do {
             try await unpackIfNeeded(entry.id)
             let webExtension = try await open(entry.id)
-            // Turned off, removed or loaded by another call while it was opening: the settings
-            // page doesn't wait for one call before sending the next.
+            // Turned off, removed or loaded by another call while it was opening.
             guard installed.first(where: { $0.id == entry.id })?.isEnabled == true, contexts[entry.id] == nil else { return }
             try activate(webExtension, id: entry.id)
         } catch {
@@ -179,8 +168,7 @@ final class Extensions: NSObject {
         }
     }
 
-    /// Prepares the files (`ExtensionCompatibility`) before WebKit opens them; an extension installed
-    /// by an earlier build is prepared the first time this one loads it.
+    /// Prepares the files (`ExtensionCompatibility`) before WebKit opens them.
     private func open(_ id: String) async throws -> WKWebExtension {
         do {
             try ExtensionCompatibility.apply(to: files(id))
@@ -208,15 +196,13 @@ final class Extensions: NSObject {
         contexts[id] = context
     }
 
-    /// Downloads extension `id` from the Chrome Web Store and runs it, replacing an older version.
     /// The package must ask for no more than the access the user `approved`.
     func install(id: String, approved: ChromeWebStore.Access) async throws {
         let package = try await ChromeWebStore.download(id)
         try await install(archive: try ChromeWebStore.archive(fromPackage: package, id: id), id: id, approved: approved)
     }
 
-    /// Runs the extension in `archive` (a ZIP) as `id`, replacing an older version. Every permission
-    /// it requests is granted, so with `approved` set, one asking for more is refused.
+    /// Every permission requested is granted, so with `approved` set, one asking for more is refused.
     func install(archive: Data, id: String, approved: ChromeWebStore.Access? = nil) async throws {
         try await serially(id) { try await self.replace(id, with: archive, approved: approved) }
     }
@@ -236,8 +222,7 @@ final class Extensions: NSObject {
                   let manifest = try? JSONSerialization.jsonObject(with: data, options: .json5Allowed) as? [String: Any] else {
                 throw ChromeWebStore.PackageError.notAPackage
             }
-            // What `activate` grants is what WebKit reads from the package, so that is checked too,
-            // in case it finds access the manifest's reading here misses.
+            // `activate` grants what WebKit reads from the package, so that is checked too.
             let granted = ChromeWebStore.Access(
                 permissions: staged.requestedPermissions.map(\.rawValue),
                 patterns: staged.allRequestedMatchPatterns.map(\.string)
@@ -276,7 +261,6 @@ final class Extensions: NSObject {
         if !records.isEmpty { await controller.removeData(ofTypes: types, from: records) }
     }
 
-    /// Runs `change` once the extension's earlier install or removal has ended.
     private func serially(_ id: String, _ change: @escaping @MainActor () async throws -> Void) async throws {
         let previous = changes[id]
         let task = Task { @MainActor in
@@ -299,7 +283,6 @@ final class Extensions: NSObject {
         }
     }
 
-    /// Stops extension `id`, and the native hosts it started.
     private func unload(_ id: String) {
         if let context = contexts.removeValue(forKey: id) { try? controller.unload(context) }
         nativeHosts.removeValue(forKey: id)?.forEach { $0.stop() }
@@ -328,8 +311,8 @@ final class Extensions: NSObject {
 
     // MARK: Tabs
 
-    /// Private tabs are kept from extensions, as Chrome keeps incognito windows from extensions
-    /// not allowed in them: they are in no tab list, send no event, and run no extension (`Tab.webView`).
+    /// Private tabs are kept from extensions, as Chrome does incognito windows: in no tab list,
+    /// sending no event, running no extension.
     var tabs: [Tab] {
         browser?.navigationOrder.filter { !$0.isEphemeral } ?? []
     }
@@ -345,9 +328,8 @@ final class Extensions: NSObject {
         controller.didCloseTab(tab, windowIsClosing: false)
     }
 
-    /// The selection moved to `tab`. WebKit can't be told there is no active tab: the start page
-    /// and a private tab leave the last normal tab active, as Chrome leaves a normal window's
-    /// active tab when an incognito one is in front.
+    /// WebKit can't be told there is no active tab: the start page and a private tab leave the
+    /// last normal tab active.
     func didSelect(_ tab: Tab?) {
         guard let tab, !tab.isEphemeral, tab !== activeTab else { return }
         let previous = activeTab
@@ -355,8 +337,7 @@ final class Extensions: NSObject {
         controller.didActivateTab(tab, previousActiveTab: previous)
     }
 
-    /// Reports a tab whose place in `tabs` the change moved (pinned, unpinned, kept from the
-    /// Agent group): extensions read places as they are, but WebKit sends no `onMoved` by itself.
+    /// Reports a tab whose place in `tabs` the change moved: WebKit sends no `onMoved` by itself.
     func moving(_ tab: Tab?, _ change: () -> Void) {
         let from = tab.flatMap { tabs.firstIndex(of: $0) }
         change()
@@ -364,8 +345,6 @@ final class Extensions: NSObject {
         controller.didMoveTab(tab, from: from, in: window)
     }
 
-    /// The app came to the front or left it: extensions hear of it (`windows.onFocusChanged`), and
-    /// no window is focused while another app is.
     func appDidChangeActive(_ isActive: Bool) {
         guard isActive != isFocused else { return }
         isFocused = isActive
@@ -413,9 +392,8 @@ extension Extensions: WKWebExtensionControllerDelegate {
         } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.selectedTab?.webView.window?.contentView]) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
         } else {
-            // WebKit counts a popup it asked for as open until it is closed, and refuses the
-            // extension's `action.openPopup()` meanwhile: 1Password's Unlock button did nothing.
-            // Throwing here wouldn't help: WebKit resolves that call whatever this returns.
+            // WebKit counts a popup it asked for as open until closed, refusing `action.openPopup()`
+            // meanwhile. Throwing wouldn't help: WebKit resolves that call whatever this returns.
             action.closePopup()
         }
     }
@@ -440,7 +418,6 @@ extension Extensions: WKWebExtensionControllerDelegate {
         actionsRevision &+= 1
     }
 
-    /// Permissions an extension asks for while it runs (its optional ones).
     func webExtensionController(
         _ controller: WKWebExtensionController,
         promptForPermissions permissions: Set<WKWebExtension.Permission>,
@@ -519,8 +496,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
         port.disconnectHandler = { [weak host] _ in host?.stop() }
     }
 
-    /// `chrome.idle`: the port gets the state once connected, then `locked` and `active` as the
-    /// screen locks and unlocks, until the extension disconnects or is turned off.
+    /// `chrome.idle`: the port gets the state once connected, then each lock and unlock.
     private func listenForIdle(on port: WKWebExtension.MessagePort, for id: String) {
         idlePorts[id, default: []].append(port)
         port.disconnectHandler = { [weak self, weak port] _ in
@@ -538,7 +514,6 @@ extension Extensions: WKWebExtensionControllerDelegate {
         watchScreenLock()
     }
 
-    /// Watches the screen while a `chrome.idle` port is open, and only then.
     private func watchScreenLock() {
         let center = DistributedNotificationCenter.default()
         if idlePorts.isEmpty {
@@ -606,8 +581,7 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
         extensions.tabs
     }
 
-    /// The tab WebKit was told is active (`Extensions.didSelect`), never a private one, and only
-    /// while it is in `tabs(for:)`: WebKit refuses the window's tabs otherwise.
+    /// Only while it is in `tabs(for:)`: WebKit refuses the window's tabs otherwise.
     func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? {
         guard let tab = extensions.activeTab, extensions.tabs.contains(where: { $0 === tab }) else { return nil }
         return tab

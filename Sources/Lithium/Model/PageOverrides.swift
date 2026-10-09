@@ -6,12 +6,10 @@ import WebKit
 /// clipboard's text into a field whose page cancels pasting.
 @MainActor
 enum PageOverrides {
-    /// One capture listener on `window`, at document start in Lithium's own content world, so it
-    /// runs before any of the page's and the page can neither see nor remove it. Without Shift it
-    /// returns at once; with it, it stops the event there, so no page handler can cancel it and
-    /// WebKit opens its menu. Added after `PageTranslation.script`, whose listener still runs.
-    /// In `agent.js`'s world, to let an agent's right click through while it is armed: the page
-    /// gets that one's `contextmenu`, and `agent.js` disarms it.
+    /// A capture listener at document start in Lithium's world, so it runs before the page's and the
+    /// page can't remove it; with Shift it stops the event so WebKit opens its menu. Added after
+    /// `PageTranslation.script`, whose listener still runs. In `agent.js`'s world so an armed agent's
+    /// right click reaches the page.
     static let script = WKUserScript(source: """
         addEventListener('contextmenu', event => {
           if (event.shiftKey && !(globalThis.lithiumAgentFrame?.agentMenu > Date.now())) event.stopImmediatePropagation();
@@ -31,10 +29,8 @@ enum PageOverrides {
         menu.insertItem(item, at: paste + 1)
     }
 
-    /// Types the clipboard's plain text where the page's focus is, in whichever frame, as an input
-    /// method inserts text: the page gets `beforeinput` and `input` for typed text, never `paste`
-    /// or the ⌘V keystroke, which is what sites cancel. The clipboard is read only here, and only
-    /// when a field has the focus, or a frame, whose own focus the main frame can't see.
+    /// Inserts the clipboard's text as an input method would, so the page never gets `paste` or ⌘V,
+    /// which is what sites cancel. The clipboard is read only when a field or a frame has the focus.
     @discardableResult
     static func forcePaste(into webView: WKWebView) async -> Bool {
         let focused = try? await webView.callAsyncJavaScript("""

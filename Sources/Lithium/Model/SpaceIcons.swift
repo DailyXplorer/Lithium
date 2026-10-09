@@ -1,14 +1,12 @@
 import Foundation
 import Synchronization
 
-/// What the space icon picker offers: the Phosphor icons listed in SpaceIcons.tsv
-/// (`scripts/update-space-icons.py`), searched by name and keywords. Built off the main thread
-/// when the picker opens and dropped when it closes: nothing of it exists before.
+/// The Phosphor icons in SpaceIcons.tsv (`scripts/update-space-icons.py`) for the space icon picker.
+/// Built off the main thread when the picker opens and dropped when it closes.
 final class SpaceIconCatalog: Sendable {
     struct Entry: Identifiable, Sendable {
         /// What `Space.icon` keeps: a Phosphor name.
         let id: String
-        /// For help tags and VoiceOver: "Graduation cap".
         let label: String
         /// " word word …", lowercased ASCII: a search term matches where a word starts with it.
         fileprivate let words: [UInt8]
@@ -27,13 +25,11 @@ final class SpaceIconCatalog: Sendable {
 
     deinit { Self.count.withLock { $0 -= 1 } }
 
-    /// About 300 icons from a 20 KB file.
     static func load() -> SpaceIconCatalog {
         SpaceIconCatalog(icons: bundledIcons())
     }
 
-    /// The entries whose words start with every term of the query, in catalog order. One `memmem`
-    /// per entry and term: a few hundred short strings take well under a millisecond.
+    /// One `memmem` per entry and term: a few hundred short strings take well under a millisecond.
     static func search(_ query: String, in entries: [Entry]) -> [Entry] {
         let terms = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .split { $0.isWhitespace || $0 == "-" }

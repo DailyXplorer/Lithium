@@ -1,29 +1,23 @@
 import AppKit
 import WebKit
 
-/// The reader: a page's article alone, in a clean view the user sizes and colors. It takes the
-/// page's place in the same web view (`reader.js`), so find, zoom, print, translation and summaries
-/// all work on what is read, and leaving it puts the page back as it was, without a reload: the
-/// page waits behind it, hidden, its frames and components still in the document.
-/// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
-/// the address bar's button, which asks once per page shown, and not at all once turned off. Leaving
-/// the reader alone touches the page's world (`reader-sheets.js`), so the sheets it holds stay live.
-/// The article is found by Mozilla Readability, Firefox's reader, which `reader.js` carries: it
-/// reaches a page only when the reader opens there.
+/// The reader: a page's article alone (found by Mozilla Readability, which `reader.js` carries).
+/// It takes the page's place in the same web view, so find, zoom, print and translation work on it,
+/// and leaving puts the page back without a reload: the page waits behind it, hidden.
+/// Scripts run on demand in Lithium's own world; only leaving touches the page's (`reader-sheets.js`).
 @MainActor
 enum ReaderMode {
     enum PageState: String {
         case none, article, reading
     }
 
-    /// Websites and local files. Not Lithium's own pages, an extension's, nor Markdown, which
-    /// Lithium already shows as a document.
+    /// Not Markdown, which Lithium already shows as a document.
     static func handles(_ url: URL?) -> Bool {
         guard let url, ["http", "https", "file"].contains(url.scheme?.lowercased() ?? "") else { return false }
         return !MarkdownReader.handles(url)
     }
 
-    /// The address bar's button, on pages that look like articles. ⇧⌘R works without it.
+    /// The address bar's button; ⇧⌘R works without it.
     static var showsButton: Bool {
         get { UserDefaults.standard.object(forKey: Preference.readerButton) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: Preference.readerButton) }
@@ -34,7 +28,6 @@ enum ReaderMode {
         return (result as? String).flatMap(PageState.init(rawValue:)) ?? .none
     }
 
-    /// False when the page has no article to show.
     static func enter(_ webView: WKWebView, style: ReaderStyle) async -> Bool {
         await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
     }
@@ -59,8 +52,7 @@ enum ReaderMode {
     private static let script = source("reader", "js")
     /// The page's sheet objects, which its scripts may keep, are the page's world's alone.
     private static let sheetsScript = source("reader-sheets", "js")
-    /// DM Sans travels apart, as bytes (`reader.js`): pages can't reach the app bundle, and a strict
-    /// Content-Security-Policy blocks a data: font.
+    /// DM Sans travels apart, as bytes: pages can't reach the app bundle, and a strict CSP blocks a data: font.
     private static let css = source("reader", "css")
 
     private static func source(_ name: String, _ fileExtension: String) -> String {
@@ -109,13 +101,11 @@ struct ReaderStyle: Codable, Equatable {
 }
 
 extension Browser {
-    /// The reader for the tab in front, or the page again; a beep when it has no article to show.
     func toggleReader(_ tab: Tab?) {
         guard let tab, tab.canRead else { return }
         Task { if await !tab.toggleReader() { NSSound.beep() } }
     }
 
-    /// Saved, and shown at once by every tab in the reader.
     func setReaderStyle(_ style: ReaderStyle) {
         ReaderStyle.saved = style
         for tab in tabs where tab.isReading {

@@ -1,14 +1,10 @@
 import Foundation
 
-/// Chrome's native messaging (`runtime.connectNative`, `runtime.sendNativeMessage`), which password
-/// managers use to reach their Mac app: 1Password and Bitwarden unlock through it, and with nothing
-/// answering, 1Password's extension stayed locked and couldn't save logins. WebKit hands these
-/// calls to the browser (`Extensions`); as Chrome does, Lithium runs the host an app registered (a
-/// JSON manifest naming its executable and the extensions allowed to use it) and exchanges JSON
-/// messages with it over its standard input and output. Nothing runs until an extension asks.
+/// Chrome's native messaging, which password managers (1Password, Bitwarden) use to reach their Mac
+/// app. As Chrome does, Lithium runs the host an app registered and exchanges JSON over stdin/stdout.
 enum NativeMessaging {
-    /// Where apps register hosts: Lithium's own folder, then Chrome's and other Chromium browsers',
-    /// where password managers write theirs.
+    /// Where apps register hosts: Lithium's own folder, then Chromium browsers', where password
+    /// managers write theirs.
     static let folders: [URL] = {
         let support = URL.applicationSupportDirectory
         return ["Lithium", "Google/Chrome", "Chromium", "Microsoft Edge", "BraveSoftware/Brave-Browser"]
@@ -30,8 +26,7 @@ enum NativeMessaging {
         }
     }
 
-    /// The executable of host `name` that extension `id` may run. The first manifest found decides,
-    /// as in Chrome, and it must list the extension.
+    /// As in Chrome, the first manifest found decides, and it must list the extension.
     static func executable(of name: String, for id: String, in folders: [URL] = folders) throws -> URL {
         // Chrome's rule for names, which also keeps one from leading out of the folders.
         guard name.range(of: #"^([a-z0-9_]+\.)*[a-z0-9_]+$"#, options: .regularExpression) != nil else { throw HostError.notFound }
@@ -58,7 +53,6 @@ enum NativeMessaging {
         return Data(bytes: &length, count: 4) + json
     }
 
-    /// Takes a host's messages out of its output as it comes, in pieces of any size.
     struct Reader {
         /// Chrome takes no more from a host in one message.
         static let limit = 1024 * 1024
@@ -78,8 +72,6 @@ enum NativeMessaging {
         }
     }
 
-    /// A running host. It is told who started it by the extension's origin, as Chrome tells it, and
-    /// stops when the extension disconnects, is turned off, or Lithium quits (its input closes).
     @MainActor
     final class Host {
         private let process = Process()
@@ -146,8 +138,7 @@ enum NativeMessaging {
             writer.async { try? handle.close() }
             if process.isRunning { process.terminate() }
             onExit(error)
-            // A caller's handler may hold the host (`sendNativeMessage` stops it from its reply): let
-            // go, or the host, its process and its pipes' descriptors stay until Lithium quits.
+            // A caller's handler may hold the host: let go, or its process and pipes stay until Lithium quits.
             onMessage = { _ in }
             onExit = { _ in }
         }

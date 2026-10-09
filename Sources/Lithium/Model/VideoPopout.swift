@@ -2,9 +2,8 @@ import Foundation
 import Observation
 import WebKit
 
-/// A tab's video, kept playing in a small player over the window while other tabs show: the
-/// tab's own web view moves into the player, and `video-popout.js` makes its video fill it.
-/// Leaving a tab whose video plays with sound pops it out; coming back to the tab puts it back.
+/// A tab's video, kept playing in a small player over the window: the tab's own web view moves
+/// into the player, and `video-popout.js` makes its video fill it.
 @MainActor
 @Observable
 final class VideoPopout {
@@ -14,20 +13,16 @@ final class VideoPopout {
         /// Nil for a live stream.
         var duration: Double?
         var isMuted: Bool
-        /// Width over height.
         var aspectRatio: Double
     }
 
-    /// The tab whose video shows in the player, and what it plays; nil while hidden.
     private(set) var tab: Tab?
     private(set) var playback: Playback?
 
     @ObservationIgnored weak var browser: Browser?
-    /// Only the newest request shows the player: the page answers asynchronously, and the user
-    /// may have switched tabs again, or come back, in between.
+    /// Only the newest request shows the player: the user may have switched tabs while the page answered.
     @ObservationIgnored private var request = 0
-    /// The page last asked to show its video, until its answer comes. The page acts on the
-    /// request even when the answer comes too late, so a late answer puts the video back.
+    /// The page acts on a request even when its answer comes too late, so a late answer puts the video back.
     @ObservationIgnored private var pending: (tab: Tab, request: Int)?
     @ObservationIgnored private var polling: Task<Void, Never>?
 
@@ -35,8 +30,7 @@ final class VideoPopout {
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     private static let pollInterval: Duration = .milliseconds(500)
 
-    /// The selected tab changed: the one left behind pops its video out if it plays one with
-    /// sound, and the one shown takes its video back.
+    /// The tab left behind pops its playing video out; the one shown takes its video back.
     func selectionChanged(from previous: Tab?, to selected: Tab?) {
         if let selected, selected === tab {
             hide()
@@ -56,7 +50,6 @@ final class VideoPopout {
         }
     }
 
-    /// Pops out the selected tab's video from the menu or ⌥⌘P; the page shows where it went.
     func showSelected() {
         guard browser?.quickLinks.keyTab == nil, let tab = browser?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
         request += 1
@@ -71,13 +64,11 @@ final class VideoPopout {
         return tab !== self.tab && !tab.isAsleep && tab.pdf == nil && tab.url != nil
     }
 
-    /// Back to the page, where the video goes on playing.
     func hide() {
         guard let webView = detach() else { return }
         Task { await Self.putBack(webView, pausing: false) }
     }
 
-    /// The close button: the video stops with the player.
     func close() {
         guard let webView = detach() else { return }
         Task { await Self.putBack(webView, pausing: true) }
@@ -88,7 +79,6 @@ final class VideoPopout {
         self.tab = tab
     }
 
-    /// The tab went away or fell asleep.
     func discard(_ tab: Tab) {
         if tab === self.tab { hide() }
     }
@@ -113,7 +103,6 @@ final class VideoPopout {
         send("mute", value: !playback.isMuted)
     }
 
-    /// Selecting the tab takes the video back; a popped out selected tab just takes it back.
     func returnToTab() {
         guard let tab else { return }
         if browser?.selectedTab === tab { hide() } else { browser?.select(tab) }
@@ -130,7 +119,6 @@ final class VideoPopout {
         let state = try? await Self.run("show", in: webView)
         let newer = pending.map { $0.tab === tab && $0.request != current } ?? false
         if pending?.request == current { pending = nil }
-        // Closed or put to sleep meanwhile, the tab has no page left to show.
         let isLive = browser?.tabs.contains(tab) == true && !tab.isAsleep
         guard current == request, isLive else {
             // Unless the player has this video or a newer request shows it, the page would be
@@ -139,7 +127,6 @@ final class VideoPopout {
             return
         }
         guard let playback = Self.playback(from: state) else { return }
-        // A newer video takes the player; the one it replaces stops and goes back to its page.
         if let previous = self.tab, previous !== tab {
             let webView = previous.webView
             Task { await Self.putBack(webView, pausing: true) }
@@ -149,8 +136,7 @@ final class VideoPopout {
         poll(tab)
     }
 
-    /// Keeps the controls in step with the page, and closes the player when the video is gone
-    /// (the page went elsewhere, or its process died).
+    /// Also closes the player when the video is gone (the page went elsewhere, or its process died).
     private func poll(_ tab: Tab) {
         polling?.cancel()
         polling = Task { [weak self] in
@@ -176,7 +162,6 @@ final class VideoPopout {
         if playback != self.playback { self.playback = playback }
     }
 
-    /// Stops polling and forgets the tab; its web view is what goes back to the page.
     private func detach() -> WKWebView? {
         request += 1
         polling?.cancel()
@@ -196,7 +181,7 @@ final class VideoPopout {
         try await webView.callAsyncJavaScript(script, arguments: ["command": command, "value": value], contentWorld: .defaultClient)
     }
 
-    /// The page says what size its video is: past 4:1 either way, the player keeps 4:1.
+    /// Past 4:1 either way, the player keeps 4:1.
     static func playback(from state: Any?) -> Playback? {
         guard let state = state as? [String: Any],
               let width = state["width"] as? Double, let height = state["height"] as? Double,

@@ -34,18 +34,15 @@ struct PermissionRequest: Identifiable, Equatable {
     let tabID: Tab.ID
     let host: String
     let kinds: [PermissionKind]
-    /// The private session (its tabs' data store) the request comes from; nil for a normal tab.
     var privateSession: ObjectIdentifier? = nil
-    /// The space keeping its data apart the request comes from (`Tab.siteSpace`).
+    /// `Tab.siteSpace`.
     var space: Space.ID? = nil
 }
 
-/// Per-site answers to camera, microphone, location and download prompts. Answers are remembered
-/// until the user changes them in Settings; pending prompts wait for the user in the tab.
-/// A private tab's answers stay in memory for its private session only: saved, they would
-/// record the site it visited, and carry its grant into normal browsing. A space that keeps its
-/// data apart has its own answers too, as another identity, kept until Lithium quits: Settings
-/// lists only the shared ones, so a saved grant there could never be taken back.
+/// Per-site answers to camera, microphone, location and download prompts. A private tab's stay in
+/// memory: saved, they would record the site and carry its grant into normal browsing. A separate
+/// space's are kept until Lithium quits: Settings lists only shared ones, so a saved grant
+/// couldn't be taken back.
 @MainActor
 @Observable
 final class SitePermissions {
@@ -55,8 +52,7 @@ final class SitePermissions {
     private var privateDecisions: [ObjectIdentifier: [String: [PermissionKind: PermissionDecision]]] = [:]
     private var spaceDecisions: [Space.ID: [String: [PermissionKind: PermissionDecision]]] = [:]
 
-    /// Saved answers this build doesn't know (a newer build's kind or decision), written back as
-    /// they were, so running an older build doesn't erase them.
+    /// A newer build's answers, written back as they were so an older build doesn't erase them.
     @ObservationIgnored private var unknown: [String: [String: String]] = [:]
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -78,8 +74,6 @@ final class SitePermissions {
         self.decisions = decisions
     }
 
-    /// The answers that count for `host`: a private session's own, a separate space's own, or the
-    /// saved ones.
     func decisions(for host: String, privateSession: ObjectIdentifier?, space: Space.ID? = nil) -> [PermissionKind: PermissionDecision] {
         let stored = if let privateSession {
             privateDecisions[privateSession]?[host]
@@ -91,9 +85,8 @@ final class SitePermissions {
         return stored ?? [:]
     }
 
-    /// Resolves from stored answers when every kind has one; otherwise asks in the tab.
-    /// `privateSession` is set for a private tab: only that session's own answers count, as the
-    /// normal ones would tell the site who this is; likewise `space` for a separate space's tab.
+    /// A private session or separate space counts only its own answers: the normal ones would tell
+    /// the site who this is.
     func request(_ kinds: [PermissionKind], host: String, tabID: Tab.ID, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) async -> Bool {
         let stored = decisions(for: host, privateSession: privateSession, space: space)
         let known = kinds.map { stored[$0] }
@@ -133,17 +126,15 @@ final class SitePermissions {
         privateDecisions[privateSession] = nil
     }
 
-    /// The space was deleted, its store with it.
     func forget(space: Space.ID) {
         spaceDecisions[space] = nil
     }
 
-    /// Denied this once, without remembering anything: the prompt dismissed with Escape.
+    /// Denied this once, without remembering anything.
     func dismiss(_ request: PermissionRequest) {
         resolve(request.id, false)
     }
 
-    /// Unanswered prompts of a closed tab, or of the page it left, are denied, without remembering anything.
     func cancel(tabID: Tab.ID) {
         pending.filter { $0.tabID == tabID }.forEach { resolve($0.id, false) }
     }

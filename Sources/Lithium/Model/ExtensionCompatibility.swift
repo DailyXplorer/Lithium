@@ -1,10 +1,7 @@
 import Foundation
 
-/// Runs `extension-compat.js` before an extension's background, which adds the Chrome APIs
-/// WebKit lacks and Chrome Web Store builds use as soon as they start. WebKit has no way to run
-/// a script in an extension's background, so its service worker becomes a small one that loads
-/// the script, then the extension's own. Only a service worker background: none other has been
-/// seen to need it.
+/// Runs `extension-compat.js` (Chrome APIs WebKit lacks) before an extension's background. WebKit
+/// can't inject into a background, so its service worker becomes one that loads the script first.
 enum ExtensionCompatibility {
     static let script = "lithium-compat.js"
     static let worker = "lithium-background.js"
@@ -14,8 +11,7 @@ enum ExtensionCompatibility {
 
     struct OutsideFolder: Error {}
 
-    /// Prepares the unpacked extension in `folder`. Repeating it changes nothing, except the script
-    /// when Lithium's is newer.
+    /// Prepares the unpacked extension in `folder`; idempotent.
     static func apply(to folder: URL) throws {
         let file = folder.appending(path: "manifest.json")
         guard var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: file), options: .json5Allowed) as? [String: Any],
@@ -31,8 +27,8 @@ enum ExtensionCompatibility {
         let script = folder.appending(path: Self.script)
         if (try? Data(contentsOf: script)) != source { try source.write(to: script, options: .atomic) }
         guard name != worker else { return }
-        // Next to the extension's own, so the paths it loads relative to itself still lead to the same
-        // files. The names are written as JSON strings: a quote in one can't add code.
+        // Next to the extension's own so its relative paths still resolve. Names are JSON strings: a
+        // quote in one can't add code.
         let load = background["type"] as? String == "module"
             ? "import \"/\(Self.script)\";\nimport \(try jsonString("./\(name)"));\n"
             : "importScripts(\"/\(Self.script)\", \(try jsonString(name)));\n"

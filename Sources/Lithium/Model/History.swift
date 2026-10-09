@@ -14,10 +14,12 @@ final class HistoryStore {
     private var db: OpaquePointer?
     private var lastRecorded: (url: URL, date: Date)?
     /// Titles waiting to be written, by address: a page that retitles itself (an unread count,
-    /// a clock) costs one write a second at most, not one per change.
+    /// a clock) costs one write per `titleDelay` at most, not one per change. Every read, visit
+    /// and quit writes them first, so nothing ever sees an old title.
     private var pendingTitles: [URL: String] = [:]
     private var titleWrite: Task<Void, Never>?
-    static let titleDelay = Duration.seconds(1)
+    /// Shorter in tests.
+    var titleDelay = Duration.seconds(30)
     /// The address bar's query reads every visit (70 ms at 200,000): its own connection, off the main thread.
     private let search: HistorySearch
     private let fileURL: URL
@@ -70,8 +72,8 @@ final class HistoryStore {
         guard !title.isEmpty else { return }
         pendingTitles[url] = title
         guard titleWrite == nil else { return }
-        titleWrite = Task { [weak self] in
-            try? await Task.sleep(for: Self.titleDelay)
+        titleWrite = Task { [weak self, titleDelay] in
+            try? await Task.sleep(for: titleDelay)
             guard !Task.isCancelled else { return }
             self?.writeTitles()
         }

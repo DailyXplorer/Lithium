@@ -53,6 +53,27 @@ struct IdleAnimationTests {
         #expect(after * 4 < acting, "\(after) wakeups a second after the call, \(acting) during it")
     }
 
+    /// The control for the tests above and below: the agent button's pulse as it was before the
+    /// fix runs on after the call, and the wakeup count sees it off screen. Without it, a line
+    /// that "stops" could only mean the count sees nothing in a window that is never shown.
+    @Test func wakeupsSeeARepeatingAnimationThatRunsOn() async throws {
+        let agent = Acting()
+        let (window, wakeups) = host(RepeatingPulseHost(agent: agent))
+        defer {
+            wakeups.stop()
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        agent.isActing = true
+        try await Task.sleep(for: .milliseconds(300))
+        agent.isActing = false
+        try await Task.sleep(for: .milliseconds(300))
+        let after = try await wakeups.count(over: .milliseconds(600))
+        #expect(after >= 30, "the pre-fix pulse still draws after the call (\(after) wakeups in 0.6 s)")
+    }
+
     /// amazon.fr loads twice, the second load about 190 ms after the first ends: while the line
     /// still runs to 100 % or sweeps away. Whenever the second load comes, and however the first
     /// ended, nothing animates once both are done.
@@ -262,6 +283,19 @@ private struct PulseHost: View {
 
     var body: some View {
         Rectangle().frame(width: 20, height: 20).modifier(ActingPulse(isOn: agent.isActing))
+    }
+}
+
+/// `AgentButton`'s pulse before the fix: a `repeatForever` that nothing replaces once the call ends.
+private struct RepeatingPulseHost: View {
+    let agent: Acting
+    @State private var pulse = false
+
+    var body: some View {
+        Rectangle().frame(width: 20, height: 20)
+            .opacity(agent.isActing && pulse ? 0.45 : 1)
+            .animation(agent.isActing ? .easeInOut(duration: 0.6).repeatForever() : .default, value: pulse)
+            .onChange(of: agent.isActing, initial: true) { _, acting in pulse = acting }
     }
 }
 

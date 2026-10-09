@@ -31,6 +31,23 @@ struct DeveloperToolsTests {
         #expect(UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool == false)
     }
 
+    /// A Quick Link window's page is kept out of the tab list, and follows the setting all the same.
+    @Test func quickLinkPagesFollowTheSetting() throws {
+        UserDefaults.standard.removeObject(forKey: Preference.developerTools)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.developerTools) }
+        let browser = Browser()
+        browser.quickLinks.showWindow = { _, _ in nil }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        #expect(tab.webView.isInspectable)
+
+        browser.developerTools = false
+        #expect(!tab.webView.isInspectable)
+        #expect(!developerExtras(tab.webView))
+        browser.developerTools = true
+        #expect(tab.webView.isInspectable)
+    }
+
     @Test func menuItemsNeedATabAndTheSetting() {
         UserDefaults.standard.removeObject(forKey: Preference.developerTools)
         defer { UserDefaults.standard.removeObject(forKey: Preference.developerTools) }

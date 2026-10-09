@@ -1,3 +1,4 @@
+import Network
 import PDFKit
 import Testing
 @testable import Lithium
@@ -128,6 +129,37 @@ extension BrowserTests {
         #expect(tab.url == file)
         #expect(await waitForPDF(5) { tab.title == "Menu" })
         #expect(tab.favicon === PDFReader.icon)
+    }
+
+    /// Stopped once shown but before its end came, a PDF never finishes: the viewer doesn't stay
+    /// blank over WebKit's, it opens what came or makes way.
+    @Test func aPDFStoppedPartwayIsntLeftBlank() async throws {
+        let body = try Data(contentsOf: makePDF(title: "Long", pages: Array(repeating: "Page", count: 40)))
+        let listener = try NWListener(using: .tcp, on: .any)
+        // Kept open, so the load is still under way when stopped.
+        let open = OpenConnections()
+        defer { open.cancelAll() }
+        listener.newConnectionHandler = { connection in
+            open.keep(connection)
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in
+                // The first half, and the rest never.
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: \(body.count)\r\n\r\n"
+                connection.send(content: Data(head.utf8) + body.prefix(body.count / 2), completion: .contentProcessed { _ in })
+            }
+        }
+        listener.start(queue: .global())
+        defer { listener.cancel() }
+        #expect(await waitForPDF(5) { listener.port != nil && listener.state == .ready })
+        let port = try #require(listener.port)
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "http://127.0.0.1:\(port.rawValue)/long.pdf")!)
+        defer { browser.close(tab) }
+        try #require(await waitForPDF(30) { tab.pdf != nil }, "the PDF commits")
+        #expect(tab.pdf?.document == nil)
+
+        tab.stopLoading()
+        #expect(await waitForPDF(10) { tab.pdf == nil || tab.pdf?.document != nil })
     }
 
     /// A tab going through many PDFs keeps the readers (file and document) of the last few only;
@@ -461,6 +493,20 @@ extension BrowserTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
+    }
+}
+
+/// Connections a test server leaves open; Network calls its handlers on a queue of its own.
+private final class OpenConnections: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connections: [NWConnection] = []
+
+    func keep(_ connection: NWConnection) {
+        lock.withLock { connections.append(connection) }
+    }
+
+    func cancelAll() {
+        lock.withLock { connections }.forEach { $0.cancel() }
     }
 }
 

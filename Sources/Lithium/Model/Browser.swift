@@ -50,7 +50,8 @@ final class Browser {
     var developerTools = UserDefaults.standard.object(forKey: Preference.developerTools) as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(developerTools, forKey: Preference.developerTools)
-            for case let webView? in tabs.map(\.loadedWebView) { DeveloperTools.apply(developerTools, to: webView) }
+            // Quick Link windows' pages too: they are kept out of `tabs`.
+            for case let webView? in (tabs + quickLinks.tabs).map(\.loadedWebView) { DeveloperTools.apply(developerTools, to: webView) }
         }
     }
     var canShowWebInspector: Bool { developerTools && commandTab != nil }

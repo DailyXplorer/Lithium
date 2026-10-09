@@ -152,6 +152,29 @@ struct ReaderModeTests {
         #expect(try await value("document.querySelector('a').href", in: webView) == "https://example.com/more")
     }
 
+    /// Footnote and contents links scroll the reader to their place, an old named anchor's too; the
+    /// page's scripts still find their own elements by id.
+    @Test func linksToAPlaceInThePageScrollTheReader() async throws {
+        let filler = (1...30).map { "<p>Paragraph \($0) of a long article about lithium, the lightest metal of all, with words enough to count.</p>" }
+        let webView = try await load("""
+            <!doctype html><title>Notes</title><body><main>
+            <p>Read the note<sup><a href="#fn1">1</a></sup> or the <a href="#old">old part</a>, with enough words to count here.</p>
+            \(filler[0..<15].joined())
+            <p><a name="old"></a>The old part begins here, in a paragraph long enough to stay in the article.</p>
+            \(filler[15..<30].joined())
+            <p id="fn1">The footnote itself, long enough to stay in the article as a paragraph of its own.</p>
+            </main></body>
+            """)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        for link in ["#fn1", "#old"] {
+            _ = try await webView.evaluateJavaScript("scrollTo(0, 0); document.body.querySelector('a[href$=\"\(link)\"]').click(); 0")
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(try await value("String(scrollY > 300)", in: webView) == "true", "\(link)")
+            #expect(webView.url?.absoluteString == "https://example.com/notes/")
+        }
+        #expect(try await value("String(document.getElementById('fn1').closest('body') === document.body)", in: webView) == "false")
+    }
+
     @Test func carriesNoScriptsOrHandlers() async throws {
         let webView = try await load(ReaderPages.article)
         // The page's own broken image already ran its handler.
@@ -762,12 +785,36 @@ struct ReaderTabTests {
         #expect(await tab.toggleReader())
         let commits = tab.commits
         tab.load(other)
-        #expect(!tab.isReading)
         #expect(await waitUntil(10) { tab.commits > commits && !tab.isLoading })
         try await Task.sleep(for: .milliseconds(300))
         #expect(!tab.isReaderAvailable)
         #expect(!tab.isReading)
         #expect(await !tab.toggleReader())
+    }
+
+    /// A link's page takes a while to come: the reader stays until it does, rather than the page
+    /// behind it showing (and playing) meanwhile.
+    @Test func theReaderStaysUntilTheNextPageComes() async throws {
+        let (article, _) = try pages()
+        let (listener, server) = try await LocalHTTP.serve(["/next": ("Content-Type: text/html", "<title>Next</title>next")], delay: 2)
+        defer { listener.cancel() }
+        let browser = Browser()
+        browser.newTab(url: article)
+        let tab = try #require(browser.selectedTab)
+        #expect(await waitUntil(10) { tab.isReaderAvailable })
+        #expect(await tab.toggleReader())
+        let commits = tab.commits
+
+        tab.load(server.appending(path: "next"))
+        #expect(await waitUntil(5) { tab.isLoading })
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(tab.commits == commits, "the next page is still on its way")
+        #expect(tab.isReading)
+        #expect(await inReader(tab))
+
+        #expect(await waitUntil(10) { tab.commits > commits && !tab.isLoading })
+        #expect(!tab.isReading)
+        #expect(tab.webView.title == "Next")
     }
 
     /// A video playing in an embed, which the page's own scripts can't reach, waits while the

@@ -44,17 +44,49 @@ struct LoadingProgress: Equatable {
 struct LoadingBar: View {
     let tab: Tab
 
+    var body: some View {
+        LoadingLine(isLoading: tab.isLoading && tab.url?.scheme?.hasPrefix("http") == true, progress: tab.progress)
+    }
+}
+
+/// The loading bar from plain values, so a test can play a page's loads to it.
+struct LoadingLine: View {
+    let isLoading: Bool
+    let progress: Double
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var load = LoadingProgress()
     @State private var fade = 1.0
-    @State private var pulse = 0.5
+    @State private var pulseStart = Date()
 
     private static let step = Animation.easeOut(duration: 0.18)
     private static let fadeOut = Animation.easeOut(duration: 0.32)
     private static let headWidth: CGFloat = 280
     private static let exitFeather: CGFloat = 40
 
+    /// Only a load pulses. The pulse is a timeline paused the rest of the time, not a
+    /// `repeatForever` animation: that one ran on at the display's rate, invisible, whenever no
+    /// later animated change of the pulse reached it.
+    private var isPulsing: Bool { load.phase == .loading && !reduceMotion }
+
     var body: some View {
+        TimelineView(.animation(paused: !isPulsing)) { context in
+            line(pulse: isPulsing ? Self.pulse(after: context.date.timeIntervalSince(pulseStart)) : 0.5)
+        }
+        .opacity(load.isVisible ? (reduceMotion ? fade : 1) : 0)
+        .allowsHitTesting(false)
+        .onAppear { sync() }
+        .onChange(of: isLoading) { sync() }
+        .onChange(of: progress) { sync() }
+    }
+
+    /// From 0 to 1 and back every 1.4 s, eased in and out, as the autoreversing
+    /// `easeInOut(duration: 0.7)` was.
+    static func pulse(after elapsed: TimeInterval) -> Double {
+        (1 - cos(.pi * max(0, elapsed) / 0.7)) / 2
+    }
+
+    private func line(pulse: Double) -> some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let head = width * load.value
@@ -94,11 +126,6 @@ struct LoadingBar: View {
             }
             .frame(width: width, height: proxy.size.height, alignment: .bottomLeading)
         }
-        .opacity(load.isVisible ? (reduceMotion ? fade : 1) : 0)
-        .allowsHitTesting(false)
-        .onAppear { sync() }
-        .onChange(of: tab.isLoading) { sync() }
-        .onChange(of: tab.progress) { sync() }
     }
 
     private func glow(width: CGFloat, opacity: Double) -> some View {
@@ -117,13 +144,13 @@ struct LoadingBar: View {
 
     private func sync() {
         var next = load
-        next.update(isLoading: tab.isLoading && tab.url?.scheme?.hasPrefix("http") == true, progress: tab.progress)
+        next.update(isLoading: isLoading, progress: progress)
         guard next != load else { return }
         let starting = load.phase != .loading && next.phase == .loading
         if starting {
             load = LoadingProgress()
             fade = 1
-            pulse = reduceMotion ? 0.5 : 0
+            pulseStart = Date()
         }
         if next.phase == .finishing {
             // The exit chains off the run to 100 %, so no timer outlives the load.
@@ -133,13 +160,9 @@ struct LoadingBar: View {
         } else {
             withAnimation(Self.step) { load = next }
         }
-        if starting, !reduceMotion {
-            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = 1 }
-        }
     }
 
     private func exit(_ generation: Int) {
-        withAnimation(.easeOut(duration: 0.2)) { pulse = 0.5 }
         withAnimation(Self.fadeOut) { fade = 0 } completion: {
             load.finish(generation: generation)
         }

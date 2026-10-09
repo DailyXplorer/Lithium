@@ -17,6 +17,14 @@ struct IdleAnimationTests {
         #expect(ActingPulse.opacity(after: -1) == 1)
     }
 
+    @Test func loadingPulseRisesAndFalls() {
+        #expect(LoadingLine.pulse(after: 0) == 0)
+        #expect(abs(LoadingLine.pulse(after: 0.35) - 0.5) < 1e-9)
+        #expect(abs(LoadingLine.pulse(after: 0.7) - 1) < 1e-9)
+        #expect(abs(LoadingLine.pulse(after: 1.4)) < 1e-9)
+        #expect(LoadingLine.pulse(after: -1) == 0)
+    }
+
     /// The toolbar's agent button pulses while a call runs, then stops drawing: the
     /// `repeatForever` it had ran on after every call, as long as the agent stayed connected.
     @Test func agentPulseStopsWhenTheCallEnds() async throws {
@@ -44,11 +52,102 @@ struct IdleAnimationTests {
         #expect(acting >= 30, "the pulse draws while the agent acts (\(acting) wakeups)")
         #expect(after * 4 < acting, "\(after) wakeups a second after the call, \(acting) during it")
     }
+
+    /// amazon.fr loads twice, the second load about 190 ms after the first ends: while the line
+    /// still runs to 100 % or sweeps away. Whenever the second load comes, and however the first
+    /// ended, nothing animates once both are done.
+    @Test(arguments: [
+        BackToBack(gap: nil),
+        BackToBack(gap: .zero),
+        BackToBack(gap: .milliseconds(50)),
+        BackToBack(gap: .milliseconds(150)),
+        BackToBack(gap: .milliseconds(180)),
+        BackToBack(gap: .milliseconds(190)),
+        BackToBack(gap: .milliseconds(200)),
+        BackToBack(gap: .milliseconds(300)),
+        BackToBack(gap: .milliseconds(600)),
+        BackToBack(gap: .milliseconds(190), firstEndsAt: 0.7),
+        BackToBack(gap: .milliseconds(190), appearsLoading: true),
+    ])
+    func loadingLineStopsAfterBackToBackLoads(_ loads: BackToBack) async throws {
+        let page = FakeLoad()
+        page.shows = !loads.appearsLoading
+        let (window, wakeups) = host(LineHost(page: page))
+        defer {
+            wakeups.stop()
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        page.progress = 0.1
+        page.isLoading = true
+        if loads.appearsLoading {
+            try await Task.sleep(for: .milliseconds(100))
+            page.shows = true
+        }
+        let loading = try await wakeups.count(over: .milliseconds(300))
+        page.progress = loads.firstEndsAt
+        page.isLoading = false
+        if let gap = loads.gap {
+            if gap > .zero { try await Task.sleep(for: gap) }
+            page.progress = 0.1
+            page.isLoading = true
+            try await Task.sleep(for: .milliseconds(150))
+            page.progress = 1
+            page.isLoading = false
+        }
+        try await Task.sleep(for: .seconds(1))
+        let after = try await wakeups.count(over: .milliseconds(600))
+        #expect(loading >= 9, "the line draws while the page loads (\(loading) wakeups in 0.3 s)")
+        #expect(after * 2 < loading, "\(after) wakeups in 0.6 s once idle, \(loading) in 0.3 s of load")
+    }
+
+    private func host(_ view: some View) -> (NSWindow, MainThreadWakeups) {
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 28)
+        // Off screen and never shown, but in a window, where SwiftUI animates.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 300, height: 28), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.orderFrontRegardless()
+        return (window, MainThreadWakeups())
+    }
+}
+
+/// A second load `gap` after the first ends (nil: none; zero: in the same turn), the first
+/// ending at `firstEndsAt` progress (below 1 when the second one cuts it short). With
+/// `appearsLoading`, the line comes in mid-load, as when the address bar's edit ends after Return.
+struct BackToBack: Sendable, CustomTestStringConvertible {
+    let gap: Duration?
+    var firstEndsAt = 1.0
+    var appearsLoading = false
+
+    var testDescription: String {
+        "\(gap.map { "second load after \($0)" } ?? "one load"), first ends at \(firstEndsAt)\(appearsLoading ? ", shown mid-load" : "")"
+    }
 }
 
 @MainActor @Observable
 private final class Acting {
     var isActing = false
+}
+
+@MainActor @Observable
+private final class FakeLoad {
+    var isLoading = false
+    var progress = 0.0
+    var shows = true
+}
+
+private struct LineHost: View {
+    let page: FakeLoad
+
+    var body: some View {
+        if page.shows {
+            LoadingLine(isLoading: page.isLoading, progress: page.progress).frame(width: 300, height: 28)
+        }
+    }
 }
 
 private struct PulseHost: View {

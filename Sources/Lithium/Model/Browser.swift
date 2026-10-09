@@ -1189,6 +1189,14 @@ final class Browser {
         history.writeTitles()
     }
 
+    /// "Clear history": the visits, their icons, and the closed tabs ⇧⌘T would bring back with
+    /// their back and forward lists.
+    func clearHistory() async {
+        await history.clear()
+        await clearIcons()
+        closedTabs.removeAll()
+    }
+
     /// With the history cleared, the icons kept for the sites in it; favorites and open tabs
     /// keep theirs. A private tab's host doesn't count: keeping it would keep an earlier visit.
     func clearIcons() async {

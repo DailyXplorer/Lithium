@@ -273,8 +273,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "openPasswords":
             Passwords.open()
         case "clearHistory":
-            await browser.history.clear()
-            await browser.clearIcons()
+            await browser.clearHistory()
             return (await visits(browser, matching: ""), nil)
         case "history":
             return (await visits(browser, matching: value as? String ?? ""), nil)

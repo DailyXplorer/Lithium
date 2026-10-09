@@ -831,6 +831,16 @@ struct BrowserTests {
         #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
     }
 
+    /// Clearing the history leaves no closed tab for ⇧⌘T to bring back with its pages.
+    @Test func clearingTheHistoryForgetsClosedTabs() async {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Closed</title>")!)
+        browser.close(tab)
+        #expect(browser.canReopenClosedTab)
+        await browser.clearHistory()
+        #expect(!browser.canReopenClosedTab)
+    }
+
     /// A session write that failed is tried again at the next save, though nothing changed since.
     @Test func aFailedSessionWriteIsTriedAgain() throws {
         let browser = Browser()

@@ -84,6 +84,24 @@ struct QuickLinksTests {
         #expect(stopped)
     }
 
+    /// ⌘= zooms the link's page while its window is in front, as Zoom Out and Actual Size do.
+    @Test func commandEqualsZoomsALinksPage() throws {
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let tab = try #require(browser.quickLinks.open(URL(string: "data:text/html,link")!))
+        defer { browser.quickLinks.close(tab) }
+        let window = try #require(windows.opened.first?.window)
+        #expect(!browser.ownsZoomIn(in: window), "not in front")
+
+        browser.quickLinks.windowBecameKey(tab)
+        #expect(browser.ownsZoomIn(in: window))
+        browser.zoomSelectedTab(by: PageZoom.step)
+        #expect(tab.webView.pageZoom == 1.1)
+        browser.quickLinks.windowResignedKey(tab)
+        #expect(!browser.ownsZoomIn(in: window))
+        #expect(!browser.ownsZoomIn(in: nil))
+    }
+
     /// Moved in, it is a normal tab at the top of the list, selected, in the same web view: the
     /// page doesn't reload and keeps what was typed in it. The menu's page commands follow the
     /// window in front.

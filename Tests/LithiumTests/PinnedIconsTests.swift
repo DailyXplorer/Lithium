@@ -258,6 +258,23 @@ struct PinnedIcons {
         #expect(found.map(icons.contains) == true)
     }
 
+    /// A site without an icon is searched once a session, not at each of its pages' loads.
+    @Test func aSiteWithoutAnIconIsSearchedOnce() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(page: "<!doctype html><title>No icon</title>", requests: requests)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        #expect(await favicons.favicon(for: webView) == nil)
+        #expect(requests["/favicon.ico"] == 1)
+        #expect(await favicons.favicon(for: webView) == nil)
+        #expect(requests["/favicon.ico"] == 1, "not fetched again")
+        #expect(favicons.missing.contains(try #require(base.host())))
+    }
+
     /// A page animating its icon gets it fetched, and the favorite saved, at most every
     /// `Tab.iconInterval`, not at every frame; it ends on the icon named last.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))

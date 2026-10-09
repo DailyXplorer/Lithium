@@ -108,10 +108,14 @@ final class Favicons {
         if let result {
             store(result, for: host)
         } else {
-            if missing.count >= missingLimit { missing.removeAll(keepingCapacity: true) }
-            missing.insert(host)
+            noteMissing(host)
         }
         return result
+    }
+
+    private func noteMissing(_ host: String) {
+        if missing.count >= missingLimit { missing.removeAll(keepingCapacity: true) }
+        missing.insert(host)
     }
 
     /// `<link rel="…icon…" href="…">` targets in a page, raster formats first.
@@ -156,10 +160,12 @@ final class Favicons {
 
     /// With an unread count (in the title, or `counting` via `setAppBadge`) the touch icon comes first:
     /// sites draw the count into their favicon, never their touch icon. A favicon is then shown but
-    /// not kept, as the count in it would stay.
+    /// not kept, as the count in it would stay. A site that has none isn't searched again this
+    /// session: each of its pages would cost a script and every candidate's fetch.
     func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
+        guard !missing.contains(host) else { return nil }
         let generation = generation
 
         let found = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [String: Any]
@@ -198,6 +204,8 @@ final class Favicons {
             if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
             return png
         }
+        // Only once the page answered and every candidate failed: not for a tab that moved on.
+        if found != nil, !Task.isCancelled, generation == self.generation { noteMissing(host) }
         return nil
     }
 

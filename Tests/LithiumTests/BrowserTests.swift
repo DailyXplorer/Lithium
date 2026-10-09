@@ -824,9 +824,9 @@ struct BrowserTests {
     }
 
     /// Idle sleep passes by a page the user typed in, or pressed a key in while it has a
-    /// `beforeunload` handler, for an idle interval from that input; a handler alone, with no
+    /// `beforeunload` handler, for one more idle interval once left; a handler alone, with no
     /// interaction, keeps no tab awake. "Sleep Other Tabs" sleeps them anyway, and a page woken
-    /// afresh holds nothing unsaved.
+    /// afresh holds nothing unsaved. Typed while shown, as a user does, then left.
     @Test func idleSleepSparesAPageWithUnsavedInput() async throws {
         let guarded = "<script>addEventListener('beforeunload', event => event.preventDefault())</script><title>Guarded</title><p>guarded"
         let (listener, base) = try await LocalHTTP.serve([
@@ -843,15 +843,15 @@ struct BrowserTests {
         #expect(await waitUntil(120) { [typed, pressed, untouched, visible].allSatisfy(loaded) })
         UserDefaults.standard.set(3, forKey: "tabIdleSeconds")
         defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
-        // Idle for longer than that since opened: only input spares them.
-        try await Task.sleep(for: .seconds(3.2))
 
+        browser.select(typed)
         _ = try await typed.webView.callAsyncJavaScript("document.getElementById('field').focus()", contentWorld: .page)
         let client = try #require(typed.webView as NSView as? NSTextInputClient)
         client.insertText("draft", replacementRange: NSRange(location: NSNotFound, length: 0))
         #expect(await waitUntil(10) { typed.unsavedInputAt != nil })
 
         // Off screen and never ordered in: the key goes to the page as a real one.
+        browser.select(pressed)
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.contentView = nil }
@@ -866,7 +866,11 @@ struct BrowserTests {
         }
         #expect(await waitUntil(10) { pressed.unsavedInputAt != nil })
         #expect(untouched.unsavedInputAt == nil)
+        // Leaving them marks them active: idle from now, their input older than that.
+        browser.select(visible)
 
+        // Idle for longer than the interval: only input spares them.
+        try await Task.sleep(for: .seconds(3.2))
         browser.relieveMemoryPressure(critical: false)
         #expect(untouched.isAsleep)
         #expect(!typed.isAsleep && !pressed.isAsleep)
@@ -875,8 +879,8 @@ struct BrowserTests {
         #expect(typed.isAsleep)
         #expect(!pressed.isAsleep && !visible.isAsleep)
 
-        // Left alone for an idle interval, the input no longer counts.
-        try await Task.sleep(for: .seconds(3.2))
+        // Left alone for a second idle interval, the input no longer counts.
+        try await Task.sleep(for: .seconds(3))
         browser.relieveMemoryPressure(critical: false)
         #expect(pressed.isAsleep)
         #expect(!visible.isAsleep)

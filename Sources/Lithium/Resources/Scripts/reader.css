@@ -3,10 +3,11 @@
   --bg: #FFFFFF; --ink: #1C1D24; --muted: #6B6D7C; --line: rgba(28, 29, 36, .12); --code: rgba(28, 29, 36, .05); --accent: #4A5BD9;
   color-scheme: light;
 }
-:root:has(> body[data-theme=sepia]) { --bg: #F5EEE1; --ink: #3A3027; --muted: #85766A; --line: rgba(58, 48, 39, .15); --code: rgba(58, 48, 39, .06); --accent: #9A5B2B; }
-:root:has(> body[data-theme=dark]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
+/* The reader's <body>, the first: the page's own, behind it, may carry a data-theme of its own. */
+:root:has(> body:first-of-type[data-theme=sepia]) { --bg: #F5EEE1; --ink: #3A3027; --muted: #85766A; --line: rgba(58, 48, 39, .15); --code: rgba(58, 48, 39, .06); --accent: #9A5B2B; }
+:root:has(> body:first-of-type[data-theme=dark]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
 @media (prefers-color-scheme: dark) {
-  :root:has(> body[data-theme=auto]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
+  :root:has(> body:first-of-type[data-theme=auto]) { --bg: #1A1A20; --ink: #E6E6EE; --muted: #9A9CAE; --line: rgba(230, 230, 238, .13); --code: rgba(230, 230, 238, .07); --accent: #95A1FF; color-scheme: dark; }
 }
 
 /* The page's <html> stays, with what its scripts set on it (a modal's overflow: hidden, a

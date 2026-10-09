@@ -374,6 +374,18 @@ struct ReaderModeTests {
         #expect(try await value("getComputedStyle(document.querySelector('article')).fontSize", in: webView) == "15px")
     }
 
+    /// The page's own <body>, behind the reader's, naming a theme of its own: the reader keeps the user's.
+    @Test func keepsItsThemeWhateverThePageNames() async throws {
+        let webView = try await load(ReaderPages.article.replacingOccurrences(of: "<body>", with: "<body data-theme=\"dark\">"))
+        // The theme's color, not the background, which fades to it: a web view out of a window
+        // never moves a transition on.
+        let background = "getComputedStyle(document.body).getPropertyValue('--bg').trim().toLowerCase()"
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle(theme: .light)))
+        #expect(try await value(background, in: webView) == "#ffffff")
+        await ReaderMode.apply(ReaderStyle(theme: .sepia), to: webView)
+        #expect(try await value(background, in: webView) == "#f5eee1")
+    }
+
     /// A CSS-in-JS rule whose text can't be read back whole (`font: var(--a)` with a font longhand
     /// after it, as on Condé Nast's sites): the page keeps the very sheet, so its text sizes stay.
     @Test func keepsRulesTheirTextCantCarry() async throws {
@@ -740,6 +752,60 @@ struct ReaderTabTests {
         #expect(!tab.isReaderAvailable)
         #expect(!tab.isReading)
         #expect(await !tab.toggleReader())
+    }
+
+    /// A video playing in an embed, which the page's own scripts can't reach, waits while the
+    /// reader is open, and plays on once it is left.
+    @Test func embedsWaitBehindTheReader() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let video = try #require(Bundle.module.url(forResource: "Fixtures/red", withExtension: "mp4"))
+        try FileManager.default.copyItem(at: video, to: folder.appending(path: "red.mp4"))
+        let article = folder.appending(path: "article.html")
+        try ReaderPages.article.replacingOccurrences(of: "<iframe src=\"about:blank\"></iframe>", with: """
+            <iframe srcdoc="<video src='red.mp4' loop playsinline></video>"></iframe>
+            """).write(to: article, atomically: true, encoding: .utf8)
+        let browser = Browser()
+        browser.newTab(url: article)
+        let tab = try #require(browser.selectedTab)
+        #expect(await waitUntil(10) { tab.isReaderAvailable })
+        // Media plays only in a page in a window: one far off screen, which WebKit mustn't take for hidden.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = tab.webView
+        let selector = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        if tab.webView.responds(to: selector) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(tab.webView.method(for: selector), to: Setter.self)(tab.webView, selector, false)
+        }
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+
+        // The reader carries no frame: this one is the page's, behind it.
+        let embedded = "document.querySelector('iframe').contentDocument.querySelector('video')"
+        func paused() async -> Bool? {
+            try? await tab.webView.callAsyncJavaScript("return \(embedded).paused", contentWorld: .page) as? Bool
+        }
+        let started = try await tab.webView.callAsyncJavaScript("""
+            const media = \(embedded);
+            return await Promise.race([media.play().then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+            """, contentWorld: .page) as? Bool
+        try #require(started == true, "the embed plays")
+
+        #expect(await tab.toggleReader())
+        #expect(await poll(5) { await paused() == true }, "the embed waits behind the reader")
+        #expect(await tab.toggleReader())
+        #expect(await poll(5) { await paused() == false }, "and plays on once the reader is left")
+    }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return await condition()
     }
 
     /// A page that moves on by itself (pushState) is asked again for its new address.

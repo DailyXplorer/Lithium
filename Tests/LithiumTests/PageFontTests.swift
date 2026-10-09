@@ -343,6 +343,52 @@ struct PageFontTests {
         #expect((lookups ?? .max) < 20, "looked up \(lookups ?? -1) times for 61 changes")
     }
 
+    /// A sheet added later (CSS-in-JS, a lazy chunk) has only what its font rules select checked
+    /// again, not every element of the page; those still take the font it names.
+    @Test func anAddedSheetChecksOnlyWhatItsFontRulesSelect() async throws {
+        let page = """
+            <div id="rows"></div><i id="icon" class="glyph"></i>
+            <script>
+              const rows = document.getElementById('rows');
+              for (let i = 0; i < 300; i++) { const p = document.createElement('p'); p.textContent = 'row ' + i; rows.append(p); }
+            </script>
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+        // The font script's world counts the elements it reads the style of.
+        _ = try await webView.callAsyncJavaScript("""
+            window.reads = 0;
+            const read = window.getComputedStyle;
+            window.getComputedStyle = function (...args) { window.reads++; return read.apply(this, args); };
+            """, contentWorld: .defaultClient)
+
+        let probe = """
+            const first = (element) => getComputedStyle(element).fontFamily.split(',')[0].replace(/"/g, '').trim();
+            const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
+            await settle();
+            const plain = document.createElement('style');
+            plain.textContent = '#rows p { color: #333; }';
+            document.head.append(plain);
+            await settle();
+            const icons = document.createElement('style');
+            icons.textContent = '.glyph { font-family: "Font Awesome 6 Free"; }';
+            document.head.append(icons);
+            await settle();
+            return { icon: first(document.getElementById('icon')), row: first(document.querySelector('#rows p')) };
+            """
+        _ = try await webView.callAsyncJavaScript("await new Promise((resolve) => setTimeout(resolve, 400)); window.reads = 0", contentWorld: .defaultClient)
+        let fonts = try #require(try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? [String: String])
+        #expect(fonts["icon"] == "Font Awesome 6 Free")
+        #expect(fonts["row"] == "Lithium DM Sans")
+        let reads = try await webView.callAsyncJavaScript("return reads", contentWorld: .defaultClient) as? Int
+        #expect((reads ?? .max) < 20, "read the style of \(reads ?? -1) elements for two sheets")
+    }
+
     /// A font the user picked from the Mac's: named, not shipped, and icons and code keep theirs.
     @Test func pickedFontReplacesTextFontsButNotIconsCodeOrMath() async throws {
         let script = PageStyle.fontScript(family: "Helvetica Neue")

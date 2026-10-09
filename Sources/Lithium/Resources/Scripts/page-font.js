@@ -192,7 +192,13 @@
       changed.clear();
       pending.clear();
       classChanges.clear();
+      addedSheets.clear();
       return;
+    }
+    if (addedSheets.size) {
+      const sheets = [...addedSheets];
+      addedSheets.clear();
+      sheets.forEach(sheetAdded);
     }
     if (classChanges.size) {
       const changes = [...classChanges];
@@ -248,6 +254,15 @@
 
   // A stylesheet from another origin can't be read: its rules are unknown.
   const fontRules = new WeakMap();
+  const readFontSelectors = (rules, selectors) => {
+    for (const rule of rules) {
+      if (rule.cssRules) readFontSelectors(rule.cssRules, selectors);
+      if (rule.selectorText && rule.style && (rule.style.getPropertyValue('font-family') || rule.style.getPropertyValue('font'))) {
+        selectors.push(rule.selectorText.replace(/::?(before|after|marker|first-line|first-letter)\b/g, ''));
+      }
+    }
+    return selectors;
+  };
   const fontRulesOf = (root) => {
     const sheets = [...root.styleSheets, ...root.adoptedStyleSheets].filter((other) => other !== sheet);
     let stamp = String(sheets.length);
@@ -258,16 +273,8 @@
     if (known && known.stamp === stamp) return known;
     const selectors = [];
     let opaque = false;
-    const read = (rules) => {
-      for (const rule of rules) {
-        if (rule.cssRules) read(rule.cssRules);
-        if (rule.selectorText && rule.style && (rule.style.getPropertyValue('font-family') || rule.style.getPropertyValue('font'))) {
-          selectors.push(rule.selectorText.replace(/::?(before|after|marker|first-line|first-letter)\b/g, ''));
-        }
-      }
-    };
     for (const other of sheets) {
-      try { read(other.cssRules); } catch (_) { opaque = true; }
+      try { readFontSelectors(other.cssRules, selectors); } catch (_) { opaque = true; }
     }
     const rules = { stamp, selectors, opaque };
     fontRules.set(root, rules);
@@ -325,9 +332,28 @@
     schedule();
   };
 
-  const queueTreeOf = (node) => {
+  // A new sheet changes only what its font rules select (an element whose font it names keeps its
+  // subtree): those are rechecked, not the whole page, which a CSS-in-JS or lazy-CSS site adds
+  // sheets to all the time. Run by `flush`, which rechecks `changed` right after.
+  const sheetAdded = (node) => {
+    if (!node.isConnected || !node.sheet) return;
     const root = node.getRootNode();
-    queue(root === document ? document.documentElement : root);
+    let selectors;
+    try { selectors = readFontSelectors(node.sheet.cssRules, []); } catch (_) {
+      recheckSubtreeLater(root === document ? document.documentElement : root);
+      return;
+    }
+    for (const selector of selectors) {
+      try { root.querySelectorAll(selector).forEach((element) => changed.add(element)); } catch (_) {}
+    }
+  };
+
+  // A <link>'s sheet comes once it loads, a <style>'s once its text is in: both by the flush.
+  const addedSheets = new Set();
+  const queueSheet = (node) => {
+    if (!running) return;
+    addedSheets.add(node);
+    schedule();
   };
 
   observer = new MutationObserver((records) => {
@@ -337,7 +363,7 @@
       if (record.type === 'childList') {
         for (const node of record.addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          if (node.localName === 'style' || node.localName === 'link') queueTreeOf(node);
+          if (node.localName === 'style' || node.localName === 'link') queueSheet(node);
           else queue(node);
         }
       } else if (record.attributeName === 'class'
@@ -353,7 +379,7 @@
   adopt(document);
   observer.observe(document, OPTIONS);
   document.addEventListener('load', (event) => {
-    if (event.target.localName === 'link') queueTreeOf(event.target);
+    if (event.target.localName === 'link') queueSheet(event.target);
   }, true);
   // Custom elements defined late attach shadow roots that no mutation reports.
   const findLateShadowRoots = (root) => {
@@ -392,6 +418,7 @@
       pending.clear();
       changed.clear();
       classChanges.clear();
+      addedSheets.clear();
       settling.forEach((id) => clearTimeout(id));
       settling.clear();
     },

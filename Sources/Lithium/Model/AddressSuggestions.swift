@@ -140,6 +140,13 @@ final class AddressSuggestions {
         }
     }
 
+    /// A click into another text field never reports its mouse-up here: that field's selection loop
+    /// takes it. A row never takes focus, so text focus elsewhere clears the list straight away.
+    func focusSettled(on responder: NSResponder?) {
+        guard clearsOnMouseUp, responder is NSTextView else { return }
+        clear()
+    }
+
     /// Back in the field before that mouse-up: the list is the new edit's.
     func editingBegan() {
         clearsOnMouseUp = false

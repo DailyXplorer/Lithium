@@ -362,6 +362,7 @@ private struct AddressField: NSViewRepresentable {
                 suggestions.clear()
             } else {
                 suggestions.clearAfterMouseUp()
+                DispatchQueue.main.async { [weak field] in suggestions.focusSettled(on: field?.window?.firstResponder) }
             }
         }
     }

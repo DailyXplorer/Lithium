@@ -97,15 +97,15 @@ struct AddressSuggestionsTests {
 
     /// A click on a row that ended the edit keeps the list for as long as it is held, and the list
     /// goes only after its mouse-up is handled; back in the field by then, the list stays.
-    @Test func aHeldClickKeepsTheListUntilItsMouseUp() async throws {
+    @Test func aHeldClickKeepsTheListUntilItsMouseUp() async {
         let suggestions = AddressSuggestions()
         let mainQueueTurn = { await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } } }
         suggestions.update(query: "swift", tabs: [], pins: [], history: history([]))
         suggestions.historyQuery?.cancel()
 
         suggestions.clearAfterMouseUp()
-        try await Task.sleep(for: .milliseconds(800))
-        #expect(suggestions.items.map(\.id) == ["search:swift"], "a long press keeps the row")
+        suggestions.focusSettled(on: nil)
+        #expect(suggestions.items.map(\.id) == ["search:swift"], "a press on a row keeps it")
         suggestions.mouseWentUp()
         #expect(!suggestions.items.isEmpty, "the row is still there while the mouse-up is handled")
         await mainQueueTurn()
@@ -118,6 +118,28 @@ struct AddressSuggestionsTests {
         suggestions.mouseWentUp()
         await mainQueueTurn()
         #expect(suggestions.items.map(\.id) == ["search:swift"], "a new edit keeps its list")
+    }
+
+    /// A click into another text field (find bar, tab rename) ends the edit with the button held, and
+    /// that field's selection loop takes the mouse-up: the list goes once focus lands there.
+    @Test func aClickIntoAnotherTextFieldClearsTheListAtOnce() {
+        let suggestions = AddressSuggestions()
+        let otherFieldEditor = NSTextView()
+        otherFieldEditor.isFieldEditor = true
+        suggestions.update(query: "swift", tabs: [], pins: [], history: history([]))
+        suggestions.historyQuery?.cancel()
+
+        suggestions.clearAfterMouseUp()
+        suggestions.focusSettled(on: NSView())
+        #expect(!suggestions.items.isEmpty, "focus on a view that isn't text waits for the mouse-up")
+        suggestions.focusSettled(on: otherFieldEditor)
+        #expect(suggestions.items.isEmpty)
+
+        suggestions.update(query: "swift", tabs: [], pins: [], history: history([]))
+        suggestions.historyQuery?.cancel()
+        suggestions.focusSettled(on: otherFieldEditor)
+        #expect(!suggestions.items.isEmpty, "only an edit ended by a held click is cleared")
+        suggestions.mouseWentUp()
     }
 }
 

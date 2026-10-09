@@ -98,6 +98,19 @@ struct NowPlayingTests {
         media.isPaused = true
         #expect(media.elapsed(at: start.addingTimeInterval(5)) == 10)
     }
+
+    /// The player's clock runs only for playing media with a length: a live stream shows a fixed
+    /// "Live" and must not redraw twice a second for as long as it plays.
+    @Test func clocksOnlyPlayingMediaWithALength() throws {
+        let date = Date()
+        let playing = try #require(NowPlaying.Media(message: ["paused": false, "duration": 30], at: date))
+        let paused = try #require(NowPlaying.Media(message: ["paused": true, "duration": 30], at: date))
+        let live = try #require(NowPlaying.Media(message: ["paused": false, "duration": Double.infinity], at: date))
+        #expect(playing.showsMovingTime)
+        #expect(!paused.showsMovingTime)
+        #expect(live.duration == nil)
+        #expect(!live.showsMovingTime)
+    }
 }
 
 /// A whole Browser, which keeps its data in the home folder, so this suite only runs in a

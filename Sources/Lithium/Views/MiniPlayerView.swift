@@ -31,8 +31,8 @@ struct MiniPlayer: View {
             .onTapGesture { nowPlaying.showTab() }
             .onHover { isHovered = $0 }
             .help("Show \(tab.displayTitle)")
-            // Counted on between the page's reports, and only while it plays.
-            TimelineView(.animation(minimumInterval: 0.5, paused: media.isPaused)) { context in
+            // Counted on between the page's reports, and only while it plays and has a length.
+            TimelineView(.animation(minimumInterval: 0.5, paused: !media.showsMovingTime)) { context in
                 Progress(media: media, time: media.elapsed(at: context.date))
             }
             .padding(.horizontal, 4)

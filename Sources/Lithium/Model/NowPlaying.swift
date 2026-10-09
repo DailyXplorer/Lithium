@@ -27,6 +27,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var isRestored: Bool
         var reportedAt: Date
 
+        /// The player's time moves only while media of known length plays: a stream shows a fixed
+        /// "Live", so a clock for it would wake the main thread for nothing.
+        var showsMovingTime: Bool { !isPaused && duration != nil }
+
         func elapsed(at date: Date) -> Double {
             guard !isPaused else { return time }
             let elapsed = time + max(0, date.timeIntervalSince(reportedAt)) * rate

@@ -231,12 +231,14 @@ final class Extensions: NSObject {
         let checked = try? updateCheck.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         guard !installed.isEmpty, checked.map({ now.timeIntervalSince($0) >= Self.updateInterval }) ?? true,
               let latest = try? await latestVersions(installed) else { return }
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try? Data().write(to: updateCheck)
+        // A download that failed (offline, store error) is tried again on the next check rather
+        // than a day later; a version refused once downloaded isn't, it would only be refused again.
+        var downloaded = true
         for entry in installed {
             guard let version = latest[entry.id], ChromeWebStore.isNewer(version, than: entry.version) else { continue }
             do {
-                let archive = try await downloadArchive(entry.id)
+                let archive: Data
+                do { archive = try await downloadArchive(entry.id) } catch { downloaded = false; throw error }
                 try await serially(entry.id) {
                     // Removed while it downloaded: not added back.
                     guard self.installed.contains(where: { $0.id == entry.id }) else { return }
@@ -246,6 +248,9 @@ final class Extensions: NSObject {
                 NSLog("Lithium: couldn’t update extension %@: %@", entry.id, error.localizedDescription)
             }
         }
+        guard downloaded else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? Data().write(to: updateCheck)
     }
 
     static let updateInterval: TimeInterval = 24 * 60 * 60

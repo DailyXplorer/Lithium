@@ -153,6 +153,8 @@ struct QuickLinksTests {
         defer { browser.quickLinks.close(tab) }
         browser.quickLinks.windowBecameKey(tab)
         #expect(browser.selectedTab == nil)
+        // The menu's page commands, Force Paste among them, stay enabled from this.
+        #expect(browser.commandTab === tab)
         #expect(browser.canShowWebInspector)
         browser.setProtections(false, for: browser.commandTab)
         #expect(!browser.privacy.isEnabled(for: base))

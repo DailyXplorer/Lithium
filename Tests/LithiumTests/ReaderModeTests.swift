@@ -304,6 +304,26 @@ struct ReaderModeTests {
         #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
     }
 
+    /// A CSS-in-JS library that makes its <style> on its first write, while the reader is open,
+    /// keeps that sheet: what it writes there once the reader is left styles the page.
+    @Test func keepsStylingThroughASheetThePageMadeWhileReading() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("""
+            const lazy = document.createElement('style');
+            lazy.nonce = 'fixture';
+            document.head.append(lazy);
+            window.lazySheet = lazy.sheet;
+            lazySheet.insertRule('.late-js { color: rgb(37, 38, 39); }', 0); 0
+            """)
+        await ReaderMode.exit(webView)
+        _ = try await webView.evaluateJavaScript("lazySheet.insertRule('.after-exit { color: rgb(44, 45, 46); }', lazySheet.cssRules.length); 0")
+        let after = try await swatches(in: webView)
+        #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
+        #expect(after["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
+    }
+
     /// Each paragraph in its own section, custom element and div, as on some company blogs.
     @Test func keepsParagraphsSplitAcrossSections() async throws {
         try await expectWholeArticle("reader-split-sections", paragraphs: 9, without: ["Listen to article", "Products", "Related stories", "Copyright footer"])

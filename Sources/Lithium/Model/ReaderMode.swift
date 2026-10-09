@@ -7,7 +7,8 @@ import WebKit
 /// frames alone load again: detached, a frame loses its document.
 /// Nothing is added to pages: the scripts run on demand, in Lithium's own content world, but for
 /// the address bar's button, which asks once per page shown, and not at all once turned off. Opening
-/// the reader alone touches the page's world (`reader-sheets.js`), so the sheets it holds stay live.
+/// and leaving the reader alone touch the page's world (`reader-sheets.js`), so the sheets it holds
+/// stay live.
 /// The article is found by Mozilla Readability, Firefox's reader, which `reader.js` carries: it
 /// reaches a page only when the reader opens there.
 @MainActor
@@ -40,7 +41,9 @@ enum ReaderMode {
         return await run("enter", style: style, css: css, font: PageStyle.fontBase64, in: webView)
     }
 
+    /// The sheets the page added while reading move back with their elements, and get new ones too.
     static func exit(_ webView: WKWebView) async {
+        _ = try? await webView.callAsyncJavaScript(sheetsScript, contentWorld: .page)
         _ = await run("exit", style: .init(), in: webView)
     }
 

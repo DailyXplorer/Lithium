@@ -1,5 +1,6 @@
 // Body of a function run by ReaderMode in the page's own world, as the reader opens, which takes the
-// page's <style>s and <link>s out of the document: put back, each gets a new sheet, while a CSS-in-JS
+// page's <style>s and <link>s out of the document, and as it closes, which moves those the page added
+// meanwhile to the page's: put back, each gets a new sheet, while a CSS-in-JS
 // library keeps writing to the one it holds (styled-components keeps it for good). That one now
 // passes what it's told on: to its element's sheet once the page is back, and while the reader is
 // open, to the one `reader.js` gives back on leaving. Only while both hold as many rules, so that an

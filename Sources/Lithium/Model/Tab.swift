@@ -1713,6 +1713,7 @@ extension Tab: WKWebExtensionTab {
     /// Sent to the page it slept on, it just wakes, which loads that page. Sent between an
     /// extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
+        guard Extensions.mayOpen(url) else { throw Extensions.RefusedAddress() }
         go(to: url)
     }
 

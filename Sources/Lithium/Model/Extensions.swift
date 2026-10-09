@@ -65,6 +65,18 @@ final class Extensions: NSObject {
 
     static let scheme = "webkit-extension"
 
+    /// A file on the Mac would load with read access to its whole folder, and Lithium's own pages
+    /// can turn protections off: an extension opens neither (`tabs.create`, `tabs.update`), as
+    /// agents can't. The user still can.
+    static func mayOpen(_ url: URL?) -> Bool {
+        guard let scheme = url?.scheme?.lowercased() else { return true }
+        return scheme != "file" && scheme != Internal.scheme
+    }
+
+    struct RefusedAddress: LocalizedError {
+        var errorDescription: String? { "Extensions can’t open files or Lithium’s own pages." }
+    }
+
     init(
         folder: URL = .applicationSupportDirectory.appending(path: "Lithium/Extensions"),
         configuration: WKWebExtensionController.Configuration = .default()
@@ -382,6 +394,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
     ) async throws -> (any WKWebExtensionTab)? {
         guard let browser else { return nil }
         let url = configuration.url
+        guard Self.mayOpen(url) else { throw RefusedAddress() }
         return browser.newTab(url: url, selecting: configuration.shouldBeActive, configuration: self.configuration(for: url))
     }
 

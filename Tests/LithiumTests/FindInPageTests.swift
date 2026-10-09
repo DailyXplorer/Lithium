@@ -97,6 +97,8 @@ struct FindInPageTests {
         let page = Target(matches: 2)
         page.answer()
         let typed = Task { await find.type(query: "licence", in: page) }
+        // The keystroke came first: its task waits out the pause before Return.
+        await Task.yield()
         await find.update(query: "licence", in: page)
         await typed.value
         #expect(page.counted == ["licence"])

@@ -88,4 +88,42 @@ struct SettingsControlsTests {
         let problems = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String])
         for problem in problems { Issue.record("\(problem)") }
     }
+
+    /// Answers like `SampleBridge`, slowly, and counts the sidebar colors it is sent.
+    @MainActor
+    private final class SlowBridge: NSObject, WKScriptMessageHandlerWithReply {
+        var colors: [String] = []
+
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
+            let body = message.body as? [String: Any]
+            if body?["action"] as? String == "setSidebarColor", let color = body?["value"] as? String {
+                colors.append(color)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return await SampleBridge().userContentController(controller, didReceive: message)
+        }
+    }
+
+    /// A drag in the color picker sends a color at every step: one goes to the app at a time,
+    /// then the last one, not each of them.
+    @Test func aColorDragSendsOneColorAtATime() async throws {
+        let bridge = SlowBridge()
+        let configuration = WKWebViewConfiguration()
+        InternalSchemeHandler.shared.install(on: configuration)
+        configuration.userContentController.addScriptMessageHandler(bridge, contentWorld: .page, name: InternalBridge.name)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 700), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
+        try await loaded.wait()
+        _ = try await webView.callAsyncJavaScript("""
+            for (let i = 0; i < 200 && !$('#version').textContent; i++) await new Promise((r) => setTimeout(r, 50));
+            $('#custom-color').click();
+            for (let i = 1; i <= 30; i++) colorPicked('#0000' + String(i).padStart(2, '0'));
+            """, contentWorld: .page)
+        for _ in 0..<50 where bridge.colors.last != "#000030" { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(bridge.colors.first == "#000001")
+        #expect(bridge.colors.last == "#000030")
+        #expect(bridge.colors.count <= 3)
+    }
 }

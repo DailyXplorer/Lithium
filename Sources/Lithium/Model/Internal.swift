@@ -340,10 +340,25 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
+    /// Every settings action answers with the whole state, many a second while a color is dragged:
+    /// what can't change meanwhile is read once. The WebKit Lithium runs is the one it launched
+    /// with, whatever Safari update comes after.
+    private static let safariVersion = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")?["CFBundleShortVersionString"] as? String ?? ""
+    /// Extension icons as PNG data URLs, by extension and version.
+    private var icons: [String: String] = [:]
+
+    private func icon(of entry: InstalledExtension, context: WKWebExtensionContext?) -> String {
+        guard let context else { return "" }
+        let key = "\(entry.id) \(entry.version)"
+        if let icon = icons[key] { return icon }
+        let icon = context.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? ""
+        icons[key] = icon
+        return icon
+    }
+
     private func state(_ browser: Browser) -> [String: Any] {
         let defaults = UserDefaults.standard
         let info = Bundle.main.infoDictionary ?? [:]
-        let safari = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
         return [
             "appearance": [
                 "sidebarStyle": defaults.string(forKey: Preference.sidebarStyle) ?? SidebarStyle.solid.rawValue,
@@ -417,12 +432,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 return [
                     "id": entry.id, "name": entry.name, "version": entry.version, "enabled": entry.isEnabled,
                     "hasOptions": context?.optionsPageURL != nil,
-                    "icon": context?.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? "",
+                    "icon": icon(of: entry, context: context),
                 ] as [String: Any]
             },
             "about": [
                 "version": info["CFBundleShortVersionString"] as? String ?? "dev",
-                "safari": safari?["CFBundleShortVersionString"] as? String ?? "",
+                "safari": Self.safariVersion,
                 "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             ],
         ]

@@ -558,11 +558,25 @@
   $('#start-to').oninput = setGradient;
   // WebKit's own color popover opens far from the swatch in Lithium's window: the swatches ask
   // for Lithium's picker, placed by their rect, and take its colors as if picked in place.
-  let picking = null;
+  // The picker sends a color at every step of a drag, and each one rebuilds the whole settings
+  // state: one goes to the app at a time, then the latest picked meanwhile.
+  let picking = null, picked = null, sending = false;
+  const sendPicked = async () => {
+    sending = true;
+    try {
+      while (picked !== null && picking) {
+        picking.value = picked.toLowerCase();
+        picked = null;
+        await picking.oninput({ target: picking });
+      }
+    } finally {
+      sending = false;
+    }
+  };
   window.colorPicked = (hex) => {
     if (!picking) return;
-    picking.value = hex.toLowerCase();
-    picking.dispatchEvent(new Event('input'));
+    picked = hex;
+    if (!sending) sendPicked();
   };
   document.querySelectorAll('input[type=color]').forEach((input) => {
     input.addEventListener('click', (event) => {

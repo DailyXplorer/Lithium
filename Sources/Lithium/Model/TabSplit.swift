@@ -70,6 +70,22 @@ extension Browser {
         tab.id == selectedTabID || shownPartner === tab || quickLinks.contains(tab)
     }
 
+    /// The prompt over the page: the focused tab's, else the other side's in split view, whose page
+    /// would otherwise wait unseen until clicked.
+    var shownPermissionRequest: PermissionRequest? {
+        shown(permissions.pending, tabID: \.tabID)
+    }
+
+    var shownAppLinkRequest: AppLinkRequest? {
+        shown(appLinks.pending, tabID: \.tabID)
+    }
+
+    private func shown<Request>(_ pending: [Request], tabID: KeyPath<Request, Tab.ID>) -> Request? {
+        guard !pending.isEmpty else { return nil }
+        return pending.first { $0[keyPath: tabID] == selectedTabID }
+            ?? shownPartner.flatMap { partner in pending.first { $0[keyPath: tabID] == partner.id } }
+    }
+
     /// The pair shows once, where its first tab in the list is.
     var tabListEntries: [TabListEntry] {
         let list = regularTabs

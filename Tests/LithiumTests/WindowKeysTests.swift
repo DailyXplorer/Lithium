@@ -42,6 +42,36 @@ struct WindowKeysTests {
         #expect(!browser.dismissOverlay())
     }
 
+    /// In split view the other side's prompt shows too (nothing else would until it was clicked),
+    /// after the focused side's, and Escape dismisses the one shown.
+    @Test func theOtherSplitSidesPromptShows() async throws {
+        let browser = Browser()
+        let first = browser.newTab(url: URL(string: "data:text/html,first")!)
+        defer { browser.tabs.forEach(browser.close) }
+        let second = browser.newTab(url: URL(string: "data:text/html,second")!, selecting: false)
+        browser.openInSplit(second)
+        let focused = try #require(browser.selectedTab)
+        let other = try #require(browser.shownPartner)
+        #expect(Set([focused.id, other.id]) == Set([first.id, second.id]))
+        // Asked once the pages are in: a commit drops the prompts of the page before.
+        #expect(await waitUntil(60) { [first, second].allSatisfy { !$0.webView.isLoading && $0.webView.url != nil } })
+        #expect(browser.shownPermissionRequest == nil)
+
+        let host = "camera.example"
+        let otherAsked = Task { await browser.permissions.request([.camera], host: host, tabID: other.id) }
+        #expect(await waitUntil(10) { browser.shownPermissionRequest?.tabID == other.id })
+        let focusedAsked = Task { await browser.permissions.request([.microphone], host: host, tabID: focused.id) }
+        #expect(await waitUntil(10) { browser.shownPermissionRequest?.tabID == focused.id }, "the focused side's first")
+
+        #expect(browser.dismissOverlay())
+        #expect(await focusedAsked.value == false)
+        #expect(browser.shownPermissionRequest?.tabID == other.id)
+        #expect(browser.dismissOverlay())
+        #expect(await otherAsked.value == false)
+        #expect(browser.permissions.pending.isEmpty)
+        #expect(browser.permissions.decisions[host] == nil, "nothing is remembered")
+    }
+
     /// Lithium's Escape is for its own window only, with nothing over it, and not for a text
     /// field being edited (the address bar), except the find field and a tab's name.
     @Test func escapeIsLithiumsOnlyInItsWindowAndNotForAFieldBeingEdited() async throws {

@@ -157,6 +157,7 @@ final class Browser {
         videoPopout.browser = self
         nowPlaying.browser = self
         quickLinks.browser = self
+        tidyTitles.browser = self
         extensions.start()
         restore(SessionStore.load())
         saveSession()

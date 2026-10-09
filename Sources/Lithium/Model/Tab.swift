@@ -199,6 +199,8 @@ final class Tab: NSObject, Identifiable {
     /// The main document's HTTP status, for agents; nil for pages without one (error page, files).
     @ObservationIgnored private(set) var httpStatus: Int?
     private(set) var tidyTitle: String?
+    /// The page whose title it last sent the on-device model (`TidyTitles`): once per page.
+    @ObservationIgnored var titleAskedFor: URL?
     /// WebKit keeps it per web view, so each new one (waking) is muted again.
     var isMuted = false {
         didSet {
@@ -478,6 +480,8 @@ final class Tab: NSObject, Identifiable {
         noteSound()
         lastActive = Date()
         if !isLoading { checkReader() }
+        // Its title may have changed while off screen, where it doesn't ask the model.
+        if !isAsleep { browser?.tidyTitles.update(self) }
         wakeIfAsleep()
     }
 

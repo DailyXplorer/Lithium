@@ -118,8 +118,8 @@ struct TidyTitlesTabsTests {
     }
 
     /// A long title that keeps changing while the model answers (a live count) asks one title at
-    /// a time; titles gone by the model's turn are dropped, and the one shown is asked.
-    @Test func titlesGoneByTheirTurnNeverReachTheModel() async throws {
+    /// a time, and only once for the page: the titles after it keep the rules' tidying.
+    @Test func aLiveTitleAsksTheModelOncePerPage() async throws {
         let first = "Live match commentary and every score update from the stadium tonight"
         let page = (headers: "Content-Type: text/html", body: "<title>\(first)</title><p>Page</p>")
         let (listener, base) = try await LocalHTTP.serve(["/live": page])
@@ -154,10 +154,64 @@ struct TidyTitlesTabsTests {
         #expect(model.asked == [first], "one title at a time")
         model.answers = true
 
-        #expect(await waitUntil(10) { model.asked.count == 2 })
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(model.asked == [first, last], "the titles in between were dropped")
-        #expect(await waitUntil(10) { tab.tidyTitle == "Live match" })
+        _ = try await tab.webView.evaluateJavaScript("document.title = '\(last) again'")
+        #expect(await waitUntil(5) { tab.title == last + " again" })
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(model.asked == [first], "the page already asked")
+        #expect(tab.displayTitle == last + " again")
+    }
+
+    /// A tab opened in the background asks the model nothing until it's shown.
+    @Test func aTabOffScreenAsksOnceShown() async throws {
+        let title = "Swift concurrency explained with many practical examples for beginners"
+        let page = (headers: "Content-Type: text/html", body: "<title>\(title)</title><p>Page</p>")
+        let (listener, base) = try await LocalHTTP.serve(["/page": page])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            return .title("Swift concurrency")
+        }
+
+        let shown = browser.newTab()
+        let background = browser.newTab(url: base.appending(path: "page"), selecting: false)
+        defer { [shown, background].forEach { browser.close($0) } }
+        #expect(await waitUntil(30) { !background.webView.isLoading && background.title == title })
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(model.asked.isEmpty)
+
+        browser.select(background)
+        #expect(await waitUntil(10) { background.tidyTitle == "Swift concurrency" })
+        #expect(model.asked == [title])
+    }
+
+    /// A page whose address changes with its title (a timestamp in the URL) is capped per site.
+    @Test func aSiteAsksTheModelAtMostTenTimesAMinute() async throws {
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            return .title("Live match")
+        }
+        let tab = browser.newTab()
+        defer { browser.close(tab) }
+        for minute in 1...11 {
+            tab.restore(url: URL(string: "https://live.example/match?t=\(minute)")!,
+                        title: "Live match commentary at minute \(minute) with every score update")
+            titles.update(tab)
+            #expect(await waitUntil(5) { model.asked.count == min(minute, 10) })
+        }
+        try await Task.sleep(for: .seconds(1.5))
+        #expect(model.asked.count == 10)
     }
 
     /// Tabs restored asleep at launch show their tidy titles at once, from the rules alone.
@@ -188,16 +242,14 @@ struct TidyTitlesTabsTests {
             return .title("Short")
         }
         defer { model.answers = true }
-        let tabs = [
-            ("https://one.example/", "Swift concurrency explained with many practical examples for beginners"),
-            ("https://two.example/", "Live match commentary and every score update from the stadium tonight"),
-        ].map { address, title in
-            let tab = Lithium.Tab(browser: browser, configuration: WKWebViewConfiguration())
-            tab.restore(url: URL(string: address)!, title: title)
-            return tab
-        }
-        tabs.forEach { titles.update($0) }
+        // On screen, where tabs ask; the second page waits for the model to answer the first.
+        let tab = browser.newTab()
+        defer { browser.close(tab) }
+        tab.restore(url: URL(string: "https://one.example/")!, title: "Swift concurrency explained with many practical examples for beginners")
+        titles.update(tab)
         #expect(await waitUntil(10) { model.asked.count == 1 })
+        tab.restore(url: URL(string: "https://two.example/")!, title: "Live match commentary and every score update from the stadium tonight")
+        titles.update(tab)
 
         titles.isEnabled = false
         model.answers = true

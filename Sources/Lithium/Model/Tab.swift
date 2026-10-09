@@ -662,6 +662,9 @@ final class Tab: NSObject, Identifiable {
         browser?.nowPlaying.discard(self)
         browser?.agent?.pageGone(self)
         dialogOwner?.answerDialog(in: self)
+        // An unanswered prompt holds the page's delegate call, and with it the old web view.
+        browser?.permissions.cancel(tabID: id)
+        browser?.appLinks.cancel(tabID: id)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.

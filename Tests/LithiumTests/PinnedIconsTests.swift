@@ -258,6 +258,53 @@ struct PinnedIcons {
         #expect(found.map(icons.contains) == true)
     }
 
+    /// A site without an icon is searched once a session, not at each of its pages' loads.
+    @Test func aSiteWithoutAnIconIsSearchedOnce() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(page: "<!doctype html><title>No icon</title>", requests: requests)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        #expect(await favicons.favicon(for: webView) == nil)
+        // Fetched, then drawn by the page.
+        let searched = requests["/favicon.ico"]
+        #expect(searched >= 1)
+        #expect(await favicons.favicon(for: webView) == nil)
+        #expect(requests["/favicon.ico"] == searched, "not fetched again")
+        #expect(favicons.iconless.contains(try #require(base.host())))
+    }
+
+    /// History's lookup (no cookies, `https` only) failing doesn't stop the open page's own search.
+    @Test func historyFindingNoIconDoesntStopTheTabsSearch() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Local</title><link rel="icon" href="/red.png">"#)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        let host = try #require(base.host())
+        #expect(await favicons.icon(forHost: host) == nil)
+        #expect(favicons.missing.contains(host))
+        #expect(await favicons.favicon(for: webView) == Favicons.normalized(Self.red))
+    }
+
+    /// A candidate whose server couldn't be reached may still be the site's icon: searched again.
+    @Test func anUnreachableIconIsSearchedAgain() async throws {
+        let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Offline</title><link rel="icon" href="http://127.0.0.1:1/icon.png">"#)
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        webView.load(URLRequest(url: base))
+        #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+
+        let favicons = Self.favicons()
+        #expect(await favicons.favicon(for: webView) == nil)
+        #expect(!favicons.iconless.contains(try #require(base.host())))
+    }
+
     /// A page animating its icon gets it fetched, and the favorite saved, at most every
     /// `Tab.iconInterval`, not at every frame; it ends on the icon named last.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))

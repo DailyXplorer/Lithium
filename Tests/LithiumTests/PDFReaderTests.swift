@@ -130,6 +130,28 @@ extension BrowserTests {
         #expect(tab.favicon === PDFReader.icon)
     }
 
+    /// A tab going through many PDFs keeps the readers (file and document) of the last few only;
+    /// one further back comes back in the viewer all the same.
+    @Test func aTabKeepsTheLastFewPDFsOnly() async throws {
+        let browser = Browser()
+        let tab = browser.newTab()
+        defer { browser.close(tab) }
+        var addresses: [URL] = []
+        for index in 1...6 {
+            let file = try makePDF(title: "Paper \(index)", pages: Array(repeating: "Page", count: index))
+            let address = URL(string: "data:application/pdf;base64,\(try Data(contentsOf: file).base64EncodedString())")!
+            addresses.append(address)
+            tab.load(address)
+            #expect(await waitForPDF(30) { tab.url == address && tab.pdf?.pageCount == index })
+        }
+        #expect(tab.keptPDFCount == 4)
+
+        let first = try #require(tab.webView.backForwardList.backList.first { $0.url == addresses[0] })
+        tab.webView.go(to: first)
+        #expect(await waitForPDF(30) { tab.url == addresses[0] && tab.pdf?.pageCount == 1 })
+        #expect(tab.keptPDFCount == 4)
+    }
+
     @Test func downloadSavesTheBytesThePageReceived() async throws {
         let home = try #require(ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"])
         try #require(URL.downloadsDirectory.path.hasPrefix(URL(fileURLWithPath: home).resolvingSymlinksInPath().path)

@@ -15,7 +15,11 @@ const enough = kind && !kind.startsWith('article') ? 40 : 20;
 const isBlurb = (node) => node.localName === 'p' && node.parentElement?.querySelector(':scope > :is(h2, h3, h4, h5, h6)')
   && !node.parentElement.querySelector(':scope > p ~ p');
 let score = 0;
+// Blocks read at most: a feed or a forum of thousands of short ones isn't read to its end on each
+// load. An article's text comes well before that.
+let budget = 1000;
 const isEnough = (node) => {
+  if (--budget < 0) return false;
   const length = node.textContent.trim().length;
   if (length < 140) return false;
   const name = `${node.className} ${node.id}`;
@@ -25,10 +29,14 @@ const isEnough = (node) => {
   return score > enough;
 };
 const blocks = 'p, pre, article';
-for (const node of document.body.querySelectorAll(blocks)) if (isEnough(node)) return 'article';
+for (const node of document.body.querySelectorAll(blocks)) {
+  if (isEnough(node)) return 'article';
+  if (budget < 0) return 'none';
+}
 // Text broken with <br><br> instead of paragraphs, as Readability's own check counts it.
 const seen = new Set();
 for (const br of document.body.querySelectorAll('br + br')) {
+  if (budget < 0) return 'none';
   const block = br.parentElement;
   if (seen.has(block) || block.matches(blocks)) continue;
   seen.add(block);

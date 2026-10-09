@@ -122,6 +122,9 @@
 
   const pending = new Set();
   const changed = new Set();
+  // Large elements whose class changed, with their class at the last flush: their selector
+  // queries wait for it too, under its throttle.
+  const classChanges = new Map();
   let scheduled = false;
 
   // An element that stops keeping its font hands its subtree back, which then needs a full scan.
@@ -188,7 +191,13 @@
     if (window.__lithiumReader) {
       changed.clear();
       pending.clear();
+      classChanges.clear();
       return;
+    }
+    if (classChanges.size) {
+      const changes = [...classChanges];
+      classChanges.clear();
+      for (const [element, oldValue] of changes) if (element.isConnected) classChanged(element, oldValue);
     }
     if (changed.size) {
       const elements = [...changed];
@@ -288,23 +297,32 @@
     }, 500));
   };
 
-  // Also what inside keeps its own font: a rule that no longer applies selects nothing.
+  // Also what inside keeps its own font: a rule that no longer applies selects nothing. Run by
+  // `flush`, which rechecks `changed` right after.
   const classChanged = (element, oldValue) => {
-    queueChange(element);
+    const mark = (node) => changed.add(node);
+    mark(element);
     const before = new Set((oldValue || '').split(/\s+/));
     const after = new Set(element.classList);
     const toggled = [...before, ...after].filter((name) => name && before.has(name) !== after.has(name));
     if (!toggled.length) return;
-    element.querySelectorAll(`[${KEEP}]`).forEach(queueChange);
+    element.querySelectorAll(`[${KEEP}]`).forEach(mark);
     const rules = fontRulesOf(element.getRootNode());
     for (const name of toggled) {
       const token = `.${CSS.escape(name)}`;
       for (const selector of rules.selectors) {
         if (!selector.includes(token)) continue;
-        try { element.querySelectorAll(selector).forEach(queueChange); } catch (_) {}
+        try { element.querySelectorAll(selector).forEach(mark); } catch (_) {}
       }
     }
     if (rules.opaque) recheckSubtreeLater(element);
+  };
+
+  const queueClassChange = (element, oldValue) => {
+    if (!running) return;
+    // A class toggled back and forth before the flush comes to no change.
+    if (!classChanges.has(element)) classChanges.set(element, oldValue);
+    schedule();
   };
 
   const queueTreeOf = (node) => {
@@ -326,7 +344,7 @@
         || `${record.oldValue} ${record.target.getAttribute('style')}`.includes('font')) {
         // A small component is rescanned whole; a large one (a page's body, a feed, a video player) isn't.
         if (record.target.getElementsByTagName('*').length <= 64) queue(record.target);
-        else if (record.attributeName === 'class') classChanged(record.target, record.oldValue);
+        else if (record.attributeName === 'class') queueClassChange(record.target, record.oldValue);
         else queueChange(record.target);
       }
     }
@@ -373,6 +391,7 @@
       clearTimeout(timer);
       pending.clear();
       changed.clear();
+      classChanges.clear();
       settling.forEach((id) => clearTimeout(id));
       settling.clear();
     },

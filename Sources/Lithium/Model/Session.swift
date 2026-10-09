@@ -27,6 +27,10 @@ struct Session: Codable, Equatable {
 enum SessionStore {
     /// For tests.
     nonisolated(unsafe) private(set) static var writes = 0
+    /// For tests: the writes the main thread waited for.
+    nonisolated(unsafe) private(set) static var mainThreadWrites = 0
+    /// For tests: runs on the save queue before each write, so one can be held in flight.
+    nonisolated(unsafe) static var beforeWrite: (@Sendable (Session) -> Void)?
 
     static var fileURL: URL {
         URL.applicationSupportDirectory.appending(path: "Lithium/session.json")
@@ -37,9 +41,28 @@ enum SessionStore {
         StoredFile.read(Session.self, at: url) ?? Session()
     }
 
-    /// Whether the session was written: one that wasn't is tried again at the next save.
+    /// Encoding and writing take the main thread a few milliseconds a save: saves in use go
+    /// through here, one at a time and in order.
+    private static let queue = DispatchQueue(label: "Lithium.session", qos: .utility)
+
+    /// Whether the session was written: one that wasn't is tried again at the next save. Waits
+    /// for the saves before it (quitting).
     @discardableResult
     static func save(_ session: Session) -> Bool {
+        if Thread.isMainThread { mainThreadWrites += 1 }
+        return queue.sync { write(session) }
+    }
+
+    /// `done` gets on the main actor whether it was written.
+    static func saveInBackground(_ session: Session, done: @escaping @MainActor @Sendable (Bool) -> Void) {
+        queue.async {
+            let written = write(session)
+            Task { @MainActor in done(written) }
+        }
+    }
+
+    private static func write(_ session: Session) -> Bool {
+        beforeWrite?(session)
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(session).write(to: fileURL, options: .atomic)

@@ -22,6 +22,14 @@ struct HistoryStoreTests {
         #expect(store.visits(matching: "").map(\.title) == ["Swift"])
     }
 
+    /// Visits commit on the main thread: they don't wait for the disk on each one.
+    @Test func visitsDontSyncTheDiskOnEachCommit() {
+        let store = makeStore()
+        #expect(store.synchronousSetting == 1)
+        store.record(URL(string: "https://swift.org/")!, title: "Swift")
+        #expect(store.visits(matching: "").map(\.title) == ["Swift"])
+    }
+
     /// Closed at quit, with a search's connection open too, the log is folded into the file, so
     /// the next launch has nothing to replay. A title still waiting is kept; nothing is written after.
     @Test func closingFoldsTheLogIntoTheFile() async throws {

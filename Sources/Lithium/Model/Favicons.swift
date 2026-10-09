@@ -12,6 +12,14 @@ final class Favicons {
     private var uses = 0
     /// Hosts with no icon, not asked again this session.
     private(set) var missing: Set<String> = []
+    /// Hosts whose open page was searched and has no icon. Apart from `missing`: history's lookup
+    /// (no cookies, `https` only) fails for sites the page's own search finds an icon for.
+    private(set) var iconless: Set<String> = []
+    /// Hosts with no file kept: the address bar's rows ask at every keystroke, and would read the disk each time.
+    private var unstored: Set<String> = []
+    /// Decoded for those rows too, by host, with the bytes they came from.
+    private var images: [String: (data: Data, image: NSImage)] = [:]
+    private static let imagesLimit = 64
     private var inFlight: [String: Task<Data?, Never>] = [:]
     /// Raised by Clear History: a fetch that began before it must not store its host's icon again.
     private var generation = 0
@@ -62,7 +70,12 @@ final class Favicons {
             cache[host]?.lastUse = uses
             return entry.data
         }
-        guard let data = try? Data(contentsOf: file(for: host)) else { return nil }
+        guard !unstored.contains(host) else { return nil }
+        guard let data = try? Data(contentsOf: file(for: host)) else {
+            if unstored.count >= missingLimit { unstored.removeAll(keepingCapacity: true) }
+            unstored.insert(host)
+            return nil
+        }
         remember(data, for: host)
         return data
     }
@@ -78,7 +91,12 @@ final class Favicons {
     }
 
     func cached(host: String?) -> NSImage? {
-        host.flatMap(cachedData(host:)).flatMap(NSImage.init(data:))
+        guard let host, let data = cachedData(host: host) else { return nil }
+        if let entry = images[host], entry.data == data { return entry.image }
+        guard let image = NSImage(data: data) else { return nil }
+        if images.count >= Self.imagesLimit { images.removeAll(keepingCapacity: true) }
+        images[host] = (data, image)
+        return image
     }
 
     /// For pages not open in a tab (history): the stored icon, or one from well-known locations.
@@ -138,7 +156,9 @@ final class Favicons {
         for task in inFlight.values { task.cancel() }
         inFlight = [:]
         missing = []
+        iconless = []
         cache = cache.filter { hosts.contains($0.key) }
+        images = images.filter { hosts.contains($0.key) }
         let folder = folder
         let kept = Set(hosts.map { file(for: $0).lastPathComponent })
         await Task.detached(priority: .userInitiated) {
@@ -150,16 +170,20 @@ final class Favicons {
     private func store(_ png: Data, for host: String) {
         remember(png, for: host)
         missing.remove(host)
+        iconless.remove(host)
+        unstored.remove(host)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? png.write(to: file(for: host), options: .atomic)
     }
 
     /// With an unread count (in the title, or `counting` via `setAppBadge`) the touch icon comes first:
     /// sites draw the count into their favicon, never their touch icon. A favicon is then shown but
-    /// not kept, as the count in it would stay.
+    /// not kept, as the count in it would stay. A site that has none isn't searched again this
+    /// session: each of its pages would cost a script and every candidate's fetch.
     func favicon(for webView: WKWebView, counting: Bool = false) async -> Data? {
         guard let page = webView.url, let host = page.host() else { return nil }
         if let cached = cachedData(host: host) { return cached }
+        guard !iconless.contains(host) else { return nil }
         let generation = generation
 
         let found = (try? await webView.callAsyncJavaScript(Self.collectScript, contentWorld: .defaultClient)) as? [String: Any]
@@ -175,10 +199,14 @@ final class Favicons {
         }
 
         let sorted = candidates.sorted(by: Candidate.preferred)
+        var allAnswered = true
         for candidate in preferringTouchIcon ? sorted.filter(\.isTouchIcon) + sorted.filter { !$0.isTouchIcon } : sorted {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
-            guard let png = await Self.fetch(candidate.url, with: session) else { continue }
+            var answered = false
+            let png = await Self.fetch(candidate.url, with: session, answered: &answered)
+            allAnswered = allAnswered && answered
+            guard let png else { continue }
             if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
             return png
         }
@@ -198,6 +226,12 @@ final class Favicons {
             if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host) }
             return png
         }
+        // Only once the page and every candidate's server answered and none had an icon: not for a
+        // tab that moved on, nor a fetch that timed out or found no network.
+        if found != nil, allAnswered, !Task.isCancelled, generation == self.generation {
+            if iconless.count >= missingLimit { iconless.removeAll(keepingCapacity: true) }
+            iconless.insert(host)
+        }
         return nil
     }
 
@@ -216,25 +250,49 @@ final class Favicons {
     }
 
     nonisolated static func fetch(_ url: URL, with session: URLSession) async -> Data? {
-        guard isFetchable(url), let data = await download(url, limit: largestIcon, with: session) else { return nil }
+        var answered = false
+        return await fetch(url, with: session, answered: &answered)
+    }
+
+    /// `answered` tells a real answer apart from a passing failure (offline, timed out, a server error),
+    /// after which the site may still have an icon.
+    nonisolated static func fetch(_ url: URL, with session: URLSession, answered: inout Bool) async -> Data? {
+        guard isFetchable(url), let data = await download(url, limit: largestIcon, with: session, answered: &answered) else { return nil }
         return await normalizedInBackground(data)
     }
 
-    /// Read as it comes and dropped (or cut) past `limit`, so a huge answer is never held whole in memory.
     nonisolated static func download(_ url: URL, limit: Int, keepingPrefix: Bool = false, with session: URLSession) async -> Data? {
-        guard let (bytes, response) = try? await session.bytes(from: url),
-              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
+        var answered = false
+        return await download(url, limit: limit, keepingPrefix: keepingPrefix, with: session, answered: &answered)
+    }
+
+    /// Read as it comes and dropped (or cut) past `limit`, so a huge answer is never held whole in memory.
+    nonisolated static func download(_ url: URL, limit: Int, keepingPrefix: Bool = false, with session: URLSession, answered: inout Bool) async -> Data? {
+        answered = false
+        guard let (bytes, response) = try? await session.bytes(from: url) else { return nil }
         defer { bytes.task.cancel() }
-        if !keepingPrefix, response.expectedContentLength > limit { return nil }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+        guard status < 400 else {
+            answered = status < 500
+            return nil
+        }
+        if !keepingPrefix, response.expectedContentLength > limit {
+            answered = true
+            return nil
+        }
         var data = Data()
         do {
             for try await byte in bytes {
-                guard data.count < limit else { return keepingPrefix ? data : nil }
+                guard data.count < limit else {
+                    answered = true
+                    return keepingPrefix ? data : nil
+                }
                 data.append(byte)
             }
         } catch {
             return nil
         }
+        answered = true
         return data
     }
 

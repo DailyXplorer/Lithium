@@ -99,6 +99,22 @@ struct ReaderModeTests {
         #expect(await ReaderMode.check(try await load(ReaderPages.short)) == .none)
     }
 
+    /// A page of thousands of short blocks (a feed, a forum) is read up to a bound, not to its end;
+    /// an article's text, met before, is still found.
+    @Test func readsABoundedNumberOfBlocks() async throws {
+        let short = String(repeating: "<p>A short line in a long feed.</p>", count: 5000)
+        let webView = try await load("<!doctype html><title>Feed</title><body>\(short)</body>")
+        _ = try await webView.callAsyncJavaScript("""
+            window.reads = 0;
+            const text = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent');
+            Object.defineProperty(Node.prototype, 'textContent', { get() { window.reads++; return text.get.call(this); } });
+            """, contentWorld: .defaultClient)
+        #expect(await ReaderMode.check(webView) == .none)
+        let reads = try await webView.callAsyncJavaScript("return reads", contentWorld: .defaultClient) as? Int
+        #expect((reads ?? .max) <= 1000)
+        #expect(await ReaderMode.check(try await load(ReaderPages.article)) == .article)
+    }
+
     /// The check waits for the page to be idle before it reads the page: the button costs a page
     /// nothing while it is busy, whether or not the reader is ever opened.
     @Test func checksOnceThePageIsIdle() async throws {

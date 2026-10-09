@@ -107,6 +107,8 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    /// The last one handed to a write off the main thread, which may not have ended.
+    @ObservationIgnored private var queuedSession: Session?
     @ObservationIgnored private var sessionSave: Task<Void, Never>?
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
@@ -157,6 +159,7 @@ final class Browser {
         videoPopout.browser = self
         nowPlaying.browser = self
         quickLinks.browser = self
+        tidyTitles.browser = self
         extensions.start()
         let saved = SessionStore.load()
         restore(saved)
@@ -1101,16 +1104,32 @@ final class Browser {
     }
 
     /// Writes the session now, and again a moment after it changes: a page that retitles itself
-    /// (an unread count, a clock) costs one write a second at most.
-    private func saveSession() {
+    /// (an unread count, a clock) costs one write a second at most. Encoded and written off the
+    /// main thread, except `now` (quitting), which waits for it.
+    private func saveSession(now: Bool = false) {
         sessionSave?.cancel()
         sessionSave = nil
         let session = withObservationTracking { self.session } onChange: { [weak self] in
             Task { @MainActor in self?.sessionChanged() }
         }
-        guard session != savedSession else { return }
         // A failed write leaves the old file: the next save tries again rather than taking it as written.
-        if SessionStore.save(session) { savedSession = session }
+        // Compared with the last session handed to the queue: one still being written would
+        // otherwise land after a change back to the saved one, and stay.
+        if now {
+            guard session != savedSession || queuedSession != session else { return }
+            if SessionStore.save(session) { (savedSession, queuedSession) = (session, session) }
+            return
+        }
+        guard session != (queuedSession ?? savedSession) else { return }
+        queuedSession = session
+        SessionStore.saveInBackground(session) { [weak self] written in
+            guard let self else { return }
+            if written {
+                savedSession = session
+            } else if queuedSession == session {
+                queuedSession = nil
+            }
+        }
     }
 
     private func sessionChanged() {
@@ -1125,7 +1144,7 @@ final class Browser {
     static let sessionSaveDelay = Duration.seconds(1)
 
     func saveNow() {
-        saveSession()
+        saveSession(now: true)
         history.writeTitles()
     }
 

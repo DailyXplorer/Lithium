@@ -211,6 +211,18 @@ struct FingerprintingTests {
         #expect(script("https://www.example.co.uk/") == script("https://shop.example.co.uk/"))
     }
 
+    /// The farbling built for a site is kept for its next navigations, and stays that site's once
+    /// the cache has been through many others.
+    @Test func farblingIsBuiltOncePerSite() throws {
+        let privacy = Privacy()
+        let first = privacy.farblingSource(for: URL(string: "https://www.example.co.uk/a")!)
+        #expect(privacy.farblingSource(for: URL(string: "https://shop.example.co.uk/b")!) == first)
+        let others = (0..<20).map { privacy.farblingSource(for: URL(string: "https://site\($0).example/")!) }
+        #expect(Set(others).count == 20 && !others.contains(first))
+        #expect(privacy.farblingSource(for: URL(string: "https://example.co.uk/")!) == first)
+        #expect(privacy.scripts(true, for: URL(string: "https://example.co.uk/")!).first?.source == first)
+    }
+
     /// A top-level `blob:` page farbles as its creator's site: every site's blob pages once shared
     /// the seed of "", which linked them. An opaque creator's gets a seed of its own each time.
     @Test func blobPagesTakeTheirCreatorsSite() {

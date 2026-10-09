@@ -156,6 +156,13 @@ final class Tab: NSObject, Identifiable {
     private(set) var pdf: PDFReader?
     /// WebKit brings a PDF page back from its cache without its bytes.
     @ObservationIgnored private var pdfHistory: [WKBackForwardListItem: PDFReader] = [:]
+    /// Its items, the PDF shown last at the end. Each reader holds its whole file and document,
+    /// so only the last few are kept: WebKit's cache keeps only the last few pages left, and a
+    /// PDF further back loads again, bytes and all, and gets a new reader.
+    @ObservationIgnored private var pdfRecency: [WKBackForwardListItem] = []
+    private static let keptPDFs = 4
+    /// For tests.
+    var keptPDFCount: Int { pdfHistory.count }
     private(set) var isReaderAvailable = false
     /// The page's media waits while reading, its frames' too (a YouTube embed no page script can
     /// reach). WebKit keeps it waiting across documents until told, so it is told however the reader goes.
@@ -229,6 +236,8 @@ final class Tab: NSObject, Identifiable {
     /// The main document's HTTP status, for agents; nil for pages without one (error page, files).
     @ObservationIgnored private(set) var httpStatus: Int?
     private(set) var tidyTitle: String?
+    /// The page whose title it last sent the on-device model (`TidyTitles`): once per page.
+    @ObservationIgnored var titleAskedFor: URL?
     /// WebKit keeps it per web view, so each new one (waking) is muted again.
     var isMuted = false {
         didSet {
@@ -517,6 +526,8 @@ final class Tab: NSObject, Identifiable {
         noteSound()
         lastActive = Date()
         if !isLoading { checkReader() }
+        // Its title may have changed while off screen, where it doesn't ask the model.
+        if !isAsleep { browser?.tidyTitles.update(self) }
         wakeIfAsleep()
     }
 
@@ -643,6 +654,7 @@ final class Tab: NSObject, Identifiable {
         tearDown()
         pdf = nil
         pdfHistory = [:]
+        pdfRecency = []
         resetReader()
         hasRead = false
         hasInternalBridge = false
@@ -1224,6 +1236,7 @@ extension Tab: WKNavigationDelegate {
         let list = webView.backForwardList
         let live = Set(list.backList + list.forwardList + [list.currentItem].compactMap { $0 })
         pdfHistory = pdfHistory.filter { live.contains($0.key) }
+        pdfRecency.removeAll { pdfHistory[$0] == nil }
         let previous = pdf
         defer { if let previous, previous !== pdf { previous.putAway() } }
         guard PDFReader.isShowingPDF(webView), let url = webView.url else {
@@ -1233,6 +1246,7 @@ extension Tab: WKNavigationDelegate {
         }
         if let item = list.currentItem, let kept = pdfHistory[item], kept.url == url {
             pdf = kept
+            keepPDF(kept, for: item)
             return
         }
         let reader = PDFReader(url: url)
@@ -1255,7 +1269,14 @@ extension Tab: WKNavigationDelegate {
             }
         }
         pdf = reader
-        if let item = list.currentItem { pdfHistory[item] = reader }
+        if let item = list.currentItem { keepPDF(reader, for: item) }
+    }
+
+    private func keepPDF(_ reader: PDFReader, for item: WKBackForwardListItem) {
+        pdfHistory[item] = reader
+        pdfRecency.removeAll { $0 == item }
+        pdfRecency.append(item)
+        while pdfRecency.count > Self.keptPDFs { pdfHistory[pdfRecency.removeFirst()] = nil }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

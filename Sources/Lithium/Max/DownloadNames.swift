@@ -91,9 +91,18 @@ enum DownloadNames {
         return name
     }
 
-    /// `name` with the extension of the site's file name, which never changes.
+    /// `name` with the extension of the site's file name, which never changes. An extension the
+    /// name ends in itself ("Invoice.pdf", from a page's title or the model) goes: Finder hides
+    /// the real one, so "Invoice.pdf.pkg" would pass for a PDF. `original` when nothing is left.
     static func fileName(_ name: String, keepingExtensionOf original: String) -> String {
+        var stem = Substring(name)
+        while let dot = stem.lastIndex(of: "."), case let suffix = stem[stem.index(after: dot)...],
+              suffix.contains(where: \.isLetter), suffix.allSatisfy({ $0.isLetter || $0.isNumber }) {
+            stem = stem[..<dot]
+        }
+        let base = stem.trimmingCharacters(in: CharacterSet(charactersIn: ".").union(.whitespaces))
+        guard !base.isEmpty else { return original }
         let pathExtension = (original as NSString).pathExtension
-        return Downloads.fileName(name, pathExtension.isEmpty ? "" : ".\(pathExtension)")
+        return Downloads.fileName(base, pathExtension.isEmpty ? "" : ".\(pathExtension)")
     }
 }

@@ -27,6 +27,9 @@ final class DownloadItem: Identifiable {
     /// Asks where to save before it starts, as a download from the page menu does.
     @ObservationIgnored fileprivate let asksWhere: Bool
     @ObservationIgnored private var observation: NSKeyValueObservation?
+    /// The renamed file's volume and file number when it finished: "Use original name" moves
+    /// only that file, not another that took its name since.
+    @ObservationIgnored fileprivate var fileIdentity: [Int]?
 
     fileprivate init(download: WKDownload, filename: String, asksWhere: Bool) {
         self.download = download
@@ -275,13 +278,21 @@ final class Downloads: NSObject, WKDownloadDelegate {
     /// Only while the file is where Lithium put it: one the user has moved or renamed is theirs.
     fileprivate func useOriginalName(_ item: DownloadItem) {
         guard item.canUseOriginalName, let original = item.originalFilename, let current = item.destination else { return }
-        guard FileManager.default.fileExists(atPath: current.path) else {
+        guard let identity = item.fileIdentity, identity == Self.fileIdentity(of: current) else {
             item.setDestination(current)
             return
         }
         let target = destination(for: original, in: current.deletingLastPathComponent())
         guard (try? FileManager.default.moveItem(at: current, to: target)) != nil else { return }
         item.setDestination(target)
+    }
+
+    /// The volume and file number of the file at `file`, which a rename or move within the
+    /// volume keeps; nil when there is none.
+    nonisolated private static func fileIdentity(of file: URL) -> [Int]? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let volume = attributes[.systemNumber] as? Int, let number = attributes[.systemFileNumber] as? Int else { return nil }
+        return [volume, number]
     }
 
     private static func savePanel(suggesting destination: URL, in window: NSWindow?) async -> URL? {
@@ -337,6 +348,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
 
     private func didFinish(_ item: DownloadItem) {
         hasUnseen = true
+        if item.originalFilename != nil, let destination = item.destination { item.fileIdentity = Self.fileIdentity(of: destination) }
         if let destination = item.destination {
             // Makes the Downloads stack bounce in the Dock, like Safari.
             DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: destination.path)

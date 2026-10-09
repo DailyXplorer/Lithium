@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import WebKit
 
 /// Styles Lithium adds to every page, whatever the protection settings: no horizontal page
@@ -37,10 +37,18 @@ enum PageStyle {
     static let fontOffSource = "window.__lithiumFont?.stop();"
 
     private static var builtFont: (choice: String?, family: String, script: WKUserScript)?
+    /// Fonts installed or removed while Lithium runs (Font Book): the font is checked again at
+    /// its next use, so one no longer on the Mac gives way to DM Sans. Nothing is read meanwhile.
+    private static var fontSetObserver: (any NSObjectProtocol)?
 
     private static func currentFont() -> (family: String, script: WKUserScript) {
         let choice = FontChoice.shared.website ?? FontChoice.shared.interface
         if let builtFont, builtFont.choice == choice { return (builtFont.family, builtFont.script) }
+        if fontSetObserver == nil {
+            fontSetObserver = NotificationCenter.default.addObserver(forName: NSFont.fontSetChangedNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { builtFont = nil }
+            }
+        }
         let family = FontChoice.shared.websiteFamily
         let script = fontScript(family: family)
         builtFont = (choice, family, script)

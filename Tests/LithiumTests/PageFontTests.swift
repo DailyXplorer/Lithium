@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WebKit
@@ -53,6 +54,17 @@ struct PageFontTests {
         #expect(InternalBridge.siteFontHost("example.com") == "example.com")
         #expect(InternalBridge.siteFontHost("192.168.0.1") == "192.168.0.1")
         #expect(InternalBridge.siteFontHost("") == nil)
+    }
+
+    /// A font installed or removed while Lithium runs has the website font checked again: one
+    /// uninstalled since gives way to DM Sans without a relaunch.
+    @Test func fontsChangingOnTheMacRebuildTheScript() async {
+        let built = PageStyle.fontScript
+        #expect(PageStyle.fontScript === built, "kept while nothing changes")
+        NotificationCenter.default.post(name: NSFont.fontSetChangedNotification, object: nil)
+        let deadline = Date().addingTimeInterval(2)
+        while PageStyle.fontScript === built, Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(PageStyle.fontScript !== built)
     }
 
     @Test func dmSansReplacesTextFontsButNotIconsCodeOrMath() async throws {

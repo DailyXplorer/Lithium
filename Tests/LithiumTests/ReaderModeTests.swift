@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import SwiftUI
 import Testing
 import WebKit
@@ -160,6 +161,167 @@ struct ReaderModeTests {
         #expect(try await value("String(window.pageState)", in: webView) == "42")
         #expect(try await value("String(document.querySelectorAll('*').length)", in: webView) == before)
         #expect(try await value("String(document.styleSheets.length)", in: webView) == "1")
+    }
+
+    /// `reader-page-styles`, under a strict policy, with its linked sheets fetched again each time.
+    private func loadStyledPage() async throws -> (WKWebView, NWListener) {
+        let policy = "Content-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'self'; "
+            + "script-src 'nonce-fixture'; style-src 'self' 'nonce-fixture'; font-src 'self'"
+        let css = "Content-Type: text/css\r\nCache-Control: no-store"
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": (policy, try fixture("reader-page-styles")),
+            "/page.css": (css, "@import url(/imported.css); .from-link { color: rgb(17, 18, 19); }"),
+            "/imported.css": (css, ".from-import { color: rgb(24, 25, 26); }"),
+            "/theme.css": (css, ".from-theme-link { color: rgb(21, 22, 23); }"),
+        ])
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: base))
+        try await loaded.wait()
+        return (webView, listener)
+    }
+
+    /// Each swatch's look, in the document and in the shadow root, once the linked sheets are back.
+    private func swatches(in webView: WKWebView) async throws -> [String: String] {
+        let result = try await webView.callAsyncJavaScript("""
+            await Promise.all([...document.querySelectorAll('link')].map((link) => link.sheet ? null : new Promise((done) => {
+              link.addEventListener('load', done, { once: true });
+              link.addEventListener('error', done, { once: true });
+            })));
+            // A web view out of a window draws no frames: a moment instead.
+            await new Promise((later) => setTimeout(later, 50));
+            const shadow = document.getElementById('host').shadowRoot;
+            const elements = [...document.querySelectorAll('.swatches span'), ...shadow.querySelectorAll('p')];
+            return Object.fromEntries(elements.map((element) => {
+              const style = getComputedStyle(element);
+              return [element.className, [style.color, style.backgroundColor, style.fontFamily].join(' / ')];
+            }));
+            """, contentWorld: .page)
+        return result as? [String: String] ?? [:]
+    }
+
+    /// Linked, imported and inline sheets, rules the page's scripts added, sheets it turned off,
+    /// adopted sheets on the document and in a shadow root, its FontFace font and its root's theme
+    /// class all come back: every element looks as it did.
+    @Test func givesThePageBackItsStyles() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        let before = try await swatches(in: webView)
+        #expect(before["from-js"]?.hasPrefix("rgb(1, 2, 3)") == true)
+        #expect(before["from-link-js"]?.hasPrefix("rgb(27, 28, 29)") == true)
+        #expect(before["from-import"]?.hasPrefix("rgb(24, 25, 26)") == true)
+        #expect(before["themed"]?.contains("rgb(40, 50, 60)") == true)
+        #expect(before["inner-js"]?.hasPrefix("rgb(11, 12, 13)") == true)
+        #expect(before["switched-off"]?.hasPrefix("rgb(255, 0, 0)") == false)
+        #expect(before["from-theme-link"]?.hasPrefix("rgb(21, 22, 23)") == false)
+        let fixtureFace = "String([...document.fonts].some((face) => face.family.replace(/\"/g, '') === 'Fixture Face'))"
+        #expect(try await value(fixtureFace, in: webView) == "true")
+
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        #expect(try await value("String(document.styleSheets.length)", in: webView) == "0")
+        await ReaderMode.exit(webView)
+        #expect(try await swatches(in: webView) == before)
+        // The page's FontFace font stays; the reader's DM Sans joins it, as the page font script's does.
+        #expect(try await value(fixtureFace, in: webView) == "true")
+        #expect(try await value("document.documentElement.className + ' ' + document.documentElement.dataset.mode", in: webView) == "theme-night compact")
+        #expect(try await value("String(document.adoptedStyleSheets.length)", in: webView) == "1")
+        // And again: what came back is the page's own, kept for the next time.
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        await ReaderMode.exit(webView)
+        #expect(try await swatches(in: webView) == before)
+    }
+
+    /// The page's scripts run on in the reader, and write to its document: a class on the root,
+    /// a style in the head, an adopted sheet, a rule in the sheet they keep, a dialog in the body,
+    /// a new title. All of it reaches the page when the reader is left.
+    @Test func keepsWhatThePageWroteWhileReading() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        let before = try await swatches(in: webView)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("""
+            document.documentElement.classList.add('fonts-loaded');
+            document.body.dataset.ready = 'yes';
+            const late = document.createElement('style');
+            late.nonce = 'fixture';
+            late.textContent = '.late-style { color: rgb(31, 32, 33); }';
+            document.head.append(late);
+            const lateSheet = new CSSStyleSheet();
+            lateSheet.replaceSync('.late-adopted { color: rgb(34, 35, 36); }');
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, lateSheet];
+            cssInJs.insertRule('.late-js { color: rgb(37, 38, 39); }', cssInJs.cssRules.length);
+            const portal = document.createElement('div');
+            portal.id = 'portal';
+            document.body.append(portal);
+            document.title = 'Styles that come back (1)'; 0
+            """)
+        await ReaderMode.exit(webView)
+        let after = try await swatches(in: webView)
+        #expect(after["late-class"]?.hasPrefix("rgb(70, 80, 90)") == true)
+        #expect(after["late-style"]?.hasPrefix("rgb(31, 32, 33)") == true)
+        #expect(after["late-adopted"]?.hasPrefix("rgb(34, 35, 36)") == true)
+        #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
+        let late: Set = ["late-class", "late-style", "late-adopted", "late-js"]
+        #expect(after.filter { !late.contains($0.key) } == before.filter { !late.contains($0.key) })
+        #expect(try await value("document.documentElement.className", in: webView) == "theme-night fonts-loaded")
+        #expect(try await value("document.body.dataset.ready", in: webView) == "yes")
+        #expect(try await value("String(document.body.lastElementChild.id)", in: webView) == "portal")
+        #expect(try await value("document.title", in: webView) == "Styles that come back (1)")
+        // The page's sheet and the one it added; the reader's left with it.
+        #expect(try await value("String(document.adoptedStyleSheets.length)", in: webView) == "2")
+    }
+
+    /// A CSS-in-JS library that writes text (goober, Emotion and styled-components out of
+    /// production) adds to its <style> while the reader is open: the page keeps all of it.
+    @Test func keepsTextThePageAddedToItsStyles() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        _ = try await webView.evaluateJavaScript("window.textStyle = document.querySelector('style'); 0")
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("textStyle.append('.late-text { color: rgb(41, 42, 43); }'); 0")
+        await ReaderMode.exit(webView)
+        let after = try await swatches(in: webView)
+        #expect(after["late-text"]?.hasPrefix("rgb(41, 42, 43)") == true)
+        #expect(after["from-style"]?.hasPrefix("rgb(10, 20, 30)") == true)
+    }
+
+    /// A CSS-in-JS library keeps the sheet it was given (styled-components does, for good): what
+    /// it writes there once the reader is left, or while it is open a second time, styles the page.
+    @Test func keepsStylingThroughTheSheetThePageHolds() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        await ReaderMode.exit(webView)
+        _ = try await webView.evaluateJavaScript("cssInJs.insertRule('.after-exit { color: rgb(44, 45, 46); }', cssInJs.cssRules.length); 0")
+        #expect(try await swatches(in: webView)["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("cssInJs.insertRule('.late-js { color: rgb(37, 38, 39); }', cssInJs.cssRules.length); 0")
+        await ReaderMode.exit(webView)
+        let after = try await swatches(in: webView)
+        #expect(after["from-js"]?.hasPrefix("rgb(1, 2, 3)") == true)
+        #expect(after["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
+        #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
+    }
+
+    /// A CSS-in-JS library that makes its <style> on its first write, while the reader is open,
+    /// keeps that sheet: what it writes there once the reader is left styles the page.
+    @Test func keepsStylingThroughASheetThePageMadeWhileReading() async throws {
+        let (webView, listener) = try await loadStyledPage()
+        defer { listener.cancel() }
+        #expect(await ReaderMode.enter(webView, style: ReaderStyle()))
+        _ = try await webView.evaluateJavaScript("""
+            const lazy = document.createElement('style');
+            lazy.nonce = 'fixture';
+            document.head.append(lazy);
+            window.lazySheet = lazy.sheet;
+            lazySheet.insertRule('.late-js { color: rgb(37, 38, 39); }', 0); 0
+            """)
+        await ReaderMode.exit(webView)
+        _ = try await webView.evaluateJavaScript("lazySheet.insertRule('.after-exit { color: rgb(44, 45, 46); }', lazySheet.cssRules.length); 0")
+        let after = try await swatches(in: webView)
+        #expect(after["late-js"]?.hasPrefix("rgb(37, 38, 39)") == true)
+        #expect(after["after-exit"]?.hasPrefix("rgb(44, 45, 46)") == true)
     }
 
     /// Each paragraph in its own section, custom element and div, as on some company blogs.

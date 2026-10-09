@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" class="theme-night" data-mode="compact">
+<head>
+<title>Styles that come back | Example</title>
+<link rel="stylesheet" href="/page.css" id="page">
+<link rel="stylesheet" href="/theme.css" id="theme">
+<style nonce="fixture">
+  .from-style { color: rgb(10, 20, 30); }
+  .theme-night .themed { background-color: rgb(40, 50, 60); }
+  @media (prefers-color-scheme: dark) { .scheme { color: rgb(200, 0, 0); } }
+  @media (prefers-color-scheme: light) { .scheme { color: rgb(0, 200, 0); } }
+  .fonts-loaded .late-class { color: rgb(70, 80, 90); }
+  .face { font-family: "Fixture Face", serif; }
+</style>
+<style nonce="fixture" id="css-in-js"></style>
+<style nonce="fixture" id="off">.switched-off { color: rgb(255, 0, 0); }</style>
+</head>
+<body>
+<main><article>
+<h1>Styles that come back</h1>
+<p>Paragraph 01: a page styled every way a page can be, with linked sheets, an imported one, inline styles, rules added by its scripts, and a theme it turned off.</p>
+<p>Paragraph 02: it also adopts constructed sheets, on the document and in a shadow root, and loads a font of its own through the FontFace interface.</p>
+<p>Paragraph 03: leaving the reader must give it every one of those back, as they were, so that each element below looks exactly as it did before.</p>
+<p>Paragraph 04: and what its scripts wrote while the reader was on, a class on the root, a style in the head, a sheet, comes back with it as well.</p>
+</article></main>
+<div class="swatches">
+<span class="from-link">link</span> <span class="from-import">import</span> <span class="from-link-js">link rule</span>
+<span class="from-theme-link">theme</span> <span class="from-style">style</span> <span class="themed">themed</span>
+<span class="scheme">scheme</span> <span class="from-js">js</span> <span class="switched-off">off</span>
+<span class="from-adopted">adopted</span> <span class="face">face</span> <span class="late-class">late class</span>
+<span class="late-style">late style</span> <span class="late-adopted">late adopted</span> <span class="late-js">late js</span>
+<span class="late-text">late text</span> <span class="after-exit">after exit</span>
+</div>
+<div id="host"></div>
+<script nonce="fixture">
+  // A CSS-in-JS library: an empty <style> whose sheet it keeps and fills.
+  window.cssInJs = document.getElementById('css-in-js').sheet;
+  cssInJs.insertRule('.from-js { color: rgb(1, 2, 3); }');
+  const page = document.getElementById('page').sheet;
+  page.insertRule('.from-link-js { color: rgb(27, 28, 29); }', page.cssRules.length);
+  // Themes turned off through their sheet, not an attribute.
+  document.getElementById('off').sheet.disabled = true;
+  document.getElementById('theme').sheet.disabled = true;
+  const adopted = new CSSStyleSheet();
+  adopted.replaceSync('.from-adopted { color: rgb(4, 5, 6); }');
+  document.adoptedStyleSheets = [adopted];
+  const shadow = document.getElementById('host').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<p class="inner">inner</p><p class="inner-js">inner js</p><p class="inner-adopted">inner adopted</p>';
+  const inner = document.createElement('style');
+  inner.nonce = 'fixture';
+  inner.textContent = '.inner { color: rgb(7, 8, 9); }';
+  const innerJs = document.createElement('style');
+  innerJs.nonce = 'fixture';
+  shadow.append(inner, innerJs);
+  innerJs.sheet.insertRule('.inner-js { color: rgb(11, 12, 13); }');
+  const shadowSheet = new CSSStyleSheet();
+  shadowSheet.replaceSync('.inner-adopted { color: rgb(14, 15, 16); }');
+  shadow.adoptedStyleSheets = [shadowSheet];
+  document.fonts.add(new FontFace('Fixture Face', 'local("Helvetica")'));
+</script>
+</body>
+</html>

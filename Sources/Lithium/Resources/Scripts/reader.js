@@ -12,12 +12,70 @@ const applyStyle = (root) => {
   root.style.setProperty('--reader-size', `${style.size}px`);
 };
 
+// A <style> or <link> taken out of the document loses its sheet, and gets a new one, read again
+// from its text or address, when put back. What scripts did to the old one (rules CSS-in-JS added
+// with insertRule, a theme sheet turned off) lives on that object alone, so it goes to the new one.
+// A <link> still loading takes it once loaded; another site's sheet, which scripts can't change,
+// just keeps its on or off. So does one whose text or address the page changed meanwhile (more text
+// from a CSS-in-JS library, another theme): read anew, the new sheet is the page's.
+const sourceOf = (node) => node.localName === 'link' ? node.href : node.textContent;
+const restoreSheet = ({ node, sheet, source }) => {
+  const fresh = node.sheet;
+  if (!fresh) {
+    if (node.localName === 'link' && node.isConnected) node.addEventListener('load', () => restoreSheet({ node, sheet, source }), { once: true });
+    return;
+  }
+  if (fresh === sheet) return;
+  fresh.disabled = sheet.disabled;
+  if (sourceOf(node) !== source) return;
+  // The rules they share at the start stay: an @import among them isn't fetched again.
+  try {
+    const rules = [...sheet.cssRules].map((rule) => rule.cssText);
+    let same = 0;
+    while (same < rules.length && same < fresh.cssRules.length && rules[same] === fresh.cssRules[same].cssText) same++;
+    while (fresh.cssRules.length > same) fresh.deleteRule(same);
+    for (const text of rules.slice(same)) {
+      try { fresh.insertRule(text, fresh.cssRules.length); } catch {}
+    }
+  } catch {}
+};
+// The sheets of a document or shadow root, and of the shadow roots within, with their elements:
+// a sheet forgets its element once that leaves the document.
+const ownedSheets = (root) => [
+  ...[...root.styleSheets].filter((sheet) => sheet.ownerNode).map((sheet) => ({ node: sheet.ownerNode, sheet, source: sourceOf(sheet.ownerNode) })),
+  ...[...root.querySelectorAll('*')].filter((element) => element.shadowRoot).flatMap((element) => ownedSheets(element.shadowRoot)),
+];
+// The page's scripts ran on while the reader was on, and what they wrote to the document reached
+// the reader's: the page gets it back. Classes and attributes on <html> and <body> (a theme, "fonts
+// loaded") join the page's; elements added to <head> and <body> (styles, dialogs) move there.
+const carry = (from, to, ours) => {
+  for (const { name, value } of from.attributes) {
+    if (ours.includes(name)) continue;
+    if (name === 'class') to.classList.add(...from.classList);
+    else if (name !== 'style') to.setAttribute(name, value);
+  }
+  for (const property of from.style) {
+    if (!ours.includes(property)) to.style.setProperty(property, from.style.getPropertyValue(property), from.style.getPropertyPriority(property));
+  }
+  for (const node of [...from.childNodes]) if (!ours.includes(node)) to.append(node);
+};
+
 const saved = window.__lithiumReader;
 if (action === 'exit') {
   if (!saved) return false;
-  document.replaceChild(saved.root, document.documentElement);
-  document.adoptedStyleSheets = saved.sheets;
+  const reader = document.documentElement;
+  const { head, body } = document;
+  const added = ownedSheets(document);
+  const adopted = document.adoptedStyleSheets.filter((sheet) => sheet !== saved.sheet && !saved.adopted.includes(sheet));
+  const title = document.title;
+  document.replaceChild(saved.root, reader);
+  document.adoptedStyleSheets = [...saved.adopted, ...adopted];
   delete window.__lithiumReader;
+  if (title !== saved.pageTitle) document.title = title;
+  carry(reader, saved.root, ['lang', 'dir', 'data-theme', 'data-font', '--reader-size', head, body]);
+  if (head && document.head) carry(head, document.head, [saved.title]);
+  if (body && document.body) carry(body, document.body, [saved.article]);
+  [...saved.owned, ...added].forEach(restoreSheet);
   scrollTo(saved.x, saved.y);
   return true;
 }
@@ -205,8 +263,11 @@ body.append(article);
 root.append(head, body);
 applyStyle(root);
 
-// A copy of the page's sheets: the array is live, and would hold the reader's instead.
-window.__lithiumReader = { root: document.documentElement, sheets: [...document.adoptedStyleSheets], x: scrollX, y: scrollY };
+// A copy of the page's adopted sheets: the array is live, and would hold the reader's instead.
+window.__lithiumReader = {
+  root: document.documentElement, adopted: [...document.adoptedStyleSheets], owned: ownedSheets(document),
+  sheet, title: pageTitle, pageTitle: document.title, article, x: scrollX, y: scrollY,
+};
 document.adoptedStyleSheets = [sheet];
 document.replaceChild(root, document.documentElement);
 scrollTo(0, 0);

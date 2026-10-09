@@ -826,8 +826,8 @@ struct BrowserTests {
         #expect(await waitUntil(10) { tab.hasUnsavedInput })
     }
 
-    /// A page that retitles itself again and again writes the session once, a moment later,
-    /// not at every change; quitting writes what waits at once.
+    /// A page that retitles itself again and again writes the session once, a moment later and
+    /// off the main thread, not at every change; quitting writes what waits at once.
     @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {
         let browser = Browser()
         let tab = browser.newTab(url: URL(string: "data:text/html,<title>Start</title>start")!)
@@ -835,6 +835,7 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(tab) && tab.title == "Start" })
         browser.saveNow()
         let before = SessionStore.writes
+        let mainThreadBefore = SessionStore.mainThreadWrites
 
         // One at a time from here: the page's own timers are slowed while it isn't shown.
         for count in 1...20 {
@@ -843,6 +844,7 @@ struct BrowserTests {
         }
         #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.title == "Count 20" } })
         #expect(SessionStore.writes - before <= 2)
+        #expect(SessionStore.mainThreadWrites == mainThreadBefore, "written off the main thread")
 
         _ = try await tab.webView.evaluateJavaScript("document.title = 'Final'")
         #expect(await waitUntil(10) { tab.title == "Final" })

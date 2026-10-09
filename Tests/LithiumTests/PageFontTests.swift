@@ -296,6 +296,53 @@ struct PageFontTests {
         #expect(fonts["lateShadow"] == "Lithium DM Sans")
     }
 
+    /// A large container toggling its class many times a second (a carousel, a player) has its
+    /// font rules looked up when the changes are checked, not at each change.
+    @Test func largeContainerClassChangesWaitForTheCheck() async throws {
+        let page = """
+            <style>.special .icon { font-family: Menlo, monospace; }</style>
+            <div id="big"><span class="icon">x</span></div>
+            <script>
+              const big = document.getElementById('big');
+              for (let i = 0; i < 200; i++) { const p = document.createElement('p'); p.textContent = 'row ' + i; big.append(p); }
+            </script>
+            """
+        let configuration = WKWebViewConfiguration()
+        configuration.userContentController.addUserScript(PageStyle.fontScript)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+        // The font script's world counts its lookups of the rule.
+        _ = try await webView.callAsyncJavaScript("""
+            window.lookups = 0;
+            const all = Element.prototype.querySelectorAll;
+            Element.prototype.querySelectorAll = function (selector) {
+              if (String(selector).includes('.special')) window.lookups++;
+              return all.call(this, selector);
+            };
+            """, contentWorld: .defaultClient)
+
+        let probe = """
+            const big = document.getElementById('big');
+            const first = (element) => getComputedStyle(element).fontFamily.split(',')[0].replace(/"/g, '').trim();
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            // Each change reaches the observer on its own, before the next.
+            for (let i = 0; i < 60; i++) {
+              big.classList.toggle('special');
+              await Promise.resolve();
+            }
+            big.classList.add('special');
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            return first(big.querySelector('.icon'));
+            """
+        let font = try await webView.callAsyncJavaScript(probe, contentWorld: .page) as? String
+        #expect(font == "Menlo", "the change still reaches the element")
+        let lookups = try await webView.callAsyncJavaScript("return lookups", contentWorld: .defaultClient) as? Int
+        #expect((lookups ?? .max) < 20, "looked up \(lookups ?? -1) times for 61 changes")
+    }
+
     /// A font the user picked from the Mac's: named, not shipped, and icons and code keep theirs.
     @Test func pickedFontReplacesTextFontsButNotIconsCodeOrMath() async throws {
         let script = PageStyle.fontScript(family: "Helvetica Neue")

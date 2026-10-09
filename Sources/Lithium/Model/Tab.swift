@@ -391,7 +391,13 @@ final class Tab: NSObject, Identifiable {
         // left on the tab until it wakes. Waking loads its page, which is the reload.
         if isAsleep { return wake() }
         if let item = webView.backForwardList.currentItem { pdfHistory[item] = nil }
-        if let failedURL { load(failedURL) } else { appStartedLoad = webView.reload() != nil }
+        if let failedURL { load(failedURL) } else { reloadPage() }
+    }
+
+    /// A first load that never committed (stopped, or its process gone before) leaves WebKit
+    /// nothing to reload: the tab loads its address again instead.
+    private func reloadPage() {
+        if webView.backForwardList.currentItem == nil, let url { load(url) } else { appStartedLoad = webView.reload() != nil }
     }
 
     /// Back and Forward asked of the app (the toolbar, an extension), unlike the page's own
@@ -1407,7 +1413,7 @@ extension Tab: WKNavigationDelegate {
             showError(Self.crashedAgain, for: url)
         } else {
             lastCrashReload = Date()
-            appStartedLoad = webView.reload() != nil
+            reloadPage()
             // The new process starts from the page's settings; said again in case mute isn't among them.
             if isMuted { applyMute(to: webView) }
         }

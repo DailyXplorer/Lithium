@@ -391,7 +391,7 @@ final class Browser {
         let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if Self.isZoomInWithoutShift(event), let self {
                 return MainActor.assumeIsolated {
-                    guard !NativeInput.isAgents(event), event.window === self.window, self.selectedTab != nil else { return false }
+                    guard !NativeInput.isAgents(event), self.ownsZoomIn(in: event.window) else { return false }
                     self.zoomSelectedTab(by: PageZoom.step)
                     return true
                 } ? nil : event
@@ -416,6 +416,12 @@ final class Browser {
     /// ⌘=, Zoom In as most people press it: the menu's "+" takes Shift on most layouts.
     nonisolated static func isZoomInWithoutShift(_ event: NSEvent) -> Bool {
         event.charactersIgnoringModifiers == "=" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+    }
+
+    /// A link's window too: the menu's ⌘+ never sees a plain ⌘=, wherever it is pressed.
+    func ownsZoomIn(in window: NSWindow?) -> Bool {
+        guard let window, window === self.window || window === quickLinks.keyWindow else { return false }
+        return commandTab != nil
     }
 
     func zoomSelectedTab(by delta: Double) {
@@ -475,12 +481,12 @@ final class Browser {
         // The shown permission prompt, denied this once and not remembered. Not under an agent's
         // banner, whose Deny Escape triggers.
         if agent?.confirmations.front(selected: selectedTabID) == nil,
-           let request = permissions.pending.first(where: { $0.tabID == selectedTabID }) {
+           let request = shownPermissionRequest {
             permissions.dismiss(request)
             return true
         }
         if agent?.confirmations.front(selected: selectedTabID) == nil,
-           let request = appLinks.pending.first(where: { $0.tabID == selectedTabID }) {
+           let request = shownAppLinkRequest {
             appLinks.answer(request, open: false)
             return true
         }

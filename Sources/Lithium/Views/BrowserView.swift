@@ -108,11 +108,11 @@ struct ContentCard: View {
                 .id(confirmation.id)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if let request = browser.permissions.pending.first(where: { $0.tabID == tab?.id }) {
+            if let request = browser.shownPermissionRequest {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if let request = browser.appLinks.pending.first(where: { $0.tabID == tab?.id }) {
+            if let request = browser.shownAppLinkRequest {
                 AppLinkPrompt(request: request)
                     .id(request.id)
                     .transition(.move(edge: .top).combined(with: .opacity))

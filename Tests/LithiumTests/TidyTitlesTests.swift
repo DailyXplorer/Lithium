@@ -214,6 +214,32 @@ struct TidyTitlesTabsTests {
         #expect(model.asked.count == 10)
     }
 
+    /// A request the model couldn't answer doesn't use up the page's: its next title asks again.
+    @Test func aFailedRequestIsAskedAgainAtTheNextTitle() async throws {
+        let browser = Browser()
+        let titles = browser.tidyTitles
+        let wasEnabled = titles.isEnabled
+        titles.isEnabled = true
+        defer { titles.isEnabled = wasEnabled }
+        let model = Model()
+        titles.shortener = { cleaned, _ in
+            model.asked.append(cleaned)
+            return model.asked.count == 1 ? .failed : .title("Live match")
+        }
+        let tab = browser.newTab()
+        defer { browser.close(tab) }
+        let page = URL(string: "https://live.example/match")!
+        tab.restore(url: page, title: "Live match commentary at minute 1 with every score update")
+        titles.update(tab)
+        #expect(await waitUntil(5) { model.asked.count == 1 })
+        try await Task.sleep(for: .milliseconds(100))
+
+        tab.restore(url: page, title: "Live match commentary at minute 2 with every score update")
+        titles.update(tab)
+        #expect(await waitUntil(5) { model.asked.count == 2 })
+        #expect(await waitUntil(5) { tab.tidyTitle == "Live match" })
+    }
+
     /// Tabs restored asleep at launch show their tidy titles at once, from the rules alone.
     @Test func restoredTabsGetTidyTitles() throws {
         let wasEnabled = UserDefaults.standard.object(forKey: TidyTitles.preferenceKey)

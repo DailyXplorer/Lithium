@@ -128,7 +128,8 @@ final class TidyTitles {
             case .declined:
                 remember(cleaned, for: key)
             case .failed:
-                break
+                // No answer (the model busy or not ready): the page's next title asks again, as before.
+                for waiting in asking where waiting.tab?.titleAskedFor == waiting.tab?.url { waiting.tab?.titleAskedFor = nil }
             }
         }
     }

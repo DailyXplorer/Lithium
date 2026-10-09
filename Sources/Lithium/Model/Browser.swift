@@ -1102,12 +1102,14 @@ final class Browser {
             Task { @MainActor in self?.sessionChanged() }
         }
         // A failed write leaves the old file: the next save tries again rather than taking it as written.
+        // Compared with the last session handed to the queue: one still being written would
+        // otherwise land after a change back to the saved one, and stay.
         if now {
-            guard session != savedSession else { return }
+            guard session != savedSession || queuedSession != session else { return }
             if SessionStore.save(session) { (savedSession, queuedSession) = (session, session) }
             return
         }
-        guard session != savedSession, session != queuedSession else { return }
+        guard session != (queuedSession ?? savedSession) else { return }
         queuedSession = session
         SessionStore.saveInBackground(session) { [weak self] written in
             guard let self else { return }

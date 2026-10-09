@@ -29,6 +29,8 @@ enum SessionStore {
     nonisolated(unsafe) private(set) static var writes = 0
     /// For tests: the writes the main thread waited for.
     nonisolated(unsafe) private(set) static var mainThreadWrites = 0
+    /// For tests: runs on the save queue before each write, so one can be held in flight.
+    nonisolated(unsafe) static var beforeWrite: (@Sendable (Session) -> Void)?
 
     static var fileURL: URL {
         URL.applicationSupportDirectory.appending(path: "Lithium/session.json")
@@ -60,6 +62,7 @@ enum SessionStore {
     }
 
     private static func write(_ session: Session) -> Bool {
+        beforeWrite?(session)
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(session).write(to: fileURL, options: .atomic)

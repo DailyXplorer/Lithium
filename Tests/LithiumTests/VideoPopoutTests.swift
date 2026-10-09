@@ -120,6 +120,24 @@ struct VideoPopoutTests {
         _ = try await VideoPopout.run("hide", in: webView)
     }
 
+    /// A paused video the page removes ends the state check's wait at once: the player closes
+    /// as soon as before, not seconds later.
+    @Test func aPausedVideoRemovedEndsTheWait() async throws {
+        let (webView, window) = try await playingPage()
+        defer { window.orderOut(nil) }
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await VideoPopout.run("pause", in: webView)
+
+        let start = Date()
+        let waiting = Task { try await VideoPopout.run("state", in: webView, value: VideoPopout.pausedWait) as? [String: Any] == nil }
+        try await Task.sleep(for: .milliseconds(500))
+        _ = try await webView.callAsyncJavaScript("document.querySelector('video').parentElement.remove()", contentWorld: .page)
+        let gone = try await waiting.value
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(elapsed >= 0.4 && elapsed < 3, "answered when it went, not after the wait")
+        #expect(gone, "the player closes")
+    }
+
     /// The player stays where it is dropped, and keeps its distance from the nearest corner when
     /// the page changes size. Dropped past an edge, it stays whole in the page.
     @Test func playerStaysWhereItIsDropped() {

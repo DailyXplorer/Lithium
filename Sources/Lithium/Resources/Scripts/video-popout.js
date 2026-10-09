@@ -90,12 +90,15 @@ const keepRaised = (video) => {
   store.frame = requestAnimationFrame(check);
 };
 
-// Resolves when a paused video plays, seeks, changes sound or source, or the page resizes it,
-// and at the latest after `ms`: nothing else changes what the player shows.
+// Resolves when a paused video plays, seeks, changes sound or source, the page resizes it or
+// removes it (the player then closes at once), and at the latest after `ms`: nothing else
+// changes what the player shows.
 const changeOf = (video, ms) => new Promise((resolve) => {
   const events = ['play', 'seeked', 'volumechange', 'emptied', 'resize'];
+  const removal = new MutationObserver(() => { if (!video.isConnected) done(); });
   const done = () => {
     clearTimeout(timer);
+    removal.disconnect();
     events.forEach((type) => video.removeEventListener(type, done));
     removeEventListener('resize', done);
     resolve();
@@ -103,6 +106,7 @@ const changeOf = (video, ms) => new Promise((resolve) => {
   const timer = setTimeout(done, ms);
   events.forEach((type) => video.addEventListener(type, done));
   addEventListener('resize', done);
+  removal.observe(document, { childList: true, subtree: true });
 });
 
 const hide = () => {

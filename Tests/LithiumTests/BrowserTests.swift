@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Network
+import os
 import class SwiftUI.NSHostingView
 import Testing
 import WebKit
@@ -850,6 +851,37 @@ struct BrowserTests {
         #expect(await waitUntil(10) { tab.title == "Final" })
         browser.saveNow()
         #expect(SessionStore.load().tabs.contains { $0.title == "Final" })
+    }
+
+    /// A title that changes and changes back while the changed one is still being written ends
+    /// with the file holding the page's title, not the one in between.
+    @Test func aChangeBackWhileAWriteIsInFlightIsWritten() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>Steady</title>steady")!)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(120) { loaded(tab) && tab.title == "Steady" })
+        browser.saveNow()
+
+        // Holds the write of the title in between until the title is back.
+        let held = DispatchSemaphore(value: 0)
+        let reached = OSAllocatedUnfairLock(initialState: false)
+        SessionStore.beforeWrite = { session in
+            guard session.tabs.contains(where: { $0.title == "Between" }) else { return }
+            reached.withLock { $0 = true }
+            held.wait()
+        }
+        defer { SessionStore.beforeWrite = nil }
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Between'")
+        #expect(await waitUntil(10) { reached.withLock { $0 } })
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Steady'")
+        #expect(await waitUntil(5) { tab.title == "Steady" })
+        let before = SessionStore.writes
+        // The change back's save, a moment later, while the write is still held.
+        try await Task.sleep(for: Browser.sessionSaveDelay + .milliseconds(500))
+        held.signal()
+
+        #expect(await waitUntil(10) { SessionStore.writes >= before + 2 })
+        #expect(SessionStore.load().tabs.contains { $0.title == "Steady" })
     }
 
     /// Clearing the history leaves no closed tab for ⇧⌘T to bring back with its pages.

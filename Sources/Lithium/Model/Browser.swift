@@ -175,7 +175,8 @@ final class Browser {
         tidyTitles.browser = self
         extensions.start()
         // Tests leave extensions they add in place: they'd ask the store for them at each Browser.
-        if !ExternalApps.runsTests { Task { [extensions] in await extensions.updateIfDue() } }
+        extensions.checksForUpdates = !ExternalApps.runsTests
+        if extensions.checksForUpdates { Task { [extensions] in await extensions.updateIfDue() } }
         let saved = SessionStore.load()
         restore(saved)
         // Written only when restoring changed it (a tab left out, a space gone), not at every launch.

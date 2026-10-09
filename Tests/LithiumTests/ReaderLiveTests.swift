@@ -153,6 +153,10 @@ struct ReaderLiveTests {
         let before = try await styles(in: webView)
         let served = page0["styles"] as? [String: String] ?? [:]
         let volatile = Set(before.keys.filter { before[$0] != served[$0] })
+        // A page that hides its article by then (a paywall) doesn't serve it: the reader shows what the page does.
+        if !page.first.isEmpty, let hidden = try await run(Self.shownScript, ["first": page.first], in: webView)["hiddenBy"] as? String {
+            return (.skip, "not served (the page hides its article: \(hidden))")
+        }
 
         if await !tab.toggleReader() {
             return page.first.isEmpty ? (.pass, "reader refused (not an article)") : (.fail, "enter returned false")
@@ -297,6 +301,7 @@ struct ReaderLiveTests {
           .map((element) => norm(textOf(element))).filter((text) => text.length >= 40);
         // Where the article's first paragraph sits, for a reader that misses it.
         const holder = first && [...document.body.querySelectorAll('*')].reverse().find((element) => norm(textOf(element)).includes(norm(first)));
+        window.firstHolder = holder;
         const path = [];
         for (let element = holder; element && element !== document.documentElement; element = element.parentElement) {
           const computed = getComputedStyle(element);
@@ -309,6 +314,23 @@ struct ReaderLiveTests {
         const story = [...document.querySelectorAll('p')].map((p) => p.textContent.trim()).filter((text) => text.length > 80).slice(0, 2).join(' / ').slice(0, 300);
         return JSON.stringify({ title: document.title, styles: measure(), path: path.join(' < '), story,
           hasFirst: !first || text.includes(norm(first)), hasLast: !last || text.includes(norm(last)) });
+        """
+
+    /// Whether the page shows its first paragraph, as the reader opens: what hides it otherwise. A
+    /// folded accordion's panel shows it, a click away.
+    private static let shownScript = """
+        const holder = window.firstHolder?.isConnected ? window.firstHolder
+          : [...document.body.querySelectorAll('*')].reverse().find((element) => norm(textOf(element)).includes(norm(first)));
+        if (!holder) return JSON.stringify({ hiddenBy: 'its paragraphs are gone' });
+        const folded = [...document.querySelectorAll('[aria-expanded=false][aria-controls]')]
+          .flatMap((control) => control.getAttribute('aria-controls').split(/\\s+/)).map((id) => document.getElementById(id));
+        if (holder.checkVisibility({ visibilityProperty: true, opacityProperty: true }) || folded.some((panel) => panel?.contains(holder))) return '{}';
+        let hider = holder;
+        for (let element = holder; element; element = element.parentElement) {
+          const computed = getComputedStyle(element);
+          if (computed.display === 'none' || computed.visibility === 'hidden' || computed.opacity === '0') hider = element;
+        }
+        return JSON.stringify({ hiddenBy: describe(hider) });
         """
 
     /// The reader as shown: the article whole, in the reader's own size, width, font and colors,

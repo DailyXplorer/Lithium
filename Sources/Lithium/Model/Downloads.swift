@@ -95,6 +95,10 @@ final class Downloads: NSObject, WKDownloadDelegate {
     private(set) var items: [DownloadItem] = []
     /// Set when a download finishes while the list is closed; the toolbar button shows a dot.
     var hasUnseen = false
+    /// Set by the list while it shows: a download finishing in front of the user is seen.
+    @ObservationIgnored var isListShown = false {
+        didSet { if isListShown { hasUnseen = false } }
+    }
 
     @ObservationIgnored private(set) var byDownload: [ObjectIdentifier: DownloadItem] = [:]
     /// Names taken by files still being written, which don't exist on disk yet.
@@ -324,8 +328,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         didFinish(item)
     }
 
-    private func didFinish(_ item: DownloadItem) {
-        hasUnseen = true
+    func didFinish(_ item: DownloadItem) {
+        if !isListShown { hasUnseen = true }
         if item.originalFilename != nil, let destination = item.destination { item.fileIdentity = Self.fileIdentity(of: destination) }
         if let destination = item.destination {
             // Makes the Downloads stack bounce in the Dock, like Safari.

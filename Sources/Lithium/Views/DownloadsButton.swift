@@ -78,6 +78,8 @@ private struct DownloadsList: View {
         .font(Theme.font(13))
         .padding(16)
         .frame(width: 340)
+        .onAppear { downloads.isListShown = true }
+        .onDisappear { downloads.isListShown = false }
     }
 
     private var subtitle: String {

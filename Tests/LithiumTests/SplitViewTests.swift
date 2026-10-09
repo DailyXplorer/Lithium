@@ -43,6 +43,23 @@ struct SplitViewTests {
         }
     }
 
+    /// Clicking the row of the pair shown keeps its focused side, as ⌘1…⌘9 does; from another
+    /// tab, it shows the pair with its first side focused.
+    @Test func theRowOfThePairShownKeepsItsFocusedSide() {
+        let browser = browser(with: ["a", "b", "c"])
+        browser.select(tab("a", in: browser))
+        browser.openInSplit(tab("c", in: browser))
+        #expect(rows(browser) == ["a|c", "b"])
+        #expect(name(browser.selectedTab) == "c")
+
+        browser.selectSplit(showing: tab("a", in: browser))
+        #expect(name(browser.selectedTab) == "c")
+        browser.select(tab("b", in: browser))
+        browser.selectSplit(showing: tab("a", in: browser))
+        #expect(name(browser.selectedTab) == "a")
+        #expect(name(browser.shownPartner) == "c")
+    }
+
     @Test func openInSplitViewPairsWithTheSelectedTabAndFocusesIt() {
         let browser = browser(with: ["a", "b", "c"])
         browser.select(tab("a", in: browser))

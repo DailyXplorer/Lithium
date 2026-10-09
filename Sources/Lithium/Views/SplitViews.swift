@@ -190,7 +190,7 @@ struct SplitTabRow: View {
         if let first = browser.tabs.first(where: { $0.id == split.first }),
            let second = browser.tabs.first(where: { $0.id == split.second }) {
             let isShown = browser.selectedTabID.map(split.contains) ?? false
-            SidebarRow(isSelected: isShown, action: { browser.select(first) }) {
+            SidebarRow(isSelected: isShown, action: { browser.selectSplit(showing: first) }) {
                 half(first, dimmed: isShown && browser.selectedTabID != first.id)
                 Rectangle()
                     .fill(.primary.opacity(0.15))

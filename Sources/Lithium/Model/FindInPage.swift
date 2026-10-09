@@ -12,7 +12,7 @@ protocol FindTarget: AnyObject {
 
 enum FindStep: Equatable {
     case none
-    /// The match's place among them, from 1, when the target knows it (a web page doesn't).
+    /// The match's place among them, from 1, when the target knows it (a web page can't always tell).
     case shown(position: Int?)
 }
 
@@ -85,7 +85,8 @@ final class FindInPage {
             return
         }
         if matchCount == 0 { matchCount = 1 }
-        currentMatch = position ?? next(forward)
+        // A page's text read two ways may disagree by a match: never past the count.
+        currentMatch = position.map { min($0, matchCount) } ?? next(forward)
     }
 
     /// For a target that doesn't say which match it showed, counted here.
@@ -135,6 +136,22 @@ extension WKWebView: FindTarget {
         if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
         const mark = range.cloneRange();
         CSS.highlights.set('lithium-find', new Highlight(mark));
+        // Its place: the matches in the text before it, read as the count reads the page (a
+        // selection's text, like innerText, leaves out hidden text, scripts and styles).
+        let position = null;
+        if (document.body && document.body.contains(mark.startContainer)) {
+          const before = document.createRange();
+          before.setStart(document.body, 0);
+          before.setEnd(mark.startContainer, mark.startOffset);
+          selection.removeAllRanges();
+          selection.addRange(before);
+          const text = selection.toString().toLocaleLowerCase();
+          const needle = query.toLocaleLowerCase();
+          position = 1;
+          for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length)) position++;
+          selection.removeAllRanges();
+          selection.addRange(mark.cloneRange());
+        }
         selection.collapseToEnd();
         window.__lithiumFind = { mark, node: selection.anchorNode, offset: selection.anchorOffset };
 
@@ -153,6 +170,7 @@ extension WKWebView: FindTarget {
         const top = outside(box, view) ? middle(box, view) : 0;
         const left = box.left < 0 || box.right > innerWidth ? box.left + box.width / 2 - innerWidth / 2 : 0;
         if (top || left) scrollBy({ top, left, behavior: 'instant' });
+        return position;
         """
 
     /// Puts the match back in the selection, unless the user has clicked or selected since.
@@ -187,9 +205,9 @@ extension WKWebView: FindTarget {
             _ = try? await callAsyncJavaScript(Self.unmarkScript, contentWorld: .defaultClient)
             return .none
         }
-        let arguments: [String: Any] = ["color": Self.matchColor, "margin": Self.revealMargin]
-        _ = try? await callAsyncJavaScript(Self.markScript, arguments: arguments, contentWorld: .defaultClient)
-        return .shown(position: nil)
+        let arguments: [String: Any] = ["color": Self.matchColor, "margin": Self.revealMargin, "query": query]
+        let position = try? await callAsyncJavaScript(Self.markScript, arguments: arguments, contentWorld: .defaultClient)
+        return .shown(position: position as? Int)
     }
 
     func selectedText() async -> String? {

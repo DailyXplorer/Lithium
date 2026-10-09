@@ -26,6 +26,57 @@ struct BrowserTests {
         #expect(controller.userScripts.contains { $0.source.contains("function trustedJsonEditXhrRequest(") })
     }
 
+    /// Launch leaves restored tabs asleep and bare: no web view configuration, no icon read, and
+    /// the session file isn't written again. Each comes as the tab needs it.
+    @Test func launchLeavesRestoredTabsBareUntilNeeded() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "favicons-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = URL(string: "http://127.0.0.1:1/first")!
+        let second = URL(string: "http://127.0.0.1:1/second")!
+        SessionStore.save(Session(tabs: [.init(url: first, title: "First", customTitle: nil, pinID: nil),
+                                         .init(url: second, title: "Second", customTitle: nil, pinID: nil)], selectedIndex: 0))
+        defer { SessionStore.save(Session()) }
+        let writes = SessionStore.writes
+
+        let browser = Browser(favicons: Favicons(folder: folder))
+        defer { browser.tabs.forEach(browser.close) }
+        #expect(SessionStore.writes == writes)
+        let tab = try #require(browser.tabs.first { $0.url == second })
+        #expect(tab.isAsleep && !tab.hasConfiguration && tab.loadedWebView == nil)
+
+        // Cached after launch, the icon is still the one the tab shows: it is read when asked for.
+        let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8, samplesPerPixel: 4,
+                                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: folder.appending(path: "127.0.0.1.png"))
+        #expect(tab.faviconData == png)
+        #expect(tab.favicon != nil)
+
+        browser.select(tab)
+        #expect(!tab.isAsleep && tab.hasConfiguration && tab.loadedWebView != nil)
+        #expect(tab.loadedWebView?.configuration.webExtensionController === browser.extensions.controller)
+    }
+
+    /// A web app showing another view (pushState) is searched again, so the find bar's count is the new view's.
+    @Test func findSearchesAgainWhenAWebAppChangesView() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>App</title><p>needle</p><p>needle</p><p>needle</p>")])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.title == "App" && !tab.isLoading })
+        // The size a window gives it: unsized, the page lays nothing out and has no text to find.
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        browser.find.show(focusingField: false)
+        defer { browser.find.hide() }
+        await browser.find.update(query: "needle", in: tab.findTarget)
+        #expect(browser.find.matchCount == 3)
+
+        _ = try await tab.webView.callAsyncJavaScript("document.body.innerHTML = '<p>needle</p>'; history.pushState(null, '', '/next');", contentWorld: .page)
+        #expect(await waitUntil(10) { browser.find.matchCount == 1 && browser.find.currentMatch == 1 })
+    }
+
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
     @Test func restoresAnInternalTabAtLaunch() throws {
         SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))

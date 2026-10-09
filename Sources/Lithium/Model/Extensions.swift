@@ -95,7 +95,9 @@ final class Extensions: NSObject {
             }
         }
         loadTask = Task {
-            for entry in installed where entry.isEnabled { await load(entry) }
+            // Together: WebKit reads each package off the main thread, and the first page waits for them all.
+            let loads = installed.filter(\.isEnabled).map { entry in Task { await load(entry) } }
+            for load in loads { await load.value }
         }
     }
 
@@ -168,10 +170,12 @@ final class Extensions: NSObject {
         }
     }
 
-    /// Prepares the files (`ExtensionCompatibility`) before WebKit opens them.
+    /// Prepares the files (`ExtensionCompatibility`) before WebKit opens them, off the main thread:
+    /// it parses the manifest and compares files at every launch.
     private func open(_ id: String) async throws -> WKWebExtension {
+        let folder = files(id)
         do {
-            try ExtensionCompatibility.apply(to: files(id))
+            try await Task.detached(priority: .userInitiated) { try ExtensionCompatibility.apply(to: folder) }.value
         } catch {
             NSLog("Lithium: couldn’t prepare extension %@: %@", id, error.localizedDescription)
         }

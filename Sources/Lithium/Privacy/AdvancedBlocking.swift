@@ -7,29 +7,27 @@ import Foundation
 final class AdvancedBlocking {
     private var engine: WebExtension?
     private let container: URL
-    private let scriptlets: [String: String]
-    private let extendedCss: String
-    private let ubo = UBOScriptlets.bundled
+    /// Read by the first `load`, off the main thread (0.7 MB of JSON): only an open engine needs it.
+    private var library: Library?
+
+    /// For tests.
+    var hasReadLibrary: Bool { library != nil }
 
     init(container: URL = URL.applicationSupportDirectory.appending(path: "Lithium/AdvancedEngine")) {
         self.container = container
-        let scripts = Resources.bundle
-        let library = scripts.url(forResource: "scriptlets.corelibs", withExtension: "json")
-            .flatMap { try? Data(contentsOf: $0) }
-            .flatMap { try? JSONDecoder().decode(ScriptletLibrary.self, from: $0) }
-        var byName: [String: String] = [:]
-        for entry in library?.scriptlets ?? [] {
-            entry.names.forEach { byName[$0] = entry.scriptlet }
-        }
-        scriptlets = byName
-        extendedCss = scripts.url(forResource: "extended-css.min", withExtension: "js")
-            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     }
 
     /// Each build gets its own directory, renamed into place once complete: AdGuard's engine holds
     /// a file lock while it builds, which would make pages opened meanwhile wait on the main thread.
     func load(folder: URL, stamp filterStamp: String) async {
-        let ubo = ubo
+        let library: Library
+        if let read = self.library {
+            library = read
+        } else {
+            library = await Task.detached(priority: .userInitiated) { Library.read() }.value
+            self.library = library
+        }
+        let ubo = library.ubo
         let stamp = "\(filterStamp)-ubo-\(ubo?.version ?? "none")"
         let directory = container.appending(path: stamp)
         if !FileManager.default.fileExists(atPath: directory.path) {
@@ -50,22 +48,28 @@ final class AdvancedBlocking {
             }.value
             guard built else { return }
         }
-        engine = try? WebExtension(containerURL: directory)
-        let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        for other in others where other.lastPathComponent != stamp {
-            // Another load's build stays; only one a crash left behind, untouched for a day, goes.
-            if other.lastPathComponent.hasPrefix(".building-"),
-               let modified = try? other.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-               Date().timeIntervalSince(modified) < 24 * 60 * 60 { continue }
-            try? FileManager.default.removeItem(at: other)
-        }
+        // Off the main thread, which this runs at every launch. The old engines go once the new
+        // one has replaced them, as pages may be looking theirs up meanwhile.
+        engine = await Task.detached(priority: .userInitiated) { OpenedEngine(engine: try? WebExtension(containerURL: directory)) }.value.engine
+        let container = container
+        await Task.detached(priority: .userInitiated) {
+            let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            for other in others where other.lastPathComponent != stamp {
+                // Another load's build stays; only one a crash left behind, untouched for a day, goes.
+                if other.lastPathComponent.hasPrefix(".building-"),
+                   let modified = try? other.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                   Date().timeIntervalSince(modified) < 24 * 60 * 60 { continue }
+                try? FileManager.default.removeItem(at: other)
+            }
+        }.value
     }
 
     /// Given `page`, the script is for a frame showing `url`, and runs only in frames of that host.
     func script(for url: URL, inFrameOf page: URL? = nil) -> String? {
         guard ["http", "https"].contains(url.scheme), page.map({ ["http", "https"].contains($0.scheme) }) ?? true,
-              let configuration = engine?.lookup(pageUrl: url, topUrl: page) else { return nil }
+              let library, let configuration = engine?.lookup(pageUrl: url, topUrl: page) else { return nil }
 
+        let (scriptlets, extendedCss, ubo) = (library.scriptlets, library.extendedCss, library.ubo)
         var parts: [String] = []
         let isUBO = { [ubo] (scriptlet: WebExtension.Scriptlet) in
             scriptlet.name.hasPrefix(UBOScriptlets.prefix) && ubo?.resourceName(scriptlet.name) != nil
@@ -119,6 +123,32 @@ final class AdvancedBlocking {
 
     private func json<T: Encodable>(_ value: T) -> String {
         (try? String(data: JSONEncoder().encode(value), encoding: .utf8)) ?? "null"
+    }
+}
+
+/// An engine opened off the main thread, handed to the main actor: only it uses the engine after.
+private struct OpenedEngine: @unchecked Sendable {
+    let engine: WebExtension?
+}
+
+/// AdGuard's scriptlets by name, the extended CSS script and uBO's scriptlets, from the app's resources.
+private struct Library: Sendable {
+    let scriptlets: [String: String]
+    let extendedCss: String
+    let ubo: UBOScriptlets?
+
+    static func read() -> Library {
+        let scripts = Resources.bundle
+        let library = scripts.url(forResource: "scriptlets.corelibs", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+            .flatMap { try? JSONDecoder().decode(ScriptletLibrary.self, from: $0) }
+        var byName: [String: String] = [:]
+        for entry in library?.scriptlets ?? [] {
+            entry.names.forEach { byName[$0] = entry.scriptlet }
+        }
+        let extendedCss = scripts.url(forResource: "extended-css.min", withExtension: "js")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        return Library(scriptlets: byName, extendedCss: extendedCss, ubo: UBOScriptlets.bundled)
     }
 }
 

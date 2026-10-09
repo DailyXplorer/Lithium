@@ -540,6 +540,29 @@ struct PinnedIcons {
         #expect(!FileManager.default.fileExists(atPath: folder.appending(path: "visited.example.png").path))
     }
 
+    /// An icon that keeps changing (a timer, a progress ring) shows at once on the favorite, but
+    /// pins.json is written at most once a minute; quitting writes the last one.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func changingIconsRewriteTheFavoritesAtMostOnceAMinute() throws {
+        let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
+        browser.pins.forEach(browser.unpin)
+        let tab = browser.newTab(selecting: false)
+        tab.restore(url: URL(string: "https://timer.example/")!, title: "Timer")
+        browser.pin(tab)
+        defer { browser.pins.filter { $0.id == tab.pinID }.forEach(browser.unpin) }
+        let pin = { browser.pins.first { $0.id == tab.pinID } }
+        let saved = { PinStore.load().first { $0.id == tab.pinID } }
+        #expect(saved() != nil, "pinning is written at once")
+
+        browser.didLoadFavicon(Self.red, in: tab)
+        browser.didLoadFavicon(Self.blue, in: tab)
+        #expect(pin()?.favicon == Self.blue)
+        #expect(saved()?.favicon == nil, "held back: the favorites were written a moment ago")
+
+        browser.saveNow()
+        #expect(saved()?.favicon == Self.blue)
+    }
+
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {

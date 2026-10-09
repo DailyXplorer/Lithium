@@ -128,16 +128,17 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.canRead != true)
             Divider()
+            // The popover is the main window's toolbar's: a link's window has none.
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
                 if let tab = browser.selectedTab { browser.summaries.togglePanel(for: tab) }
             }
             .keyboardShortcut("s", modifiers: [.command, .shift])
-            .disabled(!browser.summaries.isEnabled || PageSummaries.page(of: browser.selectedTab?.url) == nil)
+            .disabled(!browser.summaries.isEnabled || browser.quickLinks.keyTab != nil || PageSummaries.page(of: browser.selectedTab?.url) == nil)
             Button(protectionsEnabled ? "Turn Off Protections for This Site" : "Turn On Protections for This Site") {
-                browser.setProtections(!protectionsEnabled, for: browser.selectedTab)
+                browser.setProtections(!protectionsEnabled, for: browser.commandTab)
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
-            .disabled(browser.selectedTab?.url?.scheme?.hasPrefix("http") != true)
+            .disabled(browser.commandTab?.url?.scheme?.hasPrefix("http") != true)
             Button(browser.videoPopout.tab == nil ? "Pop Out Video" : "Put Video Back") {
                 if browser.videoPopout.tab == nil { browser.videoPopout.showSelected() } else { browser.videoPopout.returnToTab() }
             }
@@ -189,26 +190,28 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             Divider()
             // As in the sidebar and the toolbar: a private tab is never pinned.
+            // Pin, Duplicate and Move act on the main window's tab list: not while a link's window
+            // is in front, where they would change a tab out of sight.
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
-                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true)
+                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true || browser.quickLinks.keyTab != nil)
             Button("Copy Link") { browser.copyLink(of: browser.commandTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.url == nil)
             Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(browser.selectedTab?.url == nil)
+                .disabled(browser.selectedTab?.url == nil || browser.quickLinks.keyTab != nil)
             if Tab.canMute {
-                Button(browser.selectedTab?.isMuted == true ? "Unmute Tab" : "Mute Tab") {
-                    browser.selectedTab?.isMuted.toggle()
+                Button(browser.commandTab?.isMuted == true ? "Unmute Tab" : "Mute Tab") {
+                    browser.commandTab?.isMuted.toggle()
                 }
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
             }
             Divider()
             Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
                 .keyboardShortcut("n", modifiers: [.command, .option])
             // A favorite's page stays in the grid: only the tab list has folders.
-            if let tab = browser.selectedTab, tab.pinID == nil {
+            if let tab = browser.selectedTab, tab.pinID == nil, browser.quickLinks.keyTab == nil {
                 MoveToFolderMenu(browser: browser, tab: tab, title: "Move Tab to Folder", showsShortcut: true)
             } else {
                 Menu("Move Tab to Folder") {}
@@ -222,7 +225,8 @@ struct BrowserCommands: Commands {
             // ⌘1…⌘9 are the sidebar's items; spaces take ⌃1…⌃9, as in Arc.
             if browser.hasSpaces {
                 Divider()
-                ForEach(Array(browser.spaces.enumerated()), id: \.element.id) { index, space in
+                // One digit each: `Character` traps on "10" (`restoreSpaces` keeps `Space.limit`).
+                ForEach(Array(browser.spaces.prefix(Space.limit).enumerated()), id: \.element.id) { index, space in
                     Button("Go to \(space.name)") { withAnimation(.snappy(duration: 0.25)) { browser.switchToSpace(at: index) } }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
                 }
@@ -231,11 +235,11 @@ struct BrowserCommands: Commands {
     }
 
     private var protectionsEnabled: Bool {
-        browser.privacy.isEnabled(for: browser.selectedTab?.url, privateSession: browser.selectedTab?.privateSession)
+        browser.privacy.isEnabled(for: browser.commandTab?.url, privateSession: browser.commandTab?.privateSession, space: browser.commandTab?.siteSpace)
     }
 
     private func showDeveloperTools(_ panel: DeveloperTools.Panel) {
-        guard browser.canShowWebInspector, let tab = browser.selectedTab else { return }
+        guard browser.canShowWebInspector, let tab = browser.commandTab else { return }
         DeveloperTools.show(panel, in: tab.webView)
     }
 

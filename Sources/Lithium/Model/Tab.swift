@@ -129,6 +129,8 @@ final class Tab: NSObject, Identifiable {
         didSet {
             if PageSummaries.page(of: oldValue) != PageSummaries.page(of: url) {
                 browser?.summaries.discard(self)
+                // Its popover too, which a hidden Zen bar's button can't close.
+                if let browser, browser.selectedTabID == id, browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
                 // The reader's article was the old address's: a page moving on by itself
                 // (pushState) shows its own content again.
                 if isReading { leaveReader() }
@@ -297,6 +299,12 @@ final class Tab: NSObject, Identifiable {
         self.privateStore = privateStore
         spaceID = space
         super.init()
+    }
+
+    /// The space whose own permission answers and per-site choices count, when it keeps its data
+    /// apart: its sign-ins are another identity's. Nil for the shared store and private tabs.
+    var siteSpace: Space.ID? {
+        privateStore == nil && browser?.separatesData(spaceID) == true ? spaceID : nil
     }
 
     /// Cookies and storage the page sees, without making a web view.
@@ -783,7 +791,7 @@ final class Tab: NSObject, Identifiable {
         await browser?.extensions.waitUntilLoaded()
         if let stillWanted, !stillWanted() { return }
         protectedURL = url
-        let enabled = privacy.isEnabled(for: url, privateSession: privateSession)
+        let enabled = privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace)
         let controller = webView.configuration.userContentController
         if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
             privacy.applyRuleLists(enabled, to: controller)
@@ -793,7 +801,7 @@ final class Tab: NSObject, Identifiable {
         // on every main-frame navigation, before the new document starts.
         controller.removeAllUserScripts()
         protectedFrameHosts = []
-        PageStyle.scripts(for: url, privateSession: privateSession).forEach(controller.addUserScript)
+        PageStyle.scripts(for: url, privateSession: privateSession, space: siteSpace).forEach(controller.addUserScript)
         if MarkdownReader.handles(url) { controller.addUserScript(MarkdownReader.script) }
         if ChromeWebStore.isStore(url) { controller.addUserScript(ChromeWebStore.script) }
         controller.addUserScript(PageTranslation.script)
@@ -838,7 +846,7 @@ final class Tab: NSObject, Identifiable {
     private func addFrameProtections(for url: URL) {
         guard let privacy = browser?.privacy, let page = webView.url, let host = url.host()?.lowercased(),
               protectedFrameHosts.insert(host).inserted,
-              let script = privacy.frameScript(privacy.isEnabled(for: page, privateSession: privateSession), for: url, in: page) else { return }
+              let script = privacy.frameScript(privacy.isEnabled(for: page, privateSession: privateSession, space: siteSpace), for: url, in: page) else { return }
         webView.configuration.userContentController.addUserScript(script)
     }
 
@@ -1165,7 +1173,7 @@ extension Tab: WKNavigationDelegate {
         // Reload return to an entry the history already has: cancelled for a new load, they would
         // drop the forward list and keep the user from going back past that page.
         if [.linkActivated, .formSubmitted, .other].contains(action.navigationType),
-           browser?.privacy.isEnabled(for: url, privateSession: privateSession) != false, action.request.httpMethod == "GET",
+           browser?.privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace) != false, action.request.httpMethod == "GET",
            let clean = TrackingParameters.stripped(url), clean != strippedURL {
             strippedURL = clean
             // The same load, without its parameters: whoever asked for it still did.
@@ -1175,7 +1183,7 @@ extension Tab: WKNavigationDelegate {
         }
 
         await applyProtections(for: url)
-        Privacy.setEngineProtections(browser?.privacy.isEnabled(for: url, privateSession: privateSession) ?? true, on: preferences)
+        Privacy.setEngineProtections(browser?.privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace) ?? true, on: preferences)
         return (.allow, preferences)
     }
 
@@ -1183,7 +1191,7 @@ extension Tab: WKNavigationDelegate {
         if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
         if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
-            privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession), for: response.response, privateSession: privateSession,
+            privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession, space: siteSpace), for: response.response, privateSession: privateSession,
                                           to: webView.configuration.userContentController)
         }
         let isAttachment = (response.response as? HTTPURLResponse)?
@@ -1202,7 +1210,7 @@ extension Tab: WKNavigationDelegate {
 
     private func askToDownload() async -> Bool {
         guard let browser, let host = shownHost, !host.isEmpty else { return false }
-        return await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession)
+        return await browser.permissions.request([.downloads], host: host, tabID: id, privateSession: privateSession, space: siteSpace)
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -1511,7 +1519,7 @@ extension Tab: WKUIDelegate {
 
     private func askPermission(_ kinds: [PermissionKind], origin: WKSecurityOrigin) async -> Bool {
         guard let browser, !origin.host.isEmpty else { return false }
-        return await browser.permissions.request(kinds, host: origin.host, tabID: id, privateSession: privateSession)
+        return await browser.permissions.request(kinds, host: origin.host, tabID: id, privateSession: privateSession, space: siteSpace)
     }
 
     func webViewDidClose(_ webView: WKWebView) {

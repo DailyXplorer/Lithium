@@ -11,6 +11,9 @@ final class Privacy {
     private(set) var disabledHosts: Set<String>
     /// Protections turned on or off in private tabs, by private session, then host; never saved.
     private var privateExceptions: [ObjectIdentifier: [String: Bool]] = [:]
+    /// Those of spaces that keep their data apart, by space, then host: another store is another
+    /// identity, so a choice made there stays there.
+    private var spaceExceptions: [Space.ID: [String: Bool]]
     private(set) var ruleCount = 0
     private(set) var filtersUpdated: Date?
     private(set) var isUpdatingFilters = false
@@ -46,6 +49,7 @@ final class Privacy {
     @ObservationIgnored private let userAgentSuffix: String
 
     private static let disabledHostsKey = "disabledProtectionHosts"
+    private static let spaceExceptionsKey = "spaceProtectionExceptions"
     private static let failedUpdatesKey = "failedFilterUpdates"
     private static let nextUpdateKey = "nextFilterUpdate"
     /// Part of each compiled list's name: bumped when `prepared(_:)` changes, so lists compiled
@@ -56,6 +60,7 @@ final class Privacy {
 
     init() {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
+        spaceExceptions = Space.siteChoices(UserDefaults.standard.dictionary(forKey: Self.spaceExceptionsKey))
         (failedUpdates, nextUpdate) = Self.savedBackoff(in: .standard)
 
         farblingTemplate = Resources.bundle.url(forResource: "farbling", withExtension: "js")
@@ -309,19 +314,24 @@ final class Privacy {
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
     }
 
-    /// `privateSession` is set for a private tab: its session's own choice wins, then the saved one.
-    func isEnabled(for url: URL?, privateSession: ObjectIdentifier? = nil) -> Bool {
+    /// `privateSession` is set for a private tab, `space` for a tab of a space that keeps its data
+    /// apart (`Tab.siteSpace`): their own choice wins, then the saved one.
+    func isEnabled(for url: URL?, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> Bool {
         guard let host = Self.siteHost(url) else { return true }
         if let privateSession, let enabled = privateExceptions[privateSession]?[host] { return enabled }
+        if let space, let enabled = spaceExceptions[space]?[host] { return enabled }
         return !disabledHosts.contains(host)
     }
 
     /// A private tab's choice stays in memory for its private session only: saved, it would
-    /// record the site it visited.
-    func setEnabled(_ enabled: Bool, for url: URL?, privateSession: ObjectIdentifier? = nil) {
+    /// record the site it visited. A separate space's is saved for that space.
+    func setEnabled(_ enabled: Bool, for url: URL?, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) {
         guard let host = Self.siteHost(url) else { return }
         if let privateSession {
             privateExceptions[privateSession, default: [:]][host] = enabled
+        } else if let space {
+            spaceExceptions[space, default: [:]][host] = enabled
+            UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
         } else {
             setEnabled(enabled, host: host)
         }
@@ -339,6 +349,12 @@ final class Privacy {
         let key = SymmetricKey(size: .bits256)
         privateFarblingKeys[privateSession] = key
         return key
+    }
+
+    /// The space was deleted, its store with it.
+    func forget(space: Space.ID) {
+        guard spaceExceptions.removeValue(forKey: space) != nil else { return }
+        UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
     }
 
     /// `host` as `disabledHosts` holds it (Settings' list), used as is: rebuilt into an address,

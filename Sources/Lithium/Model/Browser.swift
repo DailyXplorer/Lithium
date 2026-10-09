@@ -17,6 +17,9 @@ final class Browser {
         didSet {
             guard oldValue != selectedTabID else { return }
             videoPopout.selectionChanged(from: tabs.first { $0.id == oldValue }, to: selectedTab)
+            // The summary popover is one tab's. Here rather than in its button, which a hidden Zen
+            // bar doesn't have.
+            if summaries.isPanelPresented { summaries.isPanelPresented = false }
         }
     }
     /// Empty until the user makes a second space (`Space`), then the main one first.
@@ -59,7 +62,8 @@ final class Browser {
             for case let webView? in tabs.map(\.loadedWebView) { DeveloperTools.apply(developerTools, to: webView) }
         }
     }
-    var canShowWebInspector: Bool { developerTools && selectedTab != nil }
+    /// For the window in front, as the menu's other page commands (`commandTab`).
+    var canShowWebInspector: Bool { developerTools && commandTab != nil }
 
     let privacy = Privacy()
     let history = HistoryStore()
@@ -343,18 +347,25 @@ final class Browser {
 
     func setProtections(_ enabled: Bool, for tab: Tab?) {
         guard let tab, let host = Privacy.siteHost(tab.url) else { return }
-        guard let session = tab.privateSession else { return setProtections(enabled, host: host) }
-        // A private tab's choice holds for its private session only, and so do the reloads.
-        privacy.setEnabled(enabled, for: tab.url, privateSession: session)
-        tabs.filter { !$0.isAsleep && $0.privateSession == session && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
+        let (session, space) = (tab.privateSession, tab.siteSpace)
+        guard session != nil || space != nil else { return setProtections(enabled, host: host) }
+        // A private tab's choice holds for its private session only, a separate space's for that
+        // space, and so do the reloads.
+        privacy.setEnabled(enabled, for: tab.url, privateSession: session, space: space)
+        pages.filter { !$0.isAsleep && $0.privateSession == session && $0.siteSpace == space && Privacy.siteHost($0.url) == host }
+            .forEach { navigate($0, .reload) }
     }
 
     /// Reloads every open page of the site, not just the one the user changed it from, so their
     /// content blockers and scripts match the new setting. Sleeping tabs get it when they wake.
     func setProtections(_ enabled: Bool, host: String) {
         privacy.setEnabled(enabled, host: host)
-        tabs.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
+        pages.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
     }
+
+    /// The tabs, and the pages of links' windows (`QuickLinks`), which the menu's page commands
+    /// can change too.
+    private var pages: [Tab] { tabs + quickLinks.tabs }
 
     /// Settings' font choices (the fonts, "Use … on websites", a site's own font) reach the open
     /// pages they change without a reload: the font script runs again there with the new font, or
@@ -362,7 +373,7 @@ final class Browser {
     /// out, and sleeping tabs get it when they wake.
     func changePageFont(_ change: () -> Void) {
         let font = { (tab: Tab, url: URL) in
-            PageStyle.usesPageFont(url, privateSession: tab.privateSession) ? PageStyle.websiteFamily : nil
+            PageStyle.usesPageFont(url, privateSession: tab.privateSession, space: tab.siteSpace) ? PageStyle.websiteFamily : nil
         }
         let pages = tabs.compactMap { tab -> (Tab, URL, String?)? in
             guard !tab.isAsleep, let url = tab.url, !Internal.isInternal(url) else { return nil }
@@ -795,7 +806,11 @@ final class Browser {
 
     func addressTextChanged(_ text: String) {
         let edited = suggestions.editedTabID.flatMap { id in tabs.first { $0.id == id } }
-        suggestions.update(query: text, tabs: tabs, pins: pins, history: history, actions: barActions(for: edited))
+        // A space keeping its cookies apart shows only its own tabs and favorites, and its own
+        // stay out of the others: their titles and addresses are another identity's.
+        let (current, apart) = (currentSpaceID, Set(spaces.filter(\.separatesData).map(\.id)))
+        let shown = { (space: Space.ID) in space == current || !apart.contains(space) && !apart.contains(current) }
+        suggestions.update(query: text, tabs: tabs.filter { shown($0.spaceID) }, pins: pins.filter { shown($0.space) }, history: history, actions: barActions(for: edited))
     }
 
     func submitAddress(_ text: String) {
@@ -1144,7 +1159,9 @@ final class Browser {
     private func restoreSpaces(_ session: Session) {
         if let saved = session.spaces, !saved.isEmpty {
             let main = saved.first { $0.id == Space.mainID } ?? .main
-            spaces = [main] + saved.filter { $0.id != Space.mainID }
+            // No build saves more than `Space.limit`: an edited file's extra spaces are left out,
+            // and their tabs and favorites go back to the main space, as an unknown space's do.
+            spaces = Array(([main] + saved.filter { $0.id != Space.mainID }).prefix(Space.limit))
             if let id = session.spaceID, spaces.contains(where: { $0.id == id }) { currentSpaceID = id }
         }
         let known = Set(allSpaces.map(\.id))
@@ -1281,7 +1298,13 @@ final class Browser {
         removeFolders(in: id)
         spaces.remove(at: index)
         spaceSelections[id] = nil
-        if space.separatesData { removeStore(of: id) }
+        if space.separatesData {
+            removeStore(of: id)
+            // Its site choices were that store's.
+            permissions.forget(space: id)
+            privacy.forget(space: id)
+            PageStyle.forget(space: id)
+        }
     }
 
     /// Its cookies, logins and storage go at once, even while WebKit still holds the store; its

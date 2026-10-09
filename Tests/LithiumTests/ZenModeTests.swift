@@ -127,6 +127,34 @@ struct ZenModeTests {
         #expect(await waitUntil(5) { addressField(in: window) == nil })
     }
 
+    /// ⇧⌘S in Zen mode brings the top bar, whose button the summary hangs from, and holds it while
+    /// the summary is open. The summary is one page's: another tab shown, or the page moving on,
+    /// closes it, even with no button there to see the change.
+    @Test func theSummaryHoldsTheTopBarAndBelongsToOnePage() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
+        let (listener, base) = try await LocalHTTP.serve(["/a": ("Content-Type: text/html", "a"), "/b": ("Content-Type: text/html", "b")])
+        defer { listener.cancel() }
+        let (browser, _, window) = try await shownBrowser(zen: true)
+        defer { window.orderOut(nil) }
+        #expect(addressField(in: window) == nil)
+
+        browser.summaries.isPanelPresented = true
+        #expect(await waitUntil(5) { addressField(in: window) != nil })
+        // Past the close delay it is still there.
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(addressField(in: window) != nil)
+
+        let other = browser.newTab(url: base.appending(path: "a"))
+        #expect(!browser.summaries.isPanelPresented)
+        #expect(await waitUntil(5) { addressField(in: window) == nil })
+
+        #expect(await waitUntil(15) { !other.isLoading && other.webView.url != nil })
+        browser.summaries.isPanelPresented = true
+        other.load(base.appending(path: "b"))
+        #expect(!browser.summaries.isPanelPresented)
+        browser.tabs.forEach(browser.close)
+    }
+
     private func shownBrowser(zen: Bool) async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()
         if zen { browser.toggleZenMode() }

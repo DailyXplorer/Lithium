@@ -104,6 +104,33 @@ struct FindInPageTests {
         #expect(page.counted == ["licence"])
     }
 
+    /// A page finishing loading during the pause searches the old text again: the new text still searches after.
+    @Test func searchingTheOldTextAgainKeepsThePendingSearch() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        await find.update(query: "lic", in: page)
+        let typed = Task { await find.type(query: "lice", in: page) }
+        await Task.yield()
+        await find.update(query: find.query, in: page)
+        await typed.value
+        #expect(page.counted == ["lic", "lic", "lice"])
+        #expect(find.query == "lice")
+    }
+
+    /// Closing the bar during the pause drops the pending search.
+    @Test func closingTheBarDropsThePendingSearch() async {
+        let find = FindInPage()
+        let page = Target(matches: 2)
+        page.answer()
+        find.show()
+        let typed = Task { await find.type(query: "licence", in: page) }
+        await Task.yield()
+        find.hide()
+        await typed.value
+        #expect(page.counted.isEmpty)
+    }
+
     /// Only Find… gives the find field the keyboard: Find Next and Use Selection for Find show the
     /// bar but leave the keyboard where it was, such as a form field in the page.
     @Test func onlyFindTakesTheKeyboard() async {

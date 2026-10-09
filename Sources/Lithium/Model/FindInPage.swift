@@ -48,8 +48,9 @@ final class FindInPage {
     func hide() {
         isVisible = false
         linkTab = nil
-        // A search still running must not show a match once the bar is closed.
+        // A search still running, or waiting for the keys to pause, must not show a match once the bar is closed.
         search += 1
+        typing &+= 1
         target?.clearMatches()
         target = nil
     }
@@ -76,10 +77,11 @@ final class FindInPage {
     /// page one per keystroke queue up behind each other.
     func type(query newQuery: String, in target: FindTarget) async {
         typing &+= 1
-        let typed = typing, searched = search
+        let typed = typing
         try? await Task.sleep(for: Self.typingPause)
-        // Typed again, closed, or searched another way (Return) meanwhile.
-        guard typed == typing, searched == search else { return }
+        // Typed again, closed, or this text searched already (Return). A page loading meanwhile
+        // searches the old text again, which mustn't drop the new one.
+        guard typed == typing, newQuery != query else { return }
         await update(query: newQuery, in: target)
     }
 

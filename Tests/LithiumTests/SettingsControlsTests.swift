@@ -99,6 +99,7 @@ struct SettingsControlsTests {
             if body?["action"] as? String == "setSidebarColor", let color = body?["value"] as? String {
                 colors.append(color)
                 try? await Task.sleep(for: .milliseconds(100))
+                return (nil, nil)
             }
             return await SampleBridge().userContentController(controller, didReceive: message)
         }
@@ -116,9 +117,11 @@ struct SettingsControlsTests {
         webView.navigationDelegate = loaded
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         try await loaded.wait()
+        // Only the colors sent are counted: the well's own setter, without the page's re-render.
         _ = try await webView.callAsyncJavaScript("""
-            for (let i = 0; i < 200 && !$('#version').textContent; i++) await new Promise((r) => setTimeout(r, 50));
-            $('#custom-color').click();
+            const well = $('#custom-color');
+            well.oninput = (event) => call('setSidebarColor', event.target.value);
+            well.click();
             for (let i = 1; i <= 30; i++) colorPicked('#0000' + String(i).padStart(2, '0'));
             """, contentWorld: .page)
         for _ in 0..<50 where bridge.colors.last != "#000030" { try await Task.sleep(for: .milliseconds(100)) }

@@ -277,6 +277,8 @@ final class Tab: NSObject, Identifiable {
     var privateSession: ObjectIdentifier? { privateStore.map(ObjectIdentifier.init) }
     private var historyStore: HistoryStore? { isEphemeral ? nil : browser?.history }
     @ObservationIgnored private var recordedURL: URL?
+    /// The page a wake or a crash reload brings back: seen before, so finishing it is no new visit.
+    @ObservationIgnored private var reloadedURL: URL?
 
     private func recordVisit(_ url: URL, title: String) {
         recordedURL = url
@@ -343,6 +345,7 @@ final class Tab: NSObject, Identifiable {
         isAsleep = false
         sleepingState = nil
         addressAfterWaking = nil
+        reloadedURL = nil
         // A page the user sends elsewhere is no longer what its popup was talking to.
         unpair()
         // An address the user or the app sends the tab to loads without tracking parameters again.
@@ -544,6 +547,7 @@ final class Tab: NSObject, Identifiable {
     private func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)
+        reloadedURL = url
         // A pinned page's icon may have changed while it slept (a calendar's date).
         if let saved = browser?.savedIconURL(of: self) { followIcon(saved) }
     }
@@ -1319,7 +1323,10 @@ extension Tab: WKNavigationDelegate {
         searchAgainIfFinding()
         guard failedURL == nil else { return }
         if browser?.isOnScreen(self) == true { checkReader() }
-        if let url = webView.url { recordVisit(url, title: webView.title ?? "") }
+        if let url = webView.url {
+            if url == reloadedURL { recordedURL = url } else { recordVisit(url, title: webView.title ?? "") }
+        }
+        reloadedURL = nil
         browser?.tidyTitles.update(self)
         faviconLoad?.cancel()
         faviconLoad = Task { await refreshFavicon() }
@@ -1394,6 +1401,7 @@ extension Tab: WKNavigationDelegate {
         } else {
             lastCrashReload = Date()
             reloadPage()
+            reloadedURL = webView.url ?? url
             // The new process starts from the page's settings; said again in case mute isn't among them.
             if isMuted { applyMute(to: webView) }
         }

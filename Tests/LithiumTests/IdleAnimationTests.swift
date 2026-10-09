@@ -103,11 +103,64 @@ struct IdleAnimationTests {
         #expect(after * 2 < loading, "\(after) wakeups in 0.6 s once idle, \(loading) in 0.3 s of load")
     }
 
-    private func host(_ view: some View) -> (NSWindow, MainThreadWakeups) {
+    /// The same loads, with what goes on around the line in the address bar: the window opening on
+    /// a load, the edit ending after Return, the reader buttons coming and going, a resize, tab
+    /// switches. Nothing animates once the loads are done.
+    @Test(arguments: AddressBarEvent.allCases)
+    func loadingLineStopsInTheAddressBar(_ event: AddressBarEvent) async throws {
+        let bar = FakeAddressBar()
+        func load(_ progress: Double, _ isLoading: Bool, tab: Int = 0) {
+            bar.progress[tab] = progress
+            bar.isLoading[tab] = isLoading
+        }
+        if event == .opensLoading { load(0.1, true) }
+        if event == .editEnds { bar.isEditing = true }
+        let (window, wakeups) = host(AddressBarHost(bar: bar), width: 600)
+        defer {
+            wakeups.stop()
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        if event != .opensLoading { load(0.1, true) }
+        if event == .editEnds {
+            try await Task.sleep(for: .milliseconds(100))
+            bar.isEditing = false
+        }
+        let loading = try await wakeups.count(over: .milliseconds(300))
+        switch event {
+        case .resizesMidLoad: bar.width = 480
+        case .switchesTab: withAnimation(.snappy(duration: 0.25)) { bar.tab = 1 }
+        case .switchesToALoadingTab:
+            load(0.3, true, tab: 1)
+            withAnimation(.snappy(duration: 0.25)) { bar.tab = 1 }
+        default: break
+        }
+        if event == .progressEndsFirst {
+            bar.progress[bar.tab] = 1
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        load(1, false, tab: bar.tab)
+        if event == .readerButtonsComeAndGo { bar.hasReader = true }
+        // amazon.fr's second load, about 190 ms after the first.
+        try await Task.sleep(for: .milliseconds(190))
+        load(0.1, true, tab: bar.tab)
+        if event == .readerButtonsComeAndGo { bar.hasReader = false }
+        try await Task.sleep(for: .milliseconds(150))
+        load(1, false, tab: bar.tab)
+        if event == .readerButtonsComeAndGo { bar.hasReader = true }
+        try await Task.sleep(for: .seconds(1))
+        let after = try await wakeups.count(over: .milliseconds(600))
+        #expect(loading >= 9, "the line draws while the page loads (\(loading) wakeups in 0.3 s)")
+        #expect(after * 2 < loading, "\(after) wakeups in 0.6 s once idle, \(loading) in 0.3 s of load")
+    }
+
+    private func host(_ view: some View, width: CGFloat = 300) -> (NSWindow, MainThreadWakeups) {
         let hosting = NSHostingView(rootView: view)
-        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 28)
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: 28)
         // Off screen and never shown, but in a window, where SwiftUI animates.
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 300, height: 28), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: width, height: 28), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         window.orderFrontRegardless()
@@ -125,6 +178,60 @@ struct BackToBack: Sendable, CustomTestStringConvertible {
 
     var testDescription: String {
         "\(gap.map { "second load after \($0)" } ?? "one load"), first ends at \(firstEndsAt)\(appearsLoading ? ", shown mid-load" : "")"
+    }
+}
+
+/// What happens around the loading line in the address bar during amazon.fr's two loads.
+enum AddressBarEvent: String, CaseIterable, Sendable {
+    /// The window opens on a tab that is loading, so the line starts in the window's first layout.
+    case opensLoading
+    /// Return: the load starts while the field edits, and the line comes back mid-load as the lock
+    /// replaces the search icon.
+    case editEnds
+    /// `estimatedProgress` reaches 1 a moment before `isLoading` turns false.
+    case progressEndsFirst
+    /// The reader buttons come in as a load ends and go as the next starts.
+    case readerButtonsComeAndGo
+    case resizesMidLoad
+    /// To an idle tab mid-load, in an animation (spaces switch so).
+    case switchesTab
+    case switchesToALoadingTab
+}
+
+@MainActor @Observable
+private final class FakeAddressBar {
+    var tab = 0
+    var isLoading = [false, false]
+    var progress = [0.0, 0.0]
+    var isEditing = false
+    var hasReader = false
+    var width: CGFloat = 560
+}
+
+/// The address bar's layout around the line (`AddressBar`).
+private struct AddressBarHost: View {
+    let bar: FakeAddressBar
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if bar.isEditing {
+                Circle().frame(width: 22, height: 22)
+            } else {
+                Rectangle().frame(width: 22, height: 22)
+            }
+            Color.clear.frame(maxWidth: .infinity)
+            if !bar.isEditing, bar.hasReader {
+                Rectangle().frame(width: 22, height: 22)
+            }
+        }
+        .frame(width: bar.width, height: 28)
+        .overlay {
+            if !bar.isEditing {
+                LoadingLine(isLoading: bar.isLoading[bar.tab], progress: bar.progress[bar.tab])
+                    .id(bar.tab)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
     }
 }
 

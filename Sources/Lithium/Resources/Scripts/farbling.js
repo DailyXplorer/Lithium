@@ -823,6 +823,9 @@
             if (hasTrustedTypesMeta(doc)) apply(weakMapSet, trustedTypesModes, [doc, 'enforce']);
           } catch (_) {}
         }
+        // `document.open` while the page loads drops the `DOMContentLoaded` listener below, so the
+        // first batch after parsing ends stops the observer too.
+        if (read(readyState, doc) !== 'loading') apply(disconnect, observer, []);
       };
       const observer = new MutationObserverCtor(parsed);
       apply(observe, observer, [doc, { __proto__: null, childList: true, subtree: true }]);

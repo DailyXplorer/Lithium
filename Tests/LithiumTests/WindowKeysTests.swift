@@ -282,6 +282,27 @@ struct WindowKeysTests {
         #expect(first.url == page, "the tab left is untouched")
     }
 
+    /// ⌘T and ⌘L from a link's window bring the main window forward, whose field gets the keys.
+    /// The window is never shown.
+    @Test func newTabAndOpenLocationBringTheMainWindowForward() {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        let window = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        browser.window = window
+        defer { browser.window = nil }
+
+        let token = browser.addressFocusToken
+        browser.focusAddressFromMenu(newTab: false)
+        #expect(window.frontings == 1)
+        #expect(browser.addressFocusToken != token)
+        #expect(browser.selectedTab === tab, "Open Location keeps the tab")
+
+        browser.focusAddressFromMenu(newTab: true)
+        #expect(window.frontings == 2)
+        #expect(browser.selectedTabID == nil, "New Tab shows the start page")
+    }
+
     /// ⌘= zooms in like Zoom In's ⌘+; the shifted key, which types "+", is left to the menu.
     @Test func commandEqualsZoomsIn() throws {
         func key(_ characters: String, _ flags: NSEvent.ModifierFlags) throws -> NSEvent {
@@ -349,5 +370,14 @@ private final class ClosingWindow: NSWindow {
     override func close() {
         didClose = true
         super.close()
+    }
+}
+
+/// Counts the requests to come forward and stays off screen.
+private final class FrontingWindow: NSWindow {
+    private(set) var frontings = 0
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        frontings += 1
     }
 }

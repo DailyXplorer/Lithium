@@ -196,7 +196,7 @@ final class Tab: NSObject, Identifiable {
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private(set) var observations: [NSObject] = []
-    @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
+    @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int, leftOff: Set<String>)?
     /// The address the page's scripts were last set up for, and at the shown page's commit (`restoreProtections`).
     @ObservationIgnored private var protectedURL: URL?
     @ObservationIgnored private var shownProtectedURL: URL?
@@ -204,6 +204,11 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
     var isShowingError: Bool { failedURL != nil }
+    /// Shown over the error page when a filter list blocked the page itself.
+    private(set) var blockedPage: BlockedPage?
+    @ObservationIgnored private var blockLookup: Task<BlockedPage.Reason, Never>?
+    /// Open anyway: the site's next page goes without the groups that blocked it, until it commits.
+    @ObservationIgnored private var letThrough: (host: String, groups: Set<String>)?
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Cleared when another page commits.
     private(set) var loadError: NSError?
@@ -718,6 +723,9 @@ final class Tab: NSObject, Identifiable {
         hasWebstoreBridge = false
         isAsleep = true
         appliedProtections = nil
+        // Waking loads the address again, which shows the page again if it is still blocked.
+        endBlockedPage()
+        letThrough = nil
         protectedURL = nil
         canGoBack = false
         canGoForward = false
@@ -812,10 +820,12 @@ final class Tab: NSObject, Identifiable {
         if let stillWanted, !stillWanted() { return }
         protectedURL = url
         let enabled = privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace)
+        var leftOff = privacy.allowedGroups(for: url, privateSession: privateSession)
+        if let letThrough, letThrough.host == Privacy.siteHost(url) { leftOff.formUnion(letThrough.groups) }
         let controller = webView.configuration.userContentController
-        if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
-            privacy.applyRuleLists(enabled, to: controller)
-            appliedProtections = (enabled, privacy.generation)
+        if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation || appliedProtections?.leftOff != leftOff {
+            privacy.applyRuleLists(enabled, leavingOff: leftOff, to: controller)
+            appliedProtections = (enabled, privacy.generation, leftOff)
         }
         // Advanced rules are per site, so scripts are swapped on every main-frame navigation.
         controller.removeAllUserScripts()
@@ -1030,20 +1040,58 @@ final class Tab: NSObject, Identifiable {
         let error = error as NSError
         failedURL = url
         loadError = error
+        letThrough = nil
+        endBlockedPage()
+        let blocked = url.flatMap { BlockedPage.isBlocked(error) ? $0 : nil }
+        if let blocked { showBlockedPage(blocked) }
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
+        // A blocked page's explanation is `BlockedPageView`, over this one.
         let html = """
-            <!doctype html><meta charset="utf-8"><title>Can’t open this page</title>
+            <!doctype html><meta charset="utf-8"><title>\(blocked == nil ? "Can’t open this page" : "Page blocked")</title>
             <style>
               body { font: 15px "DM Sans", -apple-system, sans-serif; color: #444; display: grid; place-items: center; height: 90vh; margin: 0; }
               h1 { font-size: 22px; font-weight: 600; color: #111; margin: 0 0 8px; }
               @media (prefers-color-scheme: dark) { body { background: #1c1c1e; color: #aaa; } h1 { color: #eee; } }
             </style>
-            <div><h1>Can’t open this page</h1><p>\(message)</p></div>
+            \(blocked == nil ? "<div><h1>Can’t open this page</h1><p>\(message)</p></div>" : "")
             """
         isStartingErrorPage = true
         errorNavigation = webView.loadHTMLString(html, baseURL: url)
+    }
+
+    /// The lists are read only now, on the page's way out, and never for a page that loads.
+    private func showBlockedPage(_ url: URL) {
+        blockedPage = BlockedPage(url: url)
+        guard let privacy = browser?.privacy else { return }
+        let lookup = Task { await privacy.blockReason(for: url) }
+        blockLookup = lookup
+        Task { [weak self] in
+            let reason = await lookup.value
+            guard let self, self.blockLookup == lookup else { return }
+            self.blockedPage?.reason = reason
+        }
+    }
+
+    private func endBlockedPage() {
+        blockedPage = nil
+        blockLookup = nil
+    }
+
+    /// Open anyway lets this one page through; Always allow saves the site (for its private session
+    /// only, in a private tab). Either way only the groups that blocked it are left off.
+    func letBlockedPageThrough(always: Bool) async {
+        guard let page = blockedPage, let host = Privacy.siteHost(page.url), let lookup = blockLookup else { return }
+        let groups = await lookup.value.groups
+        // Not if the tab went elsewhere while the lists were read.
+        guard blockLookup == lookup, let browser else { return }
+        if always {
+            browser.privacy.allowPages(of: page.url, groups: groups, privateSession: privateSession)
+        } else {
+            letThrough = (host, groups)
+        }
+        browser.navigate(self, .open(page.url))
     }
 }
 
@@ -1234,7 +1282,10 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if navigation !== errorNavigation { failedURL = nil }
+        if navigation !== errorNavigation {
+            failedURL = nil
+            endBlockedPage()
+        }
         httpStatus = nil
         awaitCommit(true, for: navigation)
         isStartingErrorPage = false
@@ -1289,7 +1340,11 @@ extension Tab: WKNavigationDelegate {
         uploadingFrames = 0
         resetReader()
         resetTranslation()
-        if navigation !== errorNavigation { loadError = nil }
+        if navigation !== errorNavigation {
+            loadError = nil
+            // Open anyway was for this page: the next one gets every list again.
+            letThrough = nil
+        }
         // A later link to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.

@@ -294,6 +294,26 @@ struct PageTranslatorTests {
         #expect(engine.calls.count == calls, "no observer once shown in the original")
     }
 
+    /// What a single-page site takes away is let go while translated, not kept until Show Original;
+    /// put back, it is translated again.
+    @Test func letsGoOfWhatThePageRemoves() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        let held = "return String(window.__lithiumPageTranslation.held())"
+        #expect(await page(held, in: tab, world: .defaultClient) != "0")
+
+        // The paragraph far below still waits to come into view when it goes.
+        _ = await page("window.far = document.getElementById('far'); document.body.replaceChildren(); return ''", in: tab)
+        #expect(await waitUntil(5) { await page(held, in: tab, world: .defaultClient) == "0" })
+        _ = await page("document.body.append(window.far); return ''", in: tab)
+        #expect(await waitUntil(5) { await text("far", in: tab) == "EN(Ce paragraphe attend tout en bas de la page.)" })
+    }
+
     @Test func alwaysAndNeverChoices() async throws {
         let browser = makeBrowser()
         let translator = browser.translator

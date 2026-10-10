@@ -31,6 +31,8 @@ const waiting = new Map();
 let stopped = false;
 let sending = false;
 let dirty = new Set();
+// The page removed nodes since the last pass: what they held is let go then.
+let removed = false;
 let timer = 0;
 let ready;
 const first = new Promise((resolve) => { ready = resolve; });
@@ -61,6 +63,7 @@ const addText = (node) => {
   if (original !== undefined) return texts.set(node, { original: lead + original + trail, translated: data });
   queued.add(node);
   watch(node.parentElement, {
+    node,
     text: core,
     apply: (result) => {
       queued.delete(node);
@@ -166,6 +169,20 @@ const catchUp = () => {
   timer = 0;
   const roots = dirty;
   dirty = new Set();
+  // One kept node holds its whole removed subtree: a single-page site would otherwise keep every
+  // view it ever showed until Show Original. Moved nodes are connected again by now and stay.
+  if (removed) {
+    removed = false;
+    for (const node of texts.keys()) if (!node.isConnected) texts.delete(node);
+    for (const element of attrs.keys()) if (!element.isConnected) attrs.delete(element);
+    for (const [element, items] of waiting) {
+      if (element.isConnected) continue;
+      visible.unobserve(element);
+      waiting.delete(element);
+      // Put back later, its text is read again.
+      for (const item of items) if (item.node) queued.delete(item.node);
+    }
+  }
   for (const node of roots) if (node.isConnected) add(node);
 };
 
@@ -173,7 +190,7 @@ const onChange = (records) => {
   for (const record of records) {
     if (record.type === 'childList') {
       record.addedNodes.forEach((node) => dirty.add(node));
-      record.removedNodes.forEach((node) => texts.delete(node));
+      if (record.removedNodes.length) removed = true;
     } else if (record.type === 'characterData') {
       const node = record.target;
       if (texts.get(node)?.translated === node.data) continue;
@@ -187,7 +204,7 @@ const onChange = (records) => {
       dirty.add(record.target);
     }
   }
-  if (dirty.size && !timer) timer = setTimeout(catchUp, 300);
+  if ((dirty.size || removed) && !timer) timer = setTimeout(catchUp, 300);
 };
 const changed = new MutationObserver(onChange);
 
@@ -209,7 +226,8 @@ const restore = () => {
   ready();
 };
 
-window.__lithiumPageTranslation = { restore };
+// `held`: how many nodes the translation keeps a hold on, for the tests.
+window.__lithiumPageTranslation = { restore, held: () => texts.size + attrs.size + waiting.size };
 // Into the back/forward cache in its own text: back on screen, the app sees the page as it is
 // and translates it again if the tab still translates.
 addEventListener('pagehide', restore);

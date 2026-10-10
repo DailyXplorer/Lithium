@@ -76,6 +76,7 @@ final class Browser {
     let favicons: Favicons
     @ObservationIgnored private(set) lazy var capture = ScreenCapture(browser: self)
     @ObservationIgnored private(set) lazy var translation = PageTranslation(summaries: summaries)
+    @ObservationIgnored private(set) lazy var translator = PageTranslator(browser: self)
     @ObservationIgnored private var pinIcons: [Pin.ID: NSImage] = [:]
     /// A favorite's page can change its icon every few seconds (a timer, a progress ring): such
     /// changes write pins.json at most once a minute, the last one at the next write or at quit.
@@ -960,6 +961,7 @@ final class Browser {
         permissions.forget(privateSession: ObjectIdentifier(store))
         privacy.forget(privateSession: ObjectIdentifier(store))
         PageStyle.forget(privateSession: ObjectIdentifier(store))
+        translator.forget(privateSession: ObjectIdentifier(store))
     }
 
     func closeSelectedTab() {

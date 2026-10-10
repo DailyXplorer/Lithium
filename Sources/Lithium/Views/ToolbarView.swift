@@ -67,6 +67,9 @@ private struct AddressBar: View {
                 onDarkBackground: palette.isDark,
                 browser: browser
             )
+            if !isEditing, let tab, TranslateButton.isShown(for: tab) {
+                TranslateButton(tab: tab)
+            }
             if !isEditing, let tab, ReaderButtons.isShown(for: tab) {
                 ReaderButtons(tab: tab)
             }
@@ -241,6 +244,8 @@ struct PageMenuItems: View {
             browser.togglePinForSelectedTab()
         }
         .disabled(tab?.url == nil || tab?.isEphemeral == true)
+        Button(tab?.pageTranslation?.isActive == true ? "Show Original" : "Translate Page") { browser.toggleTranslation(tab) }
+            .disabled(tab?.canTranslate != true)
         Button("Pop Out Video") { browser.videoPopout.showSelected() }
             .disabled(!browser.videoPopout.canShowSelected)
         Divider()

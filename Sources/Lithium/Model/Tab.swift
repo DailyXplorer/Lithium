@@ -182,6 +182,13 @@ final class Tab: NSObject, Identifiable {
     /// A page back from the cache may still show the reader, so pages are asked even with the button off.
     @ObservationIgnored private var hasRead = false
     @ObservationIgnored private var readerRecheck: Task<Void, Never>?
+    /// Set by `PageTranslator` once the page's language is known; nil while there is nothing to offer.
+    var pageTranslation: TabTranslation?
+    @ObservationIgnored var languageChecked = false
+    /// The language the user translated from in this tab: its next pages in it are translated too.
+    @ObservationIgnored var translatesLanguage: String?
+    /// Moves with each page and Show Original, so a translation started before lands nowhere.
+    @ObservationIgnored var translationRun = 0
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private(set) var observations: [NSObject] = []
@@ -445,6 +452,17 @@ final class Tab: NSObject, Identifiable {
 
     var canRead: Bool { !isAsleep && pdf == nil && !isShowingError && ReaderMode.handles(url) }
 
+    var canTranslate: Bool {
+        !isAsleep && pdf == nil && !isShowingError && ["http", "https", "file"].contains(url?.scheme?.lowercased() ?? "")
+    }
+
+    /// A new document, or none: what was translated went with the old one.
+    private func resetTranslation() {
+        translationRun += 1
+        languageChecked = false
+        if pageTranslation != nil { pageTranslation = nil }
+    }
+
     @discardableResult
     func toggleReader() async -> Bool {
         guard canRead, let webView = loadedWebView else { return false }
@@ -538,7 +556,10 @@ final class Tab: NSObject, Identifiable {
     func markActive() {
         noteSound()
         lastActive = Date()
-        if !isLoading { checkReader() }
+        if !isLoading {
+            checkReader()
+            browser?.translator.check(self)
+        }
         // Its title may have changed while off screen, where it doesn't ask the model.
         if !isAsleep { browser?.tidyTitles.update(self) }
         wakeIfAsleep()
@@ -681,6 +702,7 @@ final class Tab: NSObject, Identifiable {
         pdfHistory = [:]
         pdfRecency = []
         resetReader()
+        resetTranslation()
         hasRead = false
         hasInternalBridge = false
         hasWebstoreBridge = false
@@ -1254,6 +1276,7 @@ extension Tab: WKNavigationDelegate {
         // A new document: its script tells again, a page back from the cache too.
         unsavedInputAt = nil
         resetReader()
+        resetTranslation()
         if navigation !== errorNavigation { loadError = nil }
         // A later link to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }
@@ -1329,7 +1352,10 @@ extension Tab: WKNavigationDelegate {
         }
         searchAgainIfFinding()
         guard failedURL == nil else { return }
-        if browser?.isOnScreen(self) == true { checkReader() }
+        if browser?.isOnScreen(self) == true {
+            checkReader()
+            browser?.translator.check(self)
+        }
         if let url = webView.url {
             if url == reloadedURL { recordedURL = url } else { recordVisit(url, title: webView.title ?? "") }
         }

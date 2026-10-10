@@ -433,6 +433,30 @@ struct UISnapshotTests {
         }
     }
 
+    /// The translate popover offered, downloading, translated and failed, and the address bar's
+    /// button in each state.
+    @Test func translateSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let french = Locale.Language(identifier: "fr"), english = Locale.Language(identifier: "en")
+        let states: [(name: String, status: TabTranslation.Status)] = [
+            ("offered", .offered), ("downloading", .downloading), ("translated", .translated), ("failed", .failed("This page couldn’t be translated.")),
+        ]
+        for isDark in [false, true] {
+            let scheme = isDark ? "dark" : "light"
+            for state in states {
+                let view = TranslateView(state: TabTranslation(source: french, target: english, status: state.status), site: "lemonde.fr",
+                                         alwaysTranslates: .constant(state.status == .translated), neverTranslates: .constant(false))
+                try render(view, isDark: isDark).write(to: directory.appending(path: "translate-\(state.name)-\(scheme).png"))
+            }
+            let buttons = HStack(spacing: 8) {
+                ForEach(Array(states.enumerated()), id: \.offset) { _, state in TranslateButtonLabel(status: state.status) }
+            }
+            .padding(8)
+            try render(buttons, isDark: isDark).write(to: directory.appending(path: "translate-buttons-\(scheme).png"))
+        }
+    }
+
     /// The sidebar with two folders: one open with its tabs, the selected one among them, and one
     /// collapsed with its count; a tab outside folders below them.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
@@ -517,6 +541,7 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         "appearance": [
             "sidebarStyle": "solid", "sidebarColor": "#D5DAF5", "defaultColor": "#D5DAF5", "sidebarReveal": "normal",
             "miniPlayer": true, "tabUsage": true, "websiteFont": true, "readerButton": true,
+            "translateOffer": true, "translateLanguages": [["code": "de", "name": "German"]], "translateSites": ["example.net"],
             "interfaceFont": "DM Sans", "websiteFamily": "Georgia", "websiteFontName": "Georgia", "siteFontDomains": ["example.org"],
             "startPage": ["background": "gradient", "color": "#2B2D42", "gradientFrom": "#1F3A5F", "gradientTo": "#3D2C4E", "hasImage": false] as [String: Any],
         ] as [String: Any],

@@ -116,6 +116,7 @@ extension BarAction {
         case .pinTab, .unpinTab: .location
         case .openSplitView, .exitSplitView: .sidebar
         case .enterZenMode, .exitZenMode: .fitPage
+        case .translatePage, .showOriginal: .translate
         case .clearSiteData: .trash
         case .settings: .settings
         }

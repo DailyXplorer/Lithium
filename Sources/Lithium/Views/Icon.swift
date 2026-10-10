@@ -58,6 +58,7 @@ enum Phosphor: String {
     case code
     case reader = "article"
     case readerStyle = "sliders-horizontal"
+    case translate
     case leaf
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]

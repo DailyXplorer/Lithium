@@ -246,7 +246,7 @@ struct ChosenFilters: Sendable {
             guard let group = convert(FilterLists.extraGroup, extra, into: storage.built, index: &index, used: &usedKeys) else { return nil }
             converted.append(group)
         }
-        if !read(storage.myFilters).isEmpty {
+        if hasRule(storage.myFilters) {
             guard let group = convert(FilterLists.myFiltersID, [(FilterLists.myFiltersID, storage.myFilters)], into: storage.built,
                                       index: &index, used: &usedKeys) else { return nil }
             converted.append(group)
@@ -300,9 +300,11 @@ struct ChosenFilters: Sendable {
         let discarded: Int
     }
 
+    /// A folder converted before `discarded` was recorded doesn't decode, so it is converted again:
+    /// read as 0, its rules over WebKit's limit would go unreported.
     private struct Info: Codable {
         let webkitRules: Int
-        var discarded: Int?
+        let discarded: Int
     }
 
     private struct EngineInfo: Codable {
@@ -314,6 +316,29 @@ struct ChosenFilters: Sendable {
     private static func read(_ file: URL) -> [String] {
         ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("!") }
+    }
+
+    /// Whether a file holds a rule, read only up to the first one: this runs at every build, and
+    /// the user's filters may be long.
+    static func hasRule(_ file: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
+        defer { try? handle.close() }
+        let isRule = { (line: Data) in
+            let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespaces)
+            return !text.isEmpty && !text.hasPrefix("!")
+        }
+        var line = Data()
+        while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            for byte in chunk {
+                guard byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r") else {
+                    line.append(byte)
+                    continue
+                }
+                if isRule(line) { return true }
+                line.removeAll(keepingCapacity: true)
+            }
+        }
+        return isRule(line)
     }
 
     /// The group as converted before when its files, or else its rules, are the same; otherwise
@@ -369,7 +394,7 @@ struct ChosenFilters: Sendable {
               let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
         return Converted(planned: FilterGroup(name: group, identifier: "lithium-\(group)-h\(hash)-p\(FilterGroup.preparation)",
                                               file: folder.appending(path: "rules.json"), webkitRules: info.webkitRules),
-                         folder: folder, discarded: info.discarded ?? 0)
+                         folder: folder, discarded: info.discarded)
     }
 
     private static func digest(_ text: String) -> String {

@@ -236,7 +236,8 @@ final class Privacy {
     /// Runs with `isUpdatingFilters` set by the caller, and clears it when done.
     private func updateFilters() async {
         defer { isUpdatingFilters = false }
-        guard let updater = FilterUpdater.bundled() else { return }
+        guard var updater = FilterUpdater.bundled() else { return }
+        updater.session = filterSession
         let destination = Self.downloadedFilters
         var updated = false
         await updateChosenLists()
@@ -469,14 +470,18 @@ final class Privacy {
         let chosen = !customized ? nil : await Task.detached(priority: .userInitiated) {
             ChosenFilters.build(base: folder, manifest: manifest, choices: choices, storage: storage)
         }.value
-        if customized, chosen == nil {
+        let failed = customized && chosen == nil
+        if failed {
             filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
-            // The lists loaded stay, or none at launch: the shipped set would block what the user
-            // turned off. Incomplete, so the update backs off instead of downloading every hour.
-            filtersComplete = false
-            return
         }
-        let groups = await Self.loadGroups(chosen?.groups ?? FilterGroup.shipped(in: folder, manifest: manifest), into: store)
+        // Instead, the shipped groups that hold no list the user turned off, and the shipped engine
+        // only if none is off: it is built from every shipped list. Keeping what was loaded would
+        // keep a list just turned off blocking.
+        let shippedEngine = choices.off.isEmpty
+        let shipped = FilterGroup.shipped(in: folder, manifest: manifest).filter { group in
+            manifest.groups[group.name]?.lists.map { choices.off.isDisjoint(with: $0) } ?? shippedEngine
+        }
+        let groups = await Self.loadGroups(chosen?.groups ?? shipped, into: store)
         if let chosen {
             let discarded = chosen.discarded.values.reduce(0, +)
             filterError = !groups.complete ? "Some of your filter lists or filters couldn’t be applied."
@@ -486,17 +491,22 @@ final class Privacy {
             filterError = nil
         }
         ruleLists = groups.lists
-        ruleCount = groups.ruleCount + (chosen?.advancedRules ?? manifest.advancedRules ?? 0) + (chosen?.scriptletRules ?? manifest.scriptletRules ?? 0)
+        let engineRules = chosen.map { $0.advancedRules + $0.scriptletRules }
+            ?? (shippedEngine ? (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0) : 0)
+        ruleCount = groups.ruleCount + engineRules
         filtersUpdated = manifest.date
         filtersMatchSources = FilterUpdater.bundled()?.sources.built(manifest) ?? true
-        filtersComplete = groups.complete && (manifest.failedLists ?? []).isEmpty
+        // Incomplete after a failed build, so the update backs off instead of downloading every hour.
+        filtersComplete = !failed && groups.complete && (manifest.failedLists ?? []).isEmpty
         generation += 1
 
         // Awaited, so the tab restored at launch waits for uBO's scriptlets instead of playing ads.
         if let chosen {
             await advanced.load(folder: chosen.engineFolder, stamp: chosen.engineStamp)
-        } else {
+        } else if shippedEngine {
             await advanced.load(folder: folder, stamp: stamp)
+        } else {
+            advanced.unload()
         }
     }
 

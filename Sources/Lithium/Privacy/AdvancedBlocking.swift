@@ -72,6 +72,11 @@ final class AdvancedBlocking {
         }.value
     }
 
+    /// No rules until the next `load`: the engine loaded may hold a list the user turned off.
+    func unload() {
+        engine = nil
+    }
+
     /// Given `page`, the script is for a frame showing `url`, and runs only in frames of that host.
     func script(for url: URL, inFrameOf page: URL? = nil) -> String? {
         guard ["http", "https"].contains(url.scheme), page.map({ ["http", "https"].contains($0.scheme) }) ?? true,

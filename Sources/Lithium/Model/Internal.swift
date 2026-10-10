@@ -383,14 +383,19 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         let text = privacy.myFilters
         let problems = await Task.detached(priority: .userInitiated) { FilterLists.problems(in: text) }.value
-        return [
+        var reply: [String: Any] = [
             "sections": sections.map { ["title": $0.title, "lists": $0.lists] as [String: Any] },
             "myFilters": text,
             "problems": problems.map { ["line": $0.line, "text": $0.text, "message": $0.message] as [String: Any] },
-            "error": error ?? privacy.filterError ?? "",
-            // The action's own failure: `filterError` may be about another list.
-            "failed": error ?? "",
         ]
+        for (key, message) in Self.filterMessages(failed: error, notice: privacy.filterError) { reply[key] = message }
+        return reply
+    }
+
+    /// The action's own failure in `failed`, as `filterError` may be about another list. The page
+    /// shows `error`: both, so one doesn't hide the other.
+    static func filterMessages(failed: String?, notice: String?) -> [String: String] {
+        ["error": [failed, notice].compactMap { $0 }.joined(separator: " "), "failed": failed ?? ""]
     }
 
     /// Read once: the state is sent many times a second while a color is dragged, and the WebKit

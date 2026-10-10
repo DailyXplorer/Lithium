@@ -180,20 +180,7 @@ struct FilterUpdater: Sendable {
         guard seen.count <= Self.maximumListFiles else { throw URLError(.cannotParseResponse) }
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
-        let (stream, response) = try await session.bytes(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { throw URLError(.badServerResponse) }
-        // The biggest real list is a few megabytes. Counted as it arrives: a server sending
-        // gigabytes would otherwise fill memory before any check.
-        guard response.expectedContentLength <= Int64(Self.maximumListBytes - bytes) else { throw URLError(.dataLengthExceedsMaximum) }
-        // An array sized up front: every byte of the daily update is appended here one at a time.
-        var data: [UInt8] = []
-        data.reserveCapacity(Int(max(0, response.expectedContentLength)))
-        for try await byte in stream {
-            // A NUL byte means a binary file, not text.
-            guard byte != 0 else { throw URLError(.cannotParseResponse) }
-            data.append(byte)
-            guard bytes + data.count <= Self.maximumListBytes else { throw URLError(.dataLengthExceedsMaximum) }
-        }
+        let data = try await CappedBody.download(request, session: session, limit: Self.maximumListBytes - bytes)
         bytes += data.count
         // An HTML page (an error or login page served with 200) would parse into junk rules.
         let body = String(decoding: data, as: UTF8.self)
@@ -296,6 +283,57 @@ struct FilterUpdater: Sendable {
     /// The files one list may be made of, itself and everything it includes.
     static let maximumListFiles = 32
     static let maximumListBytes = 10 * 1024 * 1024
+}
+
+/// A list's body, taken in the chunks it arrives in: read byte by byte, the daily update made an
+/// async step per byte. The biggest real list is a few megabytes; counted as it arrives, a server
+/// sending gigabytes is stopped before it fills memory.
+private final class CappedBody: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let limit: Int
+    private var data = Data()
+    private var failure: URLError?
+    /// Set before the task starts; the session calls the delegate one call at a time after.
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    private init(limit: Int) {
+        self.limit = limit
+    }
+
+    static func download(_ request: URLRequest, session: URLSession, limit: Int) async throws -> Data {
+        let body = CappedBody(limit: limit)
+        let task = session.dataTask(with: request)
+        task.delegate = body
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                body.continuation = continuation
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard failure == nil else { return }
+        if (dataTask.response as? HTTPURLResponse)?.statusCode ?? 200 >= 400 {
+            failure = URLError(.badServerResponse)
+        } else if dataTask.response?.expectedContentLength ?? -1 > Int64(limit) || data.count + chunk.count > limit {
+            failure = URLError(.dataLengthExceedsMaximum)
+        } else if chunk.contains(0) {
+            // A NUL byte means a binary file, not text.
+            failure = URLError(.cannotParseResponse)
+        } else {
+            data.append(chunk)
+            return
+        }
+        dataTask.cancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if failure == nil, (task.response as? HTTPURLResponse)?.statusCode ?? 200 >= 400 { failure = URLError(.badServerResponse) }
+        if let error = (failure as Error?) ?? error { continuation?.resume(throwing: error) } else { continuation?.resume(returning: data) }
+        continuation = nil
+    }
 }
 
 struct Manifest: Codable {

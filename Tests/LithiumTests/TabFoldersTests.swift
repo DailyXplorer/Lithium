@@ -137,6 +137,31 @@ struct TabFoldersTests {
         #expect(c.folderID == folder.id)
     }
 
+    /// A pair's sidebar row drags as its first side, like a tab's row: dropped on a folder and back
+    /// on the tab list, both sides go and stay one row.
+    @Test func aSplitRowDragsIntoAndOutOfAFolder() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let a = browser.newTab(url: page("a"))
+        let b = browser.newTab(url: page("b"))
+        browser.newTab(url: page("c"))
+        let folder = browser.newFolder()
+        browser.select(a)
+        browser.openInSplit(b)
+        let split = try #require(browser.split(of: a))
+        let first = try #require(browser.tabs.first { $0.id == split.first })
+
+        #expect(browser.dropTab([browser.startDragging(first)], on: .folder(folder.id, nil)))
+        #expect(browser.splits.draggedTabID == nil)
+        #expect(a.folderID == folder.id && b.folderID == folder.id)
+        let rows = browser.tabListRows.compactMap(\.entry).filter { $0.tab.folderID == folder.id }
+        #expect(rows.count == 1 && rows.first?.split == browser.split(of: a), "the pair as one row")
+
+        #expect(browser.dropTab([browser.startDragging(first)], on: .tabList(0)))
+        #expect(a.folderID == nil && b.folderID == nil)
+        #expect(browser.split(of: a)?.contains(b.id) == true)
+    }
+
     /// The folders, their names, collapsed state and tabs come back after a relaunch, the tabs
     /// asleep. A private tab is never saved, and a tab pinned leaves its folder.
     @Test func foldersComeBackAfterRelaunch() throws {

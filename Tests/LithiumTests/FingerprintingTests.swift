@@ -1497,7 +1497,7 @@ struct FingerprintingTests {
 
     /// Sample noise depends on each sample's value: what a silent buffer shows can't be taken off
     /// another buffer's samples, as it once could, leaving them exact. A window copied from the
-    /// middle gets the whole buffer's noise there, and nothing past what it copied; a long buffer is
+    /// middle gets the whole buffer's noise there, and nothing past what it copied; a long buffer under the limit is
     /// noised on every sample, not on a share at known places, and so are the analyser's
     /// time-domain and byte reads.
     @Test func audioNoiseCantBeMeasuredAndRemoved() async throws {
@@ -1563,5 +1563,49 @@ struct FingerprintingTests {
             #expect(try #require(protected[name]) > 0, "\(name)")
         }
         #expect(protected["byteSpread"] == 1)
+    }
+
+    /// Past the sample limit, the first `getChannelData` of a decoded track once ran the noise over
+    /// every sample, stalling the page. Now one sample in each run of three is decided, never the
+    /// same one in every run, at places that differ from site to site; `copyFromChannel` agrees.
+    @Test func longAudioBuffersAreNoisedOnAKeyedShare() async throws {
+        let probe = """
+            (() => {
+              const length = 3000000, wave = (i) => Math.fround(Math.sin(i / 7) * 0.5);
+              const make = () => {
+                const buffer = new AudioBuffer({ length, sampleRate: 44100 }), data = new Float32Array(length);
+                for (let i = 0; i < length; i++) data[i] = wave(i);
+                buffer.copyToChannel(data, 0);
+                return buffer;
+              };
+              const full = make().getChannelData(0);
+              let moved = 0, crowded = 0, places = 0;
+              const residues = [0, 0, 0];
+              for (let run = 0; run < length / 3; run++) {
+                let inRun = 0;
+                for (let i = run * 3; i < run * 3 + 3; i++) if (full[i] !== wave(i)) { inRun++; residues[i % 3]++; }
+                moved += inRun; if (inRun > 1) crowded++;
+              }
+              for (let i = 0; i < 3000; i++) if (full[i] !== wave(i)) places = (Math.imul(places, 31) + i) | 0;
+              const window = new Float32Array(1000);
+              make().copyFromChannel(window, 0, 1500001);
+              let windowOff = 0; for (let i = 0; i < 1000; i++) if (window[i] !== full[1500001 + i]) windowOff++;
+              return JSON.stringify({ moved, crowded, places: places >>> 0, windowOff, fewestInAResidue: Math.min(...residues) });
+            })()
+            """
+        let bare: [String: Int] = try await run(probe, farbling: nil)
+        let one: [String: Int] = try await run(probe, farbling: Self.farbling(site: "example.com"))
+        let other: [String: Int] = try await run(probe, farbling: Self.farbling(site: "example.org"))
+
+        #expect(bare["moved"] == 0)
+        for protected in [one, other] {
+            // About half of one sample in three.
+            #expect(try #require(protected["moved"]) > 3000000 / 12)
+            #expect(try #require(protected["moved"]) <= 3000000 / 3)
+            #expect(protected["crowded"] == 0)
+            #expect(try #require(protected["fewestInAResidue"]) > 3000000 / 24)
+            #expect(protected["windowOff"] == 0)
+        }
+        #expect(one["places"] != other["places"])
     }
 }

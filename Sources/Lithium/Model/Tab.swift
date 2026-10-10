@@ -1274,7 +1274,8 @@ extension Tab: WKNavigationDelegate {
         }
         // Open anyway lets through its own site only. WebKit checks a redirect before asking here,
         // with the groups still off, so one to another site goes again with every list on. One within
-        // the site (to https, to its language's page) is part of that load: the same filters name it.
+        // the site (to https, to another path; the same host, `www.` aside, not a language subdomain)
+        // is part of that load: the same filters name it.
         if let letThrough, Self.isRedirect(action), letThrough.host != Privacy.siteHost(url) {
             self.letThrough = nil
             Task { self.load(url) }

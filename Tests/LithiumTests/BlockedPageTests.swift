@@ -179,6 +179,7 @@ struct BlockedPageTests {
                 s.onerror = () => document.title = 'Late blocked'; document.head.append(s) }</script>
                 """#.utf8)),
             "/late.js": ("Content-Type: text/javascript", Data("document.title = 'Late loaded'".utf8)),
+            "/start": ("Content-Type: text/html", Data("<title>Start</title>".utf8)),
         ], delay: delay, requested: { requests.record($0) }, answer: { path in
             guard let base = served.withLock({ $0 }), let port = base.port else { return nil }
             switch path {
@@ -328,17 +329,21 @@ struct BlockedPageTests {
         #expect(setup.requests["/blocked"] == 1)
     }
 
-    /// Reload while Open anyway is on its way is another navigation: the page is blocked again.
-    @Test func reloadDuringOpenAnywayBlocksAgain() async throws {
+    /// Reload while Open anyway is on its way is another navigation: the page is blocked again. So
+    /// is the reload after a crash. The tab has history, so it is WebKit's reload, not a new load.
+    @Test(arguments: [false, true]) func reloadDuringOpenAnywayBlocksAgain(crashed: Bool) async throws {
         let setup = try await setUp(delay: 3)
         defer { tearDown(setup) }
-        let tab = setup.browser.newTab(url: setup.page)
+        let tab = setup.browser.newTab(url: setup.page.deletingLastPathComponent().appending(path: "start"))
+        #expect(await waitUntil(15) { tab.title == "Start" && !tab.isLoading })
+        setup.browser.navigate(tab, .open(setup.page))
         #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
 
         await tab.letBlockedPageThrough(always: false)
         #expect(await waitUntil(15) { setup.requests["/blocked"] == 1 })
+        #expect(tab.webView.backForwardList.currentItem != nil)
         let blocked = tab.loadError
-        setup.browser.navigate(tab, .reload)
+        if crashed { tab.webViewWebContentProcessDidTerminate(tab.webView) } else { setup.browser.navigate(tab, .reload) }
         #expect(await waitUntil(15) { tab.loadError !== blocked && tab.blockedPage?.reason != nil })
         #expect(setup.requests["/blocked"] == 1)
     }

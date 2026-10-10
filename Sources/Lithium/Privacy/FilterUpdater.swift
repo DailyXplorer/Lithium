@@ -45,7 +45,8 @@ struct FilterUpdater: Sendable {
             guard let url = sources.lists[name] else { continue }
             do {
                 var seen: Set<URL> = []
-                let lines = try await expand(url, seen: &seen)
+                var bytes = 0
+                let lines = try await expand(url, seen: &seen, bytes: &bytes)
                 // A captive portal, a parked domain or an emptied file answers 200 too.
                 guard lines.count >= minimumRules else { throw URLError(.cannotParseResponse) }
                 downloaded[name] = lines
@@ -72,13 +73,9 @@ struct FilterUpdater: Sendable {
         var advanced: [String] = []
         var scriptlets: [String] = []
         for (group, names) in sources.groups {
-            var unique = Set<String>()
-            var rules: [String] = []
-            for name in names {
-                for rule in downloaded[name] ?? [] where Self.isAllowed(rule, list: name) && unique.insert(rule).inserted {
-                    if Self.isUBOScriptlet(rule, list: name) { scriptlets.append(rule) } else { rules.append(rule) }
-                }
-            }
+            let sorted = Self.sorted(names.map { ($0, downloaded[$0] ?? []) })
+            let rules = sorted.rules
+            scriptlets += sorted.scriptlets
             let result = ContentBlockerConverter().convertArray(rules: rules, safariVersion: .autodetect(), advancedBlocking: true)
             // Rules over WebKit's limit are dropped without a word: the set would block less than its
             // lists say yet count as complete. The last set stays, as scripts/update-filters.py refuses it too.
@@ -128,15 +125,42 @@ struct FilterUpdater: Sendable {
         }
     }
 
-    /// A uBO `+js()` filter from one of uBO's own lists, the only ones trusted with its `trusted-` scriptlets.
-    static func isUBOScriptlet(_ rule: String, list: String) -> Bool {
-        list.hasPrefix("ubo-") && (rule.contains("##+js(") || rule.contains("#@#+js("))
+    /// A group's rules for the converter and its uBO `+js()` filters, each kept once, in order.
+    static func sorted(_ lists: [(String, [String])]) ->(rules: [String], scriptlets: [String]) {
+        var unique = Set<String>()
+        var rules: [String] = []
+        var scriptlets: [String] = []
+        for (name, lines) in lists {
+            for rule in lines where isAllowed(rule, list: name) && unique.insert(rule).inserted {
+                if isUBOScriptlet(rule, list: name) { scriptlets.append(rule) } else { rules.append(rule) }
+            }
+        }
+        return (rules, scriptlets)
     }
 
-    /// Rules that run code in pages come only from uBO's own lists: the in-page engine can't tell
+    /// uBO's own lists, and the filters the user writes: the only ones trusted to run code in pages.
+    static func isTrusted(_ list: String) -> Bool {
+        list.hasPrefix("ubo-") || list == FilterLists.myFiltersID
+    }
+
+    /// A uBO `+js()` filter from a trusted list, the only ones trusted with its `trusted-` scriptlets.
+    static func isUBOScriptlet(_ rule: String, list: String) -> Bool {
+        isTrusted(list) && (rule.contains("##+js(") || rule.contains("#@#+js("))
+    }
+
+    /// Rules that run code in pages come only from trusted lists: the in-page engine can't tell
     /// which list a rule came from, so another list's would run as trusted as uBO's.
     static func isAllowed(_ rule: String, list: String) -> Bool {
-        list.hasPrefix("ubo-") || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
+        isTrusted(list) || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
+    }
+
+    /// One list's rules, for a list the user chose: at least one, or it isn't a list.
+    func download(_ url: URL) async throws -> [String] {
+        var seen: Set<URL> = []
+        var bytes = 0
+        let lines = try await expand(url, seen: &seen, bytes: &bytes)
+        guard !lines.isEmpty else { throw URLError(.cannotParseResponse) }
+        return lines
     }
 
     private static func copy(of list: String, in folder: URL) -> URL {
@@ -149,14 +173,15 @@ struct FilterUpdater: Sendable {
         return folders.indices.sorted { dates[$0] != dates[$1] ? dates[$0] > dates[$1] : $0 < $1 }.map { folders[$0] }
     }
 
-    private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
+    /// `bytes` counts the list's files together, so its includes can't add up past the cap either.
+    private func expand(_ url: URL, seen: inout Set<URL>, bytes: inout Int) async throws -> [String] {
         guard seen.insert(url).inserted else { return [] }
         // A chain of ever new addresses would keep the update going for the whole launch.
         guard seen.count <= Self.maximumListFiles else { throw URLError(.cannotParseResponse) }
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { throw URLError(.badServerResponse) }
+        let data = try await CappedBody.download(request, session: session, limit: Self.maximumListBytes - bytes)
+        bytes += data.count
         // An HTML page (an error or login page served with 200) would parse into junk rules.
         let body = String(decoding: data, as: UTF8.self)
         if body.first(where: { !$0.isWhitespace && $0 != "\u{FEFF}" }) == "<" { throw URLError(.cannotParseResponse) }
@@ -179,7 +204,7 @@ struct FilterUpdater: Sendable {
                 if let included = URL(string: path, relativeTo: url)?.absoluteURL,
                    included.scheme?.lowercased() == url.scheme?.lowercased(),
                    included.host()?.lowercased() == url.host()?.lowercased(), included.port == url.port {
-                    lines += try await expand(included, seen: &seen)
+                    lines += try await expand(included, seen: &seen, bytes: &bytes)
                 }
             } else if !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[Adblock") {
                 lines.append(line)
@@ -257,6 +282,58 @@ struct FilterUpdater: Sendable {
     static let maximumConditionDepth = 64
     /// The files one list may be made of, itself and everything it includes.
     static let maximumListFiles = 32
+    static let maximumListBytes = 10 * 1024 * 1024
+}
+
+/// A list's body, taken in the chunks it arrives in: read byte by byte, the daily update made an
+/// async step per byte. The biggest real list is a few megabytes; counted as it arrives, a server
+/// sending gigabytes is stopped before it fills memory.
+private final class CappedBody: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let limit: Int
+    private var data = Data()
+    private var failure: URLError?
+    /// Set before the task starts; the session calls the delegate one call at a time after.
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    private init(limit: Int) {
+        self.limit = limit
+    }
+
+    static func download(_ request: URLRequest, session: URLSession, limit: Int) async throws -> Data {
+        let body = CappedBody(limit: limit)
+        let task = session.dataTask(with: request)
+        task.delegate = body
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                body.continuation = continuation
+                task.resume()
+            }
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        guard failure == nil else { return }
+        if (dataTask.response as? HTTPURLResponse)?.statusCode ?? 200 >= 400 {
+            failure = URLError(.badServerResponse)
+        } else if dataTask.response?.expectedContentLength ?? -1 > Int64(limit) || data.count + chunk.count > limit {
+            failure = URLError(.dataLengthExceedsMaximum)
+        } else if chunk.contains(0) {
+            // A NUL byte means a binary file, not text.
+            failure = URLError(.cannotParseResponse)
+        } else {
+            data.append(chunk)
+            return
+        }
+        dataTask.cancel()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if failure == nil, (task.response as? HTTPURLResponse)?.statusCode ?? 200 >= 400 { failure = URLError(.badServerResponse) }
+        if let error = (failure as Error?) ?? error { continuation?.resume(throwing: error) } else { continuation?.resume(returning: data) }
+        continuation = nil
+    }
 }
 
 struct Manifest: Codable {

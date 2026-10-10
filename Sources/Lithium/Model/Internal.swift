@@ -184,6 +184,18 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             if let engine = (value as? String).flatMap(SearchEngine.init(rawValue:)) { defaults.set(engine.rawValue, forKey: SearchEngine.preferenceKey) }
         case "updateFilters":
             browser.privacy.updateFiltersNow()
+        case "filterLists":
+            return (await filterLists(browser), nil)
+        case "setFilterList":
+            guard let entry = value as? [String: Any], let id = entry["id"] as? String else { return (nil, "No list") }
+            let error = await browser.privacy.setFilterList(id, enabled: entry["enabled"] as? Bool ?? true)
+            return (await filterLists(browser, error: error), nil)
+        case "addFilterList":
+            let error = await browser.privacy.addFilterList(value as? String ?? "")
+            return (await filterLists(browser, error: error), nil)
+        case "setMyFilters":
+            let error = await browser.privacy.setMyFilters(value as? String ?? "")
+            return (await filterLists(browser, error: error), nil)
         case "enableProtections":
             if let host = value as? String { browser.setProtections(true, host: host) }
         case "removeAllowedPage":
@@ -341,6 +353,52 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         await browser.history.visitsInBackground(matching: query, before: before, limit: Self.historyPageLength)?.map {
             ["id": $0.id, "url": $0.url.absoluteString, "title": $0.title, "time": $0.date.timeIntervalSince1970 * 1000]
         }
+    }
+
+    /// The Filter lists page, apart from the settings state: it reads lists from disk, which the
+    /// state, sent many times a second while a color is dragged, must not.
+    private func filterLists(_ browser: Browser, error: String? = nil) async -> [String: Any] {
+        let privacy = browser.privacy
+        let choices = privacy.filterChoices
+        let counts = await privacy.filterListRules()
+        let failed = Set(privacy.failedFilterLists)
+        let updated = privacy.filtersUpdated.map { $0.timeIntervalSince1970 * 1000 } ?? 0
+        let entry = { (info: FilterListInfo, enabled: Bool, rules: Int?, updated: Double, failed: Bool, removable: Bool) -> [String: Any] in
+            ["id": info.id, "name": info.name, "summary": info.summary, "homepage": info.homepage?.absoluteString ?? "",
+             "enabled": enabled, "rules": rules ?? -1, "updated": updated, "failed": failed, "removable": removable]
+        }
+        let copy = { (id: String) in choices.copies[id] }
+        var sections: [(title: String, lists: [[String: Any]])] = []
+        func add(_ title: String, _ list: [String: Any]) {
+            if let index = sections.firstIndex(where: { $0.title == title }) { sections[index].lists.append(list) } else { sections.append((title, [list])) }
+        }
+        for info in FilterLists.shipped {
+            add(info.section, entry(info, !choices.off.contains(info.id), counts[info.id], updated, failed.contains(info.id), false))
+        }
+        for info in FilterLists.catalog {
+            let on = choices.on.contains(info.id)
+            add(info.section, entry(info, on, on ? copy(info.id)?.rules : nil, (copy(info.id)?.updated.timeIntervalSince1970 ?? 0) * 1000, copy(info.id)?.failed ?? false, false))
+        }
+        for url in choices.added {
+            let id = FilterLists.id(of: url)
+            let info = FilterListInfo(id: id, name: url.host() ?? url.absoluteString, summary: url.absoluteString, section: "Added by you", homepage: url)
+            add(info.section, entry(info, true, copy(id)?.rules, (copy(id)?.updated.timeIntervalSince1970 ?? 0) * 1000, copy(id)?.failed ?? false, true))
+        }
+        let text = privacy.myFilters
+        let problems = await Task.detached(priority: .userInitiated) { FilterLists.problems(in: text) }.value
+        var reply: [String: Any] = [
+            "sections": sections.map { ["title": $0.title, "lists": $0.lists] as [String: Any] },
+            "myFilters": text,
+            "problems": problems.map { ["line": $0.line, "text": $0.text, "message": $0.message] as [String: Any] },
+        ]
+        for (key, message) in Self.filterMessages(failed: error, notice: privacy.filterError) { reply[key] = message }
+        return reply
+    }
+
+    /// The action's own failure in `failed`, as `filterError` may be about another list. The page
+    /// shows `error`: both, so one doesn't hide the other.
+    static func filterMessages(failed: String?, notice: String?) -> [String: String] {
+        ["error": [failed, notice].compactMap { $0 }.joined(separator: " "), "failed": failed ?? ""]
     }
 
     /// Read once: the state is sent many times a second while a color is dragged, and the WebKit

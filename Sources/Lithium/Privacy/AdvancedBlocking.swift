@@ -22,7 +22,9 @@ final class AdvancedBlocking {
 
     /// Each build gets its own directory, renamed into place once complete: AdGuard's engine holds
     /// a file lock while it builds, which would make pages opened meanwhile wait on the main thread.
-    func load(folder: URL, stamp filterStamp: String) async {
+    /// False when the engine can't be built or opened: the one loaded before stays.
+    @discardableResult
+    func load(folder: URL, stamp filterStamp: String) async -> Bool {
         let library: Library
         if let read = self.library {
             library = read
@@ -49,16 +51,22 @@ final class AdvancedBlocking {
                 }
                 return true
             }.value
-            guard built else { return }
+            guard built else { return false }
         }
         // Off the main thread, which this runs at every launch. Opening only makes the folder: the
         // engine is read by its first lookup, made here so the first page doesn't wait for it.
         // The old engines go once the new one has replaced them, as pages may be looking theirs up meanwhile.
-        engine = await Task.detached(priority: .userInitiated) {
+        let opened = await Task.detached(priority: .userInitiated) {
             let engine = try? WebExtension(containerURL: directory)
             _ = engine?.lookup(pageUrl: URL(string: "https://example.com/")!, topUrl: nil)
             return OpenedEngine(engine: engine)
         }.value.engine
+        // A damaged folder would be opened, and fail, at every launch: it goes, so the next load builds it again.
+        guard let opened else {
+            try? FileManager.default.removeItem(at: directory)
+            return false
+        }
+        engine = opened
         let container = container
         await Task.detached(priority: .userInitiated) {
             let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
@@ -70,6 +78,12 @@ final class AdvancedBlocking {
                 try? FileManager.default.removeItem(at: other)
             }
         }.value
+        return true
+    }
+
+    /// No rules until the next `load`: the engine loaded may hold a list the user turned off.
+    func unload() {
+        engine = nil
     }
 
     /// Given `page`, the script is for a frame showing `url`, and runs only in frames of that host.

@@ -79,28 +79,37 @@ struct BrowserTests {
     }
 
     /// A wide page clips sideways overflow; a split pane's width or zooming in leaves it scrollable,
-    /// so a fixed-width layout's right side can still be reached.
+    /// so a fixed-width layout's right side can still be reached. So does a layout wider than the
+    /// view: only overflow about a scrollbar wide is clipped.
     @Test func onlyWideViewsClipSidewaysOverflow() async throws {
-        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", "<title>Wide</title><div style='width:1500px'>wide</div>")])
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Wide</title><div style='width: calc(100vw + 15px)'>wide</div>"),
+            "/layout": ("Content-Type: text/html", "<!doctype html><title>Layout</title><div style='width: 1500px'>layout</div>"),
+        ])
         defer { listener.cancel() }
         let browser = Browser()
+        let layout = browser.newTab(url: base.appending(path: "layout"))
+        defer { browser.close(layout) }
+        // Sized before it loads: the width is measured at load.
+        layout.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
         let tab = browser.newTab(url: base)
         defer { browser.close(tab) }
-        #expect(await waitUntil(30) { tab.title == "Wide" && !tab.isLoading })
-        let overflow = { (expected: String) in
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        #expect(await waitUntil(30) { tab.title == "Wide" && !tab.isLoading && layout.title == "Layout" && !layout.isLoading })
+        let overflow = { (tab: Tab, expected: String) in
             await self.pollValue(10) {
                 let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
                 return value == expected ? value : nil
             } != nil
         }
-        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
-        #expect(await overflow("clip"))
+        #expect(await overflow(layout, "visible"))
+        #expect(await overflow(tab, "clip"))
         tab.webView.pageZoom = 1.5
-        #expect(await overflow("visible"))
+        #expect(await overflow(tab, "visible"))
         tab.webView.pageZoom = 1
-        #expect(await overflow("clip"))
+        #expect(await overflow(tab, "clip"))
         tab.webView.frame = NSRect(x: 0, y: 0, width: 700, height: 800)
-        #expect(await overflow("visible"))
+        #expect(await overflow(tab, "visible"))
     }
 
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.

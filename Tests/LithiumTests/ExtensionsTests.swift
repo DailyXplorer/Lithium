@@ -8,7 +8,7 @@ struct ExtensionsTests {
     private let id = "aabbccddeeffgghhiijjkkllmmnnoopp"
 
     /// A tiny Manifest V3 extension, zipped with its files at the root like a store package.
-    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#, files: [String: String] = [:], links: [String: String] = [:]) throws -> Data {
+    private func archive(manifest: String = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0"}"#, files: [String: String] = [:], data: [String: Data] = [:], links: [String: String] = [:]) throws -> Data {
         let source = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID())")
         let zip = FileManager.default.temporaryDirectory.appending(path: "extension-\(UUID()).zip")
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
@@ -19,6 +19,9 @@ struct ExtensionsTests {
         try Data(manifest.utf8).write(to: source.appending(path: "manifest.json"))
         for (name, contents) in files {
             try Data(contents.utf8).write(to: source.appending(path: name))
+        }
+        for (name, contents) in data {
+            try contents.write(to: source.appending(path: name))
         }
         for (name, destination) in links {
             try FileManager.default.createSymbolicLink(atPath: source.appending(path: name).path, withDestinationPath: destination)
@@ -335,6 +338,67 @@ struct ExtensionsTests {
         await extensions.updateIfDue()
         #expect(extensions.installed.first?.version == "1.0")
         #expect(extensions.contexts[id] != nil)
+    }
+
+    /// A refused version was downloaded and refused again every day, and Settings never said so.
+    /// It's remembered across launches, and only a newer one is downloaded.
+    @Test(.timeLimit(.minutes(1))) func aRefusedUpdateIsntDownloadedAgain() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        var latest = "2.0"
+        extensions.latestVersions = { _ in [self.id: latest] }
+        var downloads = 0
+        let greedy = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "2.0", "host_permissions": ["<all_urls>"]}"#)
+        extensions.downloadArchive = { _ in
+            downloads += 1
+            return greedy
+        }
+
+        await extensions.updateIfDue()
+        #expect(downloads == 1)
+        #expect(extensions.installed.first?.refusedVersion == "2.0")
+
+        let relaunched = Extensions(folder: folder, configuration: .nonPersistent())
+        #expect(relaunched.installed.first?.refusedVersion == "2.0")
+        relaunched.latestVersions = extensions.latestVersions
+        relaunched.downloadArchive = extensions.downloadArchive
+        await relaunched.updateIfDue(now: .now + Extensions.updateInterval + 60)
+        #expect(downloads == 1)
+
+        latest = "2.1"
+        let newer = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "2.1"}"#)
+        relaunched.downloadArchive = { _ in
+            downloads += 1
+            return newer
+        }
+        await relaunched.updateIfDue(now: .now + 2 * (Extensions.updateInterval + 60))
+        #expect(downloads == 2)
+        #expect(relaunched.installed == [InstalledExtension(id: id, name: "Tiny", version: "2.1", isEnabled: true)])
+    }
+
+    /// Settings showed no icon for a turned-off extension: it has no context to draw one from.
+    @Test func aTurnedOffExtensionKeepsItsIcon() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let image = NSImage(size: NSSize(width: 48, height: 48), flipped: false) { rect in
+            NSColor.systemRed.setFill()
+            rect.fill()
+            return true
+        }
+        let png = try #require(image.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+        let manifest = #"{"manifest_version": 3, "name": "Tiny", "version": "1.0", "icons": {"16": "../../outside.png", "48": "icon.png"}}"#
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(manifest: manifest, data: ["icon.png": png]), id: id)
+        #expect(extensions.icon(id) != nil)
+
+        await extensions.setEnabled(false, id: id)
+        #expect(extensions.contexts[id] == nil)
+        #expect(extensions.icon(id) != nil)
+        // Only a path inside the extension's files is read.
+        #expect(extensions.icon(id, size: 16) == nil)
+        #expect(extensions.icon("ppoonnmmllkkjjiihhggffeeddccbbaa") == nil)
     }
 
     /// The day's check was recorded before the download, so one that failed (offline) left the

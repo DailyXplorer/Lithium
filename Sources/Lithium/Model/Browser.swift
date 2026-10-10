@@ -227,6 +227,11 @@ final class Browser {
     }
 
     private func tabsThatCanSleep(idleFor interval: TimeInterval, sparingPopups: Bool, among candidates: (Tab) -> Bool) -> [Tab] {
+        let canSleep = sleepCheck(idleFor: interval, sparingPopups: sparingPopups)
+        return tabs.filter { candidates($0) && canSleep($0) }
+    }
+
+    private func sleepCheck(idleFor interval: TimeInterval, sparingPopups: Bool) -> (Tab) -> Bool {
         var paired: Set<ObjectIdentifier> = []
         if sparingPopups {
             let open = Set(tabs.map { ObjectIdentifier($0) })
@@ -240,8 +245,8 @@ final class Browser {
         // Unsaved input is spared for one more idle interval: typed on screen, it is never newer than the
         // tab's going idle, so `interval` alone would never spare it. "Sleep Other Tabs" (none) is the user's own choice.
         // A favorite's page is spared too: asleep, it can't update its unread badge, which would stay as it was.
-        return tabs.filter { tab in
-            candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
+        return { [self] tab in
+            tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
                 && !paired.contains(ObjectIdentifier(tab)) && !(sparingPopups && agent?.holds(tab) == true)
                 && !(sparingPopups && tab.hasUnsavedInput(within: 2 * interval))
                 && !(sparingPopups && tab.pinID != nil)
@@ -311,8 +316,10 @@ final class Browser {
         sleepIdleTabs(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }
     }
 
+    /// Stops at the first tab that can: the tab menu asks it each time it is built.
     func canSleepOtherTabs(than tab: Tab) -> Bool {
-        !tabsThatCanSleep(idleFor: 0, sparingPopups: true) { $0 !== tab && $0.isInTabList }.isEmpty
+        let canSleep = sleepCheck(idleFor: 0, sparingPopups: true)
+        return tabs.contains { $0 !== tab && $0.isInTabList && canSleep($0) }
     }
 
     func makeConfiguration(for url: URL? = nil) -> WKWebViewConfiguration {

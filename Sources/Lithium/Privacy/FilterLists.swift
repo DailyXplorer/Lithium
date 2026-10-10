@@ -323,9 +323,12 @@ struct ChosenFilters: Sendable {
     static func hasRule(_ file: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
         defer { try? handle.close() }
+        // Split again as `read` splits, which also breaks lines at U+000B, U+2028 and the like.
         let isRule = { (line: Data) in
-            let text = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespaces)
-            return !text.isEmpty && !text.hasPrefix("!")
+            String(decoding: line, as: UTF8.self).split(whereSeparator: \.isNewline).contains { piece in
+                let text = piece.trimmingCharacters(in: .whitespaces)
+                return !text.isEmpty && !text.hasPrefix("!")
+            }
         }
         var line = Data()
         while let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty {

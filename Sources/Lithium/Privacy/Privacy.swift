@@ -471,15 +471,21 @@ final class Privacy {
             ChosenFilters.build(base: folder, manifest: manifest, choices: choices, storage: storage)
         }.value
         let failed = customized && chosen == nil
-        if failed {
-            filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
-        }
         // Instead, the shipped groups that hold no list the user turned off, and the shipped engine
         // only if none is off: it is built from every shipped list. Keeping what was loaded would
-        // keep a list just turned off blocking.
+        // keep a list just turned off blocking. The groups are compiled whole, so the lists left on
+        // in a group that goes stop too: the message names them, as Settings still shows them on.
         let shippedEngine = choices.off.isEmpty
         let shipped = FilterGroup.shipped(in: folder, manifest: manifest).filter { group in
             manifest.groups[group.name]?.lists.map { choices.off.isDisjoint(with: $0) } ?? shippedEngine
+        }
+        if failed {
+            let kept = Set(shipped.flatMap { manifest.groups[$0.name]?.lists ?? [] })
+            let stopped = Set(manifest.groups.values.flatMap { $0.lists ?? [] }).subtracting(kept).subtracting(choices.off)
+            let names = FilterLists.shipped.filter { stopped.contains($0.id) }.map(\.name)
+                + stopped.subtracting(FilterLists.shipped.map(\.id)).sorted()
+            filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
+                + (names.isEmpty ? "" : " Until then, these lists are off too: \(names.joined(separator: ", ")).")
         }
         let groups = await Self.loadGroups(chosen?.groups ?? shipped, into: store)
         if let chosen {
@@ -502,7 +508,8 @@ final class Privacy {
 
         // Awaited, so the tab restored at launch waits for uBO's scriptlets instead of playing ads.
         if let chosen {
-            await advanced.load(folder: chosen.engineFolder, stamp: chosen.engineStamp)
+            // The engine kept when the new one can't be built may run a list just turned off.
+            if !(await advanced.load(folder: chosen.engineFolder, stamp: chosen.engineStamp)), !shippedEngine { advanced.unload() }
         } else if shippedEngine {
             await advanced.load(folder: folder, stamp: stamp)
         } else {

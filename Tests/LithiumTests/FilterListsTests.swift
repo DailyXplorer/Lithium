@@ -126,6 +126,19 @@ struct FilterListsTests {
         #expect(try await build(set).groups.map(\.name) == ["ads", "privacy"])
         try storage.writeMyFilters(String(repeating: "! A comment\n", count: 8000) + "example.com##.late")
         #expect(ChosenFilters.hasRule(storage.myFilters))
+        // One cut across two 64 KB reads; comments only past the first read have none.
+        let comments = String(repeating: "! A comment\n", count: 5461)
+        try storage.writeMyFilters(comments + "example.com##.edge")
+        #expect(ChosenFilters.hasRule(storage.myFilters))
+        try storage.writeMyFilters(comments + "! Still a comment")
+        #expect(!ChosenFilters.hasRule(storage.myFilters))
+        // Lines end where the build's reading ends them, at a vertical tab or line separator too.
+        for text in ["! Title\u{0B}example.com##.ad", "! Title\u{2028}example.com##.ad"] {
+            try storage.writeMyFilters(text)
+            #expect(ChosenFilters.hasRule(storage.myFilters), "\(text.unicodeScalars.map(\.value))")
+        }
+        try storage.writeMyFilters("\u{0B}! A comment")
+        #expect(!ChosenFilters.hasRule(storage.myFilters))
 
         // Empty filters remove the file, so the shipped set loads as it always did.
         try storage.writeMyFilters("  \n")
@@ -250,14 +263,18 @@ struct FilterListsTests {
         #expect(privacy.filterError == "Some of your filter lists or filters couldn’t be applied.")
 
         // Nowhere to convert to: the list just turned off stops blocking, as does the engine,
-        // built from every shipped list; the group holding none of them stays.
+        // built from every shipped list; the group holding none of them stays. Groups are compiled
+        // whole, so uBlock Origin filters, left on beside EasyList, stops too, and the message says so.
         try FileManager.default.removeItem(at: storage.built)
         try Data().write(to: storage.built)
         #expect(await privacy.setFilterList("easyprivacy", enabled: false) == nil)
-        #expect(privacy.filterError?.hasPrefix("Lithium couldn’t apply your filter lists") == true)
+        let stopped = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
+            + " Until then, these lists are off too: uBlock Origin filters."
+        #expect(privacy.filterError == stopped)
         #expect(!privacy.filtersComplete, "so the update backs off")
         #expect(privacy.filterChoices.off == ["easylist", "easyprivacy"], "kept, to be tried again")
         #expect(privacy.ruleLists.map(\.identifier) == malware)
+        #expect(privacy.ruleCount == 1, "the malware group's rule, none of the unloaded engine's")
         #expect(privacy.scripts(true, for: page).count == 1, "farbling only")
 
         // The same at launch; with no list off, the whole shipped set, still marked incomplete.
@@ -267,11 +284,11 @@ struct FilterListsTests {
         launched.ruleListStore = privacy.ruleListStore
         #expect(await launched.setMyFilters(filters) == nil)
         #expect(launched.ruleLists.map(\.identifier) == malware)
-        #expect(launched.filterError?.hasPrefix("Lithium couldn’t apply your filter lists") == true)
+        #expect(launched.filterError == stopped)
         #expect(await launched.setFilterList("easylist", enabled: true) == nil)
         #expect(await launched.setFilterList("easyprivacy", enabled: true) == nil)
         #expect(launched.ruleLists.map(\.identifier) == shipped)
-        #expect(launched.filterError?.hasPrefix("Lithium couldn’t apply your filter lists") == true)
+        #expect(launched.filterError == "Lithium couldn’t apply your filter lists. It will try again with the next change or update.")
         #expect(!launched.filtersComplete)
 
         try FileManager.default.removeItem(at: storage.myFilters)
@@ -436,6 +453,31 @@ struct FilterListsTests {
         #expect(try await run("return document.getElementById('filter-url').value") as? String == "https://example.com/list.txt")
     }
 
+    /// The app's own bridge puts a failed save in `failed`, which keeps the page from saying "Saved".
+    /// A whole Browser keeps its data in the home folder, so this only runs in a throwaway one.
+    @Test(.timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func theBridgeReportsAFailedSave() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let browser = Browser()
+        browser.privacy.filterStorage = storage
+        // Where the file goes, a folder: the save fails.
+        try FileManager.default.createDirectory(at: storage.myFilters, withIntermediateDirectories: true)
+        let configuration = WKWebViewConfiguration()
+        InternalSchemeHandler.shared.install(on: configuration)
+        configuration.userContentController.addScriptMessageHandler(browser.internalBridge, contentWorld: .page, name: InternalBridge.name)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 700), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: URL(string: "lithium://settings#filters")!))
+        try await loaded.wait()
+        let reply = try await webView.callAsyncJavaScript("""
+            return await window.webkit.messageHandlers.lithium.postMessage({ action: 'setMyFilters', value: 'example.org##.ad' })
+            """, contentWorld: .page) as? [String: Any]
+        let failed = try #require(reply?["failed"] as? String)
+        #expect(failed.hasPrefix("Couldn’t save your filters"))
+        #expect((reply?["error"] as? String)?.hasPrefix(failed) == true)
+    }
+
     /// The Hide YouTube Shorts list, as turned on from the catalog, hides the Shorts shelf and
     /// Shorts among videos. The page is served locally, so its rules are scoped to the local host
     /// instead of youtube.com for the page check.
@@ -468,7 +510,7 @@ struct FilterListsTests {
     }
 
     /// Only http(s) addresses with a host are taken, and only a text list under the size cap is added.
-    @Test func badAddressesAreRefused() async throws {
+    @Test(.timeLimit(.minutes(1))) func badAddressesAreRefused() async throws {
         for text in ["ftp://example.com/list.txt", "file:///etc/hosts", "javascript:alert(1)", "https://", "example.com/list.txt",
                      "https://user:secret@example.com/list.txt", "https://example.com/" + String(repeating: "a", count: 2100), ""] {
             #expect(FilterLists.validatedURL(text) == nil, "\(text)")
@@ -507,6 +549,9 @@ struct FilterListsTests {
         #expect(try await FilterLists.download(chunked, session: session) == ["||one.example^", "||two.example^"])
         StubFilterList.serve(Data("||one.example^\n||two\u{0}example^\n".utf8), at: chunked, chunk: 5)
         await #expect(throws: (any Error).self, "chunked binary") { try await FilterLists.download(chunked, session: session) }
+        // The cap counts every chunk so far, with no length announced: none of these is over it alone.
+        StubFilterList.serve(bodies["huge"]!, at: chunked, chunk: 1 << 20)
+        await #expect(throws: (any Error).self, "chunked huge") { try await FilterLists.download(chunked, session: session) }
 
         let good = URL(string: "\(host)/good.txt")!
         StubFilterList.serve(Data("! Title: good\n||ads.example^\nexample.com##.ad\n".utf8), at: good)

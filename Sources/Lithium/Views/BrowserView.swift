@@ -130,6 +130,7 @@ struct ContentCard: View {
                                 PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                             }
                         }
+                        .overlay { BlockedPageLayer(tab: tab) }
                         .overlay {
                             if let acting = browser.agent?.tabs[tab.id]?.acting {
                                 AgentActingOverlay(acting: acting)

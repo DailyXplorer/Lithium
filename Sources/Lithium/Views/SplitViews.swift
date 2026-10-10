@@ -129,6 +129,7 @@ private struct SplitPane: View {
                             SplitPDFReader(reader: pdf, tabID: tab.id, takesKeyboard: browser.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
                         }
                     }
+                    .overlay { BlockedPageLayer(tab: tab) }
                     .overlay {
                         if let acting = browser.agent?.tabs[tab.id]?.acting {
                             AgentActingOverlay(acting: acting)

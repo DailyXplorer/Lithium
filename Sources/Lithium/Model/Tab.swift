@@ -196,7 +196,7 @@ final class Tab: NSObject, Identifiable {
 
     @ObservationIgnored private weak var browser: Browser?
     @ObservationIgnored private(set) var observations: [NSObject] = []
-    @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int)?
+    @ObservationIgnored private var appliedProtections: (enabled: Bool, generation: Int, leftOff: Set<String>)?
     /// The address the page's scripts were last set up for, and at the shown page's commit (`restoreProtections`).
     @ObservationIgnored private var protectedURL: URL?
     @ObservationIgnored private var shownProtectedURL: URL?
@@ -204,6 +204,13 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private var protectedFrameHosts: Set<String> = []
     @ObservationIgnored private var failedURL: URL?
     var isShowingError: Bool { failedURL != nil }
+    /// Shown over the error page when a filter list blocked the page itself.
+    private(set) var blockedPage: BlockedPage?
+    @ObservationIgnored private(set) var blockLookup: Task<BlockedPage.Reason, Never>?
+    /// Open anyway: its load goes without the groups that blocked the page (`putBackLeftOffGroups`). Set
+    /// by `load` from `passToLoad`, so any other load the tab is sent on gets every list again.
+    @ObservationIgnored private var letThrough: (url: URL, host: String, groups: Set<String>)?
+    @ObservationIgnored private var passToLoad: (url: URL, host: String, groups: Set<String>)?
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Cleared when another page commits.
     private(set) var loadError: NSError?
@@ -357,6 +364,10 @@ final class Tab: NSObject, Identifiable {
         sleepingState = nil
         addressAfterWaking = nil
         reloadedURL = nil
+        // Open anyway's pass is for its own load: one sent while it is on its way (an address typed
+        // into the same site) mustn't get it, whenever WebKit reports the first one dropped.
+        letThrough = passToLoad
+        passToLoad = nil
         // A page the user sends elsewhere is no longer what its popup was talking to.
         unpair()
         // An address the user or the app sends the tab to loads without tracking parameters again.
@@ -419,15 +430,20 @@ final class Tab: NSObject, Identifiable {
 
     /// A first load that never committed leaves WebKit nothing to reload: load the address again.
     private func reloadPage() {
+        // A reload is another navigation: Open anyway's pass ("this time only") ends, even mid-load.
+        // So does a crash's: a blocked page that crashed its process isn't opened again unasked.
+        letThrough = nil
         if webView.backForwardList.currentItem == nil, let url { load(url) } else { appStartedLoad = webView.reload() != nil }
     }
 
     /// Asked of the app, unlike the page's `history.back()`: a file it leads to downloads without asking.
     func goBack() {
+        letThrough = nil
         appStartedLoad = webView.goBack() != nil
     }
 
     func goForward() {
+        letThrough = nil
         appStartedLoad = webView.goForward() != nil
     }
 
@@ -718,6 +734,9 @@ final class Tab: NSObject, Identifiable {
         hasWebstoreBridge = false
         isAsleep = true
         appliedProtections = nil
+        // Waking loads the address again, which shows the page again if it is still blocked.
+        endBlockedPage()
+        letThrough = nil
         protectedURL = nil
         canGoBack = false
         canGoForward = false
@@ -739,6 +758,8 @@ final class Tab: NSObject, Identifiable {
         faviconLoad?.cancel()
         faviconLoad = nil
         forgetLiveIcon()
+        // A search still on its way would keep a closed private session's address once it ends.
+        endBlockedPage()
         guard let loadedWebView else { return }
         loadedWebView.stopLoading()
         loadedWebView.navigationDelegate = PutAwayWebView.refusing
@@ -812,10 +833,12 @@ final class Tab: NSObject, Identifiable {
         if let stillWanted, !stillWanted() { return }
         protectedURL = url
         let enabled = privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace)
+        var leftOff = privacy.allowedGroups(for: url, privateSession: privateSession)
+        if let letThrough, letThrough.host == Privacy.siteHost(url) { leftOff.formUnion(letThrough.groups) }
         let controller = webView.configuration.userContentController
-        if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation {
-            privacy.applyRuleLists(enabled, to: controller)
-            appliedProtections = (enabled, privacy.generation)
+        if appliedProtections?.enabled != enabled || appliedProtections?.generation != privacy.generation || appliedProtections?.leftOff != leftOff {
+            privacy.applyRuleLists(enabled, leavingOff: leftOff, to: controller)
+            appliedProtections = (enabled, privacy.generation, leftOff)
         }
         // Advanced rules are per site, so scripts are swapped on every main-frame navigation.
         controller.removeAllUserScripts()
@@ -830,6 +853,18 @@ final class Tab: NSObject, Identifiable {
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, privateSession: privateSession, to: controller)
         browser?.agent?.install(on: controller, for: self)
+    }
+
+    /// Groups left off a page let through blocked only its own load: once its response is in, before
+    /// the document starts, they are back for its scripts, images and frames. WebKit can't turn off
+    /// part of a compiled list, so this keeps the rest of a group (other ads, trackers) on the page.
+    /// A site always allowed keeps its groups off its whole page, as before it was let through.
+    private func putBackLeftOffGroups() {
+        guard let applied = appliedProtections, !applied.leftOff.isEmpty, let privacy = browser?.privacy else { return }
+        let allowed = privacy.allowedGroups(for: protectedURL, privateSession: privateSession)
+        guard applied.leftOff != allowed else { return }
+        privacy.applyRuleLists(applied.enabled, leavingOff: allowed, to: webView.configuration.userContentController)
+        appliedProtections = (applied.enabled, privacy.generation, allowed)
     }
 
     /// A main-frame load that ends unshown left the page with scripts set up for its target: a frame
@@ -885,9 +920,17 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
+        // Open anyway was for a page that now never shows (Stop, a download): the next load is
+        // blocked again, and the blocked page, still underneath, gets its explanation and buttons back.
+        let passed = letThrough
+        letThrough = nil
         restoreProtections()
         lastUnshownLoad = load
         unshownLoads += 1
+        if let passed {
+            failedURL = passed.url
+            showBlockedPage(passed.url)
+        }
         browser?.agent?.loadEndedUnshown(in: self)
     }
 
@@ -1030,20 +1073,61 @@ final class Tab: NSObject, Identifiable {
         let error = error as NSError
         failedURL = url
         loadError = error
+        letThrough = nil
+        endBlockedPage()
+        let blocked = url.flatMap { BlockedPage.isBlocked(error) ? $0 : nil }
+        if let blocked { showBlockedPage(blocked) }
         let message = error.localizedDescription
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
+        // A blocked page's explanation is `BlockedPageView`, over this one.
         let html = """
-            <!doctype html><meta charset="utf-8"><title>Can’t open this page</title>
+            <!doctype html><meta charset="utf-8"><title>\(blocked == nil ? "Can’t open this page" : "Page blocked")</title>
             <style>
               body { font: 15px "DM Sans", -apple-system, sans-serif; color: #444; display: grid; place-items: center; height: 90vh; margin: 0; }
               h1 { font-size: 22px; font-weight: 600; color: #111; margin: 0 0 8px; }
               @media (prefers-color-scheme: dark) { body { background: #1c1c1e; color: #aaa; } h1 { color: #eee; } }
             </style>
-            <div><h1>Can’t open this page</h1><p>\(message)</p></div>
+            \(blocked == nil ? "<div><h1>Can’t open this page</h1><p>\(message)</p></div>" : "")
             """
         isStartingErrorPage = true
         errorNavigation = webView.loadHTMLString(html, baseURL: url)
+    }
+
+    /// The lists are read only now, on the page's way out, and never for a page that loads.
+    private func showBlockedPage(_ url: URL) {
+        blockedPage = BlockedPage(url: url)
+        blockLookup?.cancel()
+        guard let privacy = browser?.privacy else { return }
+        let lookup = Task { [privateSession] in await privacy.blockReason(for: url, privateSession: privateSession) }
+        blockLookup = lookup
+        Task { [weak self] in
+            let reason = await lookup.value
+            guard let self, self.blockLookup == lookup else { return }
+            self.blockedPage?.reason = reason
+        }
+    }
+
+    private func endBlockedPage() {
+        blockedPage = nil
+        // A search no page waits for any more stops.
+        blockLookup?.cancel()
+        blockLookup = nil
+    }
+
+    /// Open anyway lets this one page through; Always allow saves the site (for its private session
+    /// only, in a private tab). Either way only the groups that blocked it are left off.
+    func letBlockedPageThrough(always: Bool) async {
+        guard let page = blockedPage, let host = Privacy.siteHost(page.url), let lookup = blockLookup else { return }
+        let groups = await lookup.value.groups
+        // Not if the tab went elsewhere while the lists were read.
+        guard blockLookup == lookup, let browser else { return }
+        if always {
+            browser.privacy.allowPages(of: page.url, groups: groups, privateSession: privateSession)
+        } else {
+            passToLoad = (page.url, host, groups)
+        }
+        browser.navigate(self, .open(page.url))
     }
 }
 
@@ -1188,6 +1272,15 @@ extension Tab: WKNavigationDelegate {
             }
             return (.cancel, preferences)
         }
+        // Open anyway lets through its own site only. WebKit checks a redirect before asking here,
+        // with the groups still off, so one to another site goes again with every list on. One within
+        // the site (to https, to another path; the same host, `www.` aside, not a language subdomain)
+        // is part of that load: the same filters name it.
+        if let letThrough, Self.isRedirect(action), letThrough.host != Privacy.siteHost(url) {
+            self.letThrough = nil
+            Task { self.load(url) }
+            return (.cancel, preferences)
+        }
 
         await applyProtections(for: url)
         Privacy.setEngineProtections(browser?.privacy.isEnabled(for: url, privateSession: privateSession, space: siteSpace) ?? true, on: preferences)
@@ -1195,7 +1288,10 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
+        if response.isForMainFrame {
+            httpStatus = (response.response as? HTTPURLResponse)?.statusCode
+            putBackLeftOffGroups()
+        }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
         if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
             privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession, space: siteSpace), for: response.response, privateSession: privateSession,
@@ -1234,7 +1330,10 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if navigation !== errorNavigation { failedURL = nil }
+        if navigation !== errorNavigation {
+            failedURL = nil
+            endBlockedPage()
+        }
         httpStatus = nil
         awaitCommit(true, for: navigation)
         isStartingErrorPage = false
@@ -1289,7 +1388,13 @@ extension Tab: WKNavigationDelegate {
         uploadingFrames = 0
         resetReader()
         resetTranslation()
-        if navigation !== errorNavigation { loadError = nil }
+        if navigation !== errorNavigation {
+            loadError = nil
+            // Open anyway was for this page: the next one gets every list again.
+            letThrough = nil
+            // A page back from the cache had no response to put them back at.
+            putBackLeftOffGroups()
+        }
         // A later link to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }
         // Only now: a load that never shows (a download, a 204, Stop) leaves Lithium's page its bridge.

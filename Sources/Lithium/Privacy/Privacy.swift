@@ -13,6 +13,11 @@ final class Privacy {
     private var privateExceptions: [ObjectIdentifier: [String: Bool]] = [:]
     /// The same for spaces that keep their data apart: another store is another identity.
     private var spaceExceptions: [Space.ID: [String: Bool]]
+    /// Sites whose pages load though a filter list blocks them ("Always allow this site"), with the
+    /// groups that did: only those are left off the site's pages, every other group stays on.
+    private(set) var allowedPages: [String: Set<String>]
+    /// The same for private tabs, by private session; never saved.
+    private var privateAllowedPages: [ObjectIdentifier: [String: Set<String>]] = [:]
     private(set) var ruleCount = 0
     private(set) var filtersUpdated: Date?
     private(set) var isUpdatingFilters = false
@@ -21,6 +26,16 @@ final class Privacy {
 
     /// Set by tests too, for a rule of their own.
     @ObservationIgnored var ruleLists: [WKContentRuleList] = []
+    /// Where the loaded lists came from, searched when a page is blocked. Set by tests too.
+    @ObservationIgnored var filtersFolder: URL?
+    /// Blocked pages looked up in the loaded lists, by private session and address: blocked again (a
+    /// reload, Open anyway stopped, in another tab), a page isn't searched for again.
+    @ObservationIgnored private var blockReasons: (lists: String, reasons: [BlockLookup: BlockedPage.Reason]) = ("", [:])
+    private struct BlockLookup: Hashable {
+        let privateSession: ObjectIdentifier?
+        let url: URL
+    }
+    private static let blockReasonsLimit = 8
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// Each load waits for the one before: two at once would remove each other's compiled lists.
     @ObservationIgnored private var lastLoad: Task<Void, Never>?
@@ -65,6 +80,7 @@ final class Privacy {
 
     private static let disabledHostsKey = "disabledProtectionHosts"
     private static let spaceExceptionsKey = "spaceProtectionExceptions"
+    private static let allowedPagesKey = "allowedBlockedPages"
     private static let failedUpdatesKey = "failedFilterUpdates"
     private static let nextUpdateKey = "nextFilterUpdate"
     private static let filterChoicesKey = "filterChoices"
@@ -75,6 +91,7 @@ final class Privacy {
     init() {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
         spaceExceptions = Space.siteChoices(UserDefaults.standard.dictionary(forKey: Self.spaceExceptionsKey))
+        allowedPages = (UserDefaults.standard.dictionary(forKey: Self.allowedPagesKey) as? [String: [String]] ?? [:]).mapValues(Set.init)
         (failedUpdates, nextUpdate) = Self.savedBackoff(in: .standard)
         filterChoices = UserDefaults.standard.data(forKey: Self.filterChoicesKey)
             .flatMap { try? JSONDecoder().decode(FilterChoices.self, from: $0) } ?? FilterChoices()
@@ -340,9 +357,12 @@ final class Privacy {
 
     func forget(privateSession: ObjectIdentifier) {
         privateExceptions[privateSession] = nil
+        privateAllowedPages[privateSession] = nil
         privateFarblingKeys[privateSession] = nil
         // A later session may reuse the identifier: it mustn't get this one's seeds.
         farblingSources = farblingSources.filter { $0.key.privateSession != privateSession }
+        // Nor its blocked addresses, which would outlive it.
+        blockReasons.reasons = blockReasons.reasons.filter { $0.key.privateSession != privateSession }
     }
 
     private func farblingKey(for privateSession: ObjectIdentifier?) -> SymmetricKey {
@@ -364,9 +384,63 @@ final class Privacy {
         UserDefaults.standard.set(disabledHosts.sorted(), forKey: Self.disabledHostsKey)
     }
 
-    func applyRuleLists(_ enabled: Bool, to controller: WKUserContentController) {
+    /// `leftOff` names groups whose lists blocked a page the user let through: the others still block its ads and trackers.
+    func applyRuleLists(_ enabled: Bool, leavingOff leftOff: Set<String> = [], to controller: WKUserContentController) {
         controller.removeAllContentRuleLists()
-        if enabled { ruleLists.forEach(controller.add) }
+        guard enabled else { return }
+        for list in ruleLists where leftOff.isEmpty || !leftOff.contains(Self.group(of: list) ?? "") {
+            controller.add(list)
+        }
+    }
+
+    /// From the list's identifier, `lithium-<group>-<stamp>-p<preparation>`.
+    static func group(of list: WKContentRuleList) -> String? {
+        list.identifier.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) }
+    }
+
+    /// Groups the site's pages go without; empty for nearly every site.
+    func allowedGroups(for url: URL?, privateSession: ObjectIdentifier? = nil) -> Set<String> {
+        guard !allowedPages.isEmpty || !privateAllowedPages.isEmpty, let host = Self.siteHost(url) else { return [] }
+        return (allowedPages[host] ?? []).union(privateSession.flatMap { privateAllowedPages[$0]?[host] } ?? [])
+    }
+
+    /// A private tab's choice stays in memory only, like its protections.
+    func allowPages(of url: URL, groups: Set<String>, privateSession: ObjectIdentifier? = nil) {
+        guard let host = Self.siteHost(url), !groups.isEmpty else { return }
+        if let privateSession {
+            privateAllowedPages[privateSession, default: [:]][host, default: []].formUnion(groups)
+        } else {
+            allowedPages[host, default: []].formUnion(groups)
+            saveAllowedPages()
+        }
+    }
+
+    func removeAllowedPages(host: String) {
+        guard allowedPages.removeValue(forKey: host) != nil else { return }
+        saveAllowedPages()
+    }
+
+    private func saveAllowedPages() {
+        UserDefaults.standard.set(allowedPages.mapValues { $0.sorted() }, forKey: Self.allowedPagesKey)
+    }
+
+    /// Read from the lists' text off the main thread, and only once a page was blocked.
+    func blockReason(for url: URL, privateSession: ObjectIdentifier? = nil) async -> BlockedPage.Reason {
+        let folder = filtersFolder
+        let lists = "\(generation) \(folder?.path ?? "")"
+        let lookup = BlockLookup(privateSession: privateSession, url: url)
+        if blockReasons.lists == lists, let reason = blockReasons.reasons[lookup] { return reason }
+        let search = Task.detached(priority: .userInitiated) {
+            folder.map { BlockedPage.reason(for: url, in: $0) } ?? BlockedPage.Reason(groups: [])
+        }
+        var reason = await withTaskCancellationHandler { await search.value } onCancel: { search.cancel() }
+        // Cut short for a tab gone elsewhere: what it found so far isn't the answer.
+        guard !Task.isCancelled else { return reason }
+        // Lists that say nothing of the site: letting it through takes every group off its page.
+        if reason.groups.isEmpty { reason.groups = Set(ruleLists.compactMap(Self.group(of:))) }
+        if blockReasons.lists != lists || blockReasons.reasons.count >= Self.blockReasonsLimit { blockReasons = (lists, [:]) }
+        blockReasons.reasons[lookup] = reason
+        return reason
     }
 
     /// The caller has already reset the controller's scripts.
@@ -511,6 +585,7 @@ final class Privacy {
             filterError = nil
         }
         ruleLists = groups.lists
+        filtersFolder = folder
         let engineRules = chosen.map { $0.advancedRules + $0.scriptletRules }
             ?? (shippedEngine ? (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0) : 0)
         ruleCount = groups.ruleCount + engineRules

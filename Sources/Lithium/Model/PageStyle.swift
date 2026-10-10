@@ -10,7 +10,22 @@ enum PageStyle {
     /// its right side, with no way to scroll to it (zoom narrows the width in CSS pixels).
     private static let baseCSS = "@media (min-width: 1024px) { html, body { overflow-x: clip !important; } }"
 
-    private static let baseScript = script(css: baseCSS)
+    /// Only overflow about a scrollbar wide (a `100vw` banner) is clipped: a layout wider than the
+    /// view keeps its sideways scrolling, or its right side couldn't be reached. Measured with the
+    /// clip off, as body's clip hides its content's width, at load and when the view is resized.
+    private static let baseScript = script(css: baseCSS, then: """
+        const wide = matchMedia('(min-width: 1024px)');
+        let pending = false;
+        const check = () => {
+          pending = false;
+          const root = document.scrollingElement, sheet = style.sheet;
+          if (!wide.matches || !root || !root.clientWidth || !sheet) return;
+          sheet.disabled = true;
+          sheet.disabled = root.scrollWidth - root.clientWidth > 32;
+        };
+        addEventListener('load', check, { once: true });
+        addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });
+        """)
 
     /// Inline, since web pages cannot reach the app bundle; as WOFF2, about a third of the TTF,
     /// since every page decodes it again (`scripts/make-web-font.py`).
@@ -144,17 +159,22 @@ enum PageStyle {
         (try? String(data: JSONEncoder().encode(text), encoding: .utf8)) ?? "\"\""
     }
 
-    private static func script(css: String) -> WKUserScript {
+    /// `then` runs once the style is made, with it as `style`.
+    private static func script(css: String, then: String = "") -> WKUserScript {
         let literal = Self.literal(css)
         let source = """
             (() => {
               const style = document.createElement('style');
               style.textContent = \(literal);
               const attach = () => (document.head || document.documentElement).appendChild(style);
-              if (document.documentElement) { attach(); return; }
-              new MutationObserver((_, observer) => {
-                if (document.documentElement) { observer.disconnect(); attach(); }
-              }).observe(document, { childList: true });
+              if (document.documentElement) {
+                attach();
+              } else {
+                new MutationObserver((_, observer) => {
+                  if (document.documentElement) { observer.disconnect(); attach(); }
+                }).observe(document, { childList: true });
+              }
+              \(then)
             })();
             """
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient)

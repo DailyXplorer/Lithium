@@ -8,6 +8,9 @@ struct InstalledExtension: Codable, Equatable, Identifiable {
     var name: String
     var version: String
     var isEnabled: Bool
+    /// A newer version refused for asking more than the user agreed to: not downloaded again
+    /// every day, and shown in Settings.
+    var refusedVersion: String? = nil
 }
 
 /// Web extensions, run by `WKWebExtensionController`. Each is kept as the ZIP archive of its Chrome
@@ -235,7 +238,8 @@ final class Extensions: NSObject {
         // than a day later; a version refused once downloaded isn't, it would only be refused again.
         var downloaded = true
         for entry in installed {
-            guard let version = latest[entry.id], ChromeWebStore.isNewer(version, than: entry.version) else { continue }
+            guard let version = latest[entry.id], ChromeWebStore.isNewer(version, than: entry.version),
+                  version != entry.refusedVersion else { continue }
             do {
                 let archive: Data
                 do { archive = try await downloadArchive(entry.id) } catch { downloaded = false; throw error }
@@ -246,6 +250,9 @@ final class Extensions: NSObject {
                 }
             } catch {
                 NSLog("Lithium: couldn’t update extension %@: %@", entry.id, error.localizedDescription)
+                if case ChromeWebStore.PackageError.moreAccess = error, let index = installed.firstIndex(where: { $0.id == entry.id }) {
+                    installed[index].refusedVersion = version
+                }
             }
         }
         guard downloaded else { return }
@@ -254,6 +261,22 @@ final class Extensions: NSObject {
     }
 
     static let updateInterval: TimeInterval = 24 * 60 * 60
+
+    /// Settings shows a turned-off extension's icon too: with no context, it's read from the
+    /// manifest's `icons`, the smallest at least `size` points wide.
+    func icon(_ id: String, size: Int = 32) -> NSImage? {
+        if let context = contexts[id] { return context.webExtension.icon(for: CGSize(width: size, height: size)) }
+        let root = files(id).standardizedFileURL
+        guard let data = try? Data(contentsOf: root.appending(path: "manifest.json")),
+              let manifest = try? JSONSerialization.jsonObject(with: data, options: .json5Allowed) as? [String: Any],
+              let icons = manifest["icons"] as? [String: Any] else { return nil }
+        let sized = icons.compactMap { key, value in Int(key).flatMap { width in (value as? String).map { (width: width, path: $0) } } }
+        guard let path = (sized.filter { $0.width >= size }.min { $0.width < $1.width } ?? sized.max { $0.width < $1.width })?.path else { return nil }
+        let url = root.appending(path: path).standardizedFileURL
+        // A path with "../" doesn't reach outside the extension's own files.
+        guard url.path.hasPrefix(root.path + "/") else { return nil }
+        return NSImage(contentsOf: url)
+    }
 
     /// Its date is the last update check's.
     private var updateCheck: URL { folder.appending(path: ".update-check") }

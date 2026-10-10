@@ -345,11 +345,11 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
     private static let safariVersion = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")?["CFBundleShortVersionString"] as? String ?? ""
     private var icons: [String: String] = [:]
 
-    private func icon(of entry: InstalledExtension, context: WKWebExtensionContext?) -> String {
-        guard let context else { return "" }
+    /// A turned-off extension has no context but keeps its icon (`Extensions.icon`).
+    private func icon(of entry: InstalledExtension, in extensions: Extensions) -> String {
         let key = "\(entry.id) \(entry.version)"
         if let icon = icons[key] { return icon }
-        let icon = context.webExtension.icon(for: CGSize(width: 32, height: 32)).flatMap(Self.dataURL) ?? ""
+        let icon = extensions.icon(entry.id).flatMap(Self.dataURL) ?? ""
         icons[key] = icon
         return icon
     }
@@ -434,7 +434,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 return [
                     "id": entry.id, "name": entry.name, "version": entry.version, "enabled": entry.isEnabled,
                     "hasOptions": context?.optionsPageURL != nil,
-                    "icon": icon(of: entry, context: context),
+                    "icon": icon(of: entry, in: browser.extensions),
+                    "refusedVersion": entry.refusedVersion ?? "",
                 ] as [String: Any]
             },
             "about": [

@@ -547,7 +547,8 @@
       return el('div', { className: 'row extension' }, [
         el('div', {}, [
           el('div', { className: 'title' }, [extension.icon ? el('img', { src: extension.icon, alt: '' }) : '', extension.name]),
-          el('div', { className: 'hint', textContent: `Version ${extension.version}` + (extension.enabled ? '' : ' · Off') }),
+          el('div', { className: 'hint', textContent: `Version ${extension.version}` + (extension.enabled ? '' : ' · Off')
+            + (extension.refusedVersion ? ` · Version ${extension.refusedVersion} not installed: it asks for more access` : '') }),
         ]),
         el('div', { className: 'actions' }, actions),
       ]);

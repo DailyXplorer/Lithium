@@ -197,8 +197,11 @@ struct SplitTabRow: View {
                     .frame(width: 1, height: 16)
                 half(second, dimmed: isShown && browser.selectedTabID != second.id)
             }
+            // As its first side: moving one side to a folder brings the other along.
+            .draggable(browser.startDragging(first))
             .contextMenu {
                 SplitMenu(tab: first, isStacked: split.isStacked)
+                MoveToFolderMenu(browser: browser, tab: first)
                 Divider()
                 Button("Close Both Tabs") {
                     browser.close(second)

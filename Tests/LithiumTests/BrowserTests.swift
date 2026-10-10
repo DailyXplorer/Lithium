@@ -1036,6 +1036,70 @@ struct BrowserTests {
         #expect(await waitUntil(10) { tab.unsavedInputAt != nil })
     }
 
+    /// A page guarding leaving, which the user pressed a key in, uploading files (by XHR or
+    /// `fetch`) outlasts the idle interval: idle sleep spares it until the last upload ends.
+    /// Text sent (analytics) is no upload.
+    @Test func idleSleepSparesAPageWhileItUploadsFiles() async throws {
+        let guarded = "<script>addEventListener('beforeunload', event => event.preventDefault())</script><title>Guarded</title><p>guarded"
+        let (listener, base) = try await LocalHTTP.serve(["/guarded": ("Content-Type: text/html", guarded)])
+        defer { listener.cancel() }
+        // Answers long after the test: the uploads stay on their way until aborted.
+        let (slow, slowBase) = try await LocalHTTP.serve([:], delay: 60)
+        defer { slow.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base.appending(path: "guarded"), selecting: false)
+        let visible = browser.newTab(url: URL(string: "data:text/html,visible")!)
+        defer { [tab, visible].forEach(browser.close) }
+        #expect(await waitUntil(120) { [tab, visible].allSatisfy(loaded) })
+        UserDefaults.standard.set(3, forKey: "tabIdleSeconds")
+        defer { UserDefaults.standard.removeObject(forKey: "tabIdleSeconds") }
+
+        // Off screen and never ordered in: the key goes to the page as a real one.
+        browser.select(tab)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        window.contentView = tab.webView
+        window.makeFirstResponder(tab.webView)
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let key = try #require(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: "j", charactersIgnoringModifiers: "j", isARepeat: false, keyCode: 38
+            ))
+            if type == .keyDown { tab.webView.keyDown(with: key) } else { tab.webView.keyUp(with: key) }
+        }
+        #expect(await waitUntil(10) { tab.unsavedInputAt != nil })
+
+        let target = ["url": slowBase.appending(path: "upload").absoluteString]
+        _ = try await tab.webView.callAsyncJavaScript("fetch(url, { method: 'POST', body: 'event=view' }).catch(() => {})", arguments: target, contentWorld: .page)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!tab.isUploading)
+        _ = try await tab.webView.callAsyncJavaScript("""
+            window.xhr = new XMLHttpRequest();
+            xhr.open('POST', url);
+            xhr.send(new Blob(['file']));
+            window.aborts = new AbortController();
+            const form = new FormData();
+            form.append('file', new Blob(['file']), 'file.txt');
+            fetch(url, { method: 'POST', body: form, signal: aborts.signal }).catch(() => {});
+            """, arguments: target, contentWorld: .page)
+        #expect(await waitUntil(10) { tab.isUploading })
+        browser.select(visible)
+
+        // Idle for longer than twice the interval, its key press too old to count.
+        try await Task.sleep(for: .seconds(6.5))
+        browser.relieveMemoryPressure(critical: false)
+        #expect(!tab.isAsleep)
+
+        _ = try await tab.webView.callAsyncJavaScript("xhr.abort()", contentWorld: .page)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(tab.isUploading, "the fetch still runs")
+        _ = try await tab.webView.callAsyncJavaScript("aborts.abort()", contentWorld: .page)
+        #expect(await waitUntil(10) { !tab.isUploading })
+        browser.relieveMemoryPressure(critical: false)
+        #expect(tab.isAsleep)
+    }
+
     /// A page that retitles itself again and again writes the session once, a moment later and
     /// off the main thread, not at every change; quitting writes what waits at once.
     @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {

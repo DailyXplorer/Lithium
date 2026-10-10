@@ -107,6 +107,44 @@ struct NavigationTests {
         #expect(requests["/c"] == 1)
     }
 
+    /// A protections change leaves a background page of the site holding a draft as it is, since
+    /// nothing asks before a reload, not even once it is shown again. The page changed from reloads at once.
+    @Test func protectionsChangeKeepsAPageWithADraft() async throws {
+        let requests = Requests()
+        let (listener, base) = try await LocalHTTP.serve([
+            "/a": ("Content-Type: text/html", Data("<title>A</title>".utf8)),
+            "/form": ("Content-Type: text/html", Data("<title>Form</title><input id=field>".utf8)),
+        ], requested: { requests.record($0) })
+        defer { listener.cancel() }
+        let browser = Browser()
+        let a = browser.newTab(url: base.appending(path: "a"))
+        let form = browser.newTab(url: base.appending(path: "form"), selecting: false)
+        defer { [a, form].forEach(browser.close) }
+        #expect(await waitUntil(30) { a.webView.title == "A" && form.webView.title == "Form" })
+        let host = try #require(Privacy.siteHost(base))
+        defer { browser.privacy.setEnabled(true, host: host) }
+
+        // Typed while shown, as a user does, then left.
+        browser.select(form)
+        _ = try await form.webView.callAsyncJavaScript("document.getElementById('field').focus()", contentWorld: .page)
+        let client = try #require(form.webView as NSView as? NSTextInputClient)
+        client.insertText("draft", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(await waitUntil(10) { form.unsavedInputAt != nil })
+        browser.select(a)
+
+        browser.setProtections(false, for: a)
+        #expect(await waitUntil(15) { requests["/a"] == 2 })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests["/form"] == 1)
+        #expect(try await form.webView.evaluateJavaScript("document.getElementById('field').value") as? String == "draft")
+
+        // Back to finish the comment: it is still there.
+        browser.select(form)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests["/form"] == 1)
+        #expect(try await form.webView.evaluateJavaScript("document.getElementById('field').value") as? String == "draft")
+    }
+
     /// A server that sends the address back with its tracking parameters gets them: the tab
     /// strips them once, not in an endless loop of loads.
     @Test func aServerAddingTheParametersBackIsNotLoopedOn() async throws {

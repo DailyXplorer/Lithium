@@ -30,6 +30,8 @@ enum Theme {
     /// Reading the choice inside a view's body makes the view redraw when it changes.
     @MainActor static func nsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> NSFont? {
         if let family = FontChoice.shared.interface, let font = pickedFont(family, size, weight) { return font }
+        let key = "\(size) \(weightValue(weight))"
+        if let font = dmSansFonts[key] { return font }
         guard let base = NSFont(name: baseFontName, size: size) else { return nil }
         let descriptor = base.fontDescriptor.addingAttributes([
             NSFontDescriptor.AttributeName(kCTFontVariationAttribute as String): [
@@ -37,8 +39,13 @@ enum Theme {
                 weightAxis: weightValue(weight),
             ],
         ])
-        return NSFont(descriptor: descriptor, size: size) ?? base
+        let font = NSFont(descriptor: descriptor, size: size) ?? base
+        dmSansFonts[key] = font
+        return font
     }
+
+    /// DM Sans at each size and weight, built once: the default font is asked for on every redraw too.
+    @MainActor private static var dmSansFonts: [String: NSFont] = [:]
 
     /// Every view asks on each redraw, so each size and weight is matched once per family.
     @MainActor private static var pickedFonts: (family: String, fonts: [String: NSFont]) = ("", [:])

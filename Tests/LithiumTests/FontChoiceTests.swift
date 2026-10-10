@@ -54,6 +54,17 @@ struct FontChoiceTests {
         #expect(NSFontManager.shared.weight(of: bold) > NSFontManager.shared.weight(of: regular))
     }
 
+    /// Every view asks on each redraw: each size and weight is built once.
+    @Test func theInterfaceFontIsBuiltOncePerSizeAndWeight() throws {
+        Theme.registerFonts()
+        let regular = try #require(Theme.nsFont(13))
+        #expect(Theme.nsFont(13) === regular)
+        let semibold = try #require(Theme.nsFont(13, .semibold))
+        #expect(Theme.nsFont(13, .semibold) === semibold)
+        #expect(semibold !== regular)
+        #expect(Theme.nsFont(15)?.pointSize == 15)
+    }
+
     @Test func settingsListsTheMacsFamiliesAfterDMSans() {
         let families = FontChoice.families()
         #expect(families.first == "DM Sans")

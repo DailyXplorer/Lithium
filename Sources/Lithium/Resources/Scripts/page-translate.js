@@ -22,6 +22,10 @@ const letter = /\p{L}/u;
 // The node's own record, so the page's text can be put back and our own changes told apart.
 const texts = new Map();
 const attrs = new Map();
+// Records of nodes the page took out, kept without holding them: put back still translated, they
+// are known again and Show Original restores them.
+const goneTexts = new WeakMap();
+const goneAttrs = new WeakMap();
 // A copy of text already translated (the reader's, cloned from the page) isn't sent again.
 const known = new Map();
 const queued = new WeakSet();
@@ -57,6 +61,8 @@ const copied = (node) => !!window.__lithiumReader?.article?.contains(node);
 const addText = (node) => {
   if (texts.has(node) || queued.has(node)) return;
   const data = node.data;
+  const gone = goneTexts.get(node);
+  if (gone && data === gone.translated) return texts.set(node, gone);
   if (!letter.test(data)) return;
   const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(data);
   const original = copied(node) ? known.get(plain(core)) : undefined;
@@ -79,6 +85,15 @@ const addText = (node) => {
 };
 
 const addAttributes = (element) => {
+  const gone = goneAttrs.get(element);
+  if (gone) {
+    goneAttrs.delete(element);
+    const entries = attrs.get(element) ?? new Map();
+    for (const [name, entry] of gone) {
+      if (!entries.has(name) && entry.translated !== undefined && element.getAttribute(name) === entry.translated) entries.set(name, entry);
+    }
+    if (entries.size) attrs.set(element, entries);
+  }
   for (const name of attributes) {
     const value = element.getAttribute(name);
     if (!value || !letter.test(value)) continue;
@@ -173,8 +188,16 @@ const catchUp = () => {
   // view it ever showed until Show Original. Moved nodes are connected again by now and stay.
   if (removed) {
     removed = false;
-    for (const node of texts.keys()) if (!node.isConnected) texts.delete(node);
-    for (const element of attrs.keys()) if (!element.isConnected) attrs.delete(element);
+    for (const [node, entry] of texts) {
+      if (node.isConnected) continue;
+      goneTexts.set(node, entry);
+      texts.delete(node);
+    }
+    for (const [element, entries] of attrs) {
+      if (element.isConnected) continue;
+      goneAttrs.set(element, entries);
+      attrs.delete(element);
+    }
     for (const [element, items] of waiting) {
       if (element.isConnected) continue;
       visible.unobserve(element);

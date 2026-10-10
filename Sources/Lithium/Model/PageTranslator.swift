@@ -49,6 +49,8 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
     @ObservationIgnored private var jobs: [Job] = []
     @ObservationIgnored private var servedPair: Pair?
     @ObservationIgnored private var isServing = false
+    /// Tabs whose first batch waits on macOS's download, which may outlast the script's wait.
+    @ObservationIgnored private var downloads: Set<ObjectIdentifier> = []
     /// Never saved: a private session's choices go with it.
     @ObservationIgnored private var privateLanguages: [ObjectIdentifier: [String: Bool]] = [:]
     @ObservationIgnored private var privateSites: [ObjectIdentifier: [String: Bool]] = [:]
@@ -107,6 +109,12 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
 
     func setNeverTranslates(_ never: Bool, site: String, privateSession: ObjectIdentifier?) {
         let site = SiteInfo.registrable(site.lowercased())
+        // The offers already showing on the site go too; a translated page stays until Show Original.
+        if never, let browser {
+            for tab in browser.tabs where tab.privateSession == privateSession && tab.pageTranslation?.status == .offered && Self.site(of: tab.url) == site {
+                tab.pageTranslation?.isDismissed = true
+            }
+        }
         if let privateSession { return privateSites[privateSession, default: [:]][site] = never }
         var sites = neverSites.filter { $0 != site }
         if never { sites.append(site) }
@@ -183,6 +191,9 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         controller.addScriptMessageHandler(self, contentWorld: .defaultClient, name: Self.handlerName)
         let started = try? await webView.callAsyncJavaScript(Self.script, arguments: ["action": "start"], contentWorld: .defaultClient) as? Bool
         guard tab.translationRun == run, tab.pageTranslation?.isActive == true else { return }
+        // Back before macOS's download is done (the script waits 3 s at most): the handler says when it is.
+        // Nothing in view asked for it yet: the page is translated, and the first batch downloads.
+        if started == true, tab.pageTranslation?.status == .downloading, downloads.contains(ObjectIdentifier(tab)) { return }
         tab.pageTranslation?.status = started == true ? .translated : .failed(Self.failure)
     }
 
@@ -264,9 +275,11 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
               let state = tab.pageTranslation, state.isActive, let texts = message.body as? [String] else { return (nil, "Not translating") }
         let run = tab.translationRun
         let preparing = state.status == .downloading
+        if preparing { downloads.insert(ObjectIdentifier(tab)) }
+        defer { if preparing { downloads.remove(ObjectIdentifier(tab)) } }
         do {
             let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing)
-            if preparing, tab.translationRun == run { tab.pageTranslation?.status = .translating }
+            if preparing, tab.translationRun == run, tab.pageTranslation?.status == .downloading { tab.pageTranslation?.status = .translated }
             return (results.map { $0 ?? NSNull() as Any }, nil)
         } catch {
             guard tab.translationRun == run, tab.pageTranslation?.isActive == true else { return (nil, "Stopped") }

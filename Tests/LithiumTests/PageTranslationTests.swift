@@ -141,12 +141,21 @@ struct PageLanguageTests {
 final class StandInTranslation: TranslationEngine {
     var availability = LanguageAvailability.Status.installed
     var refusesDownload = false
+    /// The download waits for `finishDownload()`, as macOS's prompt waits for the user.
+    var holdsDownload = false
+    private var download: CheckedContinuation<Void, Never>?
     private(set) var calls: [(texts: [String], preparing: Bool)] = []
 
     func status(from source: Locale.Language, to target: Locale.Language) async -> LanguageAvailability.Status { availability }
 
+    func finishDownload() {
+        download?.resume()
+        download = nil
+    }
+
     func translate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool) async throws -> [String?] {
         calls.append((texts, preparing))
+        if preparing, holdsDownload { await withCheckedContinuation { download = $0 } }
         if preparing, refusesDownload { throw CancellationError() }
         return texts.map { "EN(\($0))" }
     }
@@ -170,6 +179,7 @@ struct PageTranslatorTests {
         let french = try fixture("translate-fr"), english = try fixture("translate-en")
         let html = "Content-Type: text/html; charset=utf-8"
         return try await LocalHTTP.serve(["/fr": (html, french), "/fr2": (html, french.replacingOccurrences(of: "Le lithium, le plus", with: "Le sodium, presque le plus")),
+                                          "/fr-low": (html, french.replacingOccurrences(of: "<article>", with: "<div style=\"height: 6000px\"></div><article>")),
                                           "/en": (html, english)])
     }
 
@@ -318,6 +328,21 @@ struct PageTranslatorTests {
         #expect(translator.neverSites.isEmpty)
     }
 
+    /// "Never translate this site" puts away the offer already showing on it.
+    @Test func neverTranslatingASiteHidesItsOffer() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        #expect(TranslateButton.isShown(for: tab))
+        let site = try #require(PageTranslator.site(of: server))
+        browser.translator.setNeverTranslates(true, site: site, privateSession: nil)
+        defer { browser.translator.setNeverTranslates(false, site: site, privateSession: nil) }
+        #expect(!TranslateButton.isShown(for: tab))
+    }
+
     /// Like Chrome: once translated, the tab's next pages in that language are too, until Show Original.
     @Test func keepsTranslatingTheTabsNextPages() async throws {
         let browser = makeBrowser()
@@ -383,6 +408,92 @@ struct PageTranslatorTests {
         }
         #expect(message.contains("French"))
         #expect(await waitUntil(5) { await text("title", in: tab) == "Le lithium, le plus léger des métaux" })
+    }
+
+    /// A download that outlasts the script's wait says so until it's done, then the page is translated.
+    @Test func saysDownloadingUntilTheLanguageArrives() async throws {
+        let browser = makeBrowser()
+        engine.availability = .supported
+        engine.holdsDownload = true
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        #expect(tab.pageTranslation?.status == .downloading)
+
+        engine.finishDownload()
+        #expect(await waitUntil(5) { tab.pageTranslation?.status == .translated })
+        #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+    }
+
+    /// Nothing in view to send yet: no download is under way, so the page doesn't say there is.
+    @Test func saysDownloadingOnlyWhileALanguageDownloads() async throws {
+        let browser = makeBrowser()
+        engine.availability = .supported
+        engine.holdsDownload = true
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr-low"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        #expect(engine.calls.isEmpty)
+        #expect(tab.pageTranslation?.status == .translated)
+
+        engine.holdsDownload = false
+        _ = await page("document.getElementById('title').scrollIntoView(); return ''", in: tab)
+        #expect(await waitUntil(5) { await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)" })
+        #expect(tab.pageTranslation?.status == .translated)
+    }
+
+    /// Back to a translated page from WebKit's cache: it went in with its own text, and is translated again.
+    @Test func pagesBackFromTheCacheAreTranslatedAgain() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        _ = await page("window.stayed = 'cached'; return ''", in: tab)
+        let calls = engine.calls.count
+
+        var commits = tab.commits
+        tab.load(server.appending(path: "en"))
+        #expect(await waitUntil(10) { tab.commits > commits && !tab.isLoading })
+        commits = tab.commits
+        tab.goBack()
+        #expect(await waitUntil(10) { tab.commits > commits && !tab.isLoading })
+        #expect(await page("return window.stayed", in: tab) == "cached", "back from the cache, not loaded again")
+        #expect(await waitUntil(10) { engine.calls.count > calls && tab.pageTranslation?.status == .translated })
+        #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+
+        browser.translator.showOriginal(tab)
+        #expect(await waitUntil(5) { await text("title", in: tab) == "Le lithium, le plus léger des métaux" })
+    }
+
+    /// Text the page adds that reads like one of our translations is the page's own, and stays.
+    @Test func showOriginalKeepsThePagesOwnTextThatMatchesATranslation() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+        _ = await page("""
+            document.querySelector('article').insertAdjacentHTML('afterbegin', '<p id="echo" title="EN(Une note utile)">EN(Le lithium, le plus léger des métaux)</p>');
+            return ''
+            """, in: tab)
+        #expect(await waitUntil(5) { await text("echo", in: tab) == "EN(EN(Le lithium, le plus léger des métaux))" })
+
+        browser.translator.showOriginal(tab)
+        #expect(await waitUntil(5) { await text("title", in: tab) == "Le lithium, le plus léger des métaux" })
+        #expect(await text("echo", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+        #expect(await page("return document.getElementById('echo').title", in: tab) == "EN(Une note utile)")
     }
 
     /// The reader shows the page's translated text, and its original after Show Original.

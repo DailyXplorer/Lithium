@@ -49,13 +49,15 @@ const watch = (element, item) => {
 
 // Copies may lose spacing (the reader's does): known text is looked up without it.
 const plain = (text) => text.replace(/\s+/g, ' ').trim();
+// Only in the reader's copy: the page's own text that happens to read like a translation is its own.
+const copied = (node) => !!window.__lithiumReader?.article?.contains(node);
 
 const addText = (node) => {
   if (texts.has(node) || queued.has(node)) return;
   const data = node.data;
   if (!letter.test(data)) return;
   const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(data);
-  const original = known.get(plain(core));
+  const original = copied(node) ? known.get(plain(core)) : undefined;
   if (original !== undefined) return texts.set(node, { original: lead + original + trail, translated: data });
   queued.add(node);
   watch(node.parentElement, {
@@ -84,7 +86,7 @@ const addAttributes = (element) => {
       entries.set(name, entry);
       attrs.set(element, entries);
     };
-    const original = known.get(plain(value));
+    const original = copied(element) ? known.get(plain(value)) : undefined;
     if (original !== undefined) {
       record({ original, translated: value });
       continue;
@@ -196,6 +198,7 @@ const restore = () => {
   clearTimeout(timer);
   catchUp();
   stopped = true;
+  removeEventListener('pagehide', restore);
   visible.disconnect();
   changed.disconnect();
   for (const [node, entry] of texts) if (node.data === entry.translated) node.data = entry.original;
@@ -207,6 +210,9 @@ const restore = () => {
 };
 
 window.__lithiumPageTranslation = { restore };
+// Into the back/forward cache in its own text: back on screen, the app sees the page as it is
+// and translates it again if the tab still translates.
+addEventListener('pagehide', restore);
 // The reader's body comes first and the page's waits behind it: both are the document's.
 for (const body of document.querySelectorAll('body')) add(body);
 changed.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: attributes });

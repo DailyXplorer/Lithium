@@ -153,6 +153,8 @@
     <div class="row"><div class="title">HTTPS upgrades and fraud warnings</div></div>
     <h3>Turned off for</h3>
     <div class="rows" id="exceptions"></div>
+    <h3>Blocked pages always allowed</h3>
+    <div class="rows" id="allowed-pages"></div>
   </section>
 
   <section id="extensions" class="page">
@@ -463,6 +465,12 @@
       button.onclick = () => call('enableProtections', host).then(render);
       return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
     }) : [el('div', { className: 'empty', textContent: 'No sites. Use Site Protections in the ⋯ menu.' })]));
+
+    $('#allowed-pages').replaceChildren(...(protections.allowedPages.length ? protections.allowedPages.map((host) => {
+      const button = el('button', { className: 'button', textContent: 'Remove' });
+      button.onclick = () => call('removeAllowedPage', host).then(render);
+      return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
+    }) : [el('div', { className: 'empty', textContent: 'No sites. Use Always allow on a blocked page.' })]));
 
     $('#permission-list').replaceChildren(permissions.length ? el('table', {}, [
       el('thead', {}, [el('tr', {}, [el('th', { textContent: 'Site' }), ...KINDS.map(([, label]) => el('th', { textContent: label }))])]),

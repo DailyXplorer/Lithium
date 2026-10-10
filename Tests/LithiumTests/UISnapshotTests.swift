@@ -502,6 +502,27 @@ struct UISnapshotTests {
         }
     }
 
+    /// The page shown for a blocked address: while its lists are read, with the list and filter that
+    /// blocked it, with none found, and in a private tab.
+    @Test func blockedPageSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let url = URL(string: "https://tlauncher.org/en/")!
+        let states: [(name: String, reason: BlockedPage.Reason?, isPrivate: Bool)] = [
+            ("looking", nil, false),
+            ("badware", BlockedPage.Reason(list: "ubo-badware", filter: "||tlauncher.org^$doc", groups: ["security"]), false),
+            ("unknown", BlockedPage.Reason(groups: ["ads", "security"]), false),
+            ("private", BlockedPage.Reason(list: "urlhaus", filter: "||tlauncher.org^", groups: ["security"]), true),
+        ]
+        for state in states {
+            for isDark in [false, true] {
+                let view = BlockedPageView(page: BlockedPage(url: url, reason: state.reason), isPrivate: state.isPrivate, onBack: {}, onOpen: { _ in })
+                    .frame(width: 760, height: 520)
+                try render(view, isDark: isDark).write(to: directory.appending(path: "blocked-page-\(state.name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))
@@ -554,6 +575,7 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "updated": Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000,
             "updating": false,
             "disabledHosts": ["bank.example.com"],
+            "allowedPages": ["tlauncher.org"],
         ] as [String: Any],
         "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],
         "max": [

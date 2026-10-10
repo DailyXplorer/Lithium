@@ -114,6 +114,7 @@ struct QuickLinkView: View {
                         PDFReaderView(reader: pdf).id(ObjectIdentifier(pdf))
                     }
                 }
+                .overlay { BlockedPageLayer(tab: tab) }
                 .overlay(alignment: .topTrailing) {
                     if browser.showsFindBar(over: tab) {
                         FindBar(tab: tab)

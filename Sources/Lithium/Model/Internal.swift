@@ -186,6 +186,9 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.privacy.updateFiltersNow()
         case "enableProtections":
             if let host = value as? String { browser.setProtections(true, host: host) }
+        case "removeAllowedPage":
+            // Open pages of the site keep theirs until their next load.
+            if let host = value as? String { browser.privacy.removeAllowedPages(host: host) }
         case "setPermission":
             if let entry = value as? [String: String], let host = entry["host"],
                let kind = entry["kind"].flatMap(PermissionKind.init(rawValue:)) {
@@ -393,6 +396,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "updated": browser.privacy.filtersUpdated.map { $0.timeIntervalSince1970 * 1000 } ?? 0,
                 "updating": browser.privacy.isUpdatingFilters,
                 "disabledHosts": browser.privacy.disabledHosts.sorted(),
+                "allowedPages": browser.privacy.allowedPages.keys.sorted(),
             ],
             "permissions": browser.permissions.decisions.keys.sorted().map { host in
                 var entry: [String: String] = ["host": host]

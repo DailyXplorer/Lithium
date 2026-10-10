@@ -72,13 +72,9 @@ struct FilterUpdater: Sendable {
         var advanced: [String] = []
         var scriptlets: [String] = []
         for (group, names) in sources.groups {
-            var unique = Set<String>()
-            var rules: [String] = []
-            for name in names {
-                for rule in downloaded[name] ?? [] where Self.isAllowed(rule, list: name) && unique.insert(rule).inserted {
-                    if Self.isUBOScriptlet(rule, list: name) { scriptlets.append(rule) } else { rules.append(rule) }
-                }
-            }
+            let sorted = Self.sorted(names.map { ($0, downloaded[$0] ?? []) })
+            let rules = sorted.rules
+            scriptlets += sorted.scriptlets
             let result = ContentBlockerConverter().convertArray(rules: rules, safariVersion: .autodetect(), advancedBlocking: true)
             // Rules over WebKit's limit are dropped without a word: the set would block less than its
             // lists say yet count as complete. The last set stays, as scripts/update-filters.py refuses it too.
@@ -128,15 +124,41 @@ struct FilterUpdater: Sendable {
         }
     }
 
-    /// A uBO `+js()` filter from one of uBO's own lists, the only ones trusted with its `trusted-` scriptlets.
-    static func isUBOScriptlet(_ rule: String, list: String) -> Bool {
-        list.hasPrefix("ubo-") && (rule.contains("##+js(") || rule.contains("#@#+js("))
+    /// A group's rules for the converter and its uBO `+js()` filters, each kept once, in order.
+    static func sorted(_ lists: [(String, [String])]) ->(rules: [String], scriptlets: [String]) {
+        var unique = Set<String>()
+        var rules: [String] = []
+        var scriptlets: [String] = []
+        for (name, lines) in lists {
+            for rule in lines where isAllowed(rule, list: name) && unique.insert(rule).inserted {
+                if isUBOScriptlet(rule, list: name) { scriptlets.append(rule) } else { rules.append(rule) }
+            }
+        }
+        return (rules, scriptlets)
     }
 
-    /// Rules that run code in pages come only from uBO's own lists: the in-page engine can't tell
+    /// uBO's own lists, and the filters the user writes: the only ones trusted to run code in pages.
+    static func isTrusted(_ list: String) -> Bool {
+        list.hasPrefix("ubo-") || list == FilterLists.myFiltersID
+    }
+
+    /// A uBO `+js()` filter from a trusted list, the only ones trusted with its `trusted-` scriptlets.
+    static func isUBOScriptlet(_ rule: String, list: String) -> Bool {
+        isTrusted(list) && (rule.contains("##+js(") || rule.contains("#@#+js("))
+    }
+
+    /// Rules that run code in pages come only from trusted lists: the in-page engine can't tell
     /// which list a rule came from, so another list's would run as trusted as uBO's.
     static func isAllowed(_ rule: String, list: String) -> Bool {
-        list.hasPrefix("ubo-") || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
+        isTrusted(list) || !(rule.contains("+js(") || rule.contains("#%#") || rule.contains("#@%#"))
+    }
+
+    /// One list's rules, for a list the user chose: at least one, or it isn't a list.
+    func download(_ url: URL) async throws -> [String] {
+        var seen: Set<URL> = []
+        let lines = try await expand(url, seen: &seen)
+        guard !lines.isEmpty else { throw URLError(.cannotParseResponse) }
+        return lines
     }
 
     private static func copy(of list: String, in folder: URL) -> URL {
@@ -157,6 +179,9 @@ struct FilterUpdater: Sendable {
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { throw URLError(.badServerResponse) }
+        // The biggest real list is a few megabytes; a NUL byte means a binary file, not text.
+        guard data.count <= Self.maximumListBytes else { throw URLError(.dataLengthExceedsMaximum) }
+        guard !data.contains(0) else { throw URLError(.cannotParseResponse) }
         // An HTML page (an error or login page served with 200) would parse into junk rules.
         let body = String(decoding: data, as: UTF8.self)
         if body.first(where: { !$0.isWhitespace && $0 != "\u{FEFF}" }) == "<" { throw URLError(.cannotParseResponse) }
@@ -257,6 +282,7 @@ struct FilterUpdater: Sendable {
     static let maximumConditionDepth = 64
     /// The files one list may be made of, itself and everything it includes.
     static let maximumListFiles = 32
+    static let maximumListBytes = 10 * 1024 * 1024
 }
 
 struct Manifest: Codable {

@@ -47,13 +47,18 @@ final class Privacy {
     private static let farblingSourcesLimit = 8
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
+    private(set) var filterChoices: FilterChoices
+    /// Set by tests, for a folder of their own.
+    @ObservationIgnored var filterStorage = FilterLists.Storage.standard
+    /// The loaded set's folder and its lists' rule counts, counted when Settings first shows them.
+    @ObservationIgnored private var loadedFilters: (folder: URL, manifest: Manifest)?
+    @ObservationIgnored private var shippedListRules: (folder: URL, updated: String, counts: [String: Int])?
 
     private static let disabledHostsKey = "disabledProtectionHosts"
     private static let spaceExceptionsKey = "spaceProtectionExceptions"
     private static let failedUpdatesKey = "failedFilterUpdates"
     private static let nextUpdateKey = "nextFilterUpdate"
-    /// Part of each compiled list's name: bump it when `prepared(_:)` changes, so lists are rebuilt.
-    private static let preparation = 4
+    private static let filterChoicesKey = "filterChoices"
     private static let updateInterval: TimeInterval = 24 * 60 * 60
     nonisolated static let firstUpdateDelay = Duration.seconds(5 * 60)
     private static let downloadedFilters = URL.applicationSupportDirectory.appending(path: "Lithium/Filters")
@@ -62,6 +67,8 @@ final class Privacy {
         disabledHosts = Set(UserDefaults.standard.stringArray(forKey: Self.disabledHostsKey) ?? [])
         spaceExceptions = Space.siteChoices(UserDefaults.standard.dictionary(forKey: Self.spaceExceptionsKey))
         (failedUpdates, nextUpdate) = Self.savedBackoff(in: .standard)
+        filterChoices = UserDefaults.standard.data(forKey: Self.filterChoicesKey)
+            .flatMap { try? JSONDecoder().decode(FilterChoices.self, from: $0) } ?? FilterChoices()
 
         farblingTemplate = Resources.bundle.url(forResource: "farbling", withExtension: "js")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
@@ -227,14 +234,17 @@ final class Privacy {
         guard let updater = FilterUpdater.bundled() else { return }
         let destination = Self.downloadedFilters
         var updated = false
+        await updateChosenLists()
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try await Task.detached(priority: .utility) { try await updater.update(into: destination) }.value
-            await reloadRuleLists()
-            updated = filtersComplete
+            updated = true
         } catch {
             NSLog("Lithium: filter update failed: %@", error.localizedDescription)
         }
+        // Also when only the chosen lists changed.
+        if updated || !filterChoices.extraLists.isEmpty { await reloadRuleLists() }
+        updated = updated && filtersComplete
         (failedUpdates, nextUpdate) = Self.saveBackoff(afterFailures: updated ? 0 : failedUpdates + 1, in: .standard)
     }
 
@@ -447,23 +457,37 @@ final class Privacy {
               let store = WKContentRuleListStore.default() else { return }
 
         let stamp = manifest.updated.filter(\.isNumber)
-        let groups = await Self.loadGroups(from: folder, manifest: manifest, into: store)
+        loadedFilters = (folder, manifest)
+        // Only once the user changed a list or wrote a filter: the shipped set loads as it always did.
+        let choices = filterChoices, storage = filterStorage
+        let chosen = choices.isDefault && !storage.hasMyFilters ? nil : await Task.detached(priority: .userInitiated) {
+            ChosenFilters.build(base: folder, manifest: manifest, choices: choices, storage: storage)
+        }.value
+        let groups = await Self.loadGroups(chosen?.groups ?? FilterGroup.shipped(in: folder, manifest: manifest), into: store)
         ruleLists = groups.lists
-        ruleCount = groups.ruleCount + (manifest.advancedRules ?? 0) + (manifest.scriptletRules ?? 0)
+        ruleCount = groups.ruleCount + (chosen?.advancedRules ?? manifest.advancedRules ?? 0) + (chosen?.scriptletRules ?? manifest.scriptletRules ?? 0)
         filtersUpdated = manifest.date
         filtersMatchSources = FilterUpdater.bundled()?.sources.built(manifest) ?? true
         filtersComplete = groups.complete && (manifest.failedLists ?? []).isEmpty
         generation += 1
 
         // Awaited, so the tab restored at launch waits for uBO's scriptlets instead of playing ads.
-        await advanced.load(folder: folder, stamp: stamp)
+        if let chosen {
+            await advanced.load(folder: chosen.engineFolder, stamp: chosen.engineStamp)
+        } else {
+            await advanced.load(folder: folder, stamp: stamp)
+        }
+    }
+
+    static func loadGroups(from folder: URL, manifest: Manifest, into store: WKContentRuleListStore) async
+        -> (lists: [WKContentRuleList], ruleCount: Int, complete: Bool) {
+        await loadGroups(FilterGroup.shipped(in: folder, manifest: manifest), into: store)
     }
 
     /// A group that fails to compile keeps its list from an earlier set, uncounted, and marks the
-    /// set incomplete so it is tried again.
-    static func loadGroups(from folder: URL, manifest: Manifest, into store: WKContentRuleListStore) async
+    /// set incomplete so it is tried again. A group compiled before is only looked up.
+    static func loadGroups(_ groups: [FilterGroup], into store: WKContentRuleListStore) async
         -> (lists: [WKContentRuleList], ruleCount: Int, complete: Bool) {
-        let stamp = manifest.updated.filter(\.isNumber)
         let available = await store.availableIdentifiers() ?? []
         var lists: [WKContentRuleList] = []
         var kept: Set<String> = []
@@ -471,15 +495,15 @@ final class Privacy {
         var complete = true
         // Started together, as WebKit compiles on a concurrent queue: the first page waits for the
         // slowest group rather than for all of them in turn. Kept in the groups' order.
-        let compiles = manifest.groups.keys.sorted().map { group in
-            let identifier = "lithium-\(group)-\(stamp)-p\(Self.preparation)"
-            return (group, identifier, Task { await compiled(group, identifier: identifier, folder: folder, store: store) })
+        let compiles = groups.map { group in
+            (group, Task { await compiled(group, store: store) })
         }
-        for (group, identifier, compile) in compiles {
+        for (entry, compile) in compiles {
+            let (group, identifier) = (entry.name, entry.identifier)
             if let list = await compile.value {
                 lists.append(list)
                 kept.insert(identifier)
-                ruleCount += manifest.groups[group]?.webkitRules ?? 0
+                ruleCount += entry.webkitRules
                 continue
             }
             complete = false
@@ -498,18 +522,128 @@ final class Privacy {
         return (lists, ruleCount, complete)
     }
 
-    private static func compiled(_ group: String, identifier: String, folder: URL, store: WKContentRuleListStore) async -> WKContentRuleList? {
-        if let cached = try? await store.contentRuleList(forIdentifier: identifier) { return cached }
-        let file = folder.appending(path: "\(group).json")
+    private static func compiled(_ group: FilterGroup, store: WKContentRuleListStore) async -> WKContentRuleList? {
+        if let cached = try? await store.contentRuleList(forIdentifier: group.identifier) { return cached }
+        let file = group.file
         guard let json = await Task.detached(priority: .utility, operation: { Self.prepared(file) }).value else {
-            NSLog("Lithium: failed to read %@ filters", group)
+            NSLog("Lithium: failed to read %@ filters", group.name)
             return nil
         }
         do {
-            return try await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json)
+            return try await store.compileContentRuleList(forIdentifier: group.identifier, encodedContentRuleList: json)
         } catch {
-            NSLog("Lithium: failed to compile %@ filters: %@", group, error.localizedDescription)
+            NSLog("Lithium: failed to compile %@ filters: %@", group.name, error.localizedDescription)
             return nil
         }
+    }
+
+    // MARK: Choosing filter lists
+
+    /// Turns a shipped or catalog list on or off. A catalog list is downloaded when first turned on;
+    /// returns a message for the user when it can't be.
+    func setFilterList(_ id: String, enabled: Bool) async -> String? {
+        var choices = filterChoices
+        if FilterLists.shipped.contains(where: { $0.id == id }) {
+            if enabled { choices.off.remove(id) } else { choices.off.insert(id) }
+        } else if let info = FilterLists.catalog.first(where: { $0.id == id }), let url = info.url {
+            if enabled {
+                guard let copy = await download(id: id, url: url) else { return "Couldn’t download \(info.name). Try again later." }
+                choices = filterChoices
+                choices.copies[id] = copy
+                choices.on.insert(id)
+            } else {
+                choices = filterChoices
+                choices.on.remove(id)
+                forgetCopy(of: id, in: &choices)
+            }
+        } else if !enabled, let url = filterChoices.added.first(where: { FilterLists.id(of: $0) == id }) {
+            choices.added.removeAll { $0 == url }
+            forgetCopy(of: id, in: &choices)
+        } else {
+            return nil
+        }
+        await apply(choices)
+        return nil
+    }
+
+    /// Adds a list by its address once it downloads as a filter list; returns why it wasn't added.
+    func addFilterList(_ text: String) async -> String? {
+        guard let url = FilterLists.validatedURL(text) else { return "Enter an address starting with https:// or http://." }
+        let id = FilterLists.id(of: url)
+        guard !filterChoices.added.contains(url) else { return "This list is already added." }
+        if FilterLists.catalog.contains(where: { $0.url == url }) { return "This list is in the catalog: turn it on there." }
+        guard let copy = await download(id: id, url: url) else { return "That address doesn’t lead to a filter list." }
+        var choices = filterChoices
+        choices.added.append(url)
+        choices.copies[id] = copy
+        await apply(choices)
+        return nil
+    }
+
+    var myFilters: String { filterStorage.readMyFilters() }
+
+    /// Saved and compiled at once: pages get them from their next load.
+    func setMyFilters(_ text: String) async {
+        do {
+            try filterStorage.writeMyFilters(text)
+        } catch {
+            NSLog("Lithium: failed to save your filters: %@", error.localizedDescription)
+        }
+        await reloadRuleLists()
+    }
+
+    /// Each list's rule count, as Settings shows it. Counted once per filter set, off the main thread.
+    func filterListRules() async -> [String: Int] {
+        guard let (folder, manifest) = loadedFilters else { return [:] }
+        if let counted = shippedListRules, counted.folder == folder, counted.updated == manifest.updated { return counted.counts }
+        let names = Set(manifest.groups.values.compactMap(\.lists).joined())
+        let counts = await Task.detached(priority: .userInitiated) {
+            Dictionary(uniqueKeysWithValues: names.map { name in
+                let text = (try? String(contentsOf: folder.appending(path: "lists/\(name).txt"), encoding: .utf8)) ?? ""
+                return (name, text.isEmpty ? 0 : text.split(whereSeparator: \.isNewline).count)
+            })
+        }.value
+        shippedListRules = (folder, manifest.updated, counts)
+        return counts
+    }
+
+    var failedFilterLists: [String] { loadedFilters?.manifest.failedLists ?? [] }
+
+    private func apply(_ choices: FilterChoices) async {
+        filterChoices = choices
+        UserDefaults.standard.set(try? JSONEncoder().encode(choices), forKey: Self.filterChoicesKey)
+        await reloadRuleLists()
+    }
+
+    private func download(id: String, url: URL) async -> FilterChoices.Copy? {
+        do {
+            let lines = try await FilterLists.download(url)
+            try filterStorage.save(lines, for: id)
+            return FilterChoices.Copy(rules: lines.count, updated: Date())
+        } catch {
+            NSLog("Lithium: filter list %@ failed to download: %@", id, error.localizedDescription)
+            return nil
+        }
+    }
+
+    private func forgetCopy(of id: String, in choices: inout FilterChoices) {
+        choices.copies[id] = nil
+        try? FileManager.default.removeItem(at: filterStorage.copy(of: id))
+    }
+
+    /// With the shipped lists' daily update: a list that fails keeps its last copy.
+    private func updateChosenLists() async {
+        let lists = filterChoices.extraLists
+        guard !lists.isEmpty else { return }
+        var copies: [String: FilterChoices.Copy] = [:]
+        for list in lists {
+            copies[list.id] = await download(id: list.id, url: list.url)
+        }
+        var choices = filterChoices
+        for list in lists where choices.extraLists.contains(where: { $0.id == list.id }) {
+            if let copy = copies[list.id] { choices.copies[list.id] = copy } else { choices.copies[list.id]?.failed = true }
+        }
+        filterChoices = choices
+        UserDefaults.standard.set(try? JSONEncoder().encode(choices), forKey: Self.filterChoicesKey)
     }
 }

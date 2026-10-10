@@ -155,9 +155,12 @@ enum FilterLists {
     static func problems(in text: String) -> [Problem] {
         var problems: [Problem] = []
         for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[Adblock") else { continue }
-            if let message = problem(line) { problems.append(Problem(line: index + 1, text: line, message: message)) }
+            // Split again as the build splits, which also breaks lines at U+000B, U+2028 and the like.
+            for piece in raw.split(whereSeparator: \.isNewline) {
+                let line = piece.trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[Adblock") else { continue }
+                if let message = problem(line) { problems.append(Problem(line: index + 1, text: line, message: message)) }
+            }
         }
         return problems
     }

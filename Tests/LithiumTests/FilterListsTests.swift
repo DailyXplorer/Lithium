@@ -222,15 +222,21 @@ struct FilterListsTests {
             UserDefaults.standard.removeObject(forKey: key)
             try? FileManager.default.removeItem(at: root)
         }
-        let set = try shippedSet(["ads": ["easylist": "||ads.lithium.test^", "ubo-filters": "||more.lithium.test^"],
-                                  "privacy": ["easyprivacy": "||tracker.lithium.test^"],
-                                  "malware": ["urlhaus": "||malware.lithium.test^"]])
+        let named = try shippedSet(["ads": ["easylist": "||ads.lithium.test^", "ubo-filters": "||more.lithium.test^"],
+                                    "privacy": ["easyprivacy": "||tracker.lithium.test^"],
+                                    "malware": ["urlhaus": "||malware.lithium.test^"]])
+        // One in-page rule in the shipped engine, so the rule count shows whether it is counted.
+        try #"example.net#%#//scriptlet("set-constant", "lithiumShipped", "1")"#.write(to: named.folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        let set = (folder: named.folder, manifest: Manifest(format: named.manifest.format, updated: named.manifest.updated,
+                                                             groups: named.manifest.groups, advancedRules: 1))
         let shipped = FilterGroup.shipped(in: set.folder, manifest: set.manifest).map(\.identifier)
         let malware = FilterGroup.shipped(in: set.folder, manifest: set.manifest).filter { $0.name == "malware" }.map(\.identifier)
         let privacy = Privacy()
         privacy.filterStorage = storage
         privacy.filterSet = set
         privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        let engines = root.appending(path: "engine")
+        privacy.advanced = AdvancedBlocking(container: engines)
         let page = URL(string: "https://example.com/")!
 
         #expect(await privacy.setFilterList("easylist", enabled: false) == nil)
@@ -243,6 +249,20 @@ struct FilterListsTests {
         #expect(privacy.ruleLists.last?.identifier.hasPrefix("lithium-my-filters-h") == true)
         #expect(privacy.filterError == nil)
         #expect(privacy.scripts(true, for: page).count == 2, "farbling and the scriptlet")
+
+        // An engine that can't be built: the one before, which may run a list since turned off,
+        // goes too, and the page says so. Moved, not deleted, so the engine open before still works.
+        let moved = root.appending(path: "engine-moved")
+        try FileManager.default.moveItem(at: engines, to: moved)
+        try Data().write(to: engines)
+        #expect(await privacy.setMyFilters(filters + "\nexample.com##+js(set, lithiumOther, 1)") == nil)
+        #expect(privacy.scripts(true, for: page).count == 1, "farbling only")
+        #expect(privacy.filterError == "Lithium couldn’t build the in-page rules of your filter lists, so none apply until the next change or update.")
+        try FileManager.default.removeItem(at: engines)
+        try FileManager.default.moveItem(at: moved, to: engines)
+        #expect(await privacy.setMyFilters(filters) == nil)
+        #expect(privacy.scripts(true, for: page).count == 2)
+        #expect(privacy.filterError == nil)
 
         // A group WebKit won't compile is reported, and the save itself still succeeded.
         let mine = try #require(try FileManager.default.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: nil)
@@ -264,12 +284,13 @@ struct FilterListsTests {
 
         // Nowhere to convert to: the list just turned off stops blocking, as does the engine,
         // built from every shipped list; the group holding none of them stays. Groups are compiled
-        // whole, so uBlock Origin filters, left on beside EasyList, stops too, and the message says so.
+        // whole, so uBlock Origin filters, left on beside EasyList, stops too, as do the added list
+        // and the user's filters, and the message names them all.
         try FileManager.default.removeItem(at: storage.built)
         try Data().write(to: storage.built)
         #expect(await privacy.setFilterList("easyprivacy", enabled: false) == nil)
-        let stopped = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
-            + " Until then, these lists are off too: uBlock Origin filters."
+        let failed = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
+        let stopped = failed + " Until then, these aren’t applied: uBlock Origin filters, \(url.absoluteString), your filters, every list’s in-page rules."
         #expect(privacy.filterError == stopped)
         #expect(!privacy.filtersComplete, "so the update backs off")
         #expect(privacy.filterChoices.off == ["easylist", "easyprivacy"], "kept, to be tried again")
@@ -282,18 +303,51 @@ struct FilterListsTests {
         launched.filterStorage = storage
         launched.filterSet = set
         launched.ruleListStore = privacy.ruleListStore
+        launched.advanced = AdvancedBlocking(container: engines)
         #expect(await launched.setMyFilters(filters) == nil)
         #expect(launched.ruleLists.map(\.identifier) == malware)
         #expect(launched.filterError == stopped)
         #expect(await launched.setFilterList("easylist", enabled: true) == nil)
         #expect(await launched.setFilterList("easyprivacy", enabled: true) == nil)
         #expect(launched.ruleLists.map(\.identifier) == shipped)
-        #expect(launched.filterError == "Lithium couldn’t apply your filter lists. It will try again with the next change or update.")
+        #expect(launched.filterError == failed + " Until then, these aren’t applied: \(url.absoluteString), your filters.")
+        #expect(launched.ruleCount == 4, "three groups' rules and the shipped engine's")
+        #expect(launched.scripts(true, for: URL(string: "https://example.net/")!).count == 2, "farbling and the shipped scriptlet")
         #expect(!launched.filtersComplete)
 
         try FileManager.default.removeItem(at: storage.myFilters)
         try FileManager.default.createDirectory(at: storage.myFilters, withIntermediateDirectories: true)
         #expect(await privacy.setMyFilters("example.org##.ad")?.hasPrefix("Couldn’t save your filters") == true)
+    }
+
+    /// A set downloaded before its manifest named each group's lists can't be rebuilt, so a list
+    /// turned off fails the build. The app's own grouping then tells which groups hold it: the
+    /// others stay, and the lists left on beside it are named.
+    @Test func aSetWithoutListNamesKeepsTheGroupsOfTheAppsGrouping() async throws {
+        let key = "filterChoices"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let grouping = try #require(FilterUpdater.bundled()?.sources.groups)
+        let named = try shippedSet(grouping.mapValues { lists in Dictionary(uniqueKeysWithValues: lists.map { ($0, "||\($0).lithium.test^") }) })
+        let set = (folder: named.folder, manifest: Manifest(format: named.manifest.format, updated: named.manifest.updated,
+                                                             groups: named.manifest.groups.mapValues { Manifest.Group(webkitRules: $0.webkitRules) },
+                                                             advancedRules: 0))
+        let privacy = Privacy()
+        privacy.filterStorage = storage
+        privacy.filterSet = set
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
+
+        #expect(await privacy.setFilterList("easylist", enabled: false) == nil)
+        let kept = FilterGroup.shipped(in: set.folder, manifest: set.manifest)
+            .filter { !(grouping[$0.name] ?? []).contains("easylist") }.map(\.identifier)
+        #expect(!kept.isEmpty)
+        #expect(privacy.ruleLists.map(\.identifier) == kept)
+        #expect(privacy.filterError == "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
+            + " Until then, these aren’t applied: uBlock Origin filters, uBlock Origin quick fixes, every list’s in-page rules.")
     }
 
     /// An added list is refreshed with the daily update and keeps its copy when that fails; one
@@ -364,6 +418,9 @@ struct FilterListsTests {
         privacy.filterStorage = storage
         privacy.filterSet = set
         privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
+        // Not the app's own folder, which the shipped lists' update writes to.
+        privacy.filterDownloads = root.appending(path: "downloads/Filters")
         // Every other address, the shipped lists' included, answers 404: nothing is written.
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubFilterList.self]
@@ -381,6 +438,7 @@ struct FilterListsTests {
         #expect(privacy.ruleLists.map(\.identifier) != loaded, "reloaded")
         #expect(UserDefaults.standard.integer(forKey: "failedFilterUpdates") == 1)
         #expect(UserDefaults.standard.double(forKey: "nextFilterUpdate") > Date().timeIntervalSinceReferenceDate)
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: "downloads").path), "the update ran there")
     }
 
     /// What the user types in My filters stays when a reply re-renders the page before they save,
@@ -493,7 +551,18 @@ struct FilterListsTests {
         let youtube = try await build(set, choices)
         let extra = try #require(youtube.groups.first { $0.name == FilterLists.extraGroup })
         let rules = try String(contentsOf: extra.file, encoding: .utf8)
-        #expect(rules.contains("ytd-reel-shelf-renderer") && rules.contains("youtube.com"))
+        #expect(rules.contains("ytd-reel-shelf-renderer"))
+        // Every compiled rule is scoped to YouTube, and the in-page ones run on youtube.com only.
+        let compiled = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: extra.file)) as? [[String: Any]])
+        #expect(!compiled.isEmpty && compiled.allSatisfy { rule in
+            (rule["trigger"] as? [String: Any] ?? [:]).contains { key, value in
+                key.hasPrefix("if-") && (value as? [String]).map { !$0.isEmpty && $0.allSatisfy { $0.contains("youtube") } } == true
+            }
+        })
+        let engine = AdvancedBlocking(container: root.appending(path: "engine"))
+        #expect(await engine.load(folder: youtube.engineFolder, stamp: youtube.engineStamp))
+        #expect(engine.script(for: URL(string: "https://www.youtube.com/")!)?.contains("rich-shelf-header") == true)
+        #expect(engine.script(for: URL(string: "https://example.com/")!) == nil)
 
         try storage.save(lines.map { $0.replacingOccurrences(of: "youtube.com", with: "127.0.0.1") }, for: "hide-youtube-shorts")
         let local = try await build(set, choices)
@@ -570,8 +639,9 @@ struct FilterListsTests {
             ||ads.example^$lithium-no-such-option
             example.org##+js(set, lithiumProbe, 1)
             example.org#@#+js()
+            ! A note\u{2028}example.com##+js(lithium-no-such-scriptlet)
             """)
-        #expect(problems.map(\.line) == [5, 6])
+        #expect(problems.map(\.line) == [5, 6, 9])
         #expect(problems.first?.message == "Unknown scriptlet “lithium-no-such-scriptlet”.")
         #expect(FilterUpdater.isAllowed("example.org##+js(set, a, 1)", list: FilterLists.myFiltersID))
         #expect(!FilterUpdater.isAllowed("example.org##+js(set, a, 1)", list: FilterLists.id(of: URL(string: "https://example.com/l.txt")!)))

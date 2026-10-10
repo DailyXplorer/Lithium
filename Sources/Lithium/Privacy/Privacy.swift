@@ -45,14 +45,18 @@ final class Privacy {
         let site: String
     }
     private static let farblingSourcesLimit = 8
-    @ObservationIgnored private let advanced = AdvancedBlocking()
+    /// Whether the engine loaded is the shipped set's, which a set no one customized can keep
+    /// when a new one can't be built.
+    @ObservationIgnored private var engineIsShipped = false
     @ObservationIgnored private let userAgentSuffix: String
     private(set) var filterChoices: FilterChoices
-    /// Set by tests, for a folder, a filter set, a rule list store and downloads of their own.
+    /// Set by tests, for a folder, a filter set, a rule list store, an engine and downloads of their own.
     @ObservationIgnored var filterStorage = FilterLists.Storage.standard
     @ObservationIgnored var filterSet: (folder: URL, manifest: Manifest)?
     @ObservationIgnored var ruleListStore: WKContentRuleListStore?
+    @ObservationIgnored var advanced = AdvancedBlocking()
     @ObservationIgnored var filterSession = URLSession.shared
+    @ObservationIgnored var filterDownloads = Privacy.downloadedFilters
     /// Why the user's choice of lists or filters isn't fully applied, for the Filter lists page.
     @ObservationIgnored private(set) var filterError: String?
     /// The loaded set's folder and its lists' rule counts, counted when Settings first shows them.
@@ -238,7 +242,7 @@ final class Privacy {
         defer { isUpdatingFilters = false }
         guard var updater = FilterUpdater.bundled() else { return }
         updater.session = filterSession
-        let destination = Self.downloadedFilters
+        let destination = filterDownloads
         var updated = false
         await updateChosenLists()
         do {
@@ -476,16 +480,25 @@ final class Privacy {
         // keep a list just turned off blocking. The groups are compiled whole, so the lists left on
         // in a group that goes stop too: the message names them, as Settings still shows them on.
         let shippedEngine = choices.off.isEmpty
+        // A set downloaded before its manifest named each group's lists takes the app's grouping.
+        var groupLists = manifest.groups.compactMapValues(\.lists)
+        if !shippedEngine, groupLists.count < manifest.groups.count, let bundled = FilterUpdater.bundled()?.sources.groups {
+            for group in manifest.groups.keys where groupLists[group] == nil { groupLists[group] = bundled[group] }
+        }
         let shipped = FilterGroup.shipped(in: folder, manifest: manifest).filter { group in
-            manifest.groups[group.name]?.lists.map { choices.off.isDisjoint(with: $0) } ?? shippedEngine
+            shippedEngine || groupLists[group.name].map { choices.off.isDisjoint(with: $0) } ?? false
         }
         if failed {
-            let kept = Set(shipped.flatMap { manifest.groups[$0.name]?.lists ?? [] })
-            let stopped = Set(manifest.groups.values.flatMap { $0.lists ?? [] }).subtracting(kept).subtracting(choices.off)
+            let kept = Set(shipped.flatMap { groupLists[$0.name] ?? [] })
+            let stopped = Set(groupLists.values.joined()).subtracting(kept).subtracting(choices.off)
+            // The lists the user added and their own filters are in groups only a build makes.
             let names = FilterLists.shipped.filter { stopped.contains($0.id) }.map(\.name)
                 + stopped.subtracting(FilterLists.shipped.map(\.id)).sorted()
+                + choices.extraLists.map { list in FilterLists.catalog.first { $0.id == list.id }?.name ?? list.url.absoluteString }
+                + (storage.hasMyFilters ? ["your filters"] : [])
+                + (shippedEngine ? [] : ["every list’s in-page rules"])
             filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
-                + (names.isEmpty ? "" : " Until then, these lists are off too: \(names.joined(separator: ", ")).")
+                + (names.isEmpty ? "" : " Until then, these aren’t applied: \(names.joined(separator: ", ")).")
         }
         let groups = await Self.loadGroups(chosen?.groups ?? shipped, into: store)
         if let chosen {
@@ -507,13 +520,23 @@ final class Privacy {
         generation += 1
 
         // Awaited, so the tab restored at launch waits for uBO's scriptlets instead of playing ads.
-        if let chosen {
-            // The engine kept when the new one can't be built may run a list just turned off.
-            if !(await advanced.load(folder: chosen.engineFolder, stamp: chosen.engineStamp)), !shippedEngine { advanced.unload() }
-        } else if shippedEngine {
-            await advanced.load(folder: folder, stamp: stamp)
-        } else {
+        let engine: (folder: URL, stamp: String)?
+        if let chosen { engine = (chosen.engineFolder, chosen.engineStamp) } else { engine = shippedEngine ? (folder, stamp) : nil }
+        guard let engine else {
             advanced.unload()
+            engineIsShipped = false
+            return
+        }
+        if await advanced.load(folder: engine.folder, stamp: engine.stamp) {
+            engineIsShipped = chosen == nil
+        } else if customized || !engineIsShipped {
+            // The engine kept may run a list turned off or a filter removed since, or lack a list
+            // turned back on: only the shipped set's, for a set no one customized, can stay.
+            advanced.unload()
+            engineIsShipped = false
+            ruleCount = groups.ruleCount
+            filterError = [filterError, "Lithium couldn’t build the in-page rules of your filter lists, so none apply until the next change or update."]
+                .compactMap { $0 }.joined(separator: " ")
         }
     }
 

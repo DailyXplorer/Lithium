@@ -180,9 +180,14 @@ struct BlockedPageTests {
                 """#.utf8)),
             "/late.js": ("Content-Type: text/javascript", Data("document.title = 'Late loaded'".utf8)),
         ], delay: delay, requested: { requests.record($0) }, answer: { path in
+            guard let base = served.withLock({ $0 }), let port = base.port else { return nil }
+            switch path {
             // Sends its load on to another site (localhost), where the same group blocks the page.
-            guard path == "/blocked-elsewhere", let port = served.withLock({ $0 })?.port else { return nil }
-            return ("HTTP/1.1 302 Found\r\nLocation: http://localhost:\(port)/blocked", Data())
+            case "/blocked-elsewhere": return ("HTTP/1.1 302 Found\r\nLocation: http://localhost:\(port)/blocked", Data())
+            // Sends it on within its own site.
+            case "/blocked-moved": return ("HTTP/1.1 302 Found\r\nLocation: \(base.appending(path: "blocked").absoluteString)", Data())
+            default: return nil
+            }
         })
         served.withLock { $0 = base }
         let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "blocked-rules-\(UUID().uuidString)")))
@@ -270,6 +275,21 @@ struct BlockedPageTests {
         #expect(setup.requests["/blocked"] == 0)
     }
 
+    /// A redirect within the site is part of the load Open anyway lets through (http to https, say,
+    /// which the same filters block), its ads still blocked.
+    @Test func openAnywayFollowsARedirectWithinTheSite() async throws {
+        let setup = try await setUp()
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page.deletingLastPathComponent().appending(path: "blocked-moved"))
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { tab.title == "Blocked" && !tab.isLoading })
+        #expect(tab.blockedPage == nil)
+        #expect(setup.requests["/blocked-moved"] == 1 && setup.requests["/blocked"] == 1)
+        #expect(setup.requests["/ad.js"] == 0)
+    }
+
     /// Open anyway stopped before the page shows brings the blocked page back, buttons and all, and
     /// lets nothing through later: going to it again blocks it again.
     @Test func openAnywayStoppedLetsNothingThrough() async throws {
@@ -304,6 +324,21 @@ struct BlockedPageTests {
         #expect(await waitUntil(15) { setup.requests["/blocked"] == 1 })
         let blocked = tab.loadError
         setup.browser.navigate(tab, .open(setup.page))
+        #expect(await waitUntil(15) { tab.loadError !== blocked && tab.blockedPage?.reason != nil })
+        #expect(setup.requests["/blocked"] == 1)
+    }
+
+    /// Reload while Open anyway is on its way is another navigation: the page is blocked again.
+    @Test func reloadDuringOpenAnywayBlocksAgain() async throws {
+        let setup = try await setUp(delay: 3)
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page)
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { setup.requests["/blocked"] == 1 })
+        let blocked = tab.loadError
+        setup.browser.navigate(tab, .reload)
         #expect(await waitUntil(15) { tab.loadError !== blocked && tab.blockedPage?.reason != nil })
         #expect(setup.requests["/blocked"] == 1)
     }
@@ -400,7 +435,8 @@ struct BlockedPageTests {
         setup.browser.close(tab, remembering: false)
         #expect(lookup.isCancelled)
         // Whenever the search ended, nothing is kept for the session: with the lists gone, a
-        // lookup finds nothing rather than a kept answer.
+        // lookup finds nothing rather than a kept answer. That a search cut short is never kept,
+        // whatever the timing here, is `lookupsAreKeptPerPage`'s "searched again".
         _ = await lookup.value
         try FileManager.default.removeItem(at: setup.folder.appending(path: "lists"))
         #expect(await setup.browser.privacy.blockReason(for: setup.page, privateSession: session).list == nil)

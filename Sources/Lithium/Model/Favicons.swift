@@ -24,6 +24,10 @@ final class Favicons {
     /// (Docs, Sheets), so an open page is never given its host's icon blindly, nor refetches its own.
     private var byAddress: [URL: Data] = [:]
     private static let byAddressLimit = 256
+    /// Addresses that answered with no icon (a 404, a login page): the `/favicon.ico` fallback ranks
+    /// ahead of many declared icons, and would otherwise cost a request at each of the page's loads.
+    /// Only the fetch skips them: the page may still draw one with its cookies.
+    private var noIcon: Set<URL> = []
     private var inFlight: [String: Task<(png: Data?, allAnswered: Bool), Never>] = [:]
     /// When `refresh` last wrote each host's icon: an animated one changes every few seconds.
     private var refreshed: [String: ContinuousClock.Instant] = [:]
@@ -175,6 +179,7 @@ final class Favicons {
         iconless = []
         refreshed = [:]
         byAddress = [:]
+        noIcon = []
         cache = cache.filter { hosts.contains($0.key) }
         images = images.filter { hosts.contains($0.key) }
         let folder = folder
@@ -230,10 +235,18 @@ final class Favicons {
             // The tab moved on, and its next fetch took this one's place.
             if Task.isCancelled { return nil }
             if let kept = keptIcon(for: candidate, host: host, preferringTouchIcon: preferringTouchIcon) { return kept }
+            guard !noIcon.contains(candidate.url) else { continue }
             var answered = false
             let png = await Self.fetch(candidate.url, with: session, answered: &answered)
             allAnswered = allAnswered && answered
-            guard let png else { continue }
+            guard let png else {
+                // `data:` icons cost no request, and their address may be large.
+                if answered, generation == self.generation, ["http", "https"].contains(candidate.url.scheme?.lowercased()) {
+                    if noIcon.count >= Self.byAddressLimit { noIcon.removeAll(keepingCapacity: true) }
+                    noIcon.insert(candidate.url)
+                }
+                continue
+            }
             if generation == self.generation, !preferringTouchIcon || candidate.isTouchIcon { store(png, for: host, from: candidate.url) }
             return png
         }

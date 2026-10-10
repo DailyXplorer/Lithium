@@ -81,7 +81,7 @@ struct BlockedPageFilterTests {
         #expect(BlockedPage.reason(for: url, in: besideLiteral).filter == #"/^https:\/\/tlauncher\.org\/en\//$doc"#)
     }
 
-    /// A search for a tab gone elsewhere stops before reading another list.
+    /// A search for a tab gone elsewhere stops: cancelled before it starts, it reads no list.
     @Test func aCancelledSearchStops() async throws {
         let folder = try Self.filters(["ubo-badware": "||tlauncher.org^$doc"], groups: ["security": ["ubo-badware"]])
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -307,6 +307,11 @@ struct BlockedPageTests {
         #expect(tab.blockedPage == nil)
         #expect(setup.requests["/ad.js"] == 0, "the ads group stays on")
 
+        // The allowed group stays off for what the site's pages load too, not only the page itself.
+        setup.browser.navigate(tab, .open(setup.page.deletingLastPathComponent().appending(path: "blocked-late")))
+        #expect(await waitUntil(15) { tab.title.hasPrefix("Late") })
+        #expect(tab.title == "Late loaded")
+
         // Removed with its button in Settings, the way the user does.
         let settings = setup.browser.newTab(url: Internal.settingsURL)
         var listed: [String]?
@@ -351,7 +356,26 @@ struct BlockedPageTests {
         privacy.forget(privateSession: session)
         #expect(await privacy.blockReason(for: b, privateSession: session).list == nil, "forgotten with its private session")
         #expect(await privacy.blockReason(for: a).list == "ubo-badware")
+
+        // Other lists: what was kept for them isn't the answer any more.
+        let other = try BlockedPageFilterTests.filters(["easylist": "||a.example^"], groups: ["ads": ["easylist"]])
+        defer { try? FileManager.default.removeItem(at: other) }
+        privacy.filtersFolder = other
+        #expect(await privacy.blockReason(for: a).list == "easylist")
         withExtendedLifetime(owner) {}
+    }
+
+    /// A closed tab's search stops: a private one's would otherwise keep its address after the
+    /// session is forgotten.
+    @Test func closingATabStopsItsSearch() async throws {
+        let setup = try await setUp()
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page, privateStore: .nonPersistent())
+        #expect(await waitUntil(15) { tab.blockedPage != nil })
+        let lookup = try #require(tab.blockLookup)
+
+        setup.browser.close(tab, remembering: false)
+        #expect(lookup.isCancelled)
     }
 
     /// In a private tab, Always allow holds for its private session only, in memory.

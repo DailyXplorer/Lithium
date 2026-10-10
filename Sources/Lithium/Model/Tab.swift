@@ -206,7 +206,7 @@ final class Tab: NSObject, Identifiable {
     var isShowingError: Bool { failedURL != nil }
     /// Shown over the error page when a filter list blocked the page itself.
     private(set) var blockedPage: BlockedPage?
-    @ObservationIgnored private var blockLookup: Task<BlockedPage.Reason, Never>?
+    @ObservationIgnored private(set) var blockLookup: Task<BlockedPage.Reason, Never>?
     /// Open anyway: its load goes without the groups that blocked the page (`putBackLeftOffGroups`). Set
     /// by `load` from `passToLoad`, so any other load the tab is sent on gets every list again.
     @ObservationIgnored private var letThrough: (url: URL, host: String, groups: Set<String>)?
@@ -756,6 +756,8 @@ final class Tab: NSObject, Identifiable {
         faviconLoad?.cancel()
         faviconLoad = nil
         forgetLiveIcon()
+        // A search still on its way would keep a closed private session's address once it ends.
+        endBlockedPage()
         guard let loadedWebView else { return }
         loadedWebView.stopLoading()
         loadedWebView.navigationDelegate = PutAwayWebView.refusing
@@ -854,10 +856,13 @@ final class Tab: NSObject, Identifiable {
     /// Groups left off a page let through blocked only its own load: once its response is in, before
     /// the document starts, they are back for its scripts, images and frames. WebKit can't turn off
     /// part of a compiled list, so this keeps the rest of a group (other ads, trackers) on the page.
+    /// A site always allowed keeps its groups off its whole page, as before it was let through.
     private func putBackLeftOffGroups() {
         guard let applied = appliedProtections, !applied.leftOff.isEmpty, let privacy = browser?.privacy else { return }
-        privacy.applyRuleLists(applied.enabled, to: webView.configuration.userContentController)
-        appliedProtections = (applied.enabled, privacy.generation, [])
+        let allowed = privacy.allowedGroups(for: protectedURL, privateSession: privateSession)
+        guard applied.leftOff != allowed else { return }
+        privacy.applyRuleLists(applied.enabled, leavingOff: allowed, to: webView.configuration.userContentController)
+        appliedProtections = (applied.enabled, privacy.generation, allowed)
     }
 
     /// A main-frame load that ends unshown left the page with scripts set up for its target: a frame

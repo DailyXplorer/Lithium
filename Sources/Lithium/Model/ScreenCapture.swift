@@ -54,7 +54,10 @@ final class ScreenCapture {
                 content = try await windowWithAndWithoutSidebar(window)
                 scale = CGFloat(content.anyImage.width) / window.frame.width
             }
-            let wallpaper = Self.wallpaper(for: window.screen ?? NSScreen.main, fitting: content.anyImage)
+            let url = (window.screen ?? NSScreen.main).flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+            let side = max(content.anyImage.width, content.anyImage.height) * 3 / 2
+            // A full decode of the picture file: off the main thread, as the start page's.
+            let wallpaper = await Task.detached(priority: .userInitiated) { url.flatMap { Self.wallpaper(at: $0, maxPixels: side) } }.value
             phase = .previewing(Shot(content: content, scale: scale, wallpaper: wallpaper))
         } catch {
             phase = .idle
@@ -149,13 +152,13 @@ final class ScreenCapture {
     }
 
     /// The screen's desktop picture, decoded no larger than the finished screenshot needs.
-    private static func wallpaper(for screen: NSScreen?, fitting content: CGImage) -> CGImage? {
-        guard let screen, let url = NSWorkspace.shared.desktopImageURL(for: screen),
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    /// Nonisolated: forcing the decode takes a while for a large picture.
+    nonisolated static func wallpaper(at url: URL, maxPixels: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: max(content.width, content.height) * 3 / 2,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }

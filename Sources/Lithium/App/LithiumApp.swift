@@ -67,9 +67,9 @@ struct BrowserCommands: Commands {
                 .disabled(browser.agent?.state != .listening)
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") { browser.newTabFocusingAddress() }
+            Button("New Tab") { browser.focusAddressFromMenu(newTab: true) }
                 .keyboardShortcut("t")
-            Button("Open Location…") { browser.requestAddressFocus() }
+            Button("Open Location…") { browser.focusAddressFromMenu(newTab: false) }
                 .keyboardShortcut("l")
             Button("Move to Main Window") {
                 guard let tab = browser.quickLinks.keyTab else { return }
@@ -93,8 +93,9 @@ struct BrowserCommands: Commands {
         }
         CommandGroup(after: .pasteboard) {
             // No shortcut: ⌥⇧⌘V is Paste and Match Style, which editors handle as a paste.
+            // Sent to the window in front, a link's too, so it follows `commandTab` like the other page commands.
             Button(PageOverrides.forcePasteTitle) { NSApp.sendAction(#selector(PageWebView.forcePaste(_:)), to: nil, from: nil) }
-                .disabled(browser.selectedTab == nil)
+                .disabled(browser.commandTab == nil)
         }
         CommandGroup(after: .textEditing) {
             Divider()

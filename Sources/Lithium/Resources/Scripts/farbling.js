@@ -256,14 +256,19 @@
   };
 
   // Samples get the pixels' kind of noise (see noisePixels), on pairs of neighboring float32
-  // values picked by index. Every sample, however long the buffer: noising one in a few left the
-  // others exact, at places the page could predict.
+  // values picked by index. Every sample up to the limit, which fingerprinting buffers stay far
+  // under. Past it, a whole decoded track would stall the page for seconds on its first read, so
+  // one sample in each run of `step` is decided, at a place keyed by the seed: a fixed one in a
+  // few left the others exact at places the page could predict, the same on every site.
+  const MAX_SAMPLES = 1000000;
   const sampleFloat = new Float32Array(1), sampleBits = new Uint32Array(sampleFloat.buffer);
   const noiseSamples = (samples, offset, total) => {
     if (read(typedKind, samples) !== 'Float32Array') return;
-    const count = min(read(typedLength, samples), total - offset);
-    for (let i = 0; i < count; i++) {
-      const spot = fmix(imul((offset + i) ^ seedWords[2], 0x9e3779b1) ^ seedWords[0]), shift = spot >>> 31;
+    const count = min(read(typedLength, samples), total - offset), step = max(1, ceil(total / MAX_SAMPLES));
+    for (let run = floor(offset / step); run * step < offset + count; run++) {
+      const index = run * step + (step > 1 ? (fmix(run ^ seedWords[1]) >>> 0) % step : 0), i = index - offset;
+      if (i < 0 || i >= count) continue;
+      const spot = fmix(imul(index ^ seedWords[2], 0x9e3779b1) ^ seedWords[0]), shift = spot >>> 31;
       sampleFloat[0] = samples[i];
       const pair = floor((sampleBits[0] + shift) / 2), low = 2 * pair - shift;
       // Pairs across a sign or exponent, or into infinities and NaN, are left alone.
@@ -823,6 +828,9 @@
             if (hasTrustedTypesMeta(doc)) apply(weakMapSet, trustedTypesModes, [doc, 'enforce']);
           } catch (_) {}
         }
+        // `document.open` while the page loads drops the `DOMContentLoaded` listener below, so the
+        // first batch after parsing ends stops the observer too.
+        if (read(readyState, doc) !== 'loading') apply(disconnect, observer, []);
       };
       const observer = new MutationObserverCtor(parsed);
       apply(observe, observer, [doc, { __proto__: null, childList: true, subtree: true }]);

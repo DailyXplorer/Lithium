@@ -49,6 +49,11 @@ final class Extensions: NSObject {
     @ObservationIgnored var downloadArchive: (String) async throws -> Data = { id in
         try ChromeWebStore.archive(fromPackage: try await ChromeWebStore.download(id), id: id)
     }
+    /// Whether coming back to Lithium checks for updates too, as one left running never relaunches.
+    /// Off in tests: they'd ask the store each time.
+    @ObservationIgnored var checksForUpdates = false
+    /// A check stays in flight across awaits; another starting meanwhile would ask the store twice.
+    @ObservationIgnored private var isCheckingForUpdates = false
     /// The ports `chrome.idle` listens on, per extension: password managers lock when the screen
     /// does, which only this tells them.
     @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
@@ -217,18 +222,23 @@ final class Extensions: NSObject {
     }
 
     /// The store never offers an update, and Remove then Add deletes the extension's data: as
-    /// Chrome does, newer versions are fetched after launch, at most once a day.
+    /// Chrome does, newer versions are fetched after launch and on coming back, at most once a day.
     func updateIfDue(now: Date = .now) async {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        defer { isCheckingForUpdates = false }
         await waitUntilLoaded()
         let checked = try? updateCheck.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
         guard !installed.isEmpty, checked.map({ now.timeIntervalSince($0) >= Self.updateInterval }) ?? true,
               let latest = try? await latestVersions(installed) else { return }
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try? Data().write(to: updateCheck)
+        // A download that failed (offline, store error) is tried again on the next check rather
+        // than a day later; a version refused once downloaded isn't, it would only be refused again.
+        var downloaded = true
         for entry in installed {
             guard let version = latest[entry.id], ChromeWebStore.isNewer(version, than: entry.version) else { continue }
             do {
-                let archive = try await downloadArchive(entry.id)
+                let archive: Data
+                do { archive = try await downloadArchive(entry.id) } catch { downloaded = false; throw error }
                 try await serially(entry.id) {
                     // Removed while it downloaded: not added back.
                     guard self.installed.contains(where: { $0.id == entry.id }) else { return }
@@ -238,6 +248,9 @@ final class Extensions: NSObject {
                 NSLog("Lithium: couldn’t update extension %@: %@", entry.id, error.localizedDescription)
             }
         }
+        guard downloaded else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? Data().write(to: updateCheck)
     }
 
     static let updateInterval: TimeInterval = 24 * 60 * 60
@@ -400,6 +413,8 @@ final class Extensions: NSObject {
         guard isActive != isFocused else { return }
         isFocused = isActive
         controller.didFocusWindow(isActive ? window : nil)
+        // Only reads the last check's date until a day has passed.
+        if isActive, checksForUpdates { Task { await updateIfDue() } }
     }
 
     func didChange(_ properties: WKWebExtension.TabChangedProperties, of tab: Tab) {

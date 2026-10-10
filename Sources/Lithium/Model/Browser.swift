@@ -127,6 +127,11 @@ final class Browser {
     @ObservationIgnored nonisolated(unsafe) private var dayChange: (center: NotificationCenter, observer: any NSObjectProtocol)?
     /// The icons of sleeping favorites fetched at the last change of day; awaited in tests.
     @ObservationIgnored private(set) var sleepingIconsRefresh: Task<Void, Never>?
+    /// Restored favorites wake this far apart once the window is up, not all at once. Shorter in tests.
+    @ObservationIgnored var favoriteWakeDelay = Duration.seconds(3)
+    /// Started by the first `windowDidAppear`; awaited in tests.
+    @ObservationIgnored private(set) var launchFavorites: Task<Void, Never>?
+    @ObservationIgnored private var favoriteWake: Task<Void, Never>?
 
     struct ClosedTab {
         let url: URL
@@ -176,7 +181,8 @@ final class Browser {
         tidyTitles.browser = self
         extensions.start()
         // Tests leave extensions they add in place: they'd ask the store for them at each Browser.
-        if !ExternalApps.runsTests { Task { [extensions] in await extensions.updateIfDue() } }
+        extensions.checksForUpdates = !ExternalApps.runsTests
+        if extensions.checksForUpdates { Task { [extensions] in await extensions.updateIfDue() } }
         let saved = SessionStore.load()
         restore(saved)
         // Written only when restoring changed it (a tab left out, a space gone), not at every launch.
@@ -248,12 +254,18 @@ final class Browser {
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let event = self.memoryPressure?.data else { return }
-                self.memoryLevel = event
-                if event != .normal { self.sleepTabs() }
+                self.memoryLevelChanged(to: event)
             }
         }
         source.activate()
         memoryPressure = source
+    }
+
+    /// Back to normal, the favorites critical memory put to sleep wake again, or their badges
+    /// would stay as they were. Internal for tests.
+    func memoryLevelChanged(to event: DispatchSource.MemoryPressureEvent) {
+        memoryLevel = event
+        if event != .normal { sleepTabs() } else { wakeSleepingFavorites() }
     }
 
     /// Like Firefox's tab unloading: when memory runs low, tabs idle for 5 minutes sleep; when it
@@ -394,6 +406,45 @@ final class Browser {
     func windowDidAppear() {
         installEventMonitors()
         selectedTab?.markActive()
+        if launchFavorites == nil { wakeRestoredFavorites() }
+    }
+
+    /// A favorite's notification that came while the window wasn't key put a dot on its tile; the
+    /// user is now looking at that page.
+    func windowDidBecomeKey() {
+        selectedTab?.didOpen()
+    }
+
+    /// Restored asleep, a favorite's page counts nothing until clicked: each wakes, unselected, a
+    /// few seconds apart, and idle sleep spares it after. Then the favorites still without a page
+    /// fetch their icon, as at a change of day: the date may have changed since the last session.
+    private func wakeRestoredFavorites() {
+        wakeSleepingFavorites()
+        launchFavorites = Task { [weak self, wake = favoriteWake, delay = favoriteWakeDelay] in
+            await wake?.value
+            try? await Task.sleep(for: delay)
+            self?.refreshSleepingPinIcons()
+        }
+    }
+
+    /// Also once memory is back to normal and after a favorite's page crashed out of sight. One
+    /// pass at a time, which picks up a favorite put to sleep meanwhile but wakes each once, so a
+    /// page that keeps crashing can't keep it going; it stops while memory is short, and the next
+    /// normal level starts it again.
+    func wakeSleepingFavorites() {
+        guard favoriteWake == nil, tabs.contains(where: { $0.pinID != nil && $0.isAsleep }) else { return }
+        favoriteWake = Task { [weak self, delay = favoriteWakeDelay] in
+            var woken: Set<ObjectIdentifier> = []
+            while true {
+                try? await Task.sleep(for: delay)
+                guard let self, memoryLevel == .normal, let tab = tabs.first(where: {
+                    $0.pinID != nil && $0.isAsleep && $0.url != nil && !woken.contains(ObjectIdentifier($0))
+                }) else { break }
+                woken.insert(ObjectIdentifier(tab))
+                tab.wakeIfAsleep()
+            }
+            self?.favoriteWake = nil
+        }
     }
 
     /// Installed once the window exists: a monitor added before NSApplication finishes launching is dropped.
@@ -1015,6 +1066,13 @@ final class Browser {
 
     func requestAddressFocus() {
         addressFocusToken &+= 1
+    }
+
+    /// The menu's New Tab and Open Location: the address field is the main window's, which comes
+    /// forward first, or from a link's window the keys typed next would go on to the link's page.
+    func focusAddressFromMenu(newTab: Bool) {
+        window?.makeKeyAndOrderFront(nil)
+        if newTab { newTabFocusingAddress() } else { requestAddressFocus() }
     }
 
     /// The sidebar's order, top to bottom, space after space. Extensions and agents see every space.

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import Testing
 @testable import Lithium
 
@@ -73,6 +74,15 @@ struct TrackingParametersTests {
         let url = URL(string: "https://example.com/?token=abc==&utm_source=x&flag&&next=/a?b=c&UTM_Medium=y")!
         #expect(TrackingParameters.stripped(url)?.absoluteString == "https://example.com/?token=abc==&flag&&next=/a?b=c")
     }
+
+    /// Marketo's unsubscribe and web-view pages find the recipient by `mkt_tok`.
+    @Test func keepsTheMarketoTokenWhereUnsubscribingNeedsIt() {
+        let unsubscribe = URL(string: "https://pages.example.com/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=abc&utm_source=mail")!
+        #expect(TrackingParameters.stripped(unsubscribe)?.absoluteString == "https://pages.example.com/UnsubscribePage.html?mkt_unsubscribe=1&mkt_tok=abc")
+        #expect(TrackingParameters.stripped(URL(string: "https://na-ab12.marketo.com/m/emailWebview?mkt_tok=abc")!) == nil)
+        #expect(TrackingParameters.stripped(URL(string: "https://example.com/prefs?mkt_unsubscribe=1&mkt_tok=abc")!) == nil)
+        #expect(TrackingParameters.stripped(URL(string: "https://shop.example/p?id=1&mkt_tok=abc")!)?.absoluteString == "https://shop.example/p?id=1")
+    }
 }
 
 struct FilterPreprocessorTests {
@@ -101,13 +111,30 @@ struct FaviconTests {
     }
 
     /// Hosts without an icon are remembered for the session, but only so many of them.
-    @Test func remembersABoundedNumberOfHostsWithoutIcons() async {
+    @Test func remembersABoundedNumberOfHostsWithoutIcons() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "favicons-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
         let favicons = Favicons(folder: folder, missingLimit: 2)
-        // Nothing listens on these ports: each fetch fails at once.
-        for port in 1...3 { _ = await favicons.icon(forHost: "127.0.0.1:\(port)") }
-        #expect(favicons.missing == ["127.0.0.1:3"])
+        // Each server answers every path with an empty page: no icon anywhere.
+        var hosts: [String] = []
+        for _ in 1...3 {
+            let (server, base) = try await LocalHTTP.serve([String: (headers: String, body: Data)]())
+            defer { server.cancel() }
+            let host = "127.0.0.1:\(try #require(base.port))"
+            _ = await favicons.icon(forHost: host, scheme: "http")
+            hosts.append(host)
+        }
+        #expect(favicons.missing == [hosts[2]])
+    }
+
+    /// A fetch that found no server (offline, timed out) isn't an answer: the host is asked again.
+    @Test func anUnreachableHostIsAskedAgain() async {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "favicons-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let favicons = Favicons(folder: folder)
+        // Nothing listens on this port: each fetch fails at once.
+        #expect(await favicons.icon(forHost: "127.0.0.1:1", scheme: "http") == nil)
+        #expect(favicons.missing.isEmpty)
     }
 }
 

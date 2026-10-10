@@ -514,6 +514,7 @@ private struct WindowConfigurator: NSViewRepresentable {
                 isFullScreen = name == NSWindow.willEnterFullScreenNotification
                 showOrHideLights()
             }
+            if name == NSWindow.didBecomeKeyNotification { browser?.windowDidBecomeKey() }
             layoutTrafficLights()
         }
 

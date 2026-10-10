@@ -565,7 +565,8 @@ final class Tab: NSObject, Identifiable {
         wakeIfAsleep()
     }
 
-    private func wakeIfAsleep() {
+    /// Without selecting it: a restored favorite wakes this way at launch.
+    func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)
         reloadedURL = url
@@ -695,6 +696,8 @@ final class Tab: NSObject, Identifiable {
         // The next web view asks afresh, even if this one's question never gets an answer.
         isAskingPlayback = false
         tearDown()
+        // Asleep, the page can't change its count, which would stay on the tile as it was.
+        updateUnread { $0.pageSlept() }
         pdf = nil
         pdfHistory = [:]
         pdfRecency = []
@@ -751,9 +754,6 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep, let url = webView.url, url != self.url else { return }
                     self.url = url
-                    // Same-document navigations (pushState) never reach didFinish. A load that
-                    // never shows hands back the address already recorded: no new visit.
-                    if !webView.isLoading, url != self.recordedURL { self.recordVisit(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -1246,6 +1246,10 @@ extension Tab: WKNavigationDelegate {
     @objc(_webView:navigation:didSameDocumentNavigation:)
     func webView(_ webView: WKWebView, navigation: WKNavigation?, didSameDocumentNavigation type: Int) {
         if type == 0 || type == 3 { sameDocumentNavigations += 1 }
+        // These never reach didFinish, so their visit is recorded here, once the address changed.
+        // replaceState rewrites the entry in place, as a search box or a map does on every change:
+        // no new visit. One during a load is recorded by didFinish.
+        if type != 2, !webView.isLoading, let url = webView.url, url != recordedURL { recordVisit(url, title: title) }
         // A web app's new view, through pushState or Back and Forward, is a new page to search.
         if type == 1 || type == 3 { searchAgainIfFinding() }
     }
@@ -1422,6 +1426,12 @@ extension Tab: WKNavigationDelegate {
         guard let browser else { return }
         guard browser.isOnScreen(self) else {
             sleep(configuration: browser.makeConfiguration(for: url))
+            // A favorite wakes again a moment later, or its badge would stay as it was; not after
+            // a crash within the last minute, so a page that keeps crashing can't loop.
+            if pinID != nil, lastCrashReload.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
+                lastCrashReload = Date()
+                browser.wakeSleepingFavorites()
+            }
             return
         }
         if let last = lastCrashReload, Date().timeIntervalSince(last) < 10 {

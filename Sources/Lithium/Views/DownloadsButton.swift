@@ -100,7 +100,7 @@ struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(nsImage: fileIcon)
+            Image(nsImage: item.fileIcon)
                 .resizable()
                 .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 3) {
@@ -145,13 +145,6 @@ struct DownloadRow: View {
         .onTapGesture {
             if item.state == .finished, let destination = item.destination { ExternalApps.open(destination) }
         }
-    }
-
-    private var fileIcon: NSImage {
-        if let destination = item.destination, FileManager.default.fileExists(atPath: destination.path) {
-            return NSWorkspace.shared.icon(forFile: destination.path)
-        }
-        return NSWorkspace.shared.icon(for: .data)
     }
 
     private var isFailure: Bool {

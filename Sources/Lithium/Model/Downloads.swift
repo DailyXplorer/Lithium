@@ -29,6 +29,10 @@ final class DownloadItem: Identifiable {
     @ObservationIgnored private var observation: NSKeyValueObservation?
     /// The renamed file's identity when it finished: "Use original name" moves only that file.
     @ObservationIgnored fileprivate var fileIdentity: [Int]?
+    /// The latest count WebKit reported, held back until it is worth a redraw.
+    @ObservationIgnored private var pendingBytes: Int64?
+    @ObservationIgnored private var lastShown = Date.distantPast
+    @ObservationIgnored private var icon: (path: String, image: NSImage)?
 
     fileprivate init(download: WKDownload, filename: String, asksWhere: Bool) {
         self.download = download
@@ -37,10 +41,7 @@ final class DownloadItem: Identifiable {
         observation = download.progress.observe(\.completedUnitCount) { [weak self] progress, _ in
             let completed = progress.completedUnitCount
             let total = progress.totalUnitCount
-            Task { @MainActor in
-                self?.completedBytes = completed
-                self?.totalBytes = total
-            }
+            Task { @MainActor in self?.receive(completed: completed, total: total) }
         }
     }
 
@@ -64,7 +65,40 @@ final class DownloadItem: Identifiable {
         originalFilename = original
     }
 
+    /// WebKit reports every chunk it receives, and each write redraws the toolbar ring and the
+    /// list: the count shows once it moves by 1%, or a quarter second after it last showed.
+    func receive(completed: Int64, total: Int64, at now: Date = Date()) {
+        guard state == .downloading else {
+            // A report queued before the end never moves the final count back.
+            if completed > completedBytes { completedBytes = completed }
+            return
+        }
+        let step = total > 0 ? Double(total) / 100 : .infinity
+        guard total != totalBytes || Double(completed) - Double(completedBytes) >= step
+            || now.timeIntervalSince(lastShown) >= 0.25 else {
+            pendingBytes = completed
+            return
+        }
+        if total != totalBytes { totalBytes = total }
+        if completed != completedBytes { completedBytes = completed }
+        pendingBytes = nil
+        lastShown = now
+    }
+
+    /// The file's icon, looked up once per path: the list redraws while downloads run.
+    var fileIcon: NSImage {
+        guard let path = destination?.path else { return NSWorkspace.shared.icon(for: .data) }
+        if let icon, icon.path == path { return icon.image }
+        // WebKit creates the file only later: until then, the generic icon, not kept.
+        guard FileManager.default.fileExists(atPath: path) else { return NSWorkspace.shared.icon(for: .data) }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        icon = (path, image)
+        return image
+    }
+
     func finish(_ state: State) {
+        if let pendingBytes { completedBytes = pendingBytes }
+        pendingBytes = nil
         self.state = state
         observation = nil
         if state == .finished, totalBytes <= 0 { totalBytes = completedBytes }

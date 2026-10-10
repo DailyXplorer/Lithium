@@ -495,7 +495,8 @@ final class Privacy {
             let names = FilterLists.shipped.filter { stopped.contains($0.id) }.map(\.name)
                 + stopped.subtracting(FilterLists.shipped.map(\.id)).sorted()
                 + choices.extraLists.map { list in FilterLists.catalog.first { $0.id == list.id }?.name ?? list.url.absoluteString }
-                + (storage.hasMyFilters ? ["your filters"] : [])
+                // Not for filters that are only comments, which the build skips too.
+                + (ChosenFilters.hasRule(storage.myFilters) ? ["your filters"] : [])
                 + (shippedEngine ? [] : ["every list’s in-page rules"])
             filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
                 + (names.isEmpty ? "" : " Until then, these aren’t applied: \(names.joined(separator: ", ")).")

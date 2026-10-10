@@ -74,6 +74,28 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: URL(string: "https://example.org/")!) == nil)
     }
 
+    /// A built engine that won't open is a failed load too, and goes, so the next load builds it
+    /// again instead of failing to open it at every launch.
+    @Test func anEngineThatWontOpenIsReportedAndBuiltAgain() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try #"example.org#%#//scriptlet("set-constant", "lithiumProbe", "42")"#.write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        let container = folder.appending(path: "engine")
+        #expect(await AdvancedBlocking(container: container).load(folder: folder, stamp: "one"))
+        let built = try #require(try FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: nil).first)
+        // Damaged: a file where the engine's folder was.
+        try FileManager.default.removeItem(at: built)
+        try Data().write(to: built)
+
+        let blocking = AdvancedBlocking(container: container)
+        #expect(!(await blocking.load(folder: folder, stamp: "one")))
+        #expect(blocking.script(for: URL(string: "https://example.org/")!) == nil)
+        #expect(!FileManager.default.fileExists(atPath: built.path))
+        #expect(await blocking.load(folder: folder, stamp: "one"))
+        #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
+    }
+
     @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
         let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))

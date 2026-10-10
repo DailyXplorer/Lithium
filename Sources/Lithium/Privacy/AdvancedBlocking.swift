@@ -22,7 +22,7 @@ final class AdvancedBlocking {
 
     /// Each build gets its own directory, renamed into place once complete: AdGuard's engine holds
     /// a file lock while it builds, which would make pages opened meanwhile wait on the main thread.
-    /// False when the engine can't be built: the one loaded before stays.
+    /// False when the engine can't be built or opened: the one loaded before stays.
     @discardableResult
     func load(folder: URL, stamp filterStamp: String) async -> Bool {
         let library: Library
@@ -56,11 +56,17 @@ final class AdvancedBlocking {
         // Off the main thread, which this runs at every launch. Opening only makes the folder: the
         // engine is read by its first lookup, made here so the first page doesn't wait for it.
         // The old engines go once the new one has replaced them, as pages may be looking theirs up meanwhile.
-        engine = await Task.detached(priority: .userInitiated) {
+        let opened = await Task.detached(priority: .userInitiated) {
             let engine = try? WebExtension(containerURL: directory)
             _ = engine?.lookup(pageUrl: URL(string: "https://example.com/")!, topUrl: nil)
             return OpenedEngine(engine: engine)
         }.value.engine
+        // A damaged folder would be opened, and fail, at every launch: it goes, so the next load builds it again.
+        guard let opened else {
+            try? FileManager.default.removeItem(at: directory)
+            return false
+        }
+        engine = opened
         let container = container
         await Task.detached(priority: .userInitiated) {
             let others = (try? FileManager.default.contentsOfDirectory(at: container, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []

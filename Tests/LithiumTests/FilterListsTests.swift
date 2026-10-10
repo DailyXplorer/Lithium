@@ -249,6 +249,7 @@ struct FilterListsTests {
         #expect(privacy.ruleLists.last?.identifier.hasPrefix("lithium-my-filters-h") == true)
         #expect(privacy.filterError == nil)
         #expect(privacy.scripts(true, for: page).count == 2, "farbling and the scriptlet")
+        let counted = privacy.ruleCount
 
         // An engine that can't be built: the one before, which may run a list since turned off,
         // goes too, and the page says so. Moved, not deleted, so the engine open before still works.
@@ -257,6 +258,7 @@ struct FilterListsTests {
         try Data().write(to: engines)
         #expect(await privacy.setMyFilters(filters + "\nexample.com##+js(set, lithiumOther, 1)") == nil)
         #expect(privacy.scripts(true, for: page).count == 1, "farbling only")
+        #expect(privacy.ruleCount == counted - 1, "without the scriptlet of the engine unloaded")
         #expect(privacy.filterError == "Lithium couldn’t build the in-page rules of your filter lists, so none apply until the next change or update.")
         try FileManager.default.removeItem(at: engines)
         try FileManager.default.moveItem(at: moved, to: engines)
@@ -320,6 +322,48 @@ struct FilterListsTests {
         #expect(await privacy.setMyFilters("example.org##.ad")?.hasPrefix("Couldn’t save your filters") == true)
     }
 
+    /// An engine that can't be built leaves the shipped one in place only for a set no one
+    /// customized, as it holds exactly that set's lists. With the user's filters, the one kept may
+    /// run a filter removed since, so it goes with a message, though no list is off.
+    @Test func aFailedEngineBuildKeepsOnlyTheShippedEngine() async throws {
+        let key = "filterChoices"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let named = try shippedSet(["ads": ["easylist": "||ads.lithium.test^"]])
+        try #"example.net#%#//scriptlet("set-constant", "lithiumShipped", "1")"#.write(to: named.folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        let manifest = { (updated: String) in
+            Manifest(format: named.manifest.format, updated: updated, groups: named.manifest.groups, advancedRules: 1)
+        }
+        let privacy = Privacy()
+        privacy.filterStorage = storage
+        privacy.filterSet = (named.folder, manifest(named.manifest.updated))
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        let engines = root.appending(path: "engine")
+        privacy.advanced = AdvancedBlocking(container: engines)
+        let page = URL(string: "https://example.net/")!
+
+        #expect(await privacy.setFilterList("easylist", enabled: true) == nil)
+        #expect(privacy.scripts(true, for: page).count == 2, "farbling and the shipped scriptlet")
+
+        // A newer set whose engine can't be built, having nothing to build from: the shipped
+        // engine before stays, silently.
+        try FileManager.default.removeItem(at: named.folder.appending(path: "advanced.txt"))
+        privacy.filterSet = (named.folder, manifest("2026-10-02T00:00:00Z"))
+        #expect(await privacy.setFilterList("easylist", enabled: true) == nil)
+        #expect(privacy.scripts(true, for: page).count == 2, "the shipped engine kept")
+        #expect(privacy.filterError == nil)
+
+        // The user's filters, with no list off: no engine runs, and the page says so.
+        try FileManager.default.removeItem(at: engines)
+        try Data().write(to: engines)
+        #expect(await privacy.setMyFilters("example.org##+js(set, lithiumProbe, 1)") == nil)
+        #expect(privacy.scripts(true, for: page).count == 1, "farbling only")
+        #expect(privacy.filterError == "Lithium couldn’t build the in-page rules of your filter lists, so none apply until the next change or update.")
+    }
+
     /// A set downloaded before its manifest named each group's lists can't be rebuilt, so a list
     /// turned off fails the build. The app's own grouping then tells which groups hold it: the
     /// others stay, and the lists left on beside it are named.
@@ -342,6 +386,8 @@ struct FilterListsTests {
         privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
 
         #expect(await privacy.setFilterList("easylist", enabled: false) == nil)
+        // Filters that are only comments add nothing the failure stops, so they aren't named.
+        #expect(await privacy.setMyFilters("! only a note") == nil)
         let kept = FilterGroup.shipped(in: set.folder, manifest: set.manifest)
             .filter { !(grouping[$0.name] ?? []).contains("easylist") }.map(\.identifier)
         #expect(!kept.isEmpty)
@@ -365,6 +411,8 @@ struct FilterListsTests {
         privacy.filterStorage = storage
         privacy.filterSet = set
         privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        // The added list builds an engine: not in the app's own folder.
+        privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubFilterList.self]
         privacy.filterSession = URLSession(configuration: configuration)

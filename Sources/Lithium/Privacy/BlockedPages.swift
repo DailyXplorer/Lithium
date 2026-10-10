@@ -84,6 +84,8 @@ struct BlockedPage: Equatable {
         if !site.isEmpty {
             let needles = [site, site.replacingOccurrences(of: ".", with: #"\."#)].map { Data($0.utf8) }
             for list in groupsOfList.keys.sorted() {
+                // The tab went elsewhere: its caller drops the answer.
+                if Task.isCancelled { return Reason(groups: []) }
                 guard let data = try? Data(contentsOf: folder.appending(path: "lists/\(list).txt"), options: .alwaysMapped) else { continue }
                 var seen: Set<String> = []
                 var found = needles.flatMap { lines(in: data, containing: $0) }.filter { seen.insert($0).inserted && blocksPage($0, page) }

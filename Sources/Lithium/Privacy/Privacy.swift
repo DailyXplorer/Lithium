@@ -28,9 +28,14 @@ final class Privacy {
     @ObservationIgnored var ruleLists: [WKContentRuleList] = []
     /// Where the loaded lists came from, searched when a page is blocked. Set by tests too.
     @ObservationIgnored var filtersFolder: URL?
-    /// The last blocked page looked up, by lists and address: blocked again (a reload, Open anyway
-    /// stopped), it isn't searched for again.
-    @ObservationIgnored private var lastBlockReason: (key: String, reason: BlockedPage.Reason)?
+    /// Blocked pages looked up in the loaded lists, by private session and address: blocked again (a
+    /// reload, Open anyway stopped, in another tab), a page isn't searched for again.
+    @ObservationIgnored private var blockReasons: (lists: String, reasons: [BlockLookup: BlockedPage.Reason]) = ("", [:])
+    private struct BlockLookup: Hashable {
+        let privateSession: ObjectIdentifier?
+        let url: URL
+    }
+    private static let blockReasonsLimit = 8
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// Each load waits for the one before: two at once would remove each other's compiled lists.
     @ObservationIgnored private var lastLoad: Task<Void, Never>?
@@ -336,6 +341,8 @@ final class Privacy {
         privateFarblingKeys[privateSession] = nil
         // A later session may reuse the identifier: it mustn't get this one's seeds.
         farblingSources = farblingSources.filter { $0.key.privateSession != privateSession }
+        // Nor its blocked addresses, which would outlive it.
+        blockReasons.reasons = blockReasons.reasons.filter { $0.key.privateSession != privateSession }
     }
 
     private func farblingKey(for privateSession: ObjectIdentifier?) -> SymmetricKey {
@@ -398,16 +405,21 @@ final class Privacy {
     }
 
     /// Read from the lists' text off the main thread, and only once a page was blocked.
-    func blockReason(for url: URL) async -> BlockedPage.Reason {
+    func blockReason(for url: URL, privateSession: ObjectIdentifier? = nil) async -> BlockedPage.Reason {
         let folder = filtersFolder
-        let key = "\(generation) \(folder?.path ?? "") \(url.absoluteString)"
-        if let last = lastBlockReason, last.key == key { return last.reason }
-        var reason = await Task.detached(priority: .userInitiated) {
+        let lists = "\(generation) \(folder?.path ?? "")"
+        let lookup = BlockLookup(privateSession: privateSession, url: url)
+        if blockReasons.lists == lists, let reason = blockReasons.reasons[lookup] { return reason }
+        let search = Task.detached(priority: .userInitiated) {
             folder.map { BlockedPage.reason(for: url, in: $0) } ?? BlockedPage.Reason(groups: [])
-        }.value
+        }
+        var reason = await withTaskCancellationHandler { await search.value } onCancel: { search.cancel() }
+        // Cut short for a tab gone elsewhere: what it found so far isn't the answer.
+        guard !Task.isCancelled else { return reason }
         // Lists that say nothing of the site: letting it through takes every group off its page.
         if reason.groups.isEmpty { reason.groups = Set(ruleLists.compactMap(Self.group(of:))) }
-        lastBlockReason = (key, reason)
+        if blockReasons.lists != lists || blockReasons.reasons.count >= Self.blockReasonsLimit { blockReasons = (lists, [:]) }
+        blockReasons.reasons[lookup] = reason
         return reason
     }
 

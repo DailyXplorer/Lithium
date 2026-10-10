@@ -207,7 +207,7 @@ final class Tab: NSObject, Identifiable {
     /// Shown over the error page when a filter list blocked the page itself.
     private(set) var blockedPage: BlockedPage?
     @ObservationIgnored private var blockLookup: Task<BlockedPage.Reason, Never>?
-    /// Open anyway: its load goes without the groups that blocked the page, until it commits. Set
+    /// Open anyway: its load goes without the groups that blocked the page (`putBackLeftOffGroups`). Set
     /// by `load` from `passToLoad`, so any other load the tab is sent on gets every list again.
     @ObservationIgnored private var letThrough: (url: URL, host: String, groups: Set<String>)?
     @ObservationIgnored private var passToLoad: (url: URL, host: String, groups: Set<String>)?
@@ -851,6 +851,15 @@ final class Tab: NSObject, Identifiable {
         browser?.agent?.install(on: controller, for: self)
     }
 
+    /// Groups left off a page let through blocked only its own load: once its response is in, before
+    /// the document starts, they are back for its scripts, images and frames. WebKit can't turn off
+    /// part of a compiled list, so this keeps the rest of a group (other ads, trackers) on the page.
+    private func putBackLeftOffGroups() {
+        guard let applied = appliedProtections, !applied.leftOff.isEmpty, let privacy = browser?.privacy else { return }
+        privacy.applyRuleLists(applied.enabled, to: webView.configuration.userContentController)
+        appliedProtections = (applied.enabled, privacy.generation, [])
+    }
+
     /// A main-frame load that ends unshown left the page with scripts set up for its target: a frame
     /// added next would farble with that site's seed and get its rules. Put the shown page's back.
     private func restoreProtections() {
@@ -1081,8 +1090,9 @@ final class Tab: NSObject, Identifiable {
     /// The lists are read only now, on the page's way out, and never for a page that loads.
     private func showBlockedPage(_ url: URL) {
         blockedPage = BlockedPage(url: url)
+        blockLookup?.cancel()
         guard let privacy = browser?.privacy else { return }
-        let lookup = Task { await privacy.blockReason(for: url) }
+        let lookup = Task { [privateSession] in await privacy.blockReason(for: url, privateSession: privateSession) }
         blockLookup = lookup
         Task { [weak self] in
             let reason = await lookup.value
@@ -1093,6 +1103,8 @@ final class Tab: NSObject, Identifiable {
 
     private func endBlockedPage() {
         blockedPage = nil
+        // A search no page waits for any more stops.
+        blockLookup?.cancel()
         blockLookup = nil
     }
 
@@ -1260,7 +1272,10 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
+        if response.isForMainFrame {
+            httpStatus = (response.response as? HTTPURLResponse)?.statusCode
+            putBackLeftOffGroups()
+        }
         // Before the document starts, after the page's farbling (see Privacy.trustedTypesScript).
         if let privacy = browser?.privacy, let page = response.isForMainFrame ? response.response.url : webView.url {
             privacy.addTrustedTypesScript(privacy.isEnabled(for: page, privateSession: privateSession, space: siteSpace), for: response.response, privateSession: privateSession,
@@ -1361,6 +1376,8 @@ extension Tab: WKNavigationDelegate {
             loadError = nil
             // Open anyway was for this page: the next one gets every list again.
             letThrough = nil
+            // A page back from the cache had no response to put them back at.
+            putBackLeftOffGroups()
         }
         // A later link to the same tracked address (after Back, say) is stripped again.
         if webView.url != strippedURL { strippedURL = nil }

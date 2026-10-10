@@ -66,7 +66,10 @@ struct BlockedPageFilterTests {
                                            groups: ["security": ["urlhaus"], "ads": ["easylist"]])
         let broader = try Self.filters(["ubo-badware": #"/^https:\/\/[a-z]+\.org\/en\//$doc"#, "easylist": "||ads.example^"],
                                        groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
-        defer { [escaped, capitalised, broader].forEach { try? FileManager.default.removeItem(at: $0) } }
+        // Beside a filter spelling the site, the longer expression is found only by its escaped name.
+        let besideLiteral = try Self.filters(["ubo-badware": "||tlauncher.org^$doc\n" + #"/^https:\/\/tlauncher\.org\/en\//$doc"#],
+                                             groups: ["security": ["ubo-badware"]])
+        defer { [escaped, capitalised, broader, besideLiteral].forEach { try? FileManager.default.removeItem(at: $0) } }
 
         let byRegex = BlockedPage.reason(for: url, in: escaped)
         #expect(byRegex.list == "ubo-badware" && byRegex.filter == #"/^https:\/\/tlauncher\.org\//$doc"#)
@@ -75,6 +78,20 @@ struct BlockedPageFilterTests {
         #expect(byCapitals.list == "urlhaus" && byCapitals.groups == ["security"])
         let byBroader = BlockedPage.reason(for: url, in: broader)
         #expect(byBroader.list == "ubo-badware" && byBroader.groups == ["security"])
+        #expect(BlockedPage.reason(for: url, in: besideLiteral).filter == #"/^https:\/\/tlauncher\.org\/en\//$doc"#)
+    }
+
+    /// A search for a tab gone elsewhere stops before reading another list.
+    @Test func aCancelledSearchStops() async throws {
+        let folder = try Self.filters(["ubo-badware": "||tlauncher.org^$doc"], groups: ["security": ["ubo-badware"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+
+        let reason = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return BlockedPage.reason(for: url, in: folder)
+        }.value
+        #expect(reason.list == nil && reason.groups.isEmpty)
     }
 
     /// One list spelling the site doesn't stop another, in another group, from being searched: its
@@ -154,10 +171,17 @@ struct BlockedPageTests {
         let (listener, base) = try await LocalHTTP.serve([
             "/blocked": ("Content-Type: text/html", Data(#"<title>Blocked</title><script src="/ad.js"></script>"#.utf8)),
             "/ad.js": ("Content-Type: text/javascript", Data("document.title = 'Ad'".utf8)),
+            // Once in, asks for a script the group that blocked it blocks too.
+            "/blocked-late": ("Content-Type: text/html", Data(#"""
+                <title>Blocked</title><script>onload = () => { const s = document.createElement('script'); s.src = '/late.js';
+                s.onerror = () => document.title = 'Late blocked'; document.head.append(s) }</script>
+                """#.utf8)),
+            "/late.js": ("Content-Type: text/javascript", Data("document.title = 'Late loaded'".utf8)),
         ], delay: delay, requested: { requests.record($0) })
         let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "blocked-rules-\(UUID().uuidString)")))
         let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList:
-            #"[{"trigger": {"url-filter": "/blocked", "resource-type": ["document"]}, "action": {"type": "block"}}]"#))
+            #"[{"trigger": {"url-filter": "/blocked", "resource-type": ["document"]}, "action": {"type": "block"}}, "#
+            + #"{"trigger": {"url-filter": "late\\.js"}, "action": {"type": "block"}}]"#))
         let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-1-p4", encodedContentRuleList:
             #"[{"trigger": {"url-filter": "ad\\.js"}, "action": {"type": "block"}}]"#))
         let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||127.0.0.1^$doc", "easylist": "||ads.example^"],
@@ -208,6 +232,21 @@ struct BlockedPageTests {
         #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
         #expect(setup.requests["/blocked"] == 1)
         #expect(setup.browser.privacy.allowedPages.isEmpty)
+    }
+
+    /// Only the page itself goes without the group that blocked it: what the page loads later is
+    /// blocked by that group again.
+    @Test func openAnywayLetsOnlyThePageThrough() async throws {
+        let setup = try await setUp()
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page.deletingLastPathComponent().appending(path: "blocked-late"))
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { tab.title.hasPrefix("Late") })
+        #expect(tab.title == "Late blocked")
+        #expect(setup.requests["/blocked-late"] == 1)
+        #expect(setup.requests["/late.js"] == 0)
     }
 
     /// Open anyway stopped before the page shows brings the blocked page back, buttons and all, and
@@ -284,6 +323,35 @@ struct BlockedPageTests {
         setup.browser.navigate(tab, .reload)
         #expect(await waitUntil(15) { tab.blockedPage != nil })
         #expect(setup.requests["/blocked"] == 2)
+    }
+
+    /// What blocked a page is kept for each page looked up, not only the last, and a private
+    /// session's are forgotten with it. A search cut short isn't kept.
+    @Test func lookupsAreKeptPerPage() async throws {
+        let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||a.example^$doc\n||b.example^$doc\n||c.example^$doc"],
+                                                        groups: ["security": ["ubo-badware"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let privacy = Privacy()
+        privacy.filtersFolder = folder
+        let owner = NSObject(), session = ObjectIdentifier(owner)
+        let a = try #require(URL(string: "https://a.example/")), b = try #require(URL(string: "https://b.example/"))
+        let c = try #require(URL(string: "https://c.example/"))
+
+        _ = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await privacy.blockReason(for: c)
+        }.value
+        #expect(await privacy.blockReason(for: c).list == "ubo-badware", "searched again")
+        #expect(await privacy.blockReason(for: a).list == "ubo-badware")
+        #expect(await privacy.blockReason(for: b, privateSession: session).list == "ubo-badware")
+
+        try FileManager.default.removeItem(at: folder.appending(path: "lists"))
+        #expect(await privacy.blockReason(for: a).list == "ubo-badware", "kept, though another page was looked up since")
+        #expect(await privacy.blockReason(for: b, privateSession: session).list == "ubo-badware")
+        privacy.forget(privateSession: session)
+        #expect(await privacy.blockReason(for: b, privateSession: session).list == nil, "forgotten with its private session")
+        #expect(await privacy.blockReason(for: a).list == "ubo-badware")
+        withExtendedLifetime(owner) {}
     }
 
     /// In a private tab, Always allow holds for its private session only, in memory.

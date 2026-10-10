@@ -334,6 +334,27 @@ struct NavigationTests {
         #expect(browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").count == 1)
     }
 
+    /// A page rewriting its address as it goes (replaceState, as a search box or a map does)
+    /// adds no visit; a new view (pushState) and an anchor still do.
+    @Test func replaceStateAfterTheLoadAddsNoVisit() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", Data("<title>App</title>".utf8))])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(30) { tab.webView.title == "App" && !tab.webView.isLoading })
+        let visits = { Set(browser.history.visits(matching: "127.0.0.1:\(base.port ?? 0)/").map(\.url.absoluteString)) }
+
+        for query in ["l", "li", "lit"] {
+            _ = try await tab.webView.evaluateJavaScript("history.replaceState(null, '', '/?q=\(query)'); 0")
+            #expect(await waitUntil(10) { tab.url?.query == "q=\(query)" })
+        }
+        _ = try await tab.webView.evaluateJavaScript("history.pushState(null, '', '/next'); location.hash = 'top'; 0")
+        let next = base.appending(path: "next").absoluteString
+        #expect(await waitUntil(10) { visits().contains(next + "#top") })
+        #expect(visits() == [base.absoluteString, next, next + "#top"])
+    }
+
     /// Once the tab goes to another page, the open find bar counts that page's matches, not the
     /// last page's.
     @Test func findCountsTheNewPageAfterANavigation() async throws {

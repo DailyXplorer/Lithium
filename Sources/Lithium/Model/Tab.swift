@@ -732,9 +732,6 @@ final class Tab: NSObject, Identifiable {
                 MainActor.assumeIsolated {
                     guard let self, !self.isAsleep, let url = webView.url, url != self.url else { return }
                     self.url = url
-                    // Same-document navigations (pushState) never reach didFinish. A load that
-                    // never shows hands back the address already recorded: no new visit.
-                    if !webView.isLoading, url != self.recordedURL { self.recordVisit(url, title: self.title) }
                     self.tellExtensions(.URL)
                 }
             },
@@ -1227,6 +1224,10 @@ extension Tab: WKNavigationDelegate {
     @objc(_webView:navigation:didSameDocumentNavigation:)
     func webView(_ webView: WKWebView, navigation: WKNavigation?, didSameDocumentNavigation type: Int) {
         if type == 0 || type == 3 { sameDocumentNavigations += 1 }
+        // These never reach didFinish, so their visit is recorded here, once the address changed.
+        // replaceState rewrites the entry in place, as a search box or a map does on every change:
+        // no new visit. One during a load is recorded by didFinish.
+        if type != 2, !webView.isLoading, let url = webView.url, url != recordedURL { recordVisit(url, title: title) }
         // A web app's new view, through pushState or Back and Forward, is a new page to search.
         if type == 1 || type == 3 { searchAgainIfFinding() }
     }

@@ -128,6 +128,24 @@ struct TabCommandsTests {
         #expect(!browser.canSleepOtherTabs(than: clicked), "only the shown tab is left awake")
     }
 
+    /// The menu's check stops at the first tab that can sleep, and still finds one at the end of the
+    /// list behind tabs that can't: the clicked one, the shown one, and one already asleep.
+    @Test func canSleepOtherTabsFindsTheLastTabThatCan() async throws {
+        let browser = browser(with: ["clicked", "shown", "asleep", "last"])
+        browser.select(tab("shown", in: browser))
+        let all = browser.tabs
+        #expect(await waitUntil(30) { all.allSatisfy { !$0.webView.isLoading && $0.webView.url != nil } })
+        let asleep = tab("asleep", in: browser)
+        asleep.sleep(configuration: browser.makeConfiguration(for: asleep.url))
+
+        let clicked = tab("clicked", in: browser)
+        #expect(browser.canSleepOtherTabs(than: clicked))
+        let last = tab("last", in: browser)
+        last.sleep(configuration: browser.makeConfiguration(for: last.url))
+        #expect(!browser.canSleepOtherTabs(than: clicked))
+        #expect(browser.canSleepOtherTabs(than: tab("shown", in: browser)), "the clicked one, from another tab's menu")
+    }
+
     @Test func losingFocusEndsTheCycleWhereItWas() {
         let browser = browser(with: ["a", "b", "c"])
         for notification in [(NSApplication.didResignActiveNotification, NSApp as Any), (NSWindow.didResignKeyNotification, NSWindow() as Any)] {

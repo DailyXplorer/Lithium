@@ -289,43 +289,52 @@ private struct TabRow: View {
         // Simultaneous, so a single click still selects instantly instead of waiting for a second one.
         .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
         .draggable(browser.startDragging(tab))
-        .contextMenu {
-            Button("Reload Tab") { browser.navigate(tab, .reload) }
-                .disabled(tab.url == nil)
-            if tab.isInTabList {
-                Button("Open in Split View") { browser.openInSplit(tab) }
-                    .disabled(browser.splitPartner(for: tab) == nil)
-            }
-            Button("Duplicate Tab") { browser.duplicate(tab) }
-                .disabled(tab.url == nil)
-            MuteButton(tab: tab)
-            Button("Sleep Other Tabs") { browser.sleepOtherTabs(than: tab) }
-                .disabled(!browser.canSleepOtherTabs(than: tab))
-            Divider()
-            Button("Copy Link") { browser.copyLink(of: tab) }
-                .disabled(tab.url == nil)
-            Divider()
-            Button("Rename Tab…") { browser.renamingTabID = tab.id }
-            if tab.customTitle != nil {
-                Button("Use Page Title") { browser.rename(tab, to: "") }
-            }
-            Button("Pin Tab") { browser.pin(tab) }
-                .disabled(tab.url == nil || tab.isEphemeral)
-            if tab.openedByAgent != nil {
-                Button("Move to Tab List") { withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) } }
-            }
-            MoveToFolderMenu(browser: browser, tab: tab)
-            Divider()
-            Button("Close Tab") { browser.close(tab) }
-            Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
-                .disabled(browser.peers(of: tab).allSatisfy { $0 === tab })
-            Button("Close Tabs Above") { browser.closeTabs(above: tab) }
-                .disabled(browser.tabs(above: tab).isEmpty)
-            Button("Close Tabs Below") { browser.closeTabs(below: tab) }
-                .disabled(browser.tabs(below: tab).isEmpty)
-            Divider()
-            ReopenClosedTabButton()
+        .contextMenu { TabRowMenu(tab: tab) }
+    }
+}
+
+/// Its own view, so what the items read (every tab, for some) is tracked here and not in the row,
+/// which would otherwise redo those scans whenever any tab's address changes.
+private struct TabRowMenu: View {
+    let tab: Tab
+    @Environment(Browser.self) private var browser
+
+    var body: some View {
+        Button("Reload Tab") { browser.navigate(tab, .reload) }
+            .disabled(tab.url == nil)
+        if tab.isInTabList {
+            Button("Open in Split View") { browser.openInSplit(tab) }
+                .disabled(browser.splitPartner(for: tab) == nil)
         }
+        Button("Duplicate Tab") { browser.duplicate(tab) }
+            .disabled(tab.url == nil)
+        MuteButton(tab: tab)
+        Button("Sleep Other Tabs") { browser.sleepOtherTabs(than: tab) }
+            .disabled(!browser.canSleepOtherTabs(than: tab))
+        Divider()
+        Button("Copy Link") { browser.copyLink(of: tab) }
+            .disabled(tab.url == nil)
+        Divider()
+        Button("Rename Tab…") { browser.renamingTabID = tab.id }
+        if tab.customTitle != nil {
+            Button("Use Page Title") { browser.rename(tab, to: "") }
+        }
+        Button("Pin Tab") { browser.pin(tab) }
+            .disabled(tab.url == nil || tab.isEphemeral)
+        if tab.openedByAgent != nil {
+            Button("Move to Tab List") { withAnimation(.snappy(duration: 0.2)) { browser.keep(tab) } }
+        }
+        MoveToFolderMenu(browser: browser, tab: tab)
+        Divider()
+        Button("Close Tab") { browser.close(tab) }
+        Button("Close Other Tabs") { browser.closeOtherTabs(than: tab) }
+            .disabled(browser.peers(of: tab).allSatisfy { $0 === tab })
+        Button("Close Tabs Above") { browser.closeTabs(above: tab) }
+            .disabled(browser.tabs(above: tab).isEmpty)
+        Button("Close Tabs Below") { browser.closeTabs(below: tab) }
+            .disabled(browser.tabs(below: tab).isEmpty)
+        Divider()
+        ReopenClosedTabButton()
     }
 }
 

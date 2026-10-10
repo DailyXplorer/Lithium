@@ -294,6 +294,54 @@ struct PageTranslatorTests {
         #expect(engine.calls.count == calls, "no observer once shown in the original")
     }
 
+    /// What a single-page site takes away is let go while translated, not kept until Show Original;
+    /// put back, it is translated again.
+    @Test func letsGoOfWhatThePageRemoves() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        await browser.translator.translate(tab)
+        let held = "return String(window.__lithiumPageTranslation.held())"
+        #expect(await page(held, in: tab, world: .defaultClient) != "0")
+
+        // The paragraph far below still waits to come into view when it goes.
+        _ = await page("window.far = document.getElementById('far'); document.body.replaceChildren(); return ''", in: tab)
+        #expect(await waitUntil(5) { await page(held, in: tab, world: .defaultClient) == "0" })
+        _ = await page("document.body.append(window.far); return ''", in: tab)
+        #expect(await waitUntil(5) { await text("far", in: tab) == "EN(Ce paragraphe attend tout en bas de la page.)" })
+    }
+
+    /// Taken out and put back after it was let go (a tab panel, a view a web app reuses), translated
+    /// content isn't sent again and Show Original still restores its text and attributes.
+    @Test func showOriginalRestoresWhatThePagePutsBack() async throws {
+        let browser = makeBrowser()
+        let (listener, server) = try await serve()
+        defer { listener.cancel() }
+        let (tab, window) = try await open(server.appending(path: "fr"), in: browser)
+        defer { close(tab, window, in: browser) }
+        #expect(await waitUntil(10) { tab.pageTranslation != nil })
+        let before = await page("return document.body.innerHTML", in: tab)
+        await browser.translator.translate(tab)
+        #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+        let held = "return String(window.__lithiumPageTranslation.held())"
+        let translated = await page(held, in: tab, world: .defaultClient)
+
+        _ = await page("window.view = document.querySelector('article'); window.spot = view.nextSibling; view.remove(); return ''", in: tab)
+        #expect(await waitUntil(5) { await page(held, in: tab, world: .defaultClient) != translated })
+        let calls = engine.calls.count
+        _ = await page("document.body.insertBefore(view, spot); return ''", in: tab)
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(engine.calls.count == calls, "already translated: not sent again")
+        #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
+        #expect(await page("return document.getElementById('tip').title", in: tab) == "EN(Une note utile)")
+
+        browser.translator.showOriginal(tab)
+        #expect(await waitUntil(5) { await page("return document.body.innerHTML", in: tab) == before })
+    }
+
     @Test func alwaysAndNeverChoices() async throws {
         let browser = makeBrowser()
         let translator = browser.translator

@@ -22,6 +22,10 @@ const letter = /\p{L}/u;
 // The node's own record, so the page's text can be put back and our own changes told apart.
 const texts = new Map();
 const attrs = new Map();
+// Records of nodes the page took out, kept without holding them: put back still translated, they
+// are known again and Show Original restores them.
+const goneTexts = new WeakMap();
+const goneAttrs = new WeakMap();
 // A copy of text already translated (the reader's, cloned from the page) isn't sent again.
 const known = new Map();
 const queued = new WeakSet();
@@ -31,6 +35,8 @@ const waiting = new Map();
 let stopped = false;
 let sending = false;
 let dirty = new Set();
+// The page removed nodes since the last pass: what they held is let go then.
+let removed = false;
 let timer = 0;
 let ready;
 const first = new Promise((resolve) => { ready = resolve; });
@@ -55,12 +61,15 @@ const copied = (node) => !!window.__lithiumReader?.article?.contains(node);
 const addText = (node) => {
   if (texts.has(node) || queued.has(node)) return;
   const data = node.data;
+  const gone = goneTexts.get(node);
+  if (gone && data === gone.translated) return texts.set(node, gone);
   if (!letter.test(data)) return;
   const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(data);
   const original = copied(node) ? known.get(plain(core)) : undefined;
   if (original !== undefined) return texts.set(node, { original: lead + original + trail, translated: data });
   queued.add(node);
   watch(node.parentElement, {
+    node,
     text: core,
     apply: (result) => {
       queued.delete(node);
@@ -76,6 +85,15 @@ const addText = (node) => {
 };
 
 const addAttributes = (element) => {
+  const gone = goneAttrs.get(element);
+  if (gone) {
+    goneAttrs.delete(element);
+    const entries = attrs.get(element) ?? new Map();
+    for (const [name, entry] of gone) {
+      if (!entries.has(name) && entry.translated !== undefined && element.getAttribute(name) === entry.translated) entries.set(name, entry);
+    }
+    if (entries.size) attrs.set(element, entries);
+  }
   for (const name of attributes) {
     const value = element.getAttribute(name);
     if (!value || !letter.test(value)) continue;
@@ -166,6 +184,28 @@ const catchUp = () => {
   timer = 0;
   const roots = dirty;
   dirty = new Set();
+  // One kept node holds its whole removed subtree: a single-page site would otherwise keep every
+  // view it ever showed until Show Original. Moved nodes are connected again by now and stay.
+  if (removed) {
+    removed = false;
+    for (const [node, entry] of texts) {
+      if (node.isConnected) continue;
+      goneTexts.set(node, entry);
+      texts.delete(node);
+    }
+    for (const [element, entries] of attrs) {
+      if (element.isConnected) continue;
+      goneAttrs.set(element, entries);
+      attrs.delete(element);
+    }
+    for (const [element, items] of waiting) {
+      if (element.isConnected) continue;
+      visible.unobserve(element);
+      waiting.delete(element);
+      // Put back later, its text is read again.
+      for (const item of items) if (item.node) queued.delete(item.node);
+    }
+  }
   for (const node of roots) if (node.isConnected) add(node);
 };
 
@@ -173,7 +213,7 @@ const onChange = (records) => {
   for (const record of records) {
     if (record.type === 'childList') {
       record.addedNodes.forEach((node) => dirty.add(node));
-      record.removedNodes.forEach((node) => texts.delete(node));
+      if (record.removedNodes.length) removed = true;
     } else if (record.type === 'characterData') {
       const node = record.target;
       if (texts.get(node)?.translated === node.data) continue;
@@ -187,7 +227,7 @@ const onChange = (records) => {
       dirty.add(record.target);
     }
   }
-  if (dirty.size && !timer) timer = setTimeout(catchUp, 300);
+  if ((dirty.size || removed) && !timer) timer = setTimeout(catchUp, 300);
 };
 const changed = new MutationObserver(onChange);
 
@@ -209,7 +249,8 @@ const restore = () => {
   ready();
 };
 
-window.__lithiumPageTranslation = { restore };
+// `held`: how many nodes the translation keeps a hold on, for the tests.
+window.__lithiumPageTranslation = { restore, held: () => texts.size + attrs.size + waiting.size };
 // Into the back/forward cache in its own text: back on screen, the app sees the page as it is
 // and translates it again if the tab still translates.
 addEventListener('pagehide', restore);

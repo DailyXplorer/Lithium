@@ -156,6 +156,12 @@ final class Tab: NSObject, Identifiable {
     /// When the page last reported typing or interaction since loaded (`UnsavedInput`): idle sleep
     /// would lose that work. It lapses, or one keystroke in a search field would keep the tab awake for good.
     @ObservationIgnored private(set) var unsavedInputAt: Date?
+    /// Frames that said an upload of the user's files started and not yet that it ended: it runs
+    /// with no input and no load, for as long as it takes, and sleep or a reload would lose it.
+    @ObservationIgnored private var uploadingFrames = 0
+    var isUploading: Bool { uploadingFrames > 0 }
+    /// Its site's protections changed while it held input: reloaded when next shown instead.
+    @ObservationIgnored var reloadsWhenShown = false
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     private(set) var pdf: PDFReader?
@@ -627,9 +633,22 @@ final class Tab: NSObject, Identifiable {
         unsavedInputAt = Date()
     }
 
-    /// The page reports again while the user keeps at it: this is work left alone for less than `interval`.
+    func noteUpload(_ uploading: Bool, from webView: WKWebView) {
+        guard webView === loadedWebView, !isAsleep else { return }
+        uploadingFrames = max(0, uploadingFrames + (uploading ? 1 : -1))
+    }
+
+    /// The page reports again while the user keeps at it: this is work left alone for less than
+    /// `interval`. An upload counts for as long as it runs.
     func hasUnsavedInput(within interval: TimeInterval) -> Bool {
-        unsavedInputAt.map { Date().timeIntervalSince($0) <= interval } ?? false
+        isUploading || unsavedInputAt.map { Date().timeIntervalSince($0) <= interval } ?? false
+    }
+
+    /// Done when shown, for a page whose site's protections changed while it held input.
+    func reloadIfStale() {
+        guard reloadsWhenShown else { return }
+        reloadsWhenShown = false
+        reload()
     }
 
     /// Uses Safari's speaker state (private `_isPlayingAudio`). WebKit's public media state calls a
@@ -713,6 +732,9 @@ final class Tab: NSObject, Identifiable {
         canGoForward = false
         isLoading = false
         unsavedInputAt = nil
+        uploadingFrames = 0
+        // Waking loads the page afresh.
+        reloadsWhenShown = false
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -1273,8 +1295,11 @@ extension Tab: WKNavigationDelegate {
         hasHadPage = true
         shownProtectedURL = protectedURL
         awaitCommit(false)
-        // A new document: its script tells again, a page back from the cache too.
+        // A new document: its script tells again, a page back from the cache too. Its scripts and
+        // rules were set up for this load, under the protections of now.
         unsavedInputAt = nil
+        uploadingFrames = 0
+        reloadsWhenShown = false
         resetReader()
         resetTranslation()
         if navigation !== errorNavigation { loadError = nil }

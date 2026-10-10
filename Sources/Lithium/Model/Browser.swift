@@ -238,7 +238,8 @@ final class Browser {
         let partner = shownPartner
         // A tab an agent is working in is spared like a popup, or its next action would find a reloaded page.
         // Unsaved input is spared for one more idle interval: typed on screen, it is never newer than the
-        // tab's going idle, so `interval` alone would never spare it. "Sleep Other Tabs" (none) is the user's own choice.
+        // tab's going idle, so `interval` alone would never spare it; an upload of files, while it runs.
+        // "Sleep Other Tabs" (none) is the user's own choice.
         // A favorite's page is spared too: asleep, it can't update its unread badge, which would stay as it was.
         return tabs.filter { tab in
             candidates(tab) && tab.id != selectedTabID && tab !== videoPopout.tab && tab !== partner
@@ -360,17 +361,28 @@ final class Browser {
     func setProtections(_ enabled: Bool, for tab: Tab?) {
         guard let tab, let host = Privacy.siteHost(tab.url) else { return }
         let (session, space) = (tab.privateSession, tab.siteSpace)
-        guard session != nil || space != nil else { return setProtections(enabled, host: host) }
+        guard session != nil || space != nil else { return setProtections(enabled, host: host, from: tab) }
         // A private tab's choice holds for its session only, a separate space's for that space.
         privacy.setEnabled(enabled, for: tab.url, privateSession: session, space: space)
-        pages.filter { !$0.isAsleep && $0.privateSession == session && $0.siteSpace == space && Privacy.siteHost($0.url) == host }
-            .forEach { navigate($0, .reload) }
+        reloadForProtections(pages.filter { $0.privateSession == session && $0.siteSpace == space && Privacy.siteHost($0.url) == host }, from: tab)
     }
 
     /// Reloads every open page of the site, so their content blockers and scripts match.
-    func setProtections(_ enabled: Bool, host: String) {
+    func setProtections(_ enabled: Bool, host: String, from tab: Tab? = nil) {
         privacy.setEnabled(enabled, host: host)
-        pages.filter { !$0.isAsleep && Privacy.siteHost($0.url) == host }.forEach { navigate($0, .reload) }
+        reloadForProtections(pages.filter { Privacy.siteHost($0.url) == host }, from: tab)
+    }
+
+    /// A reload would lose what another page holds (a draft, an upload), and nothing asks first:
+    /// that page reloads when next shown instead. The page the change was made from reloads at once.
+    private func reloadForProtections(_ pages: [Tab], from tab: Tab?) {
+        for page in pages where !page.isAsleep {
+            if page !== tab && page.hasUnsavedInput(within: .infinity) {
+                page.reloadsWhenShown = true
+            } else {
+                navigate(page, .reload)
+            }
+        }
     }
 
     private var pages: [Tab] { tabs + quickLinks.tabs }
@@ -884,6 +896,7 @@ final class Browser {
         if tab.spaceID != currentSpaceID, spaces.contains(where: { $0.id == tab.spaceID }) { enterSpace(tab.spaceID) }
         selectedTabID = tab.id
         tab.markActive()
+        tab.reloadIfStale()
         // In split view the other side comes on screen too, maybe from another split: its pane
         // is reused, so it doesn't wake as it appears.
         shownPartner?.markActive()

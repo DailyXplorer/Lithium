@@ -28,6 +28,10 @@ final class UnsavedInput: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let webView = message.webView as? PageWebView else { return }
-        webView.tab?.noteUnsavedInput(from: webView)
+        switch message.body as? String {
+        case "uploading": webView.tab?.noteUpload(true, from: webView)
+        case "uploaded": webView.tab?.noteUpload(false, from: webView)
+        default: webView.tab?.noteUnsavedInput(from: webView)
+        }
     }
 }

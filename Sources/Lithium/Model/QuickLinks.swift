@@ -66,6 +66,7 @@ final class QuickLinks {
 
     func windowBecameKey(_ tab: Tab) {
         keyTab = tab
+        tab.reloadIfStale()
     }
 
     func windowResignedKey(_ tab: Tab) {

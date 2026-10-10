@@ -211,108 +211,138 @@ struct ChosenFilters: Sendable {
     let engineStamp: String
     let advancedRules: Int
     let scriptletRules: Int
+    /// Rules over WebKit's limit, left out, by group.
+    let discarded: [String: Int]
 
     /// Part of each converted group's hash: bump it when the conversion changes.
     static let conversion = 1
 
-    /// Shipped groups stay as compiled while no shipped list is off. Off the main thread.
+    /// Shipped groups stay as compiled while no shipped list is off. Nil when a group can't be
+    /// built: a set without it would block lists turned off, or leave out the user's filters.
+    /// An unchanged set reads no list: groups and engine are found by their files' sizes and dates.
+    /// Off the main thread.
     static func build(base: URL, manifest: Manifest, choices: FilterChoices, storage: FilterLists.Storage) -> ChosenFilters? {
         let fileManager = FileManager.default
-        let read = { (file: URL) in
-            ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(whereSeparator: \.isNewline).map(String.init)
-        }
+        let indexFile = storage.built.appending(path: "index.json")
+        var index = (try? Data(contentsOf: indexFile)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        var usedKeys: [String: String] = [:]
         var groups: [FilterGroup] = []
         var converted: [Converted] = []
-        var advanced: [String] = []
-        var scriptlets: [String] = []
-        if choices.off.isEmpty {
+        let shippedEngine = choices.off.isEmpty
+        if shippedEngine {
             groups = FilterGroup.shipped(in: base, manifest: manifest)
-            advanced = read(base.appending(path: "advanced.txt"))
-            scriptlets = read(base.appending(path: "scriptlets.txt"))
         } else {
             for (group, entry) in manifest.groups.sorted(by: { $0.key < $1.key }) {
-                // A set without its lists' names can't be split: it stays whole.
+                // A set without its lists' names can't be split.
                 guard let names = entry.lists else { return nil }
-                let lists = names.filter { !choices.off.contains($0) }.map { ($0, read(base.appending(path: "lists/\($0).txt"))) }
-                guard let built = convert(group, lists, into: storage.built) else { return nil }
+                let lists = names.filter { !choices.off.contains($0) }.map { ($0, base.appending(path: "lists/\($0).txt")) }
+                guard let built = convert(group, lists, into: storage.built, index: &index, used: &usedKeys) else { return nil }
                 converted.append(built)
             }
         }
-        let extra = choices.extraLists.compactMap { list -> (String, [String])? in
-            fileManager.fileExists(atPath: storage.copy(of: list.id).path) ? (list.id, read(storage.copy(of: list.id))) : nil
-        }
-        if !extra.isEmpty, let group = convert(FilterLists.extraGroup, extra, into: storage.built) { converted.append(group) }
-        let mine = read(storage.myFilters).map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("!") }
-        if !mine.isEmpty, let group = convert(FilterLists.myFiltersID, [(FilterLists.myFiltersID, mine)], into: storage.built) {
+        let extra = choices.extraLists.filter { fileManager.fileExists(atPath: storage.copy(of: $0.id).path) }
+            .map { ($0.id, storage.copy(of: $0.id)) }
+        if !extra.isEmpty {
+            guard let group = convert(FilterLists.extraGroup, extra, into: storage.built, index: &index, used: &usedKeys) else { return nil }
             converted.append(group)
         }
-
-        for group in converted {
-            groups.append(group.planned)
-            advanced += read(group.folder.appending(path: "advanced.txt"))
-            scriptlets += read(group.folder.appending(path: "scriptlets.txt"))
+        if !read(storage.myFilters).isEmpty {
+            guard let group = convert(FilterLists.myFiltersID, [(FilterLists.myFiltersID, storage.myFilters)], into: storage.built,
+                                      index: &index, used: &usedKeys) else { return nil }
+            converted.append(group)
         }
-        var seen = Set<String>()
-        advanced = advanced.filter { seen.insert($0).inserted }
-        seen = []
-        scriptlets = scriptlets.filter { seen.insert($0).inserted }
+        groups += converted.map(\.planned)
 
-        // The engine is rebuilt only when what it gets changes, not for every network rule.
-        let text = (advanced.joined(separator: "\n") + "\n", scriptlets.joined(separator: "\n") + "\n")
-        let stamp = "u" + digest(text.0 + "\u{0}" + text.1)
+        // The engine is named after what it is built from, so it is rebuilt only when that changes.
+        let sources = (shippedEngine ? ["\(base.path) \(manifest.updated)"] : []) + converted.map(\.folder.lastPathComponent)
+        let stamp = "u" + digest("c\(conversion)\n" + sources.joined(separator: "\n"))
         let engineFolder = storage.built.appending(path: "engine-\(stamp)")
-        if !fileManager.fileExists(atPath: engineFolder.path) {
+        var counts = (try? Data(contentsOf: engineFolder.appending(path: "info.json"))).flatMap { try? JSONDecoder().decode(EngineInfo.self, from: $0) }
+        if counts == nil {
+            let folders = (shippedEngine ? [base] : []) + converted.map(\.folder)
+            var seen = Set<String>()
+            let advanced = folders.flatMap { read($0.appending(path: "advanced.txt")) }.filter { seen.insert($0).inserted }
+            seen = []
+            let scriptlets = folders.flatMap { read($0.appending(path: "scriptlets.txt")) }.filter { seen.insert($0).inserted }
+            let info = EngineInfo(advancedRules: advanced.count, scriptletRules: scriptlets.count)
             let staging = storage.built.appending(path: ".staging-\(UUID().uuidString)")
             do {
                 try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
-                try text.0.write(to: staging.appending(path: "advanced.txt"), atomically: false, encoding: .utf8)
-                try text.1.write(to: staging.appending(path: "scriptlets.txt"), atomically: false, encoding: .utf8)
+                try (advanced.joined(separator: "\n") + "\n").write(to: staging.appending(path: "advanced.txt"), atomically: false, encoding: .utf8)
+                try (scriptlets.joined(separator: "\n") + "\n").write(to: staging.appending(path: "scriptlets.txt"), atomically: false, encoding: .utf8)
+                // Last: its presence says the folder is whole.
+                try JSONEncoder().encode(info).write(to: staging.appending(path: "info.json"))
+                try? fileManager.removeItem(at: engineFolder)
                 try fileManager.moveItem(at: staging, to: engineFolder)
             } catch {
                 try? fileManager.removeItem(at: staging)
+                NSLog("Lithium: failed to save the filter engine: %@", error.localizedDescription)
                 return nil
             }
+            counts = info
         }
 
         // What this set doesn't use goes: converting a group again is a few seconds at most.
-        let used = Set(converted.map(\.folder.lastPathComponent) + [engineFolder.lastPathComponent])
+        try? JSONEncoder().encode(usedKeys).write(to: indexFile)
+        let used = Set(converted.map(\.folder.lastPathComponent) + [engineFolder.lastPathComponent, indexFile.lastPathComponent])
         for other in (try? fileManager.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: nil)) ?? []
         where !used.contains(other.lastPathComponent) && !other.lastPathComponent.hasPrefix(".staging-") {
             try? fileManager.removeItem(at: other)
         }
         return ChosenFilters(groups: groups, engineFolder: engineFolder, engineStamp: stamp,
-                             advancedRules: advanced.count, scriptletRules: scriptlets.count)
+                             advancedRules: counts?.advancedRules ?? 0, scriptletRules: counts?.scriptletRules ?? 0,
+                             discarded: converted.reduce(into: [:]) { if $1.discarded > 0 { $0[$1.planned.name] = $1.discarded } })
     }
 
     private struct Converted {
         let planned: FilterGroup
         let folder: URL
+        let discarded: Int
     }
 
     private struct Info: Codable {
         let webkitRules: Int
+        var discarded: Int?
     }
 
-    /// The group as converted before when its rules are the same; otherwise converted now.
-    private static func convert(_ group: String, _ lists: [(String, [String])], into built: URL) -> Converted? {
-        let sorted = FilterUpdater.sorted(lists)
+    private struct EngineInfo: Codable {
+        let advancedRules: Int
+        let scriptletRules: Int
+    }
+
+    /// A file's rules, without blank lines and comments.
+    private static func read(_ file: URL) -> [String] {
+        ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("!") }
+    }
+
+    /// The group as converted before when its files, or else its rules, are the same; otherwise
+    /// converted now. `index` maps the files' sizes and dates to the hash of the rules they held,
+    /// so an unchanged group is found without reading its lists.
+    private static func convert(_ group: String, _ lists: [(String, URL)], into built: URL,
+                                index: inout [String: String], used: inout [String: String]) -> Converted? {
+        let key = digest("\(group)\n" + lists.map { name, file in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
+            let date = (attributes?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
+            return "\(name) \(file.path) \((attributes?[.size] as? NSNumber)?.intValue ?? -1) \(date)"
+        }.joined(separator: "\n"))
+        if let hash = index[key], let cached = cached(group, hash: hash, in: built) {
+            used[key] = hash
+            return cached
+        }
+
+        let sorted = FilterUpdater.sorted(lists.map { ($0.0, read($0.1)) })
         let hash = digest("c\(conversion)\n\(group)\n" + sorted.rules.joined(separator: "\n") + "\u{0}" + sorted.scriptlets.joined(separator: "\n"))
-        let folder = built.appending(path: "\(group)-\(hash)")
-        let planned = { (info: Info) in
-            Converted(planned: FilterGroup(name: group, identifier: "lithium-\(group)-h\(hash)-p\(FilterGroup.preparation)",
-                                           file: folder.appending(path: "rules.json"), webkitRules: info.webkitRules),
-                      folder: folder)
-        }
-        if let data = try? Data(contentsOf: folder.appending(path: "info.json")), let info = try? JSONDecoder().decode(Info.self, from: data) {
-            return planned(info)
-        }
+        index[key] = hash
+        used[key] = hash
+        if let cached = cached(group, hash: hash, in: built) { return cached }
 
         let result = ContentBlockerConverter().convertArray(rules: sorted.rules, safariVersion: .autodetect(), advancedBlocking: true)
         if result.discardedSafariRules > 0 {
             NSLog("Lithium: filter group %@ is over WebKit's rule limit, %d rules discarded", group, result.discardedSafariRules)
         }
-        let info = Info(webkitRules: result.safariRulesCount)
+        let info = Info(webkitRules: result.safariRulesCount, discarded: result.discardedSafariRules)
+        let folder = built.appending(path: "\(group)-\(hash)")
         let fileManager = FileManager.default
         let staging = built.appending(path: ".staging-\(UUID().uuidString)")
         do {
@@ -329,7 +359,16 @@ struct ChosenFilters: Sendable {
             NSLog("Lithium: failed to save %@ filters: %@", group, error.localizedDescription)
             return nil
         }
-        return planned(info)
+        return cached(group, hash: hash, in: built)
+    }
+
+    private static func cached(_ group: String, hash: String, in built: URL) -> Converted? {
+        let folder = built.appending(path: "\(group)-\(hash)")
+        guard let data = try? Data(contentsOf: folder.appending(path: "info.json")),
+              let info = try? JSONDecoder().decode(Info.self, from: data) else { return nil }
+        return Converted(planned: FilterGroup(name: group, identifier: "lithium-\(group)-h\(hash)-p\(FilterGroup.preparation)",
+                                              file: folder.appending(path: "rules.json"), webkitRules: info.webkitRules),
+                         folder: folder, discarded: info.discarded ?? 0)
     }
 
     private static func digest(_ text: String) -> String {

@@ -194,8 +194,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             let error = await browser.privacy.addFilterList(value as? String ?? "")
             return (await filterLists(browser, error: error), nil)
         case "setMyFilters":
-            await browser.privacy.setMyFilters(value as? String ?? "")
-            return (await filterLists(browser), nil)
+            let error = await browser.privacy.setMyFilters(value as? String ?? "")
+            return (await filterLists(browser, error: error), nil)
         case "enableProtections":
             if let host = value as? String { browser.setProtections(true, host: host) }
         case "setPermission":
@@ -387,7 +387,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             "sections": sections.map { ["title": $0.title, "lists": $0.lists] as [String: Any] },
             "myFilters": text,
             "problems": problems.map { ["line": $0.line, "text": $0.text, "message": $0.message] as [String: Any] },
-            "error": error ?? "",
+            "error": error ?? privacy.filterError ?? "",
         ]
     }
 

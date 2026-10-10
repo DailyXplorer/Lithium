@@ -45,7 +45,8 @@ struct FilterUpdater: Sendable {
             guard let url = sources.lists[name] else { continue }
             do {
                 var seen: Set<URL> = []
-                let lines = try await expand(url, seen: &seen)
+                var bytes = 0
+                let lines = try await expand(url, seen: &seen, bytes: &bytes)
                 // A captive portal, a parked domain or an emptied file answers 200 too.
                 guard lines.count >= minimumRules else { throw URLError(.cannotParseResponse) }
                 downloaded[name] = lines
@@ -156,7 +157,8 @@ struct FilterUpdater: Sendable {
     /// One list's rules, for a list the user chose: at least one, or it isn't a list.
     func download(_ url: URL) async throws -> [String] {
         var seen: Set<URL> = []
-        let lines = try await expand(url, seen: &seen)
+        var bytes = 0
+        let lines = try await expand(url, seen: &seen, bytes: &bytes)
         guard !lines.isEmpty else { throw URLError(.cannotParseResponse) }
         return lines
     }
@@ -171,17 +173,26 @@ struct FilterUpdater: Sendable {
         return folders.indices.sorted { dates[$0] != dates[$1] ? dates[$0] > dates[$1] : $0 < $1 }.map { folders[$0] }
     }
 
-    private func expand(_ url: URL, seen: inout Set<URL>) async throws -> [String] {
+    /// `bytes` counts the list's files together, so its includes can't add up past the cap either.
+    private func expand(_ url: URL, seen: inout Set<URL>, bytes: inout Int) async throws -> [String] {
         guard seen.insert(url).inserted else { return [] }
         // A chain of ever new addresses would keep the update going for the whole launch.
         guard seen.count <= Self.maximumListFiles else { throw URLError(.cannotParseResponse) }
         var request = URLRequest(url: url, timeoutInterval: 60)
         request.setValue("Lithium-filter-updater", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await session.data(for: request)
+        let (stream, response) = try await session.bytes(for: request)
         guard (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { throw URLError(.badServerResponse) }
-        // The biggest real list is a few megabytes; a NUL byte means a binary file, not text.
-        guard data.count <= Self.maximumListBytes else { throw URLError(.dataLengthExceedsMaximum) }
-        guard !data.contains(0) else { throw URLError(.cannotParseResponse) }
+        // The biggest real list is a few megabytes. Counted as it arrives: a server sending
+        // gigabytes would otherwise fill memory before any check.
+        guard response.expectedContentLength <= Int64(Self.maximumListBytes - bytes) else { throw URLError(.dataLengthExceedsMaximum) }
+        var data = Data()
+        for try await byte in stream {
+            // A NUL byte means a binary file, not text.
+            guard byte != 0 else { throw URLError(.cannotParseResponse) }
+            data.append(byte)
+            guard bytes + data.count <= Self.maximumListBytes else { throw URLError(.dataLengthExceedsMaximum) }
+        }
+        bytes += data.count
         // An HTML page (an error or login page served with 200) would parse into junk rules.
         let body = String(decoding: data, as: UTF8.self)
         if body.first(where: { !$0.isWhitespace && $0 != "\u{FEFF}" }) == "<" { throw URLError(.cannotParseResponse) }
@@ -204,7 +215,7 @@ struct FilterUpdater: Sendable {
                 if let included = URL(string: path, relativeTo: url)?.absoluteURL,
                    included.scheme?.lowercased() == url.scheme?.lowercased(),
                    included.host()?.lowercased() == url.host()?.lowercased(), included.port == url.port {
-                    lines += try await expand(included, seen: &seen)
+                    lines += try await expand(included, seen: &seen, bytes: &bytes)
                 }
             } else if !line.isEmpty, !line.hasPrefix("!"), !line.hasPrefix("[Adblock") {
                 lines.append(line)

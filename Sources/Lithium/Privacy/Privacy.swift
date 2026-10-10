@@ -48,8 +48,12 @@ final class Privacy {
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
     private(set) var filterChoices: FilterChoices
-    /// Set by tests, for a folder of their own.
+    /// Set by tests, for a folder, a filter set and a rule list store of their own.
     @ObservationIgnored var filterStorage = FilterLists.Storage.standard
+    @ObservationIgnored var filterSet: (folder: URL, manifest: Manifest)?
+    @ObservationIgnored var ruleListStore: WKContentRuleListStore?
+    /// Why the user's choice of lists or filters isn't fully applied, for the Filter lists page.
+    @ObservationIgnored private(set) var filterError: String?
     /// The loaded set's folder and its lists' rule counts, counted when Settings first shows them.
     @ObservationIgnored private var loadedFilters: (folder: URL, manifest: Manifest)?
     @ObservationIgnored private var shippedListRules: (folder: URL, updated: String, counts: [String: Int])?
@@ -453,17 +457,32 @@ final class Privacy {
     }
 
     private func loadRuleLists() async {
-        guard let (folder, manifest) = Self.currentFilters(),
-              let store = WKContentRuleListStore.default() else { return }
+        guard let (folder, manifest) = filterSet ?? Self.currentFilters(),
+              let store = ruleListStore ?? WKContentRuleListStore.default() else { return }
 
         let stamp = manifest.updated.filter(\.isNumber)
         loadedFilters = (folder, manifest)
         // Only once the user changed a list or wrote a filter: the shipped set loads as it always did.
         let choices = filterChoices, storage = filterStorage
-        let chosen = choices.isDefault && !storage.hasMyFilters ? nil : await Task.detached(priority: .userInitiated) {
+        let customized = !choices.isDefault || storage.hasMyFilters
+        let chosen = !customized ? nil : await Task.detached(priority: .userInitiated) {
             ChosenFilters.build(base: folder, manifest: manifest, choices: choices, storage: storage)
         }.value
+        if customized, chosen == nil {
+            filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
+            // The lists loaded stay: the whole shipped set would block what the user turned off.
+            // Only at launch, with nothing loaded yet, is it better than no blocking at all.
+            guard ruleLists.isEmpty else { return }
+        }
         let groups = await Self.loadGroups(chosen?.groups ?? FilterGroup.shipped(in: folder, manifest: manifest), into: store)
+        if let chosen {
+            let discarded = chosen.discarded.values.reduce(0, +)
+            filterError = !groups.complete ? "Some of your filter lists or filters couldn’t be applied."
+                : discarded > 0 ? "Over WebKit’s limit: \(discarded.formatted()) rules of the lists you chose or your filters are left out."
+                : nil
+        } else if !customized {
+            filterError = nil
+        }
         ruleLists = groups.lists
         ruleCount = groups.ruleCount + (chosen?.advancedRules ?? manifest.advancedRules ?? 0) + (chosen?.scriptletRules ?? manifest.scriptletRules ?? 0)
         filtersUpdated = manifest.date
@@ -507,6 +526,9 @@ final class Privacy {
                 continue
             }
             complete = false
+            // Only a shipped group falls back: an earlier set's group of the same name may hold
+            // a list the user has since turned off.
+            guard identifier.wholeMatch(of: /lithium-(.+)-\d+-p\d+/) != nil else { continue }
             let previous = available
                 .filter { $0.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) } == group }
                 .max { $0.filter(\.isNumber) < $1.filter(\.isNumber) }
@@ -562,8 +584,7 @@ final class Privacy {
         } else {
             return nil
         }
-        await apply(choices)
-        return nil
+        return await apply(choices)
     }
 
     /// Adds a list by its address once it downloads as a filter list; returns why it wasn't added.
@@ -576,20 +597,21 @@ final class Privacy {
         var choices = filterChoices
         choices.added.append(url)
         choices.copies[id] = copy
-        await apply(choices)
-        return nil
+        return await apply(choices)
     }
 
     var myFilters: String { filterStorage.readMyFilters() }
 
-    /// Saved and compiled at once: pages get them from their next load.
-    func setMyFilters(_ text: String) async {
+    /// Saved and compiled at once: pages get them from their next load. Returns why they weren't.
+    func setMyFilters(_ text: String) async -> String? {
         do {
             try filterStorage.writeMyFilters(text)
         } catch {
             NSLog("Lithium: failed to save your filters: %@", error.localizedDescription)
+            return "Couldn’t save your filters: \(error.localizedDescription)"
         }
         await reloadRuleLists()
+        return filterError
     }
 
     /// Each list's rule count, as Settings shows it. Counted once per filter set, off the main thread.
@@ -609,10 +631,12 @@ final class Privacy {
 
     var failedFilterLists: [String] { loadedFilters?.manifest.failedLists ?? [] }
 
-    private func apply(_ choices: FilterChoices) async {
+    /// Saved even when it can't be applied, so it is tried again; returns why it wasn't.
+    private func apply(_ choices: FilterChoices) async -> String? {
         filterChoices = choices
         UserDefaults.standard.set(try? JSONEncoder().encode(choices), forKey: Self.filterChoicesKey)
         await reloadRuleLists()
+        return filterError
     }
 
     private func download(id: String, url: URL) async -> FilterChoices.Copy? {

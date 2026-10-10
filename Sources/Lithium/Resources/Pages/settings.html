@@ -372,6 +372,7 @@
     return parts.flatMap((part, index) => index ? [' · ', part] : [part]);
   };
 
+  let myFiltersEdited = false;
   const renderFilters = (filters) => {
     $('#filter-sections').replaceChildren(...filters.sections.flatMap((section) => [
       el('h3', { textContent: section.title }),
@@ -400,8 +401,8 @@
     ]));
     $('#filter-error').textContent = filters.error;
     $('#filter-error').hidden = !filters.error;
-    // Not over what the user is typing.
-    if (document.activeElement !== $('#my-filters')) $('#my-filters').value = filters.myFilters;
+    // Not over what the user typed and hasn't saved.
+    if (!myFiltersEdited) $('#my-filters').value = filters.myFilters;
     $('#filter-problems').replaceChildren(...filters.problems.map((problem) => el('div', { className: 'row' }, [
       el('div', {}, [
         el('div', { className: 'title', textContent: `Line ${problem.line}: ${problem.message}` }),
@@ -712,12 +713,19 @@
       $('#filter-add').textContent = 'Add';
     });
   };
+  $('#my-filters').oninput = () => {
+    myFiltersEdited = true;
+    $('#my-filters-status').textContent = '';
+  };
   $('#my-filters-save').onclick = () => {
     $('#my-filters-save').disabled = true;
     $('#my-filters-status').textContent = '';
-    call('setMyFilters', $('#my-filters').value).then((filters) => {
+    const text = $('#my-filters').value;
+    call('setMyFilters', text).then((filters) => {
+      // Edits made while saving stay unsaved.
+      if (!filters.error && $('#my-filters').value === text) myFiltersEdited = false;
       renderFilters(filters);
-      $('#my-filters-status').textContent = 'Saved';
+      if (!filters.error) $('#my-filters-status').textContent = 'Saved';
     }).finally(() => { $('#my-filters-save').disabled = false; });
   };
   $('#web-store').onclick = () => call('openWebStore');

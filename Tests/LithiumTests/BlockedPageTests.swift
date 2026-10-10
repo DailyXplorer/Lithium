@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import SwiftUI
 import Testing
 import WebKit
 @testable import Lithium
@@ -46,7 +47,8 @@ struct BlockedPageFilterTests {
     /// Among filters of the same kind, one written for pages wins, then the narrower one.
     @Test func sameKindPrefersAPageFilterThenTheNarrowest() throws {
         let url = try #require(URL(string: "https://tlauncher.org/en/"))
-        let forPages = try Self.filters(["easylist": "||tlauncher.org^\n||tlauncher.org^$doc"], groups: ["ads": ["easylist"]])
+        // The filter for pages is the shorter one: only the first rule picks it.
+        let forPages = try Self.filters(["easylist": "||tlauncher.org^$important\n||tlauncher.org^$doc"], groups: ["ads": ["easylist"]])
         let narrower = try Self.filters(["easylist": "||tlauncher.org^\n||tlauncher.org/en/^"], groups: ["ads": ["easylist"]])
         defer { [forPages, narrower].forEach { try? FileManager.default.removeItem(at: $0) } }
 
@@ -73,6 +75,30 @@ struct BlockedPageFilterTests {
         #expect(byCapitals.list == "urlhaus" && byCapitals.groups == ["security"])
         let byBroader = BlockedPage.reason(for: url, in: broader)
         #expect(byBroader.list == "ubo-badware" && byBroader.groups == ["security"])
+    }
+
+    /// One list spelling the site doesn't stop another, in another group, from being searched: its
+    /// group blocks the page too, and letting the page through must leave both off.
+    @Test func everyBlockingListIsFoundWhenOneSpellsTheSite() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let regex = try Self.filters(["easylist": "||tlauncher.org^$doc", "ubo-badware": #"/^https?:\/\/[a-z]+\.org\/en\//$doc"#],
+                                     groups: ["ads": ["easylist"], "security": ["ubo-badware"]])
+        let capitals = try Self.filters(["easylist": "||tlauncher.org^$doc", "urlhaus": "||TLauncher.org^$doc"],
+                                        groups: ["ads": ["easylist"], "security": ["urlhaus"]])
+        defer { [regex, capitals].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let byRegex = BlockedPage.reason(for: url, in: regex)
+        #expect(byRegex.list == "ubo-badware" && byRegex.groups == ["ads", "security"])
+        let byCapitals = BlockedPage.reason(for: url, in: capitals)
+        #expect(byCapitals.list == "urlhaus" && byCapitals.groups == ["ads", "security"])
+    }
+
+    /// A filter naming hundreds of sites is cut short: the page, buttons included, fits a small window.
+    @MainActor @Test func aLongFilterKeepsTheButtonsInView() {
+        let filter = "*$doc,domain=" + (1...400).map { "site\($0).example" }.joined(separator: "|") + "|tlauncher.org"
+        let page = BlockedPage(url: URL(string: "https://tlauncher.org/en/")!, reason: BlockedPage.Reason(list: "ubo-badware", filter: filter, groups: ["security"]))
+        let view = NSHostingView(rootView: BlockedPageView(page: page, isPrivate: false, onBack: {}, onOpen: { _ in }).frame(width: 760))
+        #expect(view.fittingSize.height <= 520)
     }
 
     /// No filter in the lists' text blocks the address (a list changed since it was compiled, say):
@@ -184,8 +210,8 @@ struct BlockedPageTests {
         #expect(setup.browser.privacy.allowedPages.isEmpty)
     }
 
-    /// Open anyway stopped before the page shows lets nothing through later: going to it again
-    /// blocks it again.
+    /// Open anyway stopped before the page shows brings the blocked page back, buttons and all, and
+    /// lets nothing through later: going to it again blocks it again.
     @Test func openAnywayStoppedLetsNothingThrough() async throws {
         let setup = try await setUp(delay: 3)
         defer { tearDown(setup) }
@@ -197,9 +223,28 @@ struct BlockedPageTests {
         let unshown = tab.unshownLoads
         setup.browser.navigate(tab, .stop)
         #expect(await waitUntil(15) { tab.unshownLoads > unshown && !tab.isLoading })
+        #expect(await waitUntil(15) { tab.blockedPage?.reason?.list == "ubo-badware" && tab.isShowingError })
+        #expect(tab.blockedPage?.url == setup.page)
 
+        let blocked = tab.loadError
         setup.browser.navigate(tab, .open(setup.page))
+        #expect(await waitUntil(15) { tab.loadError !== blocked && tab.blockedPage?.reason != nil })
+        #expect(setup.requests["/blocked"] == 1)
+    }
+
+    /// The site sent to again while Open anyway is on its way: that new load is blocked, whenever
+    /// WebKit reports the first one dropped.
+    @Test func openAnywaySupersededLetsNothingThrough() async throws {
+        let setup = try await setUp(delay: 3)
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page)
         #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { setup.requests["/blocked"] == 1 })
+        let blocked = tab.loadError
+        setup.browser.navigate(tab, .open(setup.page))
+        #expect(await waitUntil(15) { tab.loadError !== blocked && tab.blockedPage?.reason != nil })
         #expect(setup.requests["/blocked"] == 1)
     }
 

@@ -207,8 +207,10 @@ final class Tab: NSObject, Identifiable {
     /// Shown over the error page when a filter list blocked the page itself.
     private(set) var blockedPage: BlockedPage?
     @ObservationIgnored private var blockLookup: Task<BlockedPage.Reason, Never>?
-    /// Open anyway: the site's next page goes without the groups that blocked it, until it commits.
-    @ObservationIgnored private var letThrough: (host: String, groups: Set<String>)?
+    /// Open anyway: its load goes without the groups that blocked the page, until it commits. Set
+    /// by `load` from `passToLoad`, so any other load the tab is sent on gets every list again.
+    @ObservationIgnored private var letThrough: (url: URL, host: String, groups: Set<String>)?
+    @ObservationIgnored private var passToLoad: (url: URL, host: String, groups: Set<String>)?
     @ObservationIgnored private var errorNavigation: WKNavigation?
     /// Cleared when another page commits.
     private(set) var loadError: NSError?
@@ -362,6 +364,10 @@ final class Tab: NSObject, Identifiable {
         sleepingState = nil
         addressAfterWaking = nil
         reloadedURL = nil
+        // Open anyway's pass is for its own load: one sent while it is on its way (an address typed
+        // into the same site) mustn't get it, whenever WebKit reports the first one dropped.
+        letThrough = passToLoad
+        passToLoad = nil
         // A page the user sends elsewhere is no longer what its popup was talking to.
         unpair()
         // An address the user or the app sends the tab to loads without tracking parameters again.
@@ -424,15 +430,18 @@ final class Tab: NSObject, Identifiable {
 
     /// A first load that never committed leaves WebKit nothing to reload: load the address again.
     private func reloadPage() {
+        letThrough = nil
         if webView.backForwardList.currentItem == nil, let url { load(url) } else { appStartedLoad = webView.reload() != nil }
     }
 
     /// Asked of the app, unlike the page's `history.back()`: a file it leads to downloads without asking.
     func goBack() {
+        letThrough = nil
         appStartedLoad = webView.goBack() != nil
     }
 
     func goForward() {
+        letThrough = nil
         appStartedLoad = webView.goForward() != nil
     }
 
@@ -895,11 +904,17 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
-        // Open anyway was for a page that now never shows (Stop, a download): the next load is blocked again.
+        // Open anyway was for a page that now never shows (Stop, a download): the next load is
+        // blocked again, and the blocked page, still underneath, gets its explanation and buttons back.
+        let passed = letThrough
         letThrough = nil
         restoreProtections()
         lastUnshownLoad = load
         unshownLoads += 1
+        if let passed {
+            failedURL = passed.url
+            showBlockedPage(passed.url)
+        }
         browser?.agent?.loadEndedUnshown(in: self)
     }
 
@@ -1091,7 +1106,7 @@ final class Tab: NSObject, Identifiable {
         if always {
             browser.privacy.allowPages(of: page.url, groups: groups, privateSession: privateSession)
         } else {
-            letThrough = (host, groups)
+            passToLoad = (page.url, host, groups)
         }
         browser.navigate(self, .open(page.url))
     }

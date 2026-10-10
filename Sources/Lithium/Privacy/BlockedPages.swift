@@ -67,37 +67,32 @@ struct BlockedPage: Equatable {
         }
     }
 
-    /// Searches the lists of a filters folder for what blocks `url` as a page. Lines naming the
-    /// site, as written or escaped in a regular expression, are tried first; only if none blocks it
-    /// is every line tried (a capitalised domain, a broader expression). Lists that flag danger
-    /// come first; nothing found at all leaves every group to let the page through.
+    /// Searches the lists of a filters folder for what blocks `url` as a page. In each list, lines
+    /// naming the site, as written or escaped in a regular expression, are tried first; only if none
+    /// blocks it is every line of that list tried (a capitalised domain, a broader expression): any
+    /// list may be the one whose group still blocks the page. Lists that flag danger come first;
+    /// nothing found at all leaves every group to let the page through.
     static func reason(for url: URL, in folder: URL) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
         var groupsOfList: [String: Set<String>] = [:]
         for (group, entry) in manifest.groups {
             for list in entry.lists ?? [] { groupsOfList[list, default: []].insert(group) }
         }
-        let host = url.host()?.lowercased() ?? ""
-        let site = SiteInfo.registrable(host)
+        let page = Page(url)
+        let site = SiteInfo.registrable(page.host)
         var matches: [(list: String, filter: String)] = []
         if !site.isEmpty {
-            let lists = groupsOfList.keys.sorted().compactMap { list in
-                (try? Data(contentsOf: folder.appending(path: "lists/\(list).txt"), options: .alwaysMapped)).map { (list, $0) }
-            }
             let needles = [site, site.replacingOccurrences(of: ".", with: #"\."#)].map { Data($0.utf8) }
-            for (list, data) in lists {
+            for list in groupsOfList.keys.sorted() {
+                guard let data = try? Data(contentsOf: folder.appending(path: "lists/\(list).txt"), options: .alwaysMapped) else { continue }
                 var seen: Set<String> = []
-                for line in needles.flatMap({ lines(in: data, containing: $0) }) where seen.insert(line).inserted && blocksPage(line, url: url) {
-                    matches.append((list, line))
+                var found = needles.flatMap { lines(in: data, containing: $0) }.filter { seen.insert($0).inserted && blocksPage($0, page) }
+                if found.isEmpty {
+                    found = data.split(separator: 0x0A)
+                        .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { blocksPage($0, page) }
                 }
-            }
-            if matches.isEmpty {
-                for (list, data) in lists {
-                    for line in data.split(separator: 0x0A) {
-                        let line = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if blocksPage(line, url: url) { matches.append((list, line)) }
-                    }
-                }
+                matches += found.map { (list, $0) }
             }
         }
         let order: [Kind] = [.malware, .badware, .resourceAbuse, .trackers, .ads, .annoyances, .unknown]
@@ -143,12 +138,34 @@ struct BlockedPage: Equatable {
         return (String(filter[..<dollar]), options.lowercased().split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
     }
 
+    /// The address as every line of the lists is checked against it, worked out once.
+    struct Page {
+        let address: String
+        let lowered: String
+        let host: String
+
+        init(_ url: URL) {
+            address = url.absoluteString
+            lowered = address.lowercased()
+            host = url.host()?.lowercased() ?? ""
+        }
+    }
+
     /// Whether an Adblock-syntax network filter blocks `url` loaded as a page, from the address bar.
     static func blocksPage(_ filter: String, url: URL) -> Bool {
+        blocksPage(filter, Page(url))
+    }
+
+    static func blocksPage(_ filter: String, _ page: Page) -> Bool {
         guard !filter.isEmpty, !filter.hasPrefix("!"), !filter.hasPrefix("@@"), !filter.hasPrefix("["),
               !["##", "#@#", "#?#", "#$#", "#%#", "$$", "#+js"].contains(where: filter.contains) else { return false }
         let (pattern, options) = split(filter)
-        let host = url.host()?.lowercased() ?? ""
+        // Each plain run of the pattern must be in the address: most filters stop here, before their
+        // options are read or a regular expression is built, which keeps trying every line short.
+        if !(pattern.count > 2 && pattern.hasPrefix("/") && pattern.hasSuffix("/")) {
+            guard pattern.lowercased().split(whereSeparator: { "*^|".contains($0) }).allSatisfy({ page.lowered.contains($0) }) else { return false }
+        }
+        let host = page.host
         var matchCase = false
         for option in options {
             if pageTypes.contains(option) || pageOptions.contains(option) {
@@ -167,13 +184,7 @@ struct BlockedPage: Equatable {
                 return false
             }
         }
-        let address = url.absoluteString
-        // Each plain run of the pattern must be in the address: most filters stop here, before a
-        // regular expression is built, which keeps trying every line of every list short.
-        if !(pattern.count > 2 && pattern.hasPrefix("/") && pattern.hasSuffix("/")) {
-            let lowered = address.lowercased()
-            guard pattern.lowercased().split(whereSeparator: { "*^|".contains($0) }).allSatisfy({ lowered.contains($0) }) else { return false }
-        }
+        let address = page.address
         guard let regex = regex(for: pattern, matchCase: matchCase) else { return false }
         return regex.firstMatch(in: address, range: NSRange(address.startIndex..., in: address)) != nil
     }

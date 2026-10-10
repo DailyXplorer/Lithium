@@ -28,6 +28,9 @@ final class Privacy {
     @ObservationIgnored var ruleLists: [WKContentRuleList] = []
     /// Where the loaded lists came from, searched when a page is blocked. Set by tests too.
     @ObservationIgnored var filtersFolder: URL?
+    /// The last blocked page looked up, by lists and address: blocked again (a reload, Open anyway
+    /// stopped), it isn't searched for again.
+    @ObservationIgnored private var lastBlockReason: (key: String, reason: BlockedPage.Reason)?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     /// Each load waits for the one before: two at once would remove each other's compiled lists.
     @ObservationIgnored private var lastLoad: Task<Void, Never>?
@@ -397,11 +400,14 @@ final class Privacy {
     /// Read from the lists' text off the main thread, and only once a page was blocked.
     func blockReason(for url: URL) async -> BlockedPage.Reason {
         let folder = filtersFolder
+        let key = "\(generation) \(folder?.path ?? "") \(url.absoluteString)"
+        if let last = lastBlockReason, last.key == key { return last.reason }
         var reason = await Task.detached(priority: .userInitiated) {
             folder.map { BlockedPage.reason(for: url, in: $0) } ?? BlockedPage.Reason(groups: [])
         }.value
         // Lists that say nothing of the site: letting it through takes every group off its page.
         if reason.groups.isEmpty { reason.groups = Set(ruleLists.compactMap(Self.group(of:))) }
+        lastBlockReason = (key, reason)
         return reason
     }
 

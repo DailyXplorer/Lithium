@@ -43,6 +43,18 @@
   .font-picker { min-width: 220px; }
   .sample { font-size: 13px; }
   .snippet > div { min-width: 0; }
+  .actions { display: flex; align-items: center; gap: 10px; }
+  #filter-url { flex: 1; min-width: 0; }
+  .filter-list .hint a { color: var(--accent); }
+  .filter-list .failed { color: var(--danger); }
+  .error { color: var(--danger); }
+  #my-filters { display: block; width: 100%; min-height: 180px; margin-top: 12px; padding: 10px 12px; resize: vertical;
+    border: 1px solid var(--line); border-radius: 9px; background: none; color: inherit; outline: none;
+    font: 12.5px/1.6 ui-monospace, Menlo, monospace; transition: border-color .12s; }
+  #my-filters:focus { border-color: var(--accent); }
+  .filter-save { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  #filter-problems .row { padding: 10px 0; }
+  #filter-problems code, .hint code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 </style>
@@ -140,7 +152,7 @@
     <p class="lead">Blocks ads, trackers and fingerprinting. Built on uBlock Origin filter lists.</p>
     <div class="row">
       <div><div class="title">Filter lists</div><div class="hint" id="updated"></div></div>
-      <button class="button" id="update">Update now</button>
+      <div class="actions"><a class="button" href="#filters">Choose…</a><button class="button" id="update">Update now</button></div>
     </div>
     <details>
       <summary>Details</summary>
@@ -153,6 +165,23 @@
     <div class="row"><div class="title">HTTPS upgrades and fraud warnings</div></div>
     <h3>Turned off for</h3>
     <div class="rows" id="exceptions"></div>
+  </section>
+
+  <section id="filters" class="page">
+    <h2>Filter lists</h2>
+    <p class="lead">Choose what Lithium blocks. Lists update once a day.</p>
+    <div id="filter-sections"></div>
+    <h3>Add a list</h3>
+    <form class="row" id="filter-add-form">
+      <input type="text" id="filter-url" placeholder="https://example.com/filters.txt" autocomplete="off" spellcheck="false">
+      <button class="button" id="filter-add">Add</button>
+    </form>
+    <div class="hint error" id="filter-error" hidden></div>
+    <h3>My filters</h3>
+    <p class="hint">One rule per line, as in uBlock Origin or AdGuard: <code>||ads.example.com^</code>, <code>example.com##.banner</code> or <code>example.com##+js(…)</code>. Reload a page to see changes.</p>
+    <textarea id="my-filters" spellcheck="false" autocomplete="off" placeholder="example.com##.newsletter-popup"></textarea>
+    <div class="filter-save"><button class="button accent" id="my-filters-save">Save</button><span class="hint" id="my-filters-status"></span></div>
+    <div id="filter-problems"></div>
   </section>
 
   <section id="extensions" class="page">
@@ -324,13 +353,62 @@
 
   const showSection = () => {
     const id = siteHost() ? 'site' : (location.hash || '#appearance').slice(1);
-    const navID = id === 'site' ? 'permissions' : id;
+    const navID = id === 'site' ? 'permissions' : id === 'filters' ? 'privacy' : id;
     document.querySelectorAll('section').forEach((s) => s.classList.toggle('active', s.id === id));
     document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + navID));
     if (id === 'site') {
       if (lastState) render(lastState);
       call('site', siteHost()).then(renderSite);
     }
+    // Read from disk, so only while the page shows.
+    if (id === 'filters') call('filterLists').then(renderFilters);
+  };
+
+  const listHint = (list) => {
+    const parts = [list.summary];
+    if (list.failed) parts.push(el('span', { className: 'failed', textContent: 'Couldn’t update' }));
+    else if (list.enabled && list.rules >= 0) parts.push(`${list.rules.toLocaleString('en')} rules`, relative(list.updated));
+    if (list.homepage && !list.removable) parts.push(el('a', { href: list.homepage, textContent: 'Website' }));
+    return parts.flatMap((part, index) => index ? [' · ', part] : [part]);
+  };
+
+  let myFiltersEdited = false;
+  const renderFilters = (filters) => {
+    $('#filter-sections').replaceChildren(...filters.sections.flatMap((section) => [
+      el('h3', { textContent: section.title }),
+      el('div', { className: 'rows' }, section.lists.map((list) => {
+        let control;
+        if (list.removable) {
+          control = el('button', { className: 'button', textContent: 'Remove' });
+          control.onclick = () => {
+            control.disabled = true;
+            call('setFilterList', { id: list.id, enabled: false }).then(renderFilters);
+          };
+        } else {
+          const toggle = el('input', { type: 'checkbox', role: 'switch', checked: list.enabled });
+          toggle.setAttribute('aria-label', list.name);
+          toggle.onchange = () => {
+            toggle.disabled = true;
+            call('setFilterList', { id: list.id, enabled: toggle.checked }).then(renderFilters);
+          };
+          control = el('label', { className: 'switch' }, [toggle, el('span')]);
+        }
+        return el('div', { className: 'row filter-list' }, [
+          el('div', {}, [el('div', { className: 'title', textContent: list.name }), el('div', { className: 'hint' }, listHint(list))]),
+          control,
+        ]);
+      })),
+    ]));
+    $('#filter-error').textContent = filters.error;
+    $('#filter-error').hidden = !filters.error;
+    // Not over what the user typed and hasn't saved.
+    if (!myFiltersEdited) $('#my-filters').value = filters.myFilters;
+    $('#filter-problems').replaceChildren(...filters.problems.map((problem) => el('div', { className: 'row' }, [
+      el('div', {}, [
+        el('div', { className: 'title', textContent: `Line ${problem.line}: ${problem.message}` }),
+        el('div', { className: 'hint' }, [el('code', { textContent: problem.text })]),
+      ]),
+    ])));
   };
   window.addEventListener('hashchange', showSection);
 
@@ -621,6 +699,35 @@
     if (site) call('setSiteFont', { site, keep: true }).then((state) => { $('#site-font-site').value = ''; render(state); });
   };
   $('#update').onclick = () => call('updateFilters').then(render);
+  $('#filter-add-form').onsubmit = (event) => {
+    event.preventDefault();
+    const address = $('#filter-url').value.trim();
+    if (!address) return;
+    $('#filter-add').disabled = true;
+    $('#filter-add').innerHTML = '<span class="spin"></span>Adding';
+    call('addFilterList', address).then((filters) => {
+      if (!filters.failed) $('#filter-url').value = '';
+      renderFilters(filters);
+    }).finally(() => {
+      $('#filter-add').disabled = false;
+      $('#filter-add').textContent = 'Add';
+    });
+  };
+  $('#my-filters').oninput = () => {
+    myFiltersEdited = true;
+    $('#my-filters-status').textContent = '';
+  };
+  $('#my-filters-save').onclick = () => {
+    $('#my-filters-save').disabled = true;
+    $('#my-filters-status').textContent = '';
+    const text = $('#my-filters').value;
+    call('setMyFilters', text).then((filters) => {
+      // Edits made while saving stay unsaved.
+      if (!filters.failed && $('#my-filters').value === text) myFiltersEdited = false;
+      renderFilters(filters);
+      if (!filters.failed) $('#my-filters-status').textContent = 'Saved';
+    }).finally(() => { $('#my-filters-save').disabled = false; });
+  };
   $('#web-store').onclick = () => call('openWebStore');
   $('#open-passwords').onclick = () => call('openPasswords');
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
@@ -651,6 +758,7 @@
     if (document.hidden) return;
     call('state').then(render);
     if (siteHost()) call('site', siteHost()).then(renderSite);
+    if (location.hash === '#filters') call('filterLists').then(renderFilters);
   });
 
   showSection();

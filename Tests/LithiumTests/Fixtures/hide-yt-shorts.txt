@@ -1,0 +1,11 @@
+! An excerpt of "Hide YouTube Shorts" (https://github.com/gijsdev/ublock-hide-yt-shorts), for tests.
+! Shorts shelves
+youtube.com##ytd-reel-shelf-renderer
+youtube.com##ytd-rich-shelf-renderer[is-shorts]
+youtube.com##ytd-rich-section-renderer:has(#rich-shelf-header:has-text(Shorts))
+! Shorts among videos
+youtube.com##ytd-rich-item-renderer:has([overlay-style="SHORTS"])
+youtube.com##ytd-video-renderer:has([overlay-style="SHORTS"])
+! Shorts in the sidebar
+youtube.com##ytd-guide-entry-renderer:has-text(Shorts)
+youtube.com##ytd-mini-guide-entry-renderer:has-text(Shorts)

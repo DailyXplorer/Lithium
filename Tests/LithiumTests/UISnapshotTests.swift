@@ -161,6 +161,7 @@ struct UISnapshotTests {
         let sections: [(name: String, hash: String, script: String?)] = [
             ("appearance", "appearance", nil), ("search", "search", nil), ("privacy", "privacy", nil),
             ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
+            ("filters", "filters", nil),
             ("extensions", "extensions", nil),
             ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
@@ -534,8 +535,38 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         let action = (message.body as? [String: Any])?["action"] as? String
         if action == "site" { return (["cookies": 14, "hasData": true], nil) }
         if action == "fonts" { return (["DM Sans", "Avenir Next", "Georgia", "Helvetica Neue", "Menlo", "New York"], nil) }
+        if action == "filterLists" { return (Self.filterLists, nil) }
         return (Self.state, nil)
     }
+
+    static let filterLists: [String: Any] = {
+        let updated = Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000
+        func list(_ id: String, _ name: String, _ summary: String, enabled: Bool, rules: Int, failed: Bool = false, removable: Bool = false) -> [String: Any] {
+            ["id": id, "name": name, "summary": summary, "homepage": "https://example.com", "enabled": enabled, "rules": rules,
+             "updated": updated, "failed": failed, "removable": removable]
+        }
+        return [
+            "sections": [
+                ["title": "uBlock Origin", "lists": [
+                    list("ubo-filters", "uBlock Origin filters", "Ads, pop-ups and trackers.", enabled: true, rules: 38_211),
+                    list("ubo-unbreak", "uBlock Origin unbreak", "Keeps sites working that other lists break.", enabled: false, rules: 2_310),
+                ]] as [String: Any],
+                ["title": "Annoyances", "lists": [
+                    list("ubo-annoyances", "uBlock Origin annoyances", "Pop-ups, overlays and other distractions.", enabled: true, rules: 9_402),
+                    list("adguard-annoyances", "AdGuard annoyances", "Pop-ups, widgets and app banners.", enabled: false, rules: -1),
+                ]] as [String: Any],
+                ["title": "Community", "lists": [
+                    list("hide-youtube-shorts", "Hide YouTube Shorts", "Removes Shorts from YouTube’s pages and menus.", enabled: true, rules: 64, failed: true),
+                ]] as [String: Any],
+                ["title": "Added by you", "lists": [
+                    list("url-1", "lists.example.org", "https://lists.example.org/filters.txt", enabled: true, rules: 120, removable: true),
+                ]] as [String: Any],
+            ],
+            "myFilters": "example.com##.newsletter-popup\n||tracker.example^\nexample.org##+js(nope)",
+            "problems": [["line": 3, "text": "example.org##+js(nope)", "message": "Unknown scriptlet “nope”."]],
+            "error": "That address doesn’t lead to a filter list.",
+        ]
+    }()
 
     static let state: [String: Any] = [
         "appearance": [

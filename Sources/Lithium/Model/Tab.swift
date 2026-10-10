@@ -430,6 +430,7 @@ final class Tab: NSObject, Identifiable {
 
     /// A first load that never committed leaves WebKit nothing to reload: load the address again.
     private func reloadPage() {
+        // A reload is another navigation: Open anyway's pass ("this time only") ends, even mid-load.
         letThrough = nil
         if webView.backForwardList.currentItem == nil, let url { load(url) } else { appStartedLoad = webView.reload() != nil }
     }
@@ -1268,6 +1269,13 @@ extension Tab: WKNavigationDelegate {
             } else {
                 Task { webView.load(URLRequest(url: clean)) }
             }
+            return (.cancel, preferences)
+        }
+        // Open anyway lets through its own site only. WebKit checks a redirect before asking here,
+        // with the groups still off, so one to another site goes again with every list on.
+        if let letThrough, Self.isRedirect(action), letThrough.host != Privacy.siteHost(url) {
+            self.letThrough = nil
+            Task { self.load(url) }
             return (.cancel, preferences)
         }
 

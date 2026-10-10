@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 import SwiftUI
 import Testing
 import WebKit
@@ -168,6 +169,7 @@ struct BlockedPageTests {
 
     private func setUp(delay: TimeInterval = 0) async throws -> Setup {
         let requests = Requests()
+        let served = OSAllocatedUnfairLock<URL?>(initialState: nil)
         let (listener, base) = try await LocalHTTP.serve([
             "/blocked": ("Content-Type: text/html", Data(#"<title>Blocked</title><script src="/ad.js"></script>"#.utf8)),
             "/ad.js": ("Content-Type: text/javascript", Data("document.title = 'Ad'".utf8)),
@@ -177,7 +179,12 @@ struct BlockedPageTests {
                 s.onerror = () => document.title = 'Late blocked'; document.head.append(s) }</script>
                 """#.utf8)),
             "/late.js": ("Content-Type: text/javascript", Data("document.title = 'Late loaded'".utf8)),
-        ], delay: delay, requested: { requests.record($0) })
+        ], delay: delay, requested: { requests.record($0) }, answer: { path in
+            // Sends its load on to another site (localhost), where the same group blocks the page.
+            guard path == "/blocked-elsewhere", let port = served.withLock({ $0 })?.port else { return nil }
+            return ("HTTP/1.1 302 Found\r\nLocation: http://localhost:\(port)/blocked", Data())
+        })
+        served.withLock { $0 = base }
         let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "blocked-rules-\(UUID().uuidString)")))
         let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList:
             #"[{"trigger": {"url-filter": "/blocked", "resource-type": ["document"]}, "action": {"type": "block"}}, "#
@@ -249,6 +256,20 @@ struct BlockedPageTests {
         #expect(setup.requests["/late.js"] == 0)
     }
 
+    /// Open anyway lets its own site through, not one it redirects to: that site's page is blocked
+    /// by the same group, and its server never asked.
+    @Test func openAnywayDoesNotLetARedirectElsewhereThrough() async throws {
+        let setup = try await setUp()
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page.deletingLastPathComponent().appending(path: "blocked-elsewhere"))
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { tab.blockedPage?.url.host() == "localhost" && !tab.isLoading })
+        #expect(setup.requests["/blocked-elsewhere"] == 1)
+        #expect(setup.requests["/blocked"] == 0)
+    }
+
     /// Open anyway stopped before the page shows brings the blocked page back, buttons and all, and
     /// lets nothing through later: going to it again blocks it again.
     @Test func openAnywayStoppedLetsNothingThrough() async throws {
@@ -308,9 +329,10 @@ struct BlockedPageTests {
         #expect(setup.requests["/ad.js"] == 0, "the ads group stays on")
 
         // The allowed group stays off for what the site's pages load too, not only the page itself.
-        setup.browser.navigate(tab, .open(setup.page.deletingLastPathComponent().appending(path: "blocked-late")))
-        #expect(await waitUntil(15) { tab.title.hasPrefix("Late") })
-        #expect(tab.title == "Late loaded")
+        // In another tab, so `tab` stays on the page reloaded below.
+        let late = setup.browser.newTab(url: setup.page.deletingLastPathComponent().appending(path: "blocked-late"))
+        #expect(await waitUntil(15) { late.title.hasPrefix("Late") })
+        #expect(late.title == "Late loaded")
 
         // Removed with its button in Settings, the way the user does.
         let settings = setup.browser.newTab(url: Internal.settingsURL)
@@ -371,11 +393,17 @@ struct BlockedPageTests {
         let setup = try await setUp()
         defer { tearDown(setup) }
         let tab = setup.browser.newTab(url: setup.page, privateStore: .nonPersistent())
+        let session = try #require(tab.privateSession)
         #expect(await waitUntil(15) { tab.blockedPage != nil })
         let lookup = try #require(tab.blockLookup)
 
         setup.browser.close(tab, remembering: false)
         #expect(lookup.isCancelled)
+        // Whenever the search ended, nothing is kept for the session: with the lists gone, a
+        // lookup finds nothing rather than a kept answer.
+        _ = await lookup.value
+        try FileManager.default.removeItem(at: setup.folder.appending(path: "lists"))
+        #expect(await setup.browser.privacy.blockReason(for: setup.page, privateSession: session).list == nil)
     }
 
     /// In a private tab, Always allow holds for its private session only, in memory.

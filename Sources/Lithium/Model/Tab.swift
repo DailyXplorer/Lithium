@@ -160,8 +160,6 @@ final class Tab: NSObject, Identifiable {
     /// with no input and no load, for as long as it takes, and sleep or a reload would lose it.
     @ObservationIgnored private var uploadingFrames = 0
     var isUploading: Bool { uploadingFrames > 0 }
-    /// Its site's protections changed while it held input: reloaded when next shown instead.
-    @ObservationIgnored var reloadsWhenShown = false
     private(set) var canGoBack = false
     private(set) var canGoForward = false
     private(set) var pdf: PDFReader?
@@ -644,13 +642,6 @@ final class Tab: NSObject, Identifiable {
         isUploading || unsavedInputAt.map { Date().timeIntervalSince($0) <= interval } ?? false
     }
 
-    /// Done when shown, for a page whose site's protections changed while it held input.
-    func reloadIfStale() {
-        guard reloadsWhenShown else { return }
-        reloadsWhenShown = false
-        reload()
-    }
-
     /// Uses Safari's speaker state (private `_isPlayingAudio`). WebKit's public media state calls a
     /// page holding a video it never started "playing", which would keep most news pages awake: it
     /// is only a fallback, counting from the next pass, since the page's process answers it.
@@ -733,8 +724,6 @@ final class Tab: NSObject, Identifiable {
         isLoading = false
         unsavedInputAt = nil
         uploadingFrames = 0
-        // Waking loads the page afresh.
-        reloadsWhenShown = false
         awaitCommit(false)
         self.configuration = configuration
         withMutation(keyPath: \.webView) { loadedWebView = nil }
@@ -1295,11 +1284,9 @@ extension Tab: WKNavigationDelegate {
         hasHadPage = true
         shownProtectedURL = protectedURL
         awaitCommit(false)
-        // A new document: its script tells again, a page back from the cache too. Its scripts and
-        // rules were set up for this load, under the protections of now.
+        // A new document: its script tells again, a page back from the cache too.
         unsavedInputAt = nil
         uploadingFrames = 0
-        reloadsWhenShown = false
         resetReader()
         resetTranslation()
         if navigation !== errorNavigation { loadError = nil }

@@ -108,8 +108,8 @@ struct NavigationTests {
     }
 
     /// A protections change leaves a background page of the site holding a draft as it is, since
-    /// nothing asks before a reload: it reloads when next shown. The page changed from reloads at once.
-    @Test func protectionsChangeReloadsAPageWithADraftWhenShown() async throws {
+    /// nothing asks before a reload, not even once it is shown again. The page changed from reloads at once.
+    @Test func protectionsChangeKeepsAPageWithADraft() async throws {
         let requests = Requests()
         let (listener, base) = try await LocalHTTP.serve([
             "/a": ("Content-Type: text/html", Data("<title>A</title>".utf8)),
@@ -138,9 +138,11 @@ struct NavigationTests {
         #expect(requests["/form"] == 1)
         #expect(try await form.webView.evaluateJavaScript("document.getElementById('field').value") as? String == "draft")
 
+        // Back to finish the comment: it is still there.
         browser.select(form)
-        #expect(await waitUntil(15) { requests["/form"] == 2 })
-        #expect(!form.reloadsWhenShown)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(requests["/form"] == 1)
+        #expect(try await form.webView.evaluateJavaScript("document.getElementById('field').value") as? String == "draft")
     }
 
     /// A server that sends the address back with its tracking parameters gets them: the tab

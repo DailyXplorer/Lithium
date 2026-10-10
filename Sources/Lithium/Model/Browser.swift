@@ -373,15 +373,12 @@ final class Browser {
         reloadForProtections(pages.filter { Privacy.siteHost($0.url) == host }, from: tab)
     }
 
-    /// A reload would lose what another page holds (a draft, an upload), and nothing asks first:
-    /// that page reloads when next shown instead. The page the change was made from reloads at once.
+    /// A reload would lose what another page holds (a draft, an upload), and nothing asks first, not
+    /// even once it is shown again: that page keeps its document and gets the new protections on its
+    /// next load. The page the change was made from reloads at once.
     private func reloadForProtections(_ pages: [Tab], from tab: Tab?) {
-        for page in pages where !page.isAsleep {
-            if page !== tab && page.hasUnsavedInput(within: .infinity) {
-                page.reloadsWhenShown = true
-            } else {
-                navigate(page, .reload)
-            }
+        for page in pages where !page.isAsleep && (page === tab || !page.hasUnsavedInput(within: .infinity)) {
+            navigate(page, .reload)
         }
     }
 
@@ -896,7 +893,6 @@ final class Browser {
         if tab.spaceID != currentSpaceID, spaces.contains(where: { $0.id == tab.spaceID }) { enterSpace(tab.spaceID) }
         selectedTabID = tab.id
         tab.markActive()
-        tab.reloadIfStale()
         // In split view the other side comes on screen too, maybe from another split: its pane
         // is reused, so it doesn't wake as it appears.
         shownPartner?.markActive()

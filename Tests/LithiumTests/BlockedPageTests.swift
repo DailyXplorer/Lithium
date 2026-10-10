@@ -43,8 +43,40 @@ struct BlockedPageFilterTests {
         #expect(BlockedPage.title(of: "ubo-badware") == "uBlock filters – Badware risks")
     }
 
-    /// No list spells the address out (a regular expression the search can't tell): letting the
-    /// page through leaves every group off it.
+    /// Among filters of the same kind, one written for pages wins, then the narrower one.
+    @Test func sameKindPrefersAPageFilterThenTheNarrowest() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let forPages = try Self.filters(["easylist": "||tlauncher.org^\n||tlauncher.org^$doc"], groups: ["ads": ["easylist"]])
+        let narrower = try Self.filters(["easylist": "||tlauncher.org^\n||tlauncher.org/en/^"], groups: ["ads": ["easylist"]])
+        defer { [forPages, narrower].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        #expect(BlockedPage.reason(for: url, in: forPages).filter == "||tlauncher.org^$doc")
+        #expect(BlockedPage.reason(for: url, in: narrower).filter == "||tlauncher.org/en/^")
+    }
+
+    /// A filter that doesn't spell the site as plain text (a regular expression's escaped dot, a
+    /// capitalised domain) is still found, and only its group is named: ads and trackers stay on.
+    @Test func filtersNotSpellingTheSiteAreFound() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let escaped = try Self.filters(["ubo-badware": #"/^https:\/\/tlauncher\.org\//$doc"#, "easylist": "||ads.example^"],
+                                       groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        let capitalised = try Self.filters(["urlhaus": "||TLauncher.org^", "easylist": "||ads.example^"],
+                                           groups: ["security": ["urlhaus"], "ads": ["easylist"]])
+        let broader = try Self.filters(["ubo-badware": #"/^https:\/\/[a-z]+\.org\/en\//$doc"#, "easylist": "||ads.example^"],
+                                       groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { [escaped, capitalised, broader].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let byRegex = BlockedPage.reason(for: url, in: escaped)
+        #expect(byRegex.list == "ubo-badware" && byRegex.filter == #"/^https:\/\/tlauncher\.org\//$doc"#)
+        #expect(byRegex.groups == ["security"])
+        let byCapitals = BlockedPage.reason(for: url, in: capitalised)
+        #expect(byCapitals.list == "urlhaus" && byCapitals.groups == ["security"])
+        let byBroader = BlockedPage.reason(for: url, in: broader)
+        #expect(byBroader.list == "ubo-badware" && byBroader.groups == ["security"])
+    }
+
+    /// No filter in the lists' text blocks the address (a list changed since it was compiled, say):
+    /// letting the page through leaves every group off it.
     @Test func withNoFilterFoundEveryGroupIsNamed() throws {
         let folder = try Self.filters(["ubo-badware": "||other.example^$doc"], groups: ["security": ["ubo-badware"], "ads": []])
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -91,12 +123,12 @@ struct BlockedPageTests {
         let folder: URL
     }
 
-    private func setUp() async throws -> Setup {
+    private func setUp(delay: TimeInterval = 0) async throws -> Setup {
         let requests = Requests()
         let (listener, base) = try await LocalHTTP.serve([
             "/blocked": ("Content-Type: text/html", Data(#"<title>Blocked</title><script src="/ad.js"></script>"#.utf8)),
             "/ad.js": ("Content-Type: text/javascript", Data("document.title = 'Ad'".utf8)),
-        ], requested: { requests.record($0) })
+        ], delay: delay, requested: { requests.record($0) })
         let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "blocked-rules-\(UUID().uuidString)")))
         let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList:
             #"[{"trigger": {"url-filter": "/blocked", "resource-type": ["document"]}, "action": {"type": "block"}}]"#))
@@ -152,6 +184,25 @@ struct BlockedPageTests {
         #expect(setup.browser.privacy.allowedPages.isEmpty)
     }
 
+    /// Open anyway stopped before the page shows lets nothing through later: going to it again
+    /// blocks it again.
+    @Test func openAnywayStoppedLetsNothingThrough() async throws {
+        let setup = try await setUp(delay: 3)
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page)
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { setup.requests["/blocked"] == 1 })
+        let unshown = tab.unshownLoads
+        setup.browser.navigate(tab, .stop)
+        #expect(await waitUntil(15) { tab.unshownLoads > unshown && !tab.isLoading })
+
+        setup.browser.navigate(tab, .open(setup.page))
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+        #expect(setup.requests["/blocked"] == 1)
+    }
+
     /// Always allow lets the site's pages through from then on, saved and listed in Settings, its
     /// ads still blocked; removed there, the page is blocked again.
     @Test func alwaysAllowIsSaved() async throws {
@@ -172,7 +223,18 @@ struct BlockedPageTests {
         #expect(tab.blockedPage == nil)
         #expect(setup.requests["/ad.js"] == 0, "the ads group stays on")
 
-        privacy.removeAllowedPages(host: "127.0.0.1")
+        // Removed with its button in Settings, the way the user does.
+        let settings = setup.browser.newTab(url: Internal.settingsURL)
+        var listed: [String]?
+        for _ in 0..<300 where listed == nil {
+            listed = try? await settings.webView.callAsyncJavaScript(
+                "return document.querySelector('#allowed-pages button') ? (await call('state')).protections.allowedPages : null",
+                contentWorld: .page) as? [String]
+            if listed == nil { try await Task.sleep(for: .milliseconds(50)) }
+        }
+        #expect(listed == ["127.0.0.1"])
+        _ = try await settings.webView.callAsyncJavaScript("document.querySelector('#allowed-pages button').click()", contentWorld: .page)
+        #expect(await waitUntil(15) { privacy.allowedPages.isEmpty })
         #expect(Privacy().allowedPages.isEmpty)
         setup.browser.navigate(tab, .reload)
         #expect(await waitUntil(15) { tab.blockedPage != nil })

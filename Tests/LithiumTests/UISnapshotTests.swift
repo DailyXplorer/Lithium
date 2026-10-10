@@ -513,6 +513,9 @@ struct UISnapshotTests {
             ("badware", BlockedPage.Reason(list: "ubo-badware", filter: "||tlauncher.org^$doc", groups: ["security"]), false),
             ("unknown", BlockedPage.Reason(groups: ["ads", "security"]), false),
             ("private", BlockedPage.Reason(list: "urlhaus", filter: "||tlauncher.org^", groups: ["security"]), true),
+            // A filter naming hundreds of sites is cut short, the buttons still in view.
+            ("long-filter", BlockedPage.Reason(list: "ubo-badware", filter: "*$doc,domain=" + (1...400).map { "site\($0).example" }.joined(separator: "|") + "|tlauncher.org",
+                                               groups: ["security"]), false),
         ]
         for state in states {
             for isDark in [false, true] {

@@ -8,8 +8,8 @@ struct BlockedPage: Equatable {
     var reason: Reason?
 
     struct Reason: Equatable, Sendable {
-        /// The list's id in FilterSources.json, and the filter as written there; nil when no list
-        /// spells the address out (a regular expression, say).
+        /// The list's id in FilterSources.json, and the filter as written there; nil when no filter
+        /// found in the lists' text blocks the address.
         var list: String?
         var filter: String?
         /// The groups whose rule lists hold it: left off the page's blockers when it is let through.
@@ -67,9 +67,10 @@ struct BlockedPage: Equatable {
         }
     }
 
-    /// Searches the lists of a filters folder for what blocks `url` as a page. Only lines naming
-    /// the site are parsed, so it reads the files once and matches a handful of filters. Lists
-    /// that flag danger come first; nothing found leaves every group to let the page through.
+    /// Searches the lists of a filters folder for what blocks `url` as a page. Lines naming the
+    /// site, as written or escaped in a regular expression, are tried first; only if none blocks it
+    /// is every line tried (a capitalised domain, a broader expression). Lists that flag danger
+    /// come first; nothing found at all leaves every group to let the page through.
     static func reason(for url: URL, in folder: URL) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
         var groupsOfList: [String: Set<String>] = [:]
@@ -80,10 +81,22 @@ struct BlockedPage: Equatable {
         let site = SiteInfo.registrable(host)
         var matches: [(list: String, filter: String)] = []
         if !site.isEmpty {
-            for list in groupsOfList.keys.sorted() {
-                guard let data = try? Data(contentsOf: folder.appending(path: "lists/\(list).txt")) else { continue }
-                for line in lines(in: data, containing: Data(site.utf8)) where blocksPage(line, url: url) {
+            let lists = groupsOfList.keys.sorted().compactMap { list in
+                (try? Data(contentsOf: folder.appending(path: "lists/\(list).txt"), options: .alwaysMapped)).map { (list, $0) }
+            }
+            let needles = [site, site.replacingOccurrences(of: ".", with: #"\."#)].map { Data($0.utf8) }
+            for (list, data) in lists {
+                var seen: Set<String> = []
+                for line in needles.flatMap({ lines(in: data, containing: $0) }) where seen.insert(line).inserted && blocksPage(line, url: url) {
                     matches.append((list, line))
+                }
+            }
+            if matches.isEmpty {
+                for (list, data) in lists {
+                    for line in data.split(separator: 0x0A) {
+                        let line = String(decoding: line, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if blocksPage(line, url: url) { matches.append((list, line)) }
+                    }
                 }
             }
         }
@@ -154,8 +167,14 @@ struct BlockedPage: Equatable {
                 return false
             }
         }
-        guard let regex = regex(for: pattern, matchCase: matchCase) else { return false }
         let address = url.absoluteString
+        // Each plain run of the pattern must be in the address: most filters stop here, before a
+        // regular expression is built, which keeps trying every line of every list short.
+        if !(pattern.count > 2 && pattern.hasPrefix("/") && pattern.hasSuffix("/")) {
+            let lowered = address.lowercased()
+            guard pattern.lowercased().split(whereSeparator: { "*^|".contains($0) }).allSatisfy({ lowered.contains($0) }) else { return false }
+        }
+        guard let regex = regex(for: pattern, matchCase: matchCase) else { return false }
         return regex.firstMatch(in: address, range: NSRange(address.startIndex..., in: address)) != nil
     }
 

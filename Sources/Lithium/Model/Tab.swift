@@ -895,6 +895,8 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func endedUnshown(_ load: UnshownLoad) {
+        // Open anyway was for a page that now never shows (Stop, a download): the next load is blocked again.
+        letThrough = nil
         restoreProtections()
         lastUnshownLoad = load
         unshownLoads += 1

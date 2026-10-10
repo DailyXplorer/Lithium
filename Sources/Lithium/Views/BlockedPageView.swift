@@ -45,8 +45,11 @@ struct BlockedPageView: View {
                             .foregroundStyle(.secondary)
                     }
                     if let filter = reason.filter {
+                        // Some filters name hundreds of sites: the buttons stay in view.
                         Text(filter)
                             .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(4)
+                            .truncationMode(.middle)
                             .textSelection(.enabled)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 5)

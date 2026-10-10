@@ -277,6 +277,27 @@ struct PinnedIcons {
         #expect(favicons.iconless.contains(try #require(base.host())))
     }
 
+    /// A `/favicon.ico` that answers with no icon ranks ahead of a 192 px one the page names, but
+    /// is not fetched again at the page's next load.
+    @Test func aFallbackWithNoIconIsNotFetchedAtEachLoad() async throws {
+        let requests = Requests()
+        let (server, base) = try await Self.serveIcons(
+            page: #"<!doctype html><title>Large icon</title><link rel="icon" sizes="192x192" href="/red.png">"#, requests: requests
+        )
+        defer { server.cancel() }
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let favicons = Self.favicons()
+        let red = try #require(Favicons.normalized(Self.red))
+
+        for _ in 0..<2 {
+            webView.load(URLRequest(url: base))
+            #expect(await waitUntil(30) { !webView.isLoading && webView.url == base })
+            #expect(await favicons.favicon(for: webView) == red)
+        }
+        #expect(requests["/favicon.ico"] == 1)
+        #expect(requests["/red.png"] == 1)
+    }
+
     /// History's lookup (no cookies, `https` only) failing doesn't stop the open page's own search.
     @Test func historyFindingNoIconDoesntStopTheTabsSearch() async throws {
         let (server, base) = try await Self.serveIcons(page: #"<!doctype html><title>Local</title><link rel="icon" href="/red.png">"#)

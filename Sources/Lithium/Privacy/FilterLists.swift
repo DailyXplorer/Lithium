@@ -318,10 +318,11 @@ struct ChosenFilters: Sendable {
 
     /// The group as converted before when its files, or else its rules, are the same; otherwise
     /// converted now. `index` maps the files' sizes and dates to the hash of the rules they held,
-    /// so an unchanged group is found without reading its lists.
+    /// so an unchanged group is found without reading its lists. With `conversion` in the key, a
+    /// new conversion misses the index, as it does the hash.
     private static func convert(_ group: String, _ lists: [(String, URL)], into built: URL,
                                 index: inout [String: String], used: inout [String: String]) -> Converted? {
-        let key = digest("\(group)\n" + lists.map { name, file in
+        let key = digest("c\(conversion)\n\(group)\n" + lists.map { name, file in
             let attributes = try? FileManager.default.attributesOfItem(atPath: file.path)
             let date = (attributes?[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? 0
             return "\(name) \(file.path) \((attributes?[.size] as? NSNumber)?.intValue ?? -1) \(date)"

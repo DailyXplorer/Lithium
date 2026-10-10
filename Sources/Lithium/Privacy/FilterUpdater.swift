@@ -185,7 +185,9 @@ struct FilterUpdater: Sendable {
         // The biggest real list is a few megabytes. Counted as it arrives: a server sending
         // gigabytes would otherwise fill memory before any check.
         guard response.expectedContentLength <= Int64(Self.maximumListBytes - bytes) else { throw URLError(.dataLengthExceedsMaximum) }
-        var data = Data()
+        // An array sized up front: every byte of the daily update is appended here one at a time.
+        var data: [UInt8] = []
+        data.reserveCapacity(Int(max(0, response.expectedContentLength)))
         for try await byte in stream {
             // A NUL byte means a binary file, not text.
             guard byte != 0 else { throw URLError(.cannotParseResponse) }

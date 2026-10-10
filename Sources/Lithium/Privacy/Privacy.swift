@@ -27,7 +27,7 @@ final class Privacy {
     @ObservationIgnored private var updateLoop: Task<Void, Never>?
     /// False when the loaded filters predate a change to FilterSources.json: refreshed at once.
     @ObservationIgnored private var filtersMatchSources = true
-    @ObservationIgnored private var filtersComplete = true
+    @ObservationIgnored private(set) var filtersComplete = true
     /// Backoff for failed automatic updates (1, 2, 4… hours, up to a day). Kept across launches,
     /// or a list that stays down would bring a full download and rebuild at every launch.
     @ObservationIgnored private var failedUpdates: Int
@@ -48,10 +48,11 @@ final class Privacy {
     @ObservationIgnored private let advanced = AdvancedBlocking()
     @ObservationIgnored private let userAgentSuffix: String
     private(set) var filterChoices: FilterChoices
-    /// Set by tests, for a folder, a filter set and a rule list store of their own.
+    /// Set by tests, for a folder, a filter set, a rule list store and downloads of their own.
     @ObservationIgnored var filterStorage = FilterLists.Storage.standard
     @ObservationIgnored var filterSet: (folder: URL, manifest: Manifest)?
     @ObservationIgnored var ruleListStore: WKContentRuleListStore?
+    @ObservationIgnored var filterSession = URLSession.shared
     /// Why the user's choice of lists or filters isn't fully applied, for the Filter lists page.
     @ObservationIgnored private(set) var filterError: String?
     /// The loaded set's folder and its lists' rule counts, counted when Settings first shows them.
@@ -470,9 +471,10 @@ final class Privacy {
         }.value
         if customized, chosen == nil {
             filterError = "Lithium couldn’t apply your filter lists. It will try again with the next change or update."
-            // The lists loaded stay: the whole shipped set would block what the user turned off.
-            // Only at launch, with nothing loaded yet, is it better than no blocking at all.
-            guard ruleLists.isEmpty else { return }
+            // The lists loaded stay, or none at launch: the shipped set would block what the user
+            // turned off. Incomplete, so the update backs off instead of downloading every hour.
+            filtersComplete = false
+            return
         }
         let groups = await Self.loadGroups(chosen?.groups ?? FilterGroup.shipped(in: folder, manifest: manifest), into: store)
         if let chosen {
@@ -526,12 +528,18 @@ final class Privacy {
                 continue
             }
             complete = false
-            // Only a shipped group falls back: an earlier set's group of the same name may hold
-            // a list the user has since turned off.
-            guard identifier.wholeMatch(of: /lithium-(.+)-\d+-p\d+/) != nil else { continue }
-            let previous = available
-                .filter { $0.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) } == group }
-                .max { $0.filter(\.isNumber) < $1.filter(\.isNumber) }
+            // Only a shipped group falls back, and the user's filters to their last version: an
+            // earlier set's other groups may hold a list the user has since turned off.
+            let previous: String?
+            if identifier.wholeMatch(of: /lithium-(.+)-\d+-p\d+/) != nil {
+                previous = available
+                    .filter { $0.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) } == group }
+                    .max { $0.filter(\.isNumber) < $1.filter(\.isNumber) }
+            } else if group == FilterLists.myFiltersID {
+                previous = available.first { $0.wholeMatch(of: /lithium-my-filters-h[0-9a-f]+-p\d+/) != nil }
+            } else {
+                previous = nil
+            }
             if let previous, let list = try? await store.contentRuleList(forIdentifier: previous) {
                 lists.append(list)
                 kept.insert(previous)
@@ -562,7 +570,7 @@ final class Privacy {
     // MARK: Choosing filter lists
 
     /// Turns a shipped or catalog list on or off. A catalog list is downloaded when first turned on;
-    /// returns a message for the user when it can't be.
+    /// returns a message for the user when it can't be. Whether the set applies is `filterError`.
     func setFilterList(_ id: String, enabled: Bool) async -> String? {
         var choices = filterChoices
         if FilterLists.shipped.contains(where: { $0.id == id }) {
@@ -584,7 +592,8 @@ final class Privacy {
         } else {
             return nil
         }
-        return await apply(choices)
+        await apply(choices)
+        return nil
     }
 
     /// Adds a list by its address once it downloads as a filter list; returns why it wasn't added.
@@ -597,12 +606,14 @@ final class Privacy {
         var choices = filterChoices
         choices.added.append(url)
         choices.copies[id] = copy
-        return await apply(choices)
+        await apply(choices)
+        return nil
     }
 
     var myFilters: String { filterStorage.readMyFilters() }
 
-    /// Saved and compiled at once: pages get them from their next load. Returns why they weren't.
+    /// Saved and compiled at once: pages get them from their next load. Returns why they weren't
+    /// saved; why they aren't applied is `filterError`, which may be about another list.
     func setMyFilters(_ text: String) async -> String? {
         do {
             try filterStorage.writeMyFilters(text)
@@ -611,7 +622,7 @@ final class Privacy {
             return "Couldn’t save your filters: \(error.localizedDescription)"
         }
         await reloadRuleLists()
-        return filterError
+        return nil
     }
 
     /// Each list's rule count, as Settings shows it. Counted once per filter set, off the main thread.
@@ -631,17 +642,16 @@ final class Privacy {
 
     var failedFilterLists: [String] { loadedFilters?.manifest.failedLists ?? [] }
 
-    /// Saved even when it can't be applied, so it is tried again; returns why it wasn't.
-    private func apply(_ choices: FilterChoices) async -> String? {
+    /// Saved even when it can't be applied, so it is tried again.
+    private func apply(_ choices: FilterChoices) async {
         filterChoices = choices
         UserDefaults.standard.set(try? JSONEncoder().encode(choices), forKey: Self.filterChoicesKey)
         await reloadRuleLists()
-        return filterError
     }
 
     private func download(id: String, url: URL) async -> FilterChoices.Copy? {
         do {
-            let lines = try await FilterLists.download(url)
+            let lines = try await FilterLists.download(url, session: filterSession)
             try filterStorage.save(lines, for: id)
             return FilterChoices.Copy(rules: lines.count, updated: Date())
         } catch {
@@ -656,7 +666,7 @@ final class Privacy {
     }
 
     /// With the shipped lists' daily update: a list that fails keeps its last copy.
-    private func updateChosenLists() async {
+    func updateChosenLists() async {
         let lists = filterChoices.extraLists
         guard !lists.isEmpty else { return }
         var copies: [String: FilterChoices.Copy] = [:]
@@ -666,6 +676,10 @@ final class Privacy {
         var choices = filterChoices
         for list in lists where choices.extraLists.contains(where: { $0.id == list.id }) {
             if let copy = copies[list.id] { choices.copies[list.id] = copy } else { choices.copies[list.id]?.failed = true }
+        }
+        // Removed while it downloaded: its copy was saved after `forgetCopy` deleted it.
+        for list in lists where !choices.extraLists.contains(where: { $0.id == list.id }) {
+            try? FileManager.default.removeItem(at: filterStorage.copy(of: list.id))
         }
         filterChoices = choices
         UserDefaults.standard.set(try? JSONEncoder().encode(choices), forKey: Self.filterChoicesKey)

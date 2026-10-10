@@ -706,7 +706,7 @@
     $('#filter-add').disabled = true;
     $('#filter-add').innerHTML = '<span class="spin"></span>Adding';
     call('addFilterList', address).then((filters) => {
-      if (!filters.error) $('#filter-url').value = '';
+      if (!filters.failed) $('#filter-url').value = '';
       renderFilters(filters);
     }).finally(() => {
       $('#filter-add').disabled = false;
@@ -723,9 +723,9 @@
     const text = $('#my-filters').value;
     call('setMyFilters', text).then((filters) => {
       // Edits made while saving stay unsaved.
-      if (!filters.error && $('#my-filters').value === text) myFiltersEdited = false;
+      if (!filters.failed && $('#my-filters').value === text) myFiltersEdited = false;
       renderFilters(filters);
-      if (!filters.error) $('#my-filters-status').textContent = 'Saved';
+      if (!filters.failed) $('#my-filters-status').textContent = 'Saved';
     }).finally(() => { $('#my-filters-save').disabled = false; });
   };
   $('#web-store').onclick = () => call('openWebStore');

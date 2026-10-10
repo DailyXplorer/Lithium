@@ -388,6 +388,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             "myFilters": text,
             "problems": problems.map { ["line": $0.line, "text": $0.text, "message": $0.message] as [String: Any] },
             "error": error ?? privacy.filterError ?? "",
+            // The action's own failure: `filterError` may be about another list.
+            "failed": error ?? "",
         ]
     }
 

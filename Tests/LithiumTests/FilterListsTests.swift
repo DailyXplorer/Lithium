@@ -147,6 +147,15 @@ struct FilterListsTests {
         #expect(again.engineStamp == first.engineStamp)
         #expect(try FileManager.default.attributesOfItem(atPath: ads.file.path)[.modificationDate] as? Date == converted)
         #expect(again.discarded == [FilterLists.extraGroup: 7])
+
+        // An edit that keeps the list's size is found by its date.
+        let one = set.folder.appending(path: "lists/one.txt")
+        let date = try #require(try FileManager.default.attributesOfItem(atPath: one.path)[.modificationDate] as? Date)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: one.path)
+        try "||adz.lithium.test^".write(to: one, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: date.addingTimeInterval(60)], ofItemAtPath: one.path)
+        let edited = try await build(set, choices)
+        #expect(edited.groups.first { $0.name == "ads" }?.identifier != ads.identifier)
     }
 
     /// A chosen group that fails to compile is left out, not replaced by the shipped group of the
@@ -162,11 +171,21 @@ struct FilterListsTests {
         let loaded = await Privacy.loadGroups([broken], into: store)
         #expect(loaded.lists.isEmpty)
         #expect(!loaded.complete)
+
+        // The user's filters keep their last version: it never holds a list turned off.
+        try storage.writeMyFilters("example.com##.ad")
+        let mine = try #require(try await build(set).groups.last)
+        #expect(await Privacy.loadGroups([mine], into: store).complete)
+        let edited = FilterGroup(name: mine.name, identifier: "lithium-my-filters-h0123abcd-p\(FilterGroup.preparation)",
+                                 file: root.appending(path: "missing.json"), webkitRules: 1)
+        let kept = await Privacy.loadGroups([edited], into: store)
+        #expect(kept.lists.map(\.identifier) == [mine.identifier])
+        #expect(!kept.complete)
     }
 
     /// Settings' switches and My filters go through `Privacy`: the choice is saved for the next
     /// launch and applied at once. When it can't be built, what was loaded stays, with a message,
-    /// instead of the whole shipped set; a save that fails says so.
+    /// instead of the whole shipped set, and at launch nothing loads; a save that fails says so.
     @Test func choicesAreSavedAndAFailureKeepsWhatWasLoaded() async throws {
         let key = "filterChoices"
         UserDefaults.standard.removeObject(forKey: key)
@@ -188,18 +207,91 @@ struct FilterListsTests {
         #expect(await privacy.setMyFilters("example.com##.ad") == nil)
         #expect(storage.readMyFilters() == "example.com##.ad")
         #expect(privacy.ruleLists.last?.identifier.hasPrefix("lithium-my-filters-h") == true)
+        #expect(privacy.filterError == nil)
+
+        // A group WebKit won't compile is reported, and the save itself still succeeded.
+        let mine = try #require(try FileManager.default.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix(FilterLists.myFiltersID + "-") })
+        try "not rules".write(to: mine.appending(path: "rules.json"), atomically: true, encoding: .utf8)
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "other-store")))
+        #expect(await privacy.setMyFilters("example.com##.ad") == nil)
+        #expect(privacy.filterError == "Some of your filter lists or filters couldn’t be applied.")
 
         // Nowhere to convert to.
         let loaded = privacy.ruleLists.map(\.identifier)
         try FileManager.default.removeItem(at: storage.built)
         try Data().write(to: storage.built)
-        #expect(await privacy.setFilterList("easyprivacy", enabled: false) != nil)
+        #expect(await privacy.setFilterList("easyprivacy", enabled: false) == nil)
+        #expect(privacy.filterError?.hasPrefix("Lithium couldn’t apply your filter lists") == true)
+        #expect(!privacy.filtersComplete, "so the update backs off")
         #expect(privacy.filterChoices.off == ["easylist", "easyprivacy"], "kept, to be tried again")
         #expect(privacy.ruleLists.map(\.identifier) == loaded)
+
+        // At launch, with nothing loaded: nothing, rather than the shipped set with the lists turned off.
+        let launched = Privacy()
+        launched.filterStorage = storage
+        launched.filterSet = set
+        launched.ruleListStore = privacy.ruleListStore
+        #expect(await launched.setMyFilters("example.com##.ad") == nil)
+        #expect(launched.ruleLists.isEmpty)
+        #expect(launched.filterError?.hasPrefix("Lithium couldn’t apply your filter lists") == true)
 
         try FileManager.default.removeItem(at: storage.myFilters)
         try FileManager.default.createDirectory(at: storage.myFilters, withIntermediateDirectories: true)
         #expect(await privacy.setMyFilters("example.org##.ad")?.hasPrefix("Couldn’t save your filters") == true)
+    }
+
+    /// An added list is refreshed with the daily update and keeps its copy when that fails; one
+    /// removed while it downloads leaves no copy behind. Rules over WebKit's limit are the set's
+    /// notice, not a failure of the save that reloaded them, and go with the list.
+    @Test func addedListsUpdateAndReportWhatIsLeftOut() async throws {
+        let key = "filterChoices"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let set = try shippedSet(["ads": ["easylist": "||ads.lithium.test^"]])
+        let privacy = Privacy()
+        privacy.filterStorage = storage
+        privacy.filterSet = set
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubFilterList.self]
+        privacy.filterSession = URLSession(configuration: configuration)
+        let url = URL(string: "https://\(UUID().uuidString.lowercased()).lists.test/list.txt")!
+        let id = FilterLists.id(of: url)
+
+        StubFilterList.serve(Data("||one.lithium.test^\n".utf8), at: url)
+        #expect(await privacy.addFilterList(url.absoluteString) == nil)
+        #expect(privacy.filterChoices.copies[id]?.rules == 1)
+        #expect(privacy.filterError == nil)
+
+        // As if conversion had left rules out.
+        let extra = try #require(try FileManager.default.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix(FilterLists.extraGroup + "-") })
+        try #"{"webkitRules":1,"discarded":7}"#.write(to: extra.appending(path: "info.json"), atomically: true, encoding: .utf8)
+        #expect(await privacy.setMyFilters("example.com##.ad") == nil)
+        #expect(privacy.filterError == "Over WebKit’s limit: 7 rules of the lists you chose or your filters are left out.")
+
+        StubFilterList.serve(Data("||one.lithium.test^\n||two.lithium.test^\n".utf8), at: url)
+        await privacy.updateChosenLists()
+        #expect(privacy.filterChoices.copies[id]?.rules == 2)
+        StubFilterList.serve(nil, at: url)
+        await privacy.updateChosenLists()
+        #expect(privacy.filterChoices.copies[id]?.failed == true)
+        #expect(privacy.filterChoices.copies[id]?.rules == 2)
+        #expect(FileManager.default.fileExists(atPath: storage.copy(of: id).path))
+
+        // Removed while the update downloads it.
+        StubFilterList.serve(Data("||three.lithium.test^\n".utf8), at: url, after: 1)
+        let update = Task { await privacy.updateChosenLists() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await privacy.setFilterList(id, enabled: false) == nil)
+        await update.value
+        #expect(privacy.filterChoices.copies[id] == nil)
+        #expect(!FileManager.default.fileExists(atPath: storage.copy(of: id).path))
+        #expect(privacy.filterError == nil)
     }
 
     /// What the user types in My filters stays when a reply re-renders the page before they save,
@@ -242,6 +334,23 @@ struct FilterListsTests {
         #expect(try await run("return document.getElementById('my-filters-status').textContent") as? String == "")
         #expect(try await run("return document.getElementById('filter-error').textContent") as? String == bridge.error)
         #expect(try await run("return document.getElementById('my-filters').value") as? String == "typed##.y")
+
+        // Another list's problem shows, but this save and this address went through.
+        bridge.error = nil
+        bridge.notice = "Over WebKit’s limit: 7 rules of the lists you chose or your filters are left out."
+        _ = try await run("document.getElementById('my-filters-save').click()")
+        try await Task.sleep(for: .milliseconds(200))
+        try await settled()
+        #expect(try await run("return document.getElementById('my-filters-status').textContent") as? String == "Saved")
+        #expect(try await run("return document.getElementById('filter-error').textContent") as? String == bridge.notice)
+        _ = try await run("""
+            document.getElementById('filter-url').value = 'https://example.com/list.txt';
+            document.getElementById('filter-add-form').requestSubmit();
+            """)
+        try await Task.sleep(for: .milliseconds(200))
+        try await settled()
+        #expect(bridge.added)
+        #expect(try await run("return document.getElementById('filter-url').value") as? String == "")
     }
 
     /// The Hide YouTube Shorts list, as turned on from the catalog, hides the Shorts shelf and
@@ -333,12 +442,15 @@ struct FilterListsTests {
     }
 }
 
-/// The Filter lists page's calls, answered with one list and the saved filters.
+/// The Filter lists page's calls, answered with one list and the saved filters. `error` fails the
+/// call; `notice` is a problem of the whole set, as `Privacy.filterError`.
 @MainActor
 private final class FakeFilterBridge: NSObject, WKScriptMessageHandlerWithReply {
     var saved = "saved##.x"
     var error: String?
+    var notice: String?
     var toggled = false
+    var added = false
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
         let body = message.body as? [String: Any]
@@ -346,21 +458,27 @@ private final class FakeFilterBridge: NSObject, WKScriptMessageHandlerWithReply 
         case "filterLists": break
         case "setFilterList": toggled = true
         case "setMyFilters": if error == nil { saved = body?["value"] as? String ?? "" }
+        case "addFilterList": added = true
         default: return (nil, nil)
         }
         let list: [String: Any] = ["id": "easylist", "name": "EasyList", "summary": "Ads.", "homepage": "", "enabled": !toggled,
                                    "rules": 1, "updated": 0, "failed": false, "removable": false]
-        return (["sections": [["title": "Ads", "lists": [list]]], "myFilters": saved, "problems": [], "error": error ?? ""], nil)
+        return (["sections": [["title": "Ads", "lists": [list]]], "myFilters": saved, "problems": [],
+                 "error": error ?? notice ?? "", "failed": error ?? ""], nil)
     }
 }
 
-/// Answers with the body served at a URL, or a 404 when there is none.
+/// Answers with the body served at a URL, or a 404 when there is none, after the delay given.
 private final class StubFilterList: URLProtocol {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var bodies: [URL: Data] = [:]
+    nonisolated(unsafe) private static var delays: [URL: TimeInterval] = [:]
 
-    static func serve(_ body: Data?, at url: URL) {
-        lock.withLock { bodies[url] = body }
+    static func serve(_ body: Data?, at url: URL, after delay: TimeInterval = 0) {
+        lock.withLock {
+            bodies[url] = body
+            delays[url] = delay
+        }
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -368,7 +486,8 @@ private final class StubFilterList: URLProtocol {
 
     override func startLoading() {
         guard let url = request.url else { return }
-        let body = Self.lock.withLock { Self.bodies[url] }
+        let (body, delay) = Self.lock.withLock { (Self.bodies[url], Self.delays[url] ?? 0) }
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
         let response = HTTPURLResponse(url: url, statusCode: body == nil ? 404 : 200, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body ?? Data("Not found".utf8))

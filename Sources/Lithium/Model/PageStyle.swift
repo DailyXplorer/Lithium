@@ -19,8 +19,8 @@ enum PageStyle {
     /// never stops changing once a second, and only while the window is wide. Turning the clip off
     /// restyles the page, so while it's on that only happens when one of body's children, or what
     /// overflows it, or a node that changed reaches past the right edge (absolutely positioned
-    /// content doesn't widen its parent; text in body and nodes outside it aren't body's children);
-    /// while it's off, the plain measurement is enough.
+    /// content doesn't widen its parent; text in body and nodes outside it aren't body's children),
+    /// unless it's fixed or inside a clipping box; while it's off, the plain measurement is enough.
     /// A layout that narrows again is clipped again, as on resize, and one wider than the view, even
     /// for a moment, scrolls while it is. A change inside a shadow root is only measured with the
     /// next change outside one.
@@ -53,6 +53,14 @@ enum PageStyle {
           const box = node.getBoundingClientRect();
           return Math.max(box.right, box.left + node.scrollWidth);
         };
+        // As in reaches: a carousel's track moving inside its clipping box mustn't restyle the page.
+        const clipped = node => {
+          if (node.nodeType === 1 && getComputedStyle(node).position === 'fixed') return true;
+          for (let el = node.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+            if (getComputedStyle(el).overflowX !== 'visible') return true;
+          }
+          return false;
+        };
         const recheck = () => {
           const root = document.scrollingElement, sheet = style.sheet, body = document.body, nodes = [...changed];
           settle = first = 0;
@@ -60,7 +68,7 @@ enum PageStyle {
           if (!wide.matches || !root || !root.clientWidth || !sheet || !body) return;
           const limit = root.clientWidth + 32;
           if (sheet.disabled) sheet.disabled = root.scrollWidth - root.clientWidth > 32;
-          else if (reaches(body, limit) || nodes.some(node => node.isConnected && right(node) > limit)) check();
+          else if (reaches(body, limit) || nodes.some(node => node.isConnected && right(node) > limit && !clipped(node))) check();
         };
         const schedule = () => {
           const now = performance.now();
@@ -74,7 +82,7 @@ enum PageStyle {
           for (const record of records) {
             if (record.type === 'attributes') changed.add(record.target);
             else for (const node of record.addedNodes) {
-              if (node.nodeType === 1 || record.target === body || record.target === document.documentElement) changed.add(node);
+              changed.add(node.nodeType === 1 || record.target === body || record.target === document.documentElement ? node : record.target);
             }
           }
           schedule();

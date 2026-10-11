@@ -206,12 +206,15 @@ struct BrowserTests {
     }
 
     /// An image that gets its width when it loads, after it was added, keeps its sideways scrolling,
-    /// as does a canvas made wider through its `width`.
+    /// even absolutely positioned in a static wrapper, as does a canvas made wider through its `width`.
     @Test func imageLoadedAfterItsAddedStaysScrollable() async throws {
         let (listener, browser, tab) = try await narrowPage("<p>narrow</p><canvas id='canvas'></canvas>")
         defer { listener.cancel(); browser.close(tab) }
         #expect(await sidewaysOverflow(tab, "clip"))
-        _ = try? await tab.webView.evaluateJavaScript("document.body.append(Object.assign(document.createElement('img'), { id: 'image' }))")
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.body.append(Object.assign(document.createElement('img'), { id: 'image' }));
+            document.body.insertAdjacentHTML('beforeend', `<div id='holder'><img id='pinned' style='position: absolute; left: 0; top: 0'></div>`)
+            """)
         // Measured empty first: only its load can bring the sideways scrolling back.
         try await Task.sleep(for: .milliseconds(600))
         _ = try? await tab.webView.evaluateJavaScript("""
@@ -220,6 +223,12 @@ struct BrowserTests {
         #expect(await sidewaysOverflow(tab, "visible"))
         _ = try? await tab.webView.evaluateJavaScript("document.getElementById('image').remove()")
         #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.getElementById('pinned').src = 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='1500' height='20'/>")
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('holder').remove()")
+        #expect(await sidewaysOverflow(tab, "clip"))
         _ = try? await tab.webView.evaluateJavaScript("document.getElementById('canvas').width = 1500")
         #expect(await sidewaysOverflow(tab, "visible"))
     }
@@ -227,14 +236,14 @@ struct BrowserTests {
     /// A change that makes other content wide keeps its sideways scrolling: a class that shows a
     /// sibling, a narrow element added before a row it pushes past the edge, a style sheet in body.
     /// So does content that widens none of body's children: an absolutely positioned box in a static
-    /// one, added or shown, a block added to html after body, a `display: contents` wrapper's child
-    /// and a long word put straight into body.
+    /// one, added, shown or given a long word, a block added to html after body, a `display: contents`
+    /// wrapper's child and a long word put straight into body.
     @Test func contentWidenedByAnotherChangeStaysScrollable() async throws {
         let (listener, browser, tab) = try await narrowPage("""
             <style>.wide { display: none; width: 1500px; height: 20px } .toggle.on ~ .wide { display: block }</style>
             <p class='toggle'>toggle</p><div class='wide'></div>
             <div id='line' style='white-space: nowrap'><span style='display: inline-block; width: 1180px'></span></div>
-            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div></div>
+            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div><span id='tip' style='position: absolute; left: 0; top: 0'>x</span></div>
             """)
         defer { listener.cancel(); browser.close(tab) }
         #expect(await sidewaysOverflow(tab, "clip"))
@@ -251,6 +260,7 @@ struct BrowserTests {
         for (show, hide) in [
             ("wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
             ("menu.style.display = 'block'", "menu.style.display = 'none'"),
+            ("tip.textContent = 'W'.repeat(300)", "tip.textContent = 'x'"),
             ("document.documentElement.append(Object.assign(document.createElement('div'), { id: 'after', style: 'width: 1500px; height: 20px' }))", "after.remove()"),
             ("document.body.append(Object.assign(document.createElement('style'), { id: 'sheet', textContent: '.wide { display: block }' }))", "sheet.remove()"),
             ("document.body.insertAdjacentHTML('beforeend', `<div id='contents' style='display: contents'><div style='width: 1500px; height: 20px'></div></div>`)", "contents.remove()"),

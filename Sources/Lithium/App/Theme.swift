@@ -48,17 +48,33 @@ enum Theme {
     @MainActor private static var dmSansFonts: [String: NSFont] = [:]
 
     /// Every view asks on each redraw, so each size and weight is matched once per family.
-    @MainActor private static var pickedFonts: (family: String, fonts: [String: NSFont]) = ("", [:])
+    /// A miss is kept as nil too, or a picked font later removed from the Mac is looked up again on every redraw.
+    @MainActor private(set) static var pickedFonts: (family: String, fonts: [String: NSFont?]) = ("", [:])
+    /// Fonts installed or removed while Lithium runs: a font reinstalled since its miss is found at the next redraw.
+    @MainActor private static var fontSetObserver: (any NSObjectProtocol)?
+    /// Lookups that missed the cache, for the tests.
+    @MainActor private(set) static var pickedFontLookups = 0
+    /// Font set changes seen by the observer, for the tests: only it moves this, unlike the family.
+    @MainActor private(set) static var fontSetChanges = 0
 
     /// Nil for a family not on this Mac.
     @MainActor static func pickedFont(_ family: String, _ size: CGFloat, _ weight: Font.Weight) -> NSFont? {
         if pickedFonts.family != family { pickedFonts = (family, [:]) }
         let key = "\(size) \(weightValue(weight))"
-        if let font = pickedFonts.fonts[key] { return font }
+        if let cached = pickedFonts.fonts[key] { return cached }
         // NSFontManager's weights run 0 to 15: 5 regular, 6 medium, 8 semibold, 9 bold.
+        pickedFontLookups += 1
         let scale = switch weightValue(weight) { case 500: 6; case 600: 8; case 700: 9; default: 5 }
         let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: scale, size: size)
-        pickedFonts.fonts[key] = font
+        if font == nil, fontSetObserver == nil {
+            fontSetObserver = NotificationCenter.default.addObserver(forName: NSFont.fontSetChangedNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    pickedFonts = ("", [:])
+                    fontSetChanges += 1
+                }
+            }
+        }
+        pickedFonts.fonts.updateValue(font, forKey: key)
         return font
     }
 

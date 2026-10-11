@@ -982,6 +982,26 @@ struct BrowserTests {
         #expect(favorite.unread.shown == nil)
     }
 
+    /// A notification that came while the favorite's popup was in front leaves no dot once the
+    /// popup closes and the favorite is shown again.
+    @Test func aFavoritesDotGoesWhenItsPopupCloses() async {
+        let browser = Browser()
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        #expect(favorite.unread.shown == .dot)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == nil)
+    }
+
     /// A tab zoomed in wakes from sleep at the same zoom.
     @Test func sleepingTabKeepsItsZoom() async throws {
         let browser = Browser()

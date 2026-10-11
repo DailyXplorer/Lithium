@@ -971,8 +971,10 @@ final class Browser {
                 selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
                     : remaining[min(position, remaining.count - 1)].id)
             }
-            // The tab shown next may be asleep.
+            // The tab shown next may be asleep. As `select` does, the user now sees its page: a
+            // favorite's dot left by a notification while its popup was in front goes.
             selectedTab?.markActive()
+            selectedTab?.didOpen()
             if let selectedTab { recentTabs.didShow(selectedTab, after: nil) }
         }
         recentTabs.didClose(tab)

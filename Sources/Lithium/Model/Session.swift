@@ -12,6 +12,9 @@ struct Session: Codable, Equatable {
         /// The tab last shown in a space other than the one shown at quit.
         var lastShown: Bool? = nil
         var folderID: TabFolder.ID? = nil
+        /// Its back and forward pages (`WKWebView.interactionState`), only at quit: WebKit serializes
+        /// a loaded tab's on the main thread, and every save would rewrite a sleeping tab's.
+        var history: Data? = nil
     }
 
     var tabs: [Tab] = []
@@ -22,6 +25,13 @@ struct Session: Codable, Equatable {
     var spaceID: Space.ID? = nil
     /// Nil until the user makes a folder, so files written without folders stay as they were.
     var folders: [TabFolder]? = nil
+
+    /// As saved before quitting.
+    var withoutHistory: Session {
+        var session = self
+        for index in session.tabs.indices { session.tabs[index].history = nil }
+        return session
+    }
 
     /// Same tabs, places and spaces, page titles aside: such a change can wait to be written.
     func differsOnlyInTitles(from other: Session) -> Bool {

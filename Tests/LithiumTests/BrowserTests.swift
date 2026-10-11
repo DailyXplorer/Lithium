@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Network
 import os
+import SQLite3
 import class SwiftUI.NSHostingView
 import Testing
 import WebKit
@@ -1047,6 +1048,43 @@ struct BrowserTests {
         #expect(!tab.canGoBack)
     }
 
+    /// A tab comes back after a relaunch with its back history, saved at quit, and keeps it while
+    /// asleep. Saves before quitting leave it out: WebKit serializes a loaded tab's on the main
+    /// thread, and a sleeping tab's would be rewritten at every save.
+    @Test func aRelaunchKeepsATabsHistory() async throws {
+        let id = UUID().uuidString
+        func isSecond(_ url: URL?) -> Bool { url?.absoluteString.contains("second-\(id)") == true }
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        // Written now, not a moment into the next test, which counts writes.
+        defer { browser.close(tab); browser.saveNow() }
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { isSecond($0.url) } })
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save")
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil)
+
+        let writes = SessionStore.writes
+        let relaunched = Browser()
+        let restored = try #require(relaunched.tabs.first { isSecond($0.url) })
+        #expect(restored.isAsleep)
+        let otherTab = relaunched.newTab(url: URL(string: "data:text/html,other-\(id)")!, selecting: false)
+        defer { relaunched.close(restored); relaunched.close(otherTab); relaunched.saveNow() }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.url.absoluteString.contains("other-\(id)") } })
+        #expect(SessionStore.writes == writes + 1, "not written again at launch")
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save while asleep")
+        relaunched.saveNow()
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil, "kept while asleep")
+
+        relaunched.select(restored)
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "Second" })
+        #expect(await waitUntil(5) { restored.canGoBack })
+        restored.webView.goBack()
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "First" })
+    }
+
     /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
     @Test func memoryPressureSleepsBackgroundTabs() async throws {
         let browser = Browser()
@@ -1146,6 +1184,51 @@ struct BrowserTests {
         #expect(favorite.unread.shown == .dot, "no window is key in tests")
         browser.windowDidBecomeKey()
         #expect(favorite.unread.shown == nil)
+    }
+
+    /// A notification that came while the favorite's popup was in front leaves no dot once the
+    /// popup closes and the favorite is shown again.
+    @Test func aFavoritesDotGoesWhenItsPopupCloses() async {
+        let browser = Browser()
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        #expect(favorite.unread.shown == .dot)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == nil)
+    }
+
+    /// A popup that closes itself while the window isn't key leaves the favorite's dot: the user
+    /// hasn't seen the page yet.
+    @Test func aFavoritesDotStaysWhenItsPopupClosesInTheBackground() async {
+        let browser = Browser()
+        // Never shown, so never key.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        browser.window = window
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == .dot)
+        // `browser.window` is weak: this keeps the window alive until here.
+        #expect(browser.window === window)
     }
 
     /// A tab zoomed in wakes from sleep at the same zoom.
@@ -1416,6 +1499,151 @@ struct BrowserTests {
         #expect(browser.canReopenClosedTab)
         await browser.clearHistory()
         #expect(!browser.canReopenClosedTab)
+    }
+
+    /// Clearing the history leaves the open tabs' back lists out of the quit save, so a relaunch
+    /// doesn't bring the pages back, whether the tab is loaded or asleep.
+    @Test func clearingTheHistoryForgetsOpenTabsBackLists() async throws {
+        let id = UUID().uuidString
+        let browser = Browser()
+        func savesHistory(_ tab: Tab) throws -> Bool {
+            try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+        }
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>First</title>shown-\(id)")!)
+        let sleeping = browser.newTab(url: URL(string: "data:text/html,<title>First</title>sleeping-\(id)")!)
+        defer { browser.close(shown); browser.close(sleeping); browser.saveNow() }
+        for (tab, name) in [(shown, "shown"), (sleeping, "sleeping")] {
+            #expect(await waitUntil(120) { loaded(tab) })
+            tab.load(URL(string: "data:text/html,<title>Second</title>\(name)-second-\(id)")!)
+            #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        }
+        browser.select(shown)
+        sleeping.sleep(configuration: browser.makeConfiguration(for: sleeping.url))
+        browser.saveNow()
+        #expect(try savesHistory(shown))
+        #expect(try savesHistory(sleeping))
+
+        await browser.clearHistory()
+        // Already off the file, should the app crash before quitting.
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
+        // Nor kept when it sleeps.
+        browser.select(sleeping)
+        shown.sleep(configuration: browser.makeConfiguration(for: shown.url))
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
+        // Woken in a new web view, its pages from then on are saved again.
+        browser.select(shown)
+        #expect(await waitUntil(30) { loaded(shown) })
+        browser.saveNow()
+        #expect(try savesHistory(shown))
+    }
+
+    /// A tab whose back list the session file holds, as a quit leaves it.
+    private func tabWithSavedBackList(in browser: Browser) async throws -> Tab {
+        let id = UUID().uuidString
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        browser.saveNow()
+        #expect(try savesBackList(tab))
+        return tab
+    }
+
+    private func savesBackList(_ tab: Tab) throws -> Bool {
+        try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+    }
+
+    /// A routine save that failed leaves the quit's lists on the file: clearing the history still
+    /// takes them off.
+    @Test func clearingTheHistoryAfterAFailedWriteTakesTheListsOffTheFile() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        let quitFile = try Data(contentsOf: SessionStore.fileURL)
+        // A folder where the file goes: the routine save of the next tab fails.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try FileManager.default.createDirectory(at: SessionStore.fileURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: SessionStore.fileURL) }
+        let url = URL(string: "data:text/html,<title>\(UUID().uuidString)</title>")!
+        let reached = OSAllocatedUnfairLock(initialState: false)
+        SessionStore.beforeWrite = { session in
+            if session.tabs.contains(where: { $0.url == url }) { reached.withLock { $0 = true } }
+        }
+        defer { SessionStore.beforeWrite = nil }
+        let other = browser.newTab(url: url)
+        defer { browser.close(other) }
+        #expect(await waitUntil(10) { reached.withLock { $0 } })
+        // Waits for that write, on the same queue, and fails the same way.
+        #expect(!SessionStore.save(Session()))
+        // The failed write left the old file.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try quitFile.write(to: SessionStore.fileURL)
+        #expect(try savesBackList(tab))
+
+        await browser.clearHistory()
+        #expect(try !savesBackList(tab))
+    }
+
+    /// A quit while the visits are still being cleared saves the open tabs without their lists.
+    @Test func quittingWhileTheHistoryClearsLeavesTheListsOut() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        // Another connection holds the history's write lock, so the clear can't finish before the quit.
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(tab))
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+    }
+
+    /// A tab closed while the visits are still being cleared doesn't come back with ⇧⌘T, and a
+    /// tab woken meanwhile keeps no back list for the quit save, even one before the clear ends.
+    @Test func tabsClosedOrWokenWhileTheHistoryClearsAreCleared() async throws {
+        let browser = Browser()
+        let woken = try await tabWithSavedBackList(in: browser)
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>Shown</title>\(UUID().uuidString)")!)
+        let closed = browser.newTab(url: URL(string: "data:text/html,<title>Closed</title>\(UUID().uuidString)")!)
+        defer { browser.close(woken); browser.close(shown); browser.saveNow() }
+        browser.select(shown)
+        woken.sleep(configuration: browser.makeConfiguration(for: woken.url))
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        browser.close(closed)
+        browser.select(woken)
+        #expect(await waitUntil(30) { loaded(woken) })
+        woken.load(URL(string: "data:text/html,<title>Third</title>\(UUID().uuidString)")!)
+        #expect(await waitUntil(10) { loaded(woken) && woken.webView.title == "Third" && woken.canGoBack })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
+        // Otherwise the clear gave up on the lock before the tab woke, and the above proves nothing.
+        #expect(browser.history.isClearing)
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+
+        #expect(!browser.canReopenClosedTab)
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
     }
 
     /// A session write that failed is tried again at the next save, though nothing changed since.

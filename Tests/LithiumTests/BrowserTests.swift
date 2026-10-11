@@ -146,6 +146,33 @@ struct BrowserTests {
         #expect(await overflow(tab, "visible"))
     }
 
+    /// A layout that gets wider than the view after load (an app's table) keeps its sideways
+    /// scrolling, without the window being resized.
+    @Test func layoutWidenedAfterLoadStaysScrollable() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><p>narrow</p>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        #expect(await waitUntil(30) { tab.title == "Narrow" && !tab.isLoading })
+        let overflow = { (expected: String) in
+            await self.pollValue(10) {
+                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+                return value == expected ? value : nil
+            } != nil
+        }
+        #expect(await overflow("clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            const table = document.createElement('div');
+            table.style.cssText = 'width: 1500px; height: 400px';
+            document.body.append(table);
+            """)
+        #expect(await overflow("visible"))
+    }
+
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
     @Test func restoresAnInternalTabAtLaunch() throws {
         SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))

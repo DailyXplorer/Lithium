@@ -51,7 +51,10 @@ struct BlockedPage: Equatable {
         case "easylist-cookies": "EasyList Cookie List"
         case "peter-lowe": "Peter Lowe’s Ad and tracking server list"
         case "urlhaus": "Online Malicious URL Blocklist"
-        default: list
+        case FilterLists.myFiltersID: "your filters"
+        // Added by address, with no name of their own.
+        case _ where list.hasPrefix("url-"): "a list you added"
+        default: FilterLists.catalog.first { $0.id == list }?.name ?? list
         }
     }
 
@@ -71,12 +74,25 @@ struct BlockedPage: Equatable {
     /// naming the site, as written or escaped in a regular expression, are tried first; only if none
     /// blocks it is every line of that list tried (a capitalised domain, a broader expression): any
     /// list may be the one whose group still blocks the page. Lists that flag danger come first;
-    /// nothing found at all leaves every group to let the page through.
-    static func reason(for url: URL, in folder: URL) -> Reason {
+    /// nothing found at all leaves every group still loaded to let the page through. `extra` are the
+    /// lists the user added and their own filters, each with its group; `off` the shipped lists
+    /// turned off: a group none of whose lists is left isn't loaded. `compiled`, when known, the
+    /// groups WebKit has: a failed build leaves out groups still holding lists left on, so their
+    /// lists, blocking nothing, are neither searched nor named.
+    static func reason(for url: URL, in folder: URL, adding extra: [(list: String, group: String, file: URL)] = [],
+                       leavingOut off: Set<String> = [], compiled: Set<String>? = nil) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
         var groupsOfList: [String: Set<String>] = [:]
-        for (group, entry) in manifest.groups {
-            for list in entry.lists ?? [] { groupsOfList[list, default: []].insert(group) }
+        var files: [String: URL] = [:]
+        for (group, entry) in manifest.groups where compiled?.contains(group) ?? true {
+            for list in entry.lists ?? [] where !off.contains(list) {
+                groupsOfList[list, default: []].insert(group)
+                files[list] = folder.appending(path: "lists/\(list).txt")
+            }
+        }
+        for list in extra {
+            groupsOfList[list.list, default: []].insert(list.group)
+            files[list.list] = list.file
         }
         let page = Page(url)
         let site = SiteInfo.registrable(page.host)
@@ -86,7 +102,7 @@ struct BlockedPage: Equatable {
             for list in groupsOfList.keys.sorted() {
                 // The tab went elsewhere: its caller drops the answer.
                 if Task.isCancelled { return Reason(groups: []) }
-                guard let data = try? Data(contentsOf: folder.appending(path: "lists/\(list).txt"), options: .alwaysMapped) else { continue }
+                guard let file = files[list], let data = try? Data(contentsOf: file, options: .alwaysMapped) else { continue }
                 var seen: Set<String> = []
                 var found = needles.flatMap { lines(in: data, containing: $0) }.filter { seen.insert($0).inserted && blocksPage($0, page) }
                 if found.isEmpty {
@@ -105,7 +121,11 @@ struct BlockedPage: Equatable {
             if isForPages(a.filter) != isForPages(b.filter) { return isForPages(a.filter) }
             return a.filter.count > b.filter.count
         }
-        let groups = matches.isEmpty ? Set(manifest.groups.keys) : Set(matches.flatMap { groupsOfList[$0.list] ?? [] })
+        let loaded = manifest.groups.filter { group, entry in
+            (compiled?.contains(group) ?? true) && (entry.lists.map { $0.isEmpty || !off.isSuperset(of: $0) } ?? true)
+        }
+        let groups = matches.isEmpty ? Set(loaded.keys).union(extra.map(\.group))
+            : Set(matches.flatMap { groupsOfList[$0.list] ?? [] })
         return Reason(list: best?.list, filter: best?.filter, groups: groups)
     }
 

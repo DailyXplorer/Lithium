@@ -748,6 +748,52 @@ struct FingerprintingTests {
         }
     }
 
+    /// A tree built out of the document isn't searched as it grows, and its frames are still
+    /// protected by the insertion that puts it in, also one that takes out the node it was called
+    /// on. Fragments too, whether they go in directly or through a container out of the document.
+    /// A guard against losing protection, not a measure of the saving: the hooks call saved
+    /// natives, so a page can't see the searches skipped.
+    @Test func framesInTreesBuiltOutOfTheDocumentAreProtected() async throws {
+        let probe = """
+            (() => {
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const last = () => hash(frames[frames.length - 1]);
+              const frame = () => { const f = document.createElement('iframe'); f.srcdoc = '<p>frame</p>'; return f; };
+              // Bottom-up, as frameworks build: each insertion is into a tree still out of the document.
+              const tree = () => {
+                const inner = document.createElement('div'); inner.appendChild(frame());
+                const outer = document.createElement('section'); outer.append(inner);
+                return outer;
+              };
+              const fragment = () => { const f = document.createDocumentFragment(); f.appendChild(frame()); return f; };
+              const routes = { page: hash(window) };
+              document.body.appendChild(tree()); routes.appendChild = last();
+              document.body.appendChild(document.createElement('p')).replaceWith(tree()); routes.replaceWith = last();
+              // A fragment's frames are listed only when it goes into the document.
+              const box = document.createElement('div'); box.append(fragment());
+              document.body.appendChild(box); routes.fragmentOut = last();
+              document.body.append(fragment()); routes.fragmentIn = last();
+              const range = document.createRange(); range.selectNodeContents(document.body); range.collapse(false);
+              range.insertNode(fragment()); routes.insertNode = last();
+              return JSON.stringify(routes);
+            })()
+            """
+        let bare: [String: AnyHashable] = try await run(probe, farbling: nil)
+        let protected: [String: AnyHashable] = try await run(probe, farbling: Self.farbling())
+
+        #expect(bare.count == 6)
+        #expect(Set(bare.values).count == 1, "\(bare)")
+        #expect(protected["page"] != bare["page"])
+        for (route, value) in protected {
+            #expect(value == protected["page"], "\(route)")
+        }
+    }
+
     /// Any realm's `toString` sees through the replacements of every other: of a frame the hooks
     /// protected, and of one WebKit's injection protected with a copy of the script of its own.
     /// A blank frame that keeps its realm when its page loads gets the noise once, not twice.

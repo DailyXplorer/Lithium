@@ -131,6 +131,65 @@ struct BlockedPageFilterTests {
         #expect(BlockedPage.kind(of: nil) == .unknown)
     }
 
+    /// Groups built from the user's choice are named by their rules' hash, shipped ones by the set's
+    /// date: either way the group is read back, so a page let through goes without it.
+    @Test func groupsAreReadFromEitherIdentifier() {
+        #expect(Privacy.group(ofIdentifier: "lithium-security-20261001000000-p4") == "security")
+        #expect(Privacy.group(ofIdentifier: "lithium-security-h0123456789abcdef01234567-p4") == "security")
+        #expect(Privacy.group(ofIdentifier: "lithium-my-filters-h00ff-p4") == FilterLists.myFiltersID)
+        #expect(Privacy.group(ofIdentifier: "lithium-extra-hbeef-p4") == FilterLists.extraGroup)
+        #expect(Privacy.group(ofIdentifier: "other-list") == nil)
+    }
+
+    /// The lists the user added and their own filters are searched with the shipped ones, and only
+    /// their group is named; a shipped list turned off isn't searched. Nothing found names every
+    /// group still loaded: not one whose lists are all off.
+    @Test func addedListsAndYourFiltersAreSearched() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let folder = try Self.filters(["ubo-badware": "||tlauncher.org^$doc", "easylist": "||ads.example^"],
+                                      groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let mine = folder.appending(path: "my-filters.txt"), added = folder.appending(path: "added.txt")
+        try "||tlauncher.org^".write(to: mine, atomically: true, encoding: .utf8)
+        try "||tlauncher.org^".write(to: added, atomically: true, encoding: .utf8)
+        let extra = [(list: "url-0123", group: FilterLists.extraGroup, file: added),
+                     (list: FilterLists.myFiltersID, group: FilterLists.myFiltersID, file: mine)]
+
+        let reason = BlockedPage.reason(for: url, in: folder, adding: extra, leavingOut: ["ubo-badware"])
+        #expect(reason.list == FilterLists.myFiltersID && reason.filter == "||tlauncher.org^")
+        #expect(reason.groups == [FilterLists.extraGroup, FilterLists.myFiltersID])
+        #expect(BlockedPage.title(of: FilterLists.myFiltersID) == "your filters")
+        #expect(BlockedPage.reason(for: url, in: folder, adding: extra).groups
+                == ["security", FilterLists.extraGroup, FilterLists.myFiltersID])
+
+        let byAdded = BlockedPage.reason(for: url, in: folder, adding: [extra[0]], leavingOut: ["ubo-badware"])
+        #expect(byAdded.list == "url-0123" && byAdded.filter == "||tlauncher.org^")
+        #expect(byAdded.groups == [FilterLists.extraGroup])
+        #expect(BlockedPage.title(of: "url-0123") == "a list you added")
+
+        let elsewhere = try #require(URL(string: "https://nothing.example/"))
+        #expect(BlockedPage.reason(for: elsewhere, in: folder, adding: extra).groups
+                == ["security", "ads", FilterLists.extraGroup, FilterLists.myFiltersID])
+        #expect(BlockedPage.reason(for: elsewhere, in: folder, adding: extra, leavingOut: ["ubo-badware"]).groups
+                == ["ads", FilterLists.extraGroup, FilterLists.myFiltersID])
+    }
+
+    /// A group WebKit didn't compile blocks nothing: a filter of its lists naming the page is neither
+    /// shown nor saved by "Always allow", which would exempt the site once the group compiles again.
+    @Test func groupsWebKitLacksAreNotSearched() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let both = try Self.filters(["ubo-badware": "||tlauncher.org^$doc", "easylist": "||tlauncher.org^$doc"],
+                                    groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        let onlyAds = try Self.filters(["ubo-badware": "||other.example^$doc", "easylist": "||tlauncher.org^$doc"],
+                                       groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { [both, onlyAds].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let byBoth = BlockedPage.reason(for: url, in: both, compiled: ["security"])
+        #expect(byBoth.list == "ubo-badware" && byBoth.groups == ["security"])
+        let byAds = BlockedPage.reason(for: url, in: onlyAds, compiled: ["security"])
+        #expect(byAds.list == nil && byAds.groups == ["security"])
+    }
+
     /// The layout `FilterUpdater` writes: a manifest naming each group's lists, and their text.
     static func filters(_ lists: [String: String], groups: [String: [String]]) throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appending(path: "blocked-filters-\(UUID().uuidString)")
@@ -167,7 +226,8 @@ struct BlockedPageTests {
         let folder: URL
     }
 
-    private func setUp(delay: TimeInterval = 0) async throws -> Setup {
+    /// `stamp` names the groups: a shipped set's date, or `h` and a hash for a set the user chose.
+    private func setUp(delay: TimeInterval = 0, stamp: String = "1") async throws -> Setup {
         let requests = Requests()
         let served = OSAllocatedUnfairLock<URL?>(initialState: nil)
         let (listener, base) = try await LocalHTTP.serve([
@@ -192,10 +252,10 @@ struct BlockedPageTests {
         })
         served.withLock { $0 = base }
         let store = try #require(WKContentRuleListStore(url: FileManager.default.temporaryDirectory.appending(path: "blocked-rules-\(UUID().uuidString)")))
-        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList:
+        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-\(stamp)-p4", encodedContentRuleList:
             #"[{"trigger": {"url-filter": "/blocked", "resource-type": ["document"]}, "action": {"type": "block"}}, "#
             + #"{"trigger": {"url-filter": "late\\.js"}, "action": {"type": "block"}}]"#))
-        let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-1-p4", encodedContentRuleList:
+        let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-\(stamp)-p4", encodedContentRuleList:
             #"[{"trigger": {"url-filter": "ad\\.js"}, "action": {"type": "block"}}]"#))
         let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||127.0.0.1^$doc", "easylist": "||ads.example^"],
                                                         groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
@@ -245,6 +305,22 @@ struct BlockedPageTests {
         #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
         #expect(setup.requests["/blocked"] == 1)
         #expect(setup.browser.privacy.allowedPages.isEmpty)
+    }
+
+    /// Groups named by their hash, as every group is once a shipped list is turned off: Open anyway
+    /// still takes the one that blocked the page off it, and only that one.
+    @Test func openAnywayWorksWithCustomizedFilters() async throws {
+        let setup = try await setUp(stamp: "h0123456789abcdef01234567")
+        defer { tearDown(setup) }
+        let tab = setup.browser.newTab(url: setup.page)
+        #expect(await waitUntil(15) { tab.blockedPage?.reason != nil })
+        #expect(tab.blockedPage?.reason?.groups == ["security"])
+
+        await tab.letBlockedPageThrough(always: false)
+        #expect(await waitUntil(15) { tab.title == "Blocked" && !tab.isLoading })
+        #expect(tab.blockedPage == nil)
+        #expect(setup.requests["/blocked"] == 1)
+        #expect(setup.requests["/ad.js"] == 0, "the ads group stays on")
     }
 
     /// Only the page itself goes without the group that blocked it: what the page loads later is
@@ -398,7 +474,13 @@ struct BlockedPageTests {
         let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||a.example^$doc\n||b.example^$doc\n||c.example^$doc"],
                                                         groups: ["security": ["ubo-badware"]])
         defer { try? FileManager.default.removeItem(at: folder) }
+        // Only the groups WebKit compiled are searched, as only they block pages.
+        let store = try #require(WKContentRuleListStore(url: folder.appending(path: "rules")))
+        let rules = #"[{"trigger": {"url-filter": "a\\.example"}, "action": {"type": "block"}}]"#
         let privacy = Privacy()
+        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList: rules))
+        let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-1-p4", encodedContentRuleList: rules))
+        privacy.ruleLists = [security, ads]
         privacy.filtersFolder = folder
         let owner = NSObject(), session = ObjectIdentifier(owner)
         let a = try #require(URL(string: "https://a.example/")), b = try #require(URL(string: "https://b.example/"))
@@ -425,6 +507,45 @@ struct BlockedPageTests {
         privacy.filtersFolder = other
         #expect(await privacy.blockReason(for: a).list == "easylist")
         withExtendedLifetime(owner) {}
+    }
+
+    /// A page only the user's own filters block names them, and their group alone is the one to
+    /// leave off, not the shipped ones, which say nothing of it.
+    @Test func yourFiltersAreNamedWhenTheyBlockThePage() async throws {
+        let folder = try BlockedPageFilterTests.filters(["easylist": "||ads.example^"], groups: ["ads": ["easylist"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try #require(WKContentRuleListStore(url: folder.appending(path: "rules")))
+        let rules = #"[{"trigger": {"url-filter": "mine\\.example"}, "action": {"type": "block"}}]"#
+        let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-1-p4", encodedContentRuleList: rules))
+        let mine = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-my-filters-h00ff-p4", encodedContentRuleList: rules))
+        let privacy = Privacy()
+        await privacy.waitUntilReady()
+        privacy.filterStorage = FilterLists.Storage(folder: folder)
+        try privacy.filterStorage.writeMyFilters("||mine.example^$doc")
+        privacy.ruleLists = [ads, mine]
+        privacy.filtersFolder = folder
+
+        let reason = await privacy.blockReason(for: try #require(URL(string: "https://mine.example/")))
+        #expect(reason.list == FilterLists.myFiltersID && reason.filter == "||mine.example^$doc")
+        #expect(reason.groups == [FilterLists.myFiltersID])
+    }
+
+    /// A page only an uncompiled group's lists name isn't put down to them: "Always allow" would
+    /// otherwise save that group for the site, though it blocked nothing.
+    @Test func groupsNotLoadedDontNameThePage() async throws {
+        let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||a.example^$doc", "easylist": "||d.example^$doc"],
+                                                        groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try #require(WKContentRuleListStore(url: folder.appending(path: "rules")))
+        let rules = #"[{"trigger": {"url-filter": "a\\.example"}, "action": {"type": "block"}}]"#
+        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList: rules))
+        let privacy = Privacy()
+        privacy.ruleLists = [security]
+        privacy.filtersFolder = folder
+
+        let reason = await privacy.blockReason(for: try #require(URL(string: "https://d.example/")))
+        #expect(reason.list == nil)
+        #expect(reason.groups == ["security"])
     }
 
     /// A closed tab's search stops: a private one's would otherwise keep its address after the

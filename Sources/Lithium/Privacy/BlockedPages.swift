@@ -77,13 +77,14 @@ struct BlockedPage: Equatable {
     /// nothing found at all leaves every group still loaded to let the page through. `extra` are the
     /// lists the user added and their own filters, each with its group; `off` the shipped lists
     /// turned off: a group none of whose lists is left isn't loaded. `compiled`, when known, the
-    /// groups WebKit has: a failed build leaves out groups still holding lists left on.
+    /// groups WebKit has: a failed build leaves out groups still holding lists left on, so their
+    /// lists, blocking nothing, are neither searched nor named.
     static func reason(for url: URL, in folder: URL, adding extra: [(list: String, group: String, file: URL)] = [],
                        leavingOut off: Set<String> = [], compiled: Set<String>? = nil) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
         var groupsOfList: [String: Set<String>] = [:]
         var files: [String: URL] = [:]
-        for (group, entry) in manifest.groups {
+        for (group, entry) in manifest.groups where compiled?.contains(group) ?? true {
             for list in entry.lists ?? [] where !off.contains(list) {
                 groupsOfList[list, default: []].insert(group)
                 files[list] = folder.appending(path: "lists/\(list).txt")

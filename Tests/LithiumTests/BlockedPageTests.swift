@@ -174,6 +174,22 @@ struct BlockedPageFilterTests {
                 == ["ads", FilterLists.extraGroup, FilterLists.myFiltersID])
     }
 
+    /// A group WebKit didn't compile blocks nothing: a filter of its lists naming the page is neither
+    /// shown nor saved by "Always allow", which would exempt the site once the group compiles again.
+    @Test func groupsWebKitLacksAreNotSearched() throws {
+        let url = try #require(URL(string: "https://tlauncher.org/en/"))
+        let both = try Self.filters(["ubo-badware": "||tlauncher.org^$doc", "easylist": "||tlauncher.org^$doc"],
+                                    groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        let onlyAds = try Self.filters(["ubo-badware": "||other.example^$doc", "easylist": "||tlauncher.org^$doc"],
+                                       groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { [both, onlyAds].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let byBoth = BlockedPage.reason(for: url, in: both, compiled: ["security"])
+        #expect(byBoth.list == "ubo-badware" && byBoth.groups == ["security"])
+        let byAds = BlockedPage.reason(for: url, in: onlyAds, compiled: ["security"])
+        #expect(byAds.list == nil && byAds.groups == ["security"])
+    }
+
     /// The layout `FilterUpdater` writes: a manifest naming each group's lists, and their text.
     static func filters(_ lists: [String: String], groups: [String: [String]]) throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appending(path: "blocked-filters-\(UUID().uuidString)")

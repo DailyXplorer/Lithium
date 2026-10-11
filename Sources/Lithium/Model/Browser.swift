@@ -637,6 +637,13 @@ final class Browser {
     /// The Tabs menu's selection and tab-list commands act on the main window: not while a link's
     /// window is in front, where they would wake and switch tabs out of sight.
     var canChangeTabs: Bool { quickLinks.keyTab == nil }
+
+    /// Settings, History and Reopen Closed Tab from the menu: they open or select a tab in the main
+    /// window, which comes forward first from a link's window, or that tab would change out of sight.
+    func inMainWindow(_ command: () -> Void) {
+        if !canChangeTabs { window?.makeKeyAndOrderFront(nil) }
+        command()
+    }
     /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabList(in: currentSpaceID) }
     var agentTabs: [Tab] { agentGroup(in: currentSpaceID) }

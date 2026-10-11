@@ -169,8 +169,9 @@ struct QuickLinksTests {
         #expect(browser.videoPopout.canShowSelected)
     }
 
-    /// With a link's window in front, the Tabs menu's commands (Next Tab, ⌃⇥, ⌘1–9, ⌃1–9, New
-    /// Folder, Pin…) are off: they would wake and switch the main window's tabs out of sight.
+    /// With a link's window in front, the guard of the Tabs menu's commands (Next Tab, ⌃⇥, ⌘1–9,
+    /// ⌃1–9, New Folder, Pin…) is off: they would wake and switch the main window's tabs out of sight.
+    /// The menu items themselves can't be read headless.
     @Test func tabCommandsWaitForTheMainWindow() throws {
         let (browser, _) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
@@ -187,6 +188,27 @@ struct QuickLinksTests {
         browser.quickLinks.windowBecameKey(tab)
         browser.quickLinks.close(tab)
         #expect(browser.canChangeTabs, "a closed link's window gives them back")
+    }
+
+    /// Settings, History and Reopen Closed Tab from a link's window bring the main window forward,
+    /// where they open or select their tab; from the main window, they leave it as it is.
+    @Test func mainWindowCommandsBringItForward() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let main = RecordingWindow(contentRect: NSRect(x: -5000, y: 0, width: 400, height: 300), styleMask: .borderless, backing: .buffered, defer: true)
+        main.isReleasedWhenClosed = false
+        browser.window = main
+        var ran = 0
+        browser.inMainWindow { ran += 1 }
+        #expect(ran == 1)
+        #expect(main.frontCount == 0)
+
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        browser.quickLinks.windowBecameKey(tab)
+        browser.inMainWindow { ran += 1 }
+        #expect(ran == 2)
+        #expect(main.frontCount == 1)
     }
 
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
@@ -376,6 +398,12 @@ private final class Windows {
 
 private final class RecordingWindow: NSWindow {
     private(set) var closeCount = 0
+    private(set) var frontCount = 0
+
+    /// Recorded, never put on screen.
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        frontCount += 1
+    }
 
     override func close() {
         closeCount += 1

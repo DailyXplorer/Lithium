@@ -530,6 +530,24 @@ struct BlockedPageTests {
         #expect(reason.groups == [FilterLists.myFiltersID])
     }
 
+    /// A page only an uncompiled group's lists name isn't put down to them: "Always allow" would
+    /// otherwise save that group for the site, though it blocked nothing.
+    @Test func groupsNotLoadedDontNameThePage() async throws {
+        let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||a.example^$doc", "easylist": "||d.example^$doc"],
+                                                        groups: ["security": ["ubo-badware"], "ads": ["easylist"]])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try #require(WKContentRuleListStore(url: folder.appending(path: "rules")))
+        let rules = #"[{"trigger": {"url-filter": "a\\.example"}, "action": {"type": "block"}}]"#
+        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList: rules))
+        let privacy = Privacy()
+        privacy.ruleLists = [security]
+        privacy.filtersFolder = folder
+
+        let reason = await privacy.blockReason(for: try #require(URL(string: "https://d.example/")))
+        #expect(reason.list == nil)
+        #expect(reason.groups == ["security"])
+    }
+
     /// A closed tab's search stops: a private one's would otherwise keep its address after the
     /// session is forgotten.
     @Test func closingATabStopsItsSearch() async throws {

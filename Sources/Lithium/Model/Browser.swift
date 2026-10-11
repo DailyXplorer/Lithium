@@ -115,6 +115,9 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    /// The file's, history included, when the last write was a quit's or the file was read at
+    /// launch: `savedSession` leaves the history out, as saves before quitting do.
+    @ObservationIgnored private var savedWithHistory: Session?
     /// The last one handed to a write off the main thread, which may not have ended.
     @ObservationIgnored private var queuedSession: Session?
     @ObservationIgnored private var sessionSave: Task<Void, Never>?
@@ -186,7 +189,7 @@ final class Browser {
         let saved = SessionStore.load()
         restore(saved)
         // Written only when restoring changed it (a tab left out, a space gone), not at every launch.
-        savedSession = saved
+        (savedSession, savedWithHistory) = (saved.withoutHistory, saved)
         saveSession()
         Task { [tidyTitles] in
             // Off the launch path: the model loads once the window is up.
@@ -971,8 +974,11 @@ final class Browser {
                 selectedTabID = partner?.id ?? opener?.id ?? (remaining.isEmpty ? (tab.isInAgentGroup ? tabList(in: tab.spaceID).last?.id : nil)
                     : remaining[min(position, remaining.count - 1)].id)
             }
-            // The tab shown next may be asleep.
+            // The tab shown next may be asleep. As `select` does, the user now sees its page: a
+            // favorite's dot left by a notification while its popup was in front goes. Not while the
+            // window isn't key: `windowDidBecomeKey` clears it when the user looks.
             selectedTab?.markActive()
+            if window?.isKeyWindow != false { selectedTab?.didOpen() }
             if let selectedTab { recentTabs.didShow(selectedTab, after: nil) }
         }
         recentTabs.didClose(tab)
@@ -1161,7 +1167,9 @@ final class Browser {
 
     // MARK: Session
 
-    private var session: Session {
+    /// `quitting` adds the tabs' back and forward pages, left out of other saves: WebKit serializes a
+    /// loaded tab's on the main thread, and every save would rewrite each sleeping tab's.
+    private func session(quitting: Bool) -> Session {
         var session = Session()
         var places: [Tab.ID: Int] = [:]
         for tab in tabs {
@@ -1172,7 +1180,8 @@ final class Browser {
             let title = tab.isShowingError ? "" : tab.title
             let lastShown = tab.spaceID != currentSpaceID && spaceSelections[tab.spaceID] == tab.id
             session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID,
-                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID))
+                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID,
+                                            history: quitting ? tab.history as? Data : nil))
         }
         session.splits = savedSplits(at: places)
         session.folders = savedFolders
@@ -1196,7 +1205,7 @@ final class Browser {
             let space = saved.spaceID.flatMap { id in spaces.contains { $0.id == id } ? id : nil } ?? Space.mainID
             // Its configuration is made as it wakes: most restored tabs stay asleep for a while.
             let tab = Tab(browser: self, configuration: nil, space: space)
-            tab.restore(url: saved.url, title: saved.title)
+            tab.restore(url: saved.url, title: saved.title, history: saved.history)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { id in pins.contains { $0.id == id && $0.space == space } ? id : nil }
             tab.folderID = saved.folderID.flatMap { id in tab.pinID == nil && folderExists(id, in: space) ? id : nil }
@@ -1240,7 +1249,7 @@ final class Browser {
     private func saveSession(now: Bool = false, titlesDue: Bool = false) {
         sessionSave?.cancel()
         sessionSave = nil
-        let session = withObservationTracking { self.session } onChange: { [weak self] in
+        let session = withObservationTracking { self.session(quitting: false) } onChange: { [weak self] in
             Task { @MainActor in self?.sessionChanged() }
         }
         // A failed write leaves the old file: the next save tries again rather than taking it as written.
@@ -1249,8 +1258,10 @@ final class Browser {
         if now {
             titleSave?.cancel()
             titleSave = nil
-            guard session != savedSession || queuedSession != session else { return }
-            if SessionStore.save(session) { (savedSession, queuedSession) = (session, session) }
+            // Kept as written without the history, which later saves leave out.
+            let quitting = self.session(quitting: true)
+            guard session != savedSession || queuedSession != session || quitting != (savedWithHistory ?? session) else { return }
+            if SessionStore.save(quitting) { (savedSession, queuedSession, savedWithHistory) = (session, session, quitting) }
             return
         }
         let written = queuedSession ?? savedSession
@@ -1268,6 +1279,7 @@ final class Browser {
         titleSave?.cancel()
         titleSave = nil
         queuedSession = session
+        savedWithHistory = nil
         SessionStore.saveInBackground(session) { [weak self] written in
             guard let self else { return }
             if written {
@@ -1295,11 +1307,20 @@ final class Browser {
         if pinsUnsaved { savePins() }
     }
 
-    /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists.
+    /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists, and the open
+    /// tabs' lists, which the session saves at quit. Quick Links' too: moved in, they become tabs.
     func clearHistory() async {
+        // Before the clears below, which can take seconds: a quit meanwhile saves the session as is.
+        closedTabs.removeAll()
+        pages.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
+        // The file keeps the lists the last quit wrote until the session is written again, which
+        // a crash or force quit may never get to. Even after a save without them: it may have failed.
+        saveSession(now: true)
         await history.clear()
         await clearIcons()
+        // Again for a tab closed, or put to sleep and woken, meanwhile. The quit save above already leaves lists out.
         closedTabs.removeAll()
+        pages.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
     }
 
     /// A private tab's host doesn't count: keeping its icon would keep an earlier visit.

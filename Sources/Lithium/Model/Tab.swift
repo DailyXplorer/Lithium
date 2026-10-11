@@ -72,6 +72,9 @@ final class Tab: NSObject, Identifiable {
     private(set) var isAsleep = false
     @ObservationIgnored private(set) var lastActive = Date()
     @ObservationIgnored private var sleepingState: Any?
+    /// Set by Clear History: WebKit can't empty a web view's back list, so it isn't saved or kept
+    /// until the tab gets a new web view.
+    @ObservationIgnored private var historyForgotten = false
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
     /// The tab whose page made this one's web view (`window.open`, target=_blank): WebKit links the
@@ -402,11 +405,12 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    func restore(url: URL, title: String) {
+    func restore(url: URL, title: String, history: Data? = nil) {
         self.url = url
         self.title = title
         restoredIconURL = url
         isAsleep = true
+        sleepingState = history
         hasHadPage = true
     }
 
@@ -605,11 +609,18 @@ final class Tab: NSObject, Identifiable {
     /// Not for local files and Lithium's pages, whose read access and trust `load` grants, nor a
     /// page whose process died mid-navigation, whose history lacks the page it was going to.
     private func restorableState(of webView: WKWebView) -> Any? {
+        guard !historyForgotten else { return nil }
         let list = webView.backForwardList
         // Lithium's PDF viewer needs the bytes, which a page back from history may not come with.
         guard pdf == nil, let current = list.currentItem, current.url == url,
               (list.backList + [current] + list.forwardList).allSatisfy({ Self.wakesWithHistory($0.url) }) else { return nil }
         return webView.interactionState
+    }
+
+    /// Asleep too: woken before the clear ends, it would otherwise hand its new list to a quit.
+    func forgetHistory() {
+        sleepingState = nil
+        historyForgotten = true
     }
 
     /// A blob: address dies with the process that made it.
@@ -748,6 +759,7 @@ final class Tab: NSObject, Identifiable {
         uploadingFrames = 0
         awaitCommit(false)
         self.configuration = configuration
+        historyForgotten = false
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
 
@@ -1841,7 +1853,7 @@ extension Tab: WKWebExtensionTab {
     }
 
     /// A sleeping tab keeps its old page one Back away: with its history saved, the old page's load
-    /// is superseded; without (restored from the last session), it wakes onto the old page first.
+    /// is superseded; without (restored after a crash), it wakes onto the old page first.
     /// Between an extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         guard Extensions.mayOpen(url) else { throw Extensions.RefusedAddress() }

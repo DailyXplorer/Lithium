@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Network
 import os
+import SQLite3
 import class SwiftUI.NSHostingView
 import Testing
 import WebKit
@@ -159,6 +160,172 @@ struct BrowserTests {
         #expect(await overflow(tab, "clip"))
         tab.webView.frame = NSRect(x: 0, y: 0, width: 700, height: 800)
         #expect(await overflow(tab, "visible"))
+    }
+
+    /// A layout that gets wider than the view after load (an app's table) keeps its sideways
+    /// scrolling, without the window being resized, even when body's height stays the same (an app
+    /// shell). Once it's narrow again, it's clipped again.
+    @Test func layoutWidenedAfterLoadStaysScrollable() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><body style='margin: 0; height: 100vh'><p>narrow</p></body>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        #expect(await waitUntil(30) { tab.title == "Narrow" && !tab.isLoading })
+        let overflow = { (expected: String) in
+            await self.pollValue(10) {
+                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+                return value == expected ? value : nil
+            } != nil
+        }
+        #expect(await overflow("clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            const table = document.createElement('div');
+            table.id = 'table';
+            table.style.cssText = 'width: 1500px; height: 20px';
+            document.body.append(table);
+            """)
+        #expect(await overflow("visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('table').remove()")
+        #expect(await overflow("clip"))
+    }
+
+    /// Content made wide without adding it, by a panel shown after load (`hidden`, a class, a
+    /// style, an opened `<details>`) or a style sheet added to head, keeps its sideways scrolling too.
+    @Test func panelShownAfterLoadStaysScrollable() async throws {
+        let (listener, browser, tab) = try await narrowPage("""
+            <style>#panel.open { display: block }</style>
+            <section id='panel' hidden><div style='width: 1500px; height: 20px'></div></section>
+            <details id='more'><summary>More</summary><div style='width: 1500px; height: 20px'></div></details>
+            <p id='row'>row</p>
+            """)
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        for (show, hide) in [
+            ("panel.hidden = false", "panel.hidden = true"),
+            ("panel.classList.add('open')", "panel.classList.remove('open')"),
+            ("panel.style.display = 'block'", "panel.style.display = ''"),
+            ("more.open = true", "more.open = false"),
+        ] {
+            _ = try? await tab.webView.evaluateJavaScript(show)
+            #expect(await sidewaysOverflow(tab, "visible"), "\(show)")
+            _ = try? await tab.webView.evaluateJavaScript(hide)
+            #expect(await sidewaysOverflow(tab, "clip"), "\(hide)")
+        }
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.head.append(Object.assign(document.createElement('style'), { textContent: '#row { width: 1500px }' }))
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// An image that gets its width when it loads, after it was added, keeps its sideways scrolling,
+    /// even absolutely positioned in a static wrapper, as does a canvas made wider through its `width`.
+    @Test func imageLoadedAfterItsAddedStaysScrollable() async throws {
+        let (listener, browser, tab) = try await narrowPage("<p>narrow</p><canvas id='canvas'></canvas>")
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.body.append(Object.assign(document.createElement('img'), { id: 'image' }));
+            document.body.insertAdjacentHTML('beforeend', `<div id='holder'><img id='pinned' style='position: absolute; left: 0; top: 0'></div>`)
+            """)
+        // Measured empty first: only its load can bring the sideways scrolling back.
+        try await Task.sleep(for: .milliseconds(600))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.getElementById('image').src = 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='1500' height='20'/>")
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('image').remove()")
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.getElementById('pinned').src = 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='1500' height='20'/>")
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('holder').remove()")
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('canvas').width = 1500")
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// A change that makes other content wide keeps its sideways scrolling: a class that shows a
+    /// sibling, a narrow element added before a row it pushes past the edge, a style sheet in body.
+    /// So does content that widens none of body's children: an absolutely positioned box in a static
+    /// one, added, shown or given a long word, even a clipping one, a block added to html after body, a `display: contents`
+    /// wrapper's child and a long word put straight into body.
+    @Test func contentWidenedByAnotherChangeStaysScrollable() async throws {
+        let (listener, browser, tab) = try await narrowPage("""
+            <style>.wide { display: none; width: 1500px; height: 20px } .toggle.on ~ .wide { display: block }</style>
+            <p class='toggle'>toggle</p><div class='wide'></div>
+            <div id='line' style='white-space: nowrap'><span style='display: inline-block; width: 1180px'></span></div>
+            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div><span id='tip' style='position: absolute; left: 0; top: 0'>x</span><div id='pop' style='position: absolute; left: 1000px; top: 0; overflow: hidden'></div></div>
+            <div id='card' style='overflow: hidden'><p>card</p></div><div id='bare' style='display: contents'></div>
+            """)
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("document.querySelector('.toggle').classList.add('on')")
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.querySelector('.toggle').classList.remove('on')")
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.getElementById('line').prepend(Object.assign(document.createElement('span'), { id: 'push', style: 'display: inline-block; width: 100px' }))
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('push').remove()")
+        #expect(await sidewaysOverflow(tab, "clip"))
+        for (show, hide) in [
+            ("wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
+            ("menu.style.display = 'block'", "menu.style.display = 'none'"),
+            ("tip.textContent = 'W'.repeat(300)", "tip.textContent = 'x'"),
+            // A static clipping box doesn't clip an absolutely positioned box placed above it.
+            ("card.append(Object.assign(document.createElement('span'), { id: 'out', style: 'position: absolute; left: 1100px; width: 300px; height: 20px' }))", "out.remove()"),
+            ("bare.textContent = 'W'.repeat(300)", "bare.textContent = ''"),
+            // Nor does a clipping box placed that way clip itself as its text widens it.
+            ("pop.textContent = 'W'.repeat(300)", "pop.textContent = ''"),
+            ("document.documentElement.append(Object.assign(document.createElement('div'), { id: 'after', style: 'width: 1500px; height: 20px' }))", "after.remove()"),
+            ("document.body.append(Object.assign(document.createElement('style'), { id: 'sheet', textContent: '.wide { display: block }' }))", "sheet.remove()"),
+            ("document.body.insertAdjacentHTML('beforeend', `<div id='contents' style='display: contents'><div style='width: 1500px; height: 20px'></div></div>`)", "contents.remove()"),
+        ] {
+            _ = try? await tab.webView.evaluateJavaScript(show)
+            #expect(await sidewaysOverflow(tab, "visible"), "\(show)")
+            _ = try? await tab.webView.evaluateJavaScript(hide)
+            #expect(await sidewaysOverflow(tab, "clip"), "\(hide)")
+        }
+        _ = try? await tab.webView.evaluateJavaScript("document.body.textContent = 'W'.repeat(300)")
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// The page is only watched while the window is wide; a window widened after load starts
+    /// watching it.
+    @Test func windowWidenedAfterLoadWatchesThePage() async throws {
+        let (listener, browser, tab) = try await narrowPage("<p>narrow</p>", width: 700)
+        defer { listener.cancel(); browser.close(tab) }
+        // In a window far off screen: a page out of one isn't told its media queries changed.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 700, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = tab.webView
+        disableOcclusionDetection(tab.webView)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.contentView = nil }
+        #expect(await sidewaysOverflow(tab, "visible"))
+        window.setContentSize(NSSize(width: 1200, height: 800))
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("document.body.append(Object.assign(document.createElement('div'), { style: 'width: 1500px; height: 20px' }))")
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// A page that never stops changing (a ticker) is still measured: wide content it adds keeps its
+    /// sideways scrolling.
+    @Test func pageThatKeepsChangingIsStillMeasured() async throws {
+        let (listener, browser, tab) = try await narrowPage("<p id='tick'>0</p>")
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            setInterval(() => { document.getElementById('tick').textContent = Date.now() }, 50);
+            document.body.append(Object.assign(document.createElement('div'), { style: 'width: 1500px; height: 20px' }))
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
     }
 
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
@@ -896,6 +1063,43 @@ struct BrowserTests {
         #expect(!tab.canGoBack)
     }
 
+    /// A tab comes back after a relaunch with its back history, saved at quit, and keeps it while
+    /// asleep. Saves before quitting leave it out: WebKit serializes a loaded tab's on the main
+    /// thread, and a sleeping tab's would be rewritten at every save.
+    @Test func aRelaunchKeepsATabsHistory() async throws {
+        let id = UUID().uuidString
+        func isSecond(_ url: URL?) -> Bool { url?.absoluteString.contains("second-\(id)") == true }
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        // Written now, not a moment into the next test, which counts writes.
+        defer { browser.close(tab); browser.saveNow() }
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { isSecond($0.url) } })
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save")
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil)
+
+        let writes = SessionStore.writes
+        let relaunched = Browser()
+        let restored = try #require(relaunched.tabs.first { isSecond($0.url) })
+        #expect(restored.isAsleep)
+        let otherTab = relaunched.newTab(url: URL(string: "data:text/html,other-\(id)")!, selecting: false)
+        defer { relaunched.close(restored); relaunched.close(otherTab); relaunched.saveNow() }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.url.absoluteString.contains("other-\(id)") } })
+        #expect(SessionStore.writes == writes + 1, "not written again at launch")
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save while asleep")
+        relaunched.saveNow()
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil, "kept while asleep")
+
+        relaunched.select(restored)
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "Second" })
+        #expect(await waitUntil(5) { restored.canGoBack })
+        restored.webView.goBack()
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "First" })
+    }
+
     /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
     @Test func memoryPressureSleepsBackgroundTabs() async throws {
         let browser = Browser()
@@ -995,6 +1199,51 @@ struct BrowserTests {
         #expect(favorite.unread.shown == .dot, "no window is key in tests")
         browser.windowDidBecomeKey()
         #expect(favorite.unread.shown == nil)
+    }
+
+    /// A notification that came while the favorite's popup was in front leaves no dot once the
+    /// popup closes and the favorite is shown again.
+    @Test func aFavoritesDotGoesWhenItsPopupCloses() async {
+        let browser = Browser()
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        #expect(favorite.unread.shown == .dot)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == nil)
+    }
+
+    /// A popup that closes itself while the window isn't key leaves the favorite's dot: the user
+    /// hasn't seen the page yet.
+    @Test func aFavoritesDotStaysWhenItsPopupClosesInTheBackground() async {
+        let browser = Browser()
+        // Never shown, so never key.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        browser.window = window
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == .dot)
+        // `browser.window` is weak: this keeps the window alive until here.
+        #expect(browser.window === window)
     }
 
     /// A tab zoomed in wakes from sleep at the same zoom.
@@ -1267,6 +1516,151 @@ struct BrowserTests {
         #expect(!browser.canReopenClosedTab)
     }
 
+    /// Clearing the history leaves the open tabs' back lists out of the quit save, so a relaunch
+    /// doesn't bring the pages back, whether the tab is loaded or asleep.
+    @Test func clearingTheHistoryForgetsOpenTabsBackLists() async throws {
+        let id = UUID().uuidString
+        let browser = Browser()
+        func savesHistory(_ tab: Tab) throws -> Bool {
+            try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+        }
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>First</title>shown-\(id)")!)
+        let sleeping = browser.newTab(url: URL(string: "data:text/html,<title>First</title>sleeping-\(id)")!)
+        defer { browser.close(shown); browser.close(sleeping); browser.saveNow() }
+        for (tab, name) in [(shown, "shown"), (sleeping, "sleeping")] {
+            #expect(await waitUntil(120) { loaded(tab) })
+            tab.load(URL(string: "data:text/html,<title>Second</title>\(name)-second-\(id)")!)
+            #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        }
+        browser.select(shown)
+        sleeping.sleep(configuration: browser.makeConfiguration(for: sleeping.url))
+        browser.saveNow()
+        #expect(try savesHistory(shown))
+        #expect(try savesHistory(sleeping))
+
+        await browser.clearHistory()
+        // Already off the file, should the app crash before quitting.
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
+        // Nor kept when it sleeps.
+        browser.select(sleeping)
+        shown.sleep(configuration: browser.makeConfiguration(for: shown.url))
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
+        // Woken in a new web view, its pages from then on are saved again.
+        browser.select(shown)
+        #expect(await waitUntil(30) { loaded(shown) })
+        browser.saveNow()
+        #expect(try savesHistory(shown))
+    }
+
+    /// A tab whose back list the session file holds, as a quit leaves it.
+    private func tabWithSavedBackList(in browser: Browser) async throws -> Tab {
+        let id = UUID().uuidString
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        browser.saveNow()
+        #expect(try savesBackList(tab))
+        return tab
+    }
+
+    private func savesBackList(_ tab: Tab) throws -> Bool {
+        try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+    }
+
+    /// A routine save that failed leaves the quit's lists on the file: clearing the history still
+    /// takes them off.
+    @Test func clearingTheHistoryAfterAFailedWriteTakesTheListsOffTheFile() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        let quitFile = try Data(contentsOf: SessionStore.fileURL)
+        // A folder where the file goes: the routine save of the next tab fails.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try FileManager.default.createDirectory(at: SessionStore.fileURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: SessionStore.fileURL) }
+        let url = URL(string: "data:text/html,<title>\(UUID().uuidString)</title>")!
+        let reached = OSAllocatedUnfairLock(initialState: false)
+        SessionStore.beforeWrite = { session in
+            if session.tabs.contains(where: { $0.url == url }) { reached.withLock { $0 = true } }
+        }
+        defer { SessionStore.beforeWrite = nil }
+        let other = browser.newTab(url: url)
+        defer { browser.close(other) }
+        #expect(await waitUntil(10) { reached.withLock { $0 } })
+        // Waits for that write, on the same queue, and fails the same way.
+        #expect(!SessionStore.save(Session()))
+        // The failed write left the old file.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try quitFile.write(to: SessionStore.fileURL)
+        #expect(try savesBackList(tab))
+
+        await browser.clearHistory()
+        #expect(try !savesBackList(tab))
+    }
+
+    /// A quit while the visits are still being cleared saves the open tabs without their lists.
+    @Test func quittingWhileTheHistoryClearsLeavesTheListsOut() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        // Another connection holds the history's write lock, so the clear can't finish before the quit.
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(tab))
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+    }
+
+    /// A tab closed while the visits are still being cleared doesn't come back with ⇧⌘T, and a
+    /// tab woken meanwhile keeps no back list for the quit save, even one before the clear ends.
+    @Test func tabsClosedOrWokenWhileTheHistoryClearsAreCleared() async throws {
+        let browser = Browser()
+        let woken = try await tabWithSavedBackList(in: browser)
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>Shown</title>\(UUID().uuidString)")!)
+        let closed = browser.newTab(url: URL(string: "data:text/html,<title>Closed</title>\(UUID().uuidString)")!)
+        defer { browser.close(woken); browser.close(shown); browser.saveNow() }
+        browser.select(shown)
+        woken.sleep(configuration: browser.makeConfiguration(for: woken.url))
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        browser.close(closed)
+        browser.select(woken)
+        #expect(await waitUntil(30) { loaded(woken) })
+        woken.load(URL(string: "data:text/html,<title>Third</title>\(UUID().uuidString)")!)
+        #expect(await waitUntil(10) { loaded(woken) && woken.webView.title == "Third" && woken.canGoBack })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
+        // Otherwise the clear gave up on the lock before the tab woke, and the above proves nothing.
+        #expect(browser.history.isClearing)
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+
+        #expect(!browser.canReopenClosedTab)
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
+    }
+
     /// A session write that failed is tried again at the next save, though nothing changed since.
     @Test func aFailedSessionWriteIsTriedAgain() throws {
         let browser = Browser()
@@ -1441,6 +1835,25 @@ struct BrowserTests {
         #expect(await waitUntil(5) { browser.videoPopout.tab === tab })
         browser.close(tab)
         #expect(browser.videoPopout.tab == nil)
+    }
+
+    /// A page narrow at load, in a view wide enough for sideways overflow to be clipped.
+    private func narrowPage(_ body: String, width: CGFloat = 1200) async throws -> (NWListener, Browser, Tab) {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><body style='margin: 0; height: 100vh'>\(body)</body>"),
+        ])
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        tab.webView.frame = NSRect(x: 0, y: 0, width: width, height: 800)
+        _ = await waitUntil(30) { tab.title == "Narrow" && !tab.isLoading }
+        return (listener, browser, tab)
+    }
+
+    private func sidewaysOverflow(_ tab: Tab, _ expected: String) async -> Bool {
+        await pollValue(10) {
+            let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+            return value == expected ? value : nil
+        } != nil
     }
 
     @discardableResult

@@ -138,6 +138,27 @@ struct QuickLinksTests {
         #expect(SessionStore.load().tabs.contains { $0.url == base })
     }
 
+    /// Clear History forgets a link's back list too: moved into the main window, it would
+    /// otherwise be saved at quit and come back with a relaunch.
+    @Test func clearingTheHistoryForgetsALinksBackList() async throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        defer { browser.tabs.forEach(browser.close); browser.saveNow() }
+        let id = UUID().uuidString
+        let tab = try #require(browser.quickLinks.open(URL(string: "data:text/html,<title>First</title>\(id)")!))
+        #expect(await waitUntil(15) { tab.title == "First" && !tab.isLoading })
+        let second = URL(string: "data:text/html,<title>Second</title>second-\(id)")!
+        tab.load(second)
+        #expect(await waitUntil(15) { tab.webView.title == "Second" && !tab.isLoading && tab.canGoBack })
+        #expect(tab.history != nil)
+
+        await browser.clearHistory()
+        browser.quickLinks.moveToMainWindow(tab)
+        browser.saveNow()
+        let saved = try #require(SessionStore.load().tabs.first { $0.url == second })
+        #expect(saved.history == nil)
+    }
+
     /// With a link's window in front, the menu's protections and inspector act on the link's page,
     /// not the main window's tab out of sight; popping out a video waits for the main window.
     @Test func pageCommandsFollowTheLinksWindow() async throws {

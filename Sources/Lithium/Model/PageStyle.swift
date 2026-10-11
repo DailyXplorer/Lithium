@@ -13,9 +13,21 @@ enum PageStyle {
     /// Only overflow about a scrollbar wide (a `100vw` banner) is clipped: a layout wider than the
     /// view keeps its sideways scrolling, or its right side couldn't be reached. Measured with the
     /// clip off, as body's clip hides its content's width, at load and when the view is resized.
+    /// Also when the page changes after load: content that gets wide (an app's table, an SPA's next
+    /// route, a panel shown by a class, a late image or style sheet) changes neither html's width
+    /// nor, in an app shell, body's height. A burst is measured 200 ms after it ends, a page that
+    /// never stops changing once a second, and only while the window is wide. Turning the clip off
+    /// restyles the page, so while it's on that only happens when one of body's children, or what
+    /// overflows it, or a node that changed reaches past the right edge (absolutely positioned
+    /// content doesn't widen its parent; text in body and nodes outside it aren't body's children),
+    /// unless it's in a fixed box or a box that clips it; while it's off, the plain measurement is enough.
+    /// A layout that narrows again is clipped again, as on resize, and one wider than the view, even
+    /// for a moment, scrolls while it is. A change inside a shadow root is only measured with the
+    /// next change outside one.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
-        let pending = false;
+        let pending = false, settle = 0, first = 0;
+        const changed = new Set();
         const check = () => {
           pending = false;
           const root = document.scrollingElement, sheet = style.sheet;
@@ -23,7 +35,79 @@ enum PageStyle {
           sheet.disabled = true;
           sheet.disabled = root.scrollWidth - root.clientWidth > 32;
         };
-        addEventListener('load', check, { once: true });
+        // Fixed boxes don't widen the page, nor do scrolling or clipping ones with what they hide.
+        // An element without a box (display: contents, a framework's wrapper) is looked into.
+        const reaches = (parent, limit) => [...parent.children].some(el => {
+          const box = el.getBoundingClientRect();
+          if (!box.width && !box.height && getComputedStyle(el).display === 'contents') return reaches(el, limit);
+          if (Math.max(box.right, box.left + el.scrollWidth) <= limit) return false;
+          const css = getComputedStyle(el);
+          return css.position !== 'fixed' && (box.right > limit || css.overflowX === 'visible');
+        });
+        const right = node => {
+          if (node.nodeType !== 1) {
+            const range = document.createRange();
+            range.selectNode(node);
+            return range.getBoundingClientRect().right;
+          }
+          const box = node.getBoundingClientRect();
+          return Math.max(box.right, box.left + node.scrollWidth);
+        };
+        // As in reaches: a carousel's track moving inside its clipping box mustn't restyle the page,
+        // nor what's in a fixed box. A box clips only what it contains: an absolutely positioned
+        // one escapes the static boxes up to the positioned one it's placed in. Text is clipped by
+        // its parent's ancestors, not by the parent, whose box may grow with it.
+        const clipped = node => {
+          const owner = node.nodeType === 1 ? node : node.parentElement;
+          let css = getComputedStyle(owner);
+          if (css.position === 'fixed') return true;
+          let escapes = css.position === 'absolute';
+          for (let el = owner.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+            css = getComputedStyle(el);
+            if (css.position === 'fixed') return true;
+            if (escapes && css.position === 'static') continue;
+            if (css.overflowX !== 'visible') return true;
+            escapes = css.position === 'absolute';
+          }
+          return false;
+        };
+        const recheck = () => {
+          const root = document.scrollingElement, sheet = style.sheet, body = document.body, nodes = [...changed];
+          settle = first = 0;
+          changed.clear();
+          if (!wide.matches || !root || !root.clientWidth || !sheet || !body) return;
+          const limit = root.clientWidth + 32;
+          if (sheet.disabled) sheet.disabled = root.scrollWidth - root.clientWidth > 32;
+          else if (reaches(body, limit) || nodes.some(node => node.isConnected && right(node) > limit && !clipped(node))) check();
+        };
+        const schedule = () => {
+          const now = performance.now();
+          first ||= now;
+          clearTimeout(settle);
+          settle = setTimeout(recheck, Math.max(0, Math.min(200, first + 1000 - now)));
+        };
+        // Text is measured where it lays out, which may be outside its parent's box (display: contents).
+        const observer = new MutationObserver(records => {
+          for (const record of records) {
+            if (record.type === 'attributes') changed.add(record.target);
+            else for (const node of record.addedNodes) changed.add(node);
+          }
+          schedule();
+        });
+        const watch = () => {
+          if (wide.matches) observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'width', 'height'] });
+          else observer.disconnect();
+        };
+        addEventListener('load', () => {
+          check();
+          watch();
+          wide.addEventListener('change', watch);
+          // An image, style sheet or video that gets its size after it's added: these events don't
+          // bubble, nor reach window.
+          for (const type of ['load', 'loadedmetadata']) {
+            document.addEventListener(type, event => { if (wide.matches) { changed.add(event.target); schedule(); } }, true);
+          }
+        }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });
         """)
 

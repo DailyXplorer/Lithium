@@ -1445,7 +1445,7 @@ struct BrowserTests {
     }
 
     /// A tab closed while the visits are still being cleared doesn't come back with ⇧⌘T, and a
-    /// tab woken meanwhile keeps no back list for the quit save.
+    /// tab woken meanwhile keeps no back list for the quit save, even one before the clear ends.
     @Test func tabsClosedOrWokenWhileTheHistoryClearsAreCleared() async throws {
         let browser = Browser()
         let woken = try await tabWithSavedBackList(in: browser)
@@ -1467,6 +1467,11 @@ struct BrowserTests {
         #expect(await waitUntil(30) { loaded(woken) })
         woken.load(URL(string: "data:text/html,<title>Third</title>\(UUID().uuidString)")!)
         #expect(await waitUntil(10) { loaded(woken) && woken.webView.title == "Third" && woken.canGoBack })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
+        // Otherwise the clear gave up on the lock before the tab woke, and the above proves nothing.
+        #expect(browser.history.isClearing)
         sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
         await clearing.value
 

@@ -617,8 +617,10 @@ final class Tab: NSObject, Identifiable {
         return webView.interactionState
     }
 
+    /// Asleep too: woken before the clear ends, it would otherwise hand its new list to a quit.
     func forgetHistory() {
-        if isAsleep { sleepingState = nil } else { historyForgotten = true }
+        sleepingState = nil
+        historyForgotten = true
     }
 
     /// A blob: address dies with the process that made it.

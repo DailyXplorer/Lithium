@@ -474,7 +474,13 @@ struct BlockedPageTests {
         let folder = try BlockedPageFilterTests.filters(["ubo-badware": "||a.example^$doc\n||b.example^$doc\n||c.example^$doc"],
                                                         groups: ["security": ["ubo-badware"]])
         defer { try? FileManager.default.removeItem(at: folder) }
+        // Only the groups WebKit compiled are searched, as only they block pages.
+        let store = try #require(WKContentRuleListStore(url: folder.appending(path: "rules")))
+        let rules = #"[{"trigger": {"url-filter": "a\\.example"}, "action": {"type": "block"}}]"#
         let privacy = Privacy()
+        let security = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-security-1-p4", encodedContentRuleList: rules))
+        let ads = try #require(try await store.compileContentRuleList(forIdentifier: "lithium-ads-1-p4", encodedContentRuleList: rules))
+        privacy.ruleLists = [security, ads]
         privacy.filtersFolder = folder
         let owner = NSObject(), session = ObjectIdentifier(owner)
         let a = try #require(URL(string: "https://a.example/")), b = try #require(URL(string: "https://b.example/"))

@@ -29,19 +29,35 @@ struct DownloadsButton: View {
 
 private struct ProgressRing: View {
     let fraction: Double?
-    @State private var spin = false
 
     var body: some View {
         ZStack {
             Circle().stroke(Color.accentColor.opacity(0.18), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: fraction ?? 0.25)
-                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(fraction == nil && spin ? 270 : -90))
-                .animation(fraction == nil ? .linear(duration: 1).repeatForever(autoreverses: false) : .easeOut(duration: 0.2), value: spin)
-                .animation(.easeOut(duration: 0.2), value: fraction)
+            if let fraction {
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.2), value: fraction)
+            } else {
+                Spinner()
+            }
         }
-        .onAppear { spin = true }
+    }
+}
+
+/// Its own view so it's removed once the size is known: a later animation doesn't cancel
+/// a `repeatForever`, only removing the view that runs it does.
+private struct Spinner: View {
+    @State private var spin = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.25)
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(spin ? 270 : -90))
+            .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spin)
+            .onAppear { spin = true }
     }
 }
 

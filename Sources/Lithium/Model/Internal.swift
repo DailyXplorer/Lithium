@@ -355,7 +355,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
     private func updateExtension(_ id: String, in browser: Browser, window: NSWindow?) async {
         let name = browser.extensions.installed.first { $0.id == id }?.name ?? id
         let present = { @MainActor (alert: NSAlert) async -> NSApplication.ModalResponse in
-            if let window { await alert.beginSheetModal(for: window) } else { alert.runModal() }
+            // Closed while it downloaded, the window would never show the sheet nor end the update.
+            if let window, window.isVisible { await alert.beginSheetModal(for: window) } else { alert.runModal() }
         }
         do {
             try await browser.extensions.updateRefused(id: id) { warnings in

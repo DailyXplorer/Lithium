@@ -147,10 +147,11 @@ struct BrowserTests {
     }
 
     /// A layout that gets wider than the view after load (an app's table) keeps its sideways
-    /// scrolling, without the window being resized.
+    /// scrolling, without the window being resized, even when body's height stays the same (an app
+    /// shell). Once it's narrow again, it's clipped again.
     @Test func layoutWidenedAfterLoadStaysScrollable() async throws {
         let (listener, base) = try await LocalHTTP.serve([
-            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><p>narrow</p>"),
+            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><body style='margin: 0; height: 100vh'><p>narrow</p></body>"),
         ])
         defer { listener.cancel() }
         let browser = Browser()
@@ -167,10 +168,13 @@ struct BrowserTests {
         #expect(await overflow("clip"))
         _ = try? await tab.webView.evaluateJavaScript("""
             const table = document.createElement('div');
-            table.style.cssText = 'width: 1500px; height: 400px';
+            table.id = 'table';
+            table.style.cssText = 'width: 1500px; height: 20px';
             document.body.append(table);
             """)
         #expect(await overflow("visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('table').remove()")
+        #expect(await overflow("clip"))
     }
 
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.

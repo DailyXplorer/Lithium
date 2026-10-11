@@ -13,9 +13,10 @@ enum PageStyle {
     /// Only overflow about a scrollbar wide (a `100vw` banner) is clipped: a layout wider than the
     /// view keeps its sideways scrolling, or its right side couldn't be reached. Measured with the
     /// clip off, as body's clip hides its content's width, at load and when the view is resized.
-    /// Also when body's size changes while clipping: content that gets wide after load (an app's
-    /// table, a dashboard) usually makes the page taller too, and html's box never gets wider. Its
-    /// callbacks already come once a frame, after layout.
+    /// Also once body's content stops changing: content that gets wide after load (an app's table,
+    /// an SPA's next route) changes neither html's width nor, in an app shell, body's height. A feed
+    /// or a stream is measured when it pauses, not every frame. A layout that narrows again is
+    /// clipped again, as on resize.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
         let pending = false;
@@ -26,9 +27,14 @@ enum PageStyle {
           sheet.disabled = true;
           sheet.disabled = root.scrollWidth - root.clientWidth > 32;
         };
+        let settle;
         addEventListener('load', () => {
           check();
-          if (document.body) new ResizeObserver(() => { if (!style.sheet?.disabled) check(); }).observe(document.body);
+          if (document.body) new MutationObserver(() => {
+            if (!wide.matches) return;
+            clearTimeout(settle);
+            settle = setTimeout(check, 200);
+          }).observe(document.body, { childList: true, subtree: true });
         }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });
         """)

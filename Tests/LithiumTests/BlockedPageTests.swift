@@ -142,7 +142,8 @@ struct BlockedPageFilterTests {
     }
 
     /// The lists the user added and their own filters are searched with the shipped ones, and only
-    /// their group is named; a shipped list turned off isn't searched. Nothing found names them too.
+    /// their group is named; a shipped list turned off isn't searched. Nothing found names every
+    /// group still loaded: not one whose lists are all off.
     @Test func addedListsAndYourFiltersAreSearched() throws {
         let url = try #require(URL(string: "https://tlauncher.org/en/"))
         let folder = try Self.filters(["ubo-badware": "||tlauncher.org^$doc", "easylist": "||ads.example^"],
@@ -150,19 +151,27 @@ struct BlockedPageFilterTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let mine = folder.appending(path: "my-filters.txt"), added = folder.appending(path: "added.txt")
         try "||tlauncher.org^".write(to: mine, atomically: true, encoding: .utf8)
-        try "||other.example^".write(to: added, atomically: true, encoding: .utf8)
+        try "||tlauncher.org^".write(to: added, atomically: true, encoding: .utf8)
         let extra = [(list: "url-0123", group: FilterLists.extraGroup, file: added),
                      (list: FilterLists.myFiltersID, group: FilterLists.myFiltersID, file: mine)]
 
         let reason = BlockedPage.reason(for: url, in: folder, adding: extra, leavingOut: ["ubo-badware"])
         #expect(reason.list == FilterLists.myFiltersID && reason.filter == "||tlauncher.org^")
-        #expect(reason.groups == [FilterLists.myFiltersID])
+        #expect(reason.groups == [FilterLists.extraGroup, FilterLists.myFiltersID])
         #expect(BlockedPage.title(of: FilterLists.myFiltersID) == "your filters")
-        #expect(BlockedPage.reason(for: url, in: folder, adding: extra).groups == ["security", FilterLists.myFiltersID])
+        #expect(BlockedPage.reason(for: url, in: folder, adding: extra).groups
+                == ["security", FilterLists.extraGroup, FilterLists.myFiltersID])
+
+        let byAdded = BlockedPage.reason(for: url, in: folder, adding: [extra[0]], leavingOut: ["ubo-badware"])
+        #expect(byAdded.list == "url-0123" && byAdded.filter == "||tlauncher.org^")
+        #expect(byAdded.groups == [FilterLists.extraGroup])
+        #expect(BlockedPage.title(of: "url-0123") == "a list you added")
 
         let elsewhere = try #require(URL(string: "https://nothing.example/"))
         #expect(BlockedPage.reason(for: elsewhere, in: folder, adding: extra).groups
                 == ["security", "ads", FilterLists.extraGroup, FilterLists.myFiltersID])
+        #expect(BlockedPage.reason(for: elsewhere, in: folder, adding: extra, leavingOut: ["ubo-badware"]).groups
+                == ["ads", FilterLists.extraGroup, FilterLists.myFiltersID])
     }
 
     /// The layout `FilterUpdater` writes: a manifest naming each group's lists, and their text.
@@ -282,7 +291,7 @@ struct BlockedPageTests {
         #expect(setup.browser.privacy.allowedPages.isEmpty)
     }
 
-    /// With a shipped list turned off, every group is built and named by its hash: Open anyway
+    /// Groups named by their hash, as every group is once a shipped list is turned off: Open anyway
     /// still takes the one that blocked the page off it, and only that one.
     @Test func openAnywayWorksWithCustomizedFilters() async throws {
         let setup = try await setUp(stamp: "h0123456789abcdef01234567")
@@ -478,8 +487,8 @@ struct BlockedPageTests {
         withExtendedLifetime(owner) {}
     }
 
-    /// A page only the user's own filters block names them, and letting it through leaves their
-    /// group off, not the shipped ones, which say nothing of it.
+    /// A page only the user's own filters block names them, and their group alone is the one to
+    /// leave off, not the shipped ones, which say nothing of it.
     @Test func yourFiltersAreNamedWhenTheyBlockThePage() async throws {
         let folder = try BlockedPageFilterTests.filters(["easylist": "||ads.example^"], groups: ["ads": ["easylist"]])
         defer { try? FileManager.default.removeItem(at: folder) }

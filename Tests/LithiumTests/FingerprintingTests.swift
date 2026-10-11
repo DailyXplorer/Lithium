@@ -748,8 +748,10 @@ struct FingerprintingTests {
         }
     }
 
-    /// A tree built out of the document isn't searched as it grows: its frames are protected by
-    /// the insertion that puts it in, also one that takes out the node it was called on.
+    /// A tree built out of the document isn't searched as it grows, and its frames are still
+    /// protected by the insertion that puts it in, also one that takes out the node it was called
+    /// on. A guard against losing protection, not a measure of the saving: the hooks call saved
+    /// natives, so a page can't see the searches skipped.
     @Test func framesInTreesBuiltOutOfTheDocumentAreProtected() async throws {
         let probe = """
             (() => {

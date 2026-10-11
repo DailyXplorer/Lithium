@@ -52,6 +52,8 @@ struct BlockedPage: Equatable {
         case "peter-lowe": "Peter Lowe’s Ad and tracking server list"
         case "urlhaus": "Online Malicious URL Blocklist"
         case FilterLists.myFiltersID: "your filters"
+        // Added by address, with no name of their own.
+        case _ where list.hasPrefix("url-"): "a list you added"
         default: FilterLists.catalog.first { $0.id == list }?.name ?? list
         }
     }
@@ -72,8 +74,9 @@ struct BlockedPage: Equatable {
     /// naming the site, as written or escaped in a regular expression, are tried first; only if none
     /// blocks it is every line of that list tried (a capitalised domain, a broader expression): any
     /// list may be the one whose group still blocks the page. Lists that flag danger come first;
-    /// nothing found at all leaves every group to let the page through. `extra` are the lists the
-    /// user added and their own filters, each with its group; `off` the shipped lists turned off.
+    /// nothing found at all leaves every group still loaded to let the page through. `extra` are the
+    /// lists the user added and their own filters, each with its group; `off` the shipped lists
+    /// turned off: a group none of whose lists is left isn't loaded.
     static func reason(for url: URL, in folder: URL, adding extra: [(list: String, group: String, file: URL)] = [],
                        leavingOut off: Set<String> = []) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
@@ -116,7 +119,8 @@ struct BlockedPage: Equatable {
             if isForPages(a.filter) != isForPages(b.filter) { return isForPages(a.filter) }
             return a.filter.count > b.filter.count
         }
-        let groups = matches.isEmpty ? Set(manifest.groups.keys).union(extra.map(\.group))
+        let loaded = manifest.groups.filter { _, entry in entry.lists.map { $0.isEmpty || !off.isSuperset(of: $0) } ?? true }
+        let groups = matches.isEmpty ? Set(loaded.keys).union(extra.map(\.group))
             : Set(matches.flatMap { groupsOfList[$0.list] ?? [] })
         return Reason(list: best?.list, filter: best?.filter, groups: groups)
     }

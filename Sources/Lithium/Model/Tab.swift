@@ -1116,7 +1116,8 @@ final class Tab: NSObject, Identifiable {
     }
 
     /// Open anyway lets this one page through; Always allow saves the site (for its private session
-    /// only, in a private tab). Either way only the groups that blocked it are left off.
+    /// only, in a private tab). Either way only the groups that blocked it are left off, or every
+    /// loaded one when the lists' text doesn't say which.
     func letBlockedPageThrough(always: Bool) async {
         guard let page = blockedPage, let host = Privacy.siteHost(page.url), let lookup = blockLookup else { return }
         let groups = await lookup.value.groups

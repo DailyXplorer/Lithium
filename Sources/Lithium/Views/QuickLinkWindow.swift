@@ -6,6 +6,7 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
     private let page: Tab
     private weak var browser: Browser?
     private static var lastTopLeft: NSPoint?
+    private var sheetKeyObserver: NSObjectProtocol?
 
     static func open(_ tab: Tab, browser: Browser) -> NSWindow? {
         let window = QuickLinkWindow(tab: tab, browser: browser)
@@ -77,7 +78,27 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
         browser?.quickLinks.windowResignedKey(page, toSheet: attachedSheet != nil)
     }
 
+    /// Clicking back to this window while its sheet is up makes the sheet key, not this window: the
+    /// link is in front again all the same. Watched only while a sheet is up.
+    func windowWillBeginSheet(_ notification: Notification) {
+        guard sheetKeyObserver == nil else { return }
+        sheetKeyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, NSApp.keyWindow?.sheetParent === self else { return }
+                self.browser?.quickLinks.windowBecameKey(self.page)
+            }
+        }
+    }
+
+    func windowDidEndSheet(_ notification: Notification) {
+        guard attachedSheet == nil, let sheetKeyObserver else { return }
+        NotificationCenter.default.removeObserver(sheetKeyObserver)
+        self.sheetKeyObserver = nil
+    }
+
     func windowWillClose(_ notification: Notification) {
+        if let sheetKeyObserver { NotificationCenter.default.removeObserver(sheetKeyObserver) }
+        sheetKeyObserver = nil
         browser?.quickLinks.windowClosed(page)
         // A late update of the closed view would take the web view back from the main window.
         contentView = nil

@@ -58,7 +58,7 @@ struct BrowserCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { browser.inMainWindow { browser.openSettings() } }
+            Button("Settings…") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.openSettings() } }
                 .keyboardShortcut(",")
         }
         CommandGroup(after: .appSettings) {
@@ -82,7 +82,7 @@ struct BrowserCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") { browser.closeTabOrWindow() }
                 .keyboardShortcut("w")
-            Button("Reopen Closed Tab") { browser.inMainWindow { browser.reopenClosedTab() } }
+            Button("Reopen Closed Tab") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.reopenClosedTab() } }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(!browser.canReopenClosedTab)
         }
@@ -173,7 +173,7 @@ struct BrowserCommands: Commands {
             Divider()
         }
         CommandMenu("History") {
-            Button("Show All History") { browser.inMainWindow { browser.openHistory() } }
+            Button("Show All History") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.openHistory() } }
                 .keyboardShortcut("y")
             Divider()
             Button("Back") { browser.navigate(browser.commandTab, .back) }

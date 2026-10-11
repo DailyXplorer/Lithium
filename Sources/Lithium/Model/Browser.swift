@@ -640,12 +640,17 @@ final class Browser {
     var canChangeTabs: Bool { quickLinks.keyTab == nil }
 
     /// Settings, History and Reopen Closed Tab from the menu: they open or select a tab in the main
-    /// window, which comes forward first from a link's window, or that tab would change out of sight.
-    func inMainWindow(_ command: () -> Void) {
-        if !canChangeTabs, let window {
-            // Ordering front alone leaves a minimized window in the Dock.
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil)
+    /// window, which comes forward first from a link's window or the Dock, or that tab would change
+    /// out of sight. A closed main window opens again (`open`).
+    func inMainWindow(open: () -> Void, _ command: () -> Void) {
+        if let window, window.isVisible || window.isMiniaturized {
+            if window.isMiniaturized || !canChangeTabs {
+                // Ordering front alone leaves a minimized window in the Dock.
+                if window.isMiniaturized { window.deminiaturize(nil) }
+                window.makeKeyAndOrderFront(nil)
+            }
+        } else {
+            open()
         }
         command()
     }

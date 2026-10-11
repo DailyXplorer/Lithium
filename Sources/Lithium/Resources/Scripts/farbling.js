@@ -92,6 +92,7 @@
   const nodeType = member(Node.prototype, 'nodeType').get;
   const parentNode = member(Node.prototype, 'parentNode').get;
   const isConnected = member(Node.prototype, 'isConnected').get;
+  const rangeStart = member(AbstractRange.prototype, 'startContainer').get;
   const documentView = member(Document.prototype, 'defaultView').get;
   // By node type: elements, documents, fragments and shadow roots.
   const queryAll = { __proto__: null,
@@ -610,8 +611,10 @@
         protectAll(framesIn(node));
       }
     };
-    // A fragment hands its children over on insertion, so its frames are listed before.
-    const framesBefore = (node) => node !== null && typeof node === 'object' && read(nodeType, node) === 11 ? framesIn(node) : null;
+    // A fragment hands its children over on insertion, so its frames are listed before. Not when it
+    // goes out of the document: as above, the insertion that puts it in searches it.
+    const framesBefore = (node, target) => node !== null && typeof node === 'object' && read(nodeType, node) === 11
+      && read(isConnected, target) ? framesIn(node) : null;
     const protectAfter = (fragmentFrames, node) => {
       if (fragmentFrames === null) protectInserted(node); else protectAll(fragmentFrames);
     };
@@ -625,7 +628,7 @@
             // Fragments are rare here: their frames go in an object of their own, not an array a page could set up.
             let fragments = null, count = 0;
             for (let i = 0; i < arguments.length; i++) {
-              const found = framesBefore(arguments[i]);
+              const found = framesBefore(arguments[i], this);
               if (found !== null) { if (fragments === null) fragments = { __proto__: null }; fragments[count++] = found; }
             }
             const result = apply(original, this, arguments);
@@ -634,7 +637,7 @@
             return result;
           } }[name]
         : { [name](node) {
-            const fragmentFrames = framesBefore(node);
+            const fragmentFrames = framesBefore(node, this);
             const result = apply(original, this, arguments);
             protectAfter(fragmentFrames, node);
             return result;
@@ -676,7 +679,7 @@
         return result;
       });
       patch(win.Range.prototype, 'insertNode', (target, self, args) => {
-        const fragmentFrames = framesBefore(args[0]);
+        const fragmentFrames = framesBefore(args[0], read(rangeStart, self));
         const result = apply(target, self, args);
         protectAfter(fragmentFrames, args[0]);
         return result;

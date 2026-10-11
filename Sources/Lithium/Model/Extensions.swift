@@ -57,6 +57,9 @@ final class Extensions: NSObject {
     @ObservationIgnored var checksForUpdates = false
     /// A check stays in flight across awaits; another starting meanwhile would ask the store twice.
     @ObservationIgnored private var isCheckingForUpdates = false
+    /// Extensions whose refused version Settings is updating: a second click while it downloads
+    /// would prompt again, or reinstall what was just accepted.
+    @ObservationIgnored private var updatingRefused: Set<String> = []
     /// The ports `chrome.idle` listens on, per extension: password managers lock when the screen
     /// does, which only this tells them.
     @ObservationIgnored private(set) var idlePorts: [String: [WKWebExtension.MessagePort]] = [:]
@@ -266,7 +269,8 @@ final class Extensions: NSObject {
     /// data: from Settings, the latest version replaces it in place once `confirm` accepts what it
     /// can do, as `ChromeWebStore.warnings` words it. Throws `moreAccess` if declined.
     func updateRefused(id: String, confirm: @escaping @MainActor ([String]) async -> Bool) async throws {
-        guard installed.contains(where: { $0.id == id && $0.refusedVersion != nil }) else { return }
+        guard installed.contains(where: { $0.id == id && $0.refusedVersion != nil }), updatingRefused.insert(id).inserted else { return }
+        defer { updatingRefused.remove(id) }
         let archive = try await downloadArchive(id)
         try await serially(id) {
             // Removed while it downloaded: not added back.

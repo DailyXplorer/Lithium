@@ -632,7 +632,7 @@
       }
       if (extension.refusedVersion) {
         const update = el('button', { className: 'button', textContent: 'Update' });
-        update.onclick = () => call('updateExtension', extension.id).then(render);
+        update.onclick = () => { update.disabled = true; call('updateExtension', extension.id).then(render); };
         actions.unshift(update);
       }
       return el('div', { className: 'row extension' }, [

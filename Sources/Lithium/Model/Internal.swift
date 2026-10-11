@@ -361,7 +361,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             try await browser.extensions.updateRefused(id: id) { warnings in
                 let alert = NSAlert()
                 alert.messageText = "Update “\(name)”?"
-                alert.informativeText = warnings.isEmpty ? "It needs no special access." : "It can:\n" + warnings.map { "• \($0)" }.joined(separator: "\n")
+                alert.informativeText = warnings.isEmpty ? "It asks for more access than the installed version." : "It can:\n" + warnings.map { "• \($0)" }.joined(separator: "\n")
                 alert.addButton(withTitle: "Update")
                 alert.addButton(withTitle: "Cancel")
                 return await present(alert) == .alertFirstButtonReturn

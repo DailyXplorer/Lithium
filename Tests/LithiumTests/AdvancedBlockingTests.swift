@@ -96,37 +96,169 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
     }
 
+    /// The lists scripts/update-filters.py generates into the app; a checkout that never ran it has none.
+    nonisolated private static let bundledFilters = Resources.bundle.url(forResource: "Filters", withExtension: nil)
+        .flatMap { FileManager.default.fileExists(atPath: $0.appending(path: "scriptlets.txt").path) ? $0 : nil }
+
+    /// Every uBO scriptlet the bundled lists run against YouTube's ad placements reaches the page.
+    /// They are read from the lists, not named here: uBO swaps them as YouTube changes its player.
+    /// It fails, not skips, without the lists: a skip would let a converter that drops a scriptlet pass.
     @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
-        let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
+        let folder = try #require(Self.bundledFilters, "No generated filter lists: run scripts/update-filters.py")
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))
-        await blocking.load(folder: folder, stamp: UUID().uuidString)
+        #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
         let script = try #require(blocking.script(for: URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!))
         #expect(script.contains("adPlacements"))
-        // uBO-only scriptlets YouTube's ads are fought with; AdGuard's library has neither.
-        #expect(script.contains("function trustedJsonEditXhrRequest("))
-        #expect(script.contains("function trustedPreventDomBypass("))
+        let filters = try String(contentsOf: folder.appending(path: "scriptlets.txt"), encoding: .utf8)
+        let scriptlets = try Self.youTubeAdScriptlets(in: filters.split(whereSeparator: \.isNewline).map(String.init))
+        #expect(!scriptlets.isEmpty, "the lists have no YouTube scriptlet against adPlacements")
+        for (name, code) in scriptlets {
+            #expect(script.contains(code), "\(name) isn't in YouTube's script")
+        }
         // The real lists run end to end: the page loads and the player answer comes back without its ads.
         let result = try #require(try await FakeYouTube.run(Self.playerProbe, script: script))
         #expect(result.hasPrefix(#"["undefined","#) && result.contains("videoDetails"))
         #expect(!result.contains("adPlacements") && !result.contains("adSlots"))
     }
 
+    /// uBO's scriptlets that `filters` run on www.youtube.com against `adPlacements`, by name, with their code.
+    /// Read from the raw `+js()` lines, not through the converter under test, so a rule it drops still counts.
+    static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
+        let ubo = try #require(UBOScriptlets.bundled)
+        let youTube: Set<Substring> = ["youtube.com", "www.youtube.com"]
+        // No site, or only `~` exclusions, is every site, as in uBO. A `~` exclusion of YouTube wins over a listed site.
+        let onYouTube = { (sites: Substring) in
+            let entries = sites.split(separator: ",")
+            if entries.contains(where: { $0.hasPrefix("~") && youTube.contains($0.dropFirst()) }) { return false }
+            let permitted = entries.filter { !$0.hasPrefix("~") }
+            return permitted.isEmpty || permitted.contains { youTube.contains($0) }
+        }
+        // uBO trims the spaces around each argument, drops its quotes and resolves aliases,
+        // so `set,a` and `set-constant.js, 'a'` are one scriptlet.
+        let unquoted = { (argument: String) -> String in
+            guard argument.count > 1, let quote = argument.first, "\"'`".contains(quote), argument.last == quote else { return argument }
+            return String(argument.dropFirst().dropLast())
+        }
+        // A quote opening an argument holds its commas, as uBO's `nextArg` reads it, so `'a,b'` is one argument.
+        let split = { (body: String) -> [String] in
+            var pieces = [""]
+            var open: Character?
+            for character in body {
+                if let quote = open {
+                    if character == quote { open = nil }
+                } else if character == "," {
+                    pieces.append("")
+                    continue
+                } else if "\"'`".contains(character), pieces[pieces.count - 1].allSatisfy(\.isWhitespace) {
+                    open = character
+                }
+                pieces[pieces.count - 1].append(character)
+            }
+            return pieces.map { unquoted($0.trimmingCharacters(in: .whitespaces)) }
+        }
+        let key = { (body: String) -> String in
+            var arguments = split(body)
+            arguments[0] = ubo.resourceName(arguments[0]) ?? arguments[0]
+            return arguments.joined(separator: ",")
+        }
+        var run: [String] = []
+        var excepted: Set<String> = []
+        // Trimmed, so a line with trailing spaces still counts and a converter that drops it shows.
+        for filter in filters.map({ $0.trimmingCharacters(in: .whitespaces) }) where filter.hasSuffix(")") {
+            let isException = filter.contains("#@#+js(")
+            guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), onYouTube(filter[..<marker.lowerBound]) else { continue }
+            let body = filter[marker.upperBound..<filter.index(before: filter.endIndex)].trimmingCharacters(in: .whitespaces)
+            if isException { excepted.insert(key(body)) } else if body.contains("adPlacements") { run.append(body) }
+        }
+        // A bare `youtube.com#@#+js()` turns off every scriptlet there.
+        guard !excepted.contains("") else { return [:] }
+        var scriptlets: [String: String] = [:]
+        for body in run where !excepted.contains(key(body)) {
+            let token = split(body)[0]
+            guard let name = ubo.resourceName(token), let resource = ubo.resources[name] else {
+                Issue.record("\(token) isn't a bundled uBO scriptlet")
+                continue
+            }
+            scriptlets[name] = resource.code
+        }
+        return scriptlets
+    }
+
+    /// The expected set comes from the rules as written: YouTube's, against ad placements, less its exceptions.
+    @Test func youTubeAdScriptletsAreReadFromTheRawRules() throws {
+        let scriptlets = try Self.youTubeAdScriptlets(in: [
+            "www.youtube.com##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)",
+            "youtube.com,example.org##+js(trusted-edit-inbound-object.js, JSON.parse, adPlacements)",
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com#@#+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com##+js(set, ytInitialData.foo, undefined)",
+            "example.org##+js(json-prune, adPlacements)",
+        ])
+        #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "youtube.com#@#+js()"]).isEmpty)
+    }
+
+    /// Rules for every site run on YouTube too, and an exception matches however its arguments are spaced or named.
+    @Test func youTubeAdScriptletsCountSiteWideRulesAndMatchExceptionsAsUBODoes() throws {
+        let scriptlets = try Self.youTubeAdScriptlets(in: [
+            "##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)",
+            "~example.org##+js(trusted-edit-inbound-object.js, JSON.parse, adPlacements)",
+            "~youtube.com##+js(json-prune, adPlacements)",
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com#@#+js(set-constant.js,ytInitialPlayerResponse.adPlacements,  undefined)",
+        ])
+        #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js(json-prune, adPlacements)"]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js()"]).isEmpty)
+    }
+
+    /// As in uBO, exception arguments match once unquoted, a `~` site wins over its parent, and trailing spaces don't drop a rule.
+    @Test func youTubeAdScriptletsUnquoteArgumentsAndHonourExcludedSites() throws {
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            #"youtube.com#@#+js(set, "ytInitialPlayerResponse.adPlacements", 'undefined')"#,
+        ]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com,~www.youtube.com##+js(json-prune, adPlacements)"]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(json-prune, adPlacements)",
+            "youtube.com,~www.youtube.com#@#+js(json-prune, adPlacements)",
+        ]).keys.sorted() == ["json-prune.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)  "]).keys.sorted() == ["json-prune.js"])
+    }
+
+    /// As in uBO's parser, a quoted scriptlet name counts, and a quoted argument keeps its commas whichever quotes wrap it.
+    @Test func youTubeAdScriptletsReadQuotedNamesAndQuotedCommas() throws {
+        #expect(try Self.youTubeAdScriptlets(in: [#"youtube.com##+js("json-prune", adPlacements)"#]).keys.sorted() == ["json-prune.js"])
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(set, 'ytInitialPlayerResponse.adPlacements,x', undefined)",
+            #"youtube.com#@#+js(set, "ytInitialPlayerResponse.adPlacements,x", undefined)"#,
+        ]).isEmpty)
+    }
+
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.
+    /// Its own lists, sized so the build takes a while as the real ones' does, so it runs in any checkout.
     @Test func pagesOpenedDuringARebuildDontWaitForIt() async throws {
-        let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
-        let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))
-        await blocking.load(folder: folder, stamp: UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try (0..<20_000).map { "site\($0).example#$#.ad-\($0) { display: none !important; }" }.joined(separator: "\n")
+            .write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        try "www.youtube.com##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)"
+            .write(to: folder.appending(path: "scriptlets.txt"), atomically: true, encoding: .utf8)
+        let blocking = AdvancedBlocking(container: folder.appending(path: "engine"))
+        #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
         let url = URL(string: "https://www.youtube.com/watch?v=x")!
 
         var rebuilt = false
         let rebuild = Task {
-            await blocking.load(folder: folder, stamp: UUID().uuidString)
+            #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
             rebuilt = true
         }
+        // Each turn is timed from before its sleep, so a build that holds the main actor shows up here.
         var slowest = Duration.zero
         while !rebuilt {
-            try await Task.sleep(for: .milliseconds(10))
             let start = ContinuousClock.now
+            try await Task.sleep(for: .milliseconds(10))
             #expect(blocking.script(for: url)?.contains("adPlacements") == true)
             slowest = max(slowest, ContinuousClock.now - start)
         }

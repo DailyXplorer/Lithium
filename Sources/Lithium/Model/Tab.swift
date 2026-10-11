@@ -77,6 +77,9 @@ final class Tab: NSObject, Identifiable {
     /// The tab whose page made this one's web view (`window.open`, target=_blank): WebKit links the
     /// two pages through `window.opener` and the returned handle until either web view goes.
     @ObservationIgnored weak var scriptOpener: Tab?
+    /// Kept once `scriptOpener` goes: a page that opened this one may close it (a finished sign-in
+    /// or payment window), and that isn't a tab the user would reopen.
+    @ObservationIgnored private var openedByScript = false
     /// The hub whose dialog the page waits on: it still answers it once agent access is off.
     @ObservationIgnored var dialogOwner: AgentHub?
     /// The page's dialog waiting for the tab to be shown: true when it is, false for the default answer.
@@ -1606,6 +1609,7 @@ extension Tab: WKUIDelegate {
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
         popup.scriptOpener = self
+        popup.openedByScript = true
         // A popup window gives a size or a position, as sign-in and payment windows do; a plain
         // tab (target=_blank) doesn't, nor does a featureless window.open, which looks the same.
         let geometry = [windowFeatures.width, windowFeatures.height, windowFeatures.x, windowFeatures.y]
@@ -1654,7 +1658,7 @@ extension Tab: WKUIDelegate {
     }
 
     func webViewDidClose(_ webView: WKWebView) {
-        browser?.close(self)
+        browser?.close(self, remembering: !openedByScript)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {

@@ -13,13 +13,17 @@ enum PageStyle {
     /// Only overflow about a scrollbar wide (a `100vw` banner) is clipped: a layout wider than the
     /// view keeps its sideways scrolling, or its right side couldn't be reached. Measured with the
     /// clip off, as body's clip hides its content's width, at load and when the view is resized.
-    /// Also once body's content stops changing: content that gets wide after load (an app's table,
-    /// an SPA's next route) changes neither html's width nor, in an app shell, body's height. A feed
-    /// or a stream is measured when it pauses, not every frame. A layout that narrows again is
-    /// clipped again, as on resize.
+    /// Also when the page changes after load: content that gets wide (an app's table, an SPA's next
+    /// route, a panel shown by a class, a late image or style sheet) changes neither html's width
+    /// nor, in an app shell, body's height. A burst is measured 200 ms after it ends, a page that
+    /// never stops changing once a second. Turning the clip off restyles the page, so while it's on
+    /// that only happens when what changed reaches past the right edge (or is body, html or head);
+    /// while it's off, the plain measurement is enough. A layout that narrows again is clipped
+    /// again, as on resize, and one wider than the view, even for a moment, scrolls while it is.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
-        let pending = false;
+        let pending = false, settle = 0, first = 0, all = false;
+        const changed = new Set();
         const check = () => {
           pending = false;
           const root = document.scrollingElement, sheet = style.sheet;
@@ -27,14 +31,47 @@ enum PageStyle {
           sheet.disabled = true;
           sheet.disabled = root.scrollWidth - root.clientWidth > 32;
         };
-        let settle;
+        const recheck = () => {
+          const root = document.scrollingElement, sheet = style.sheet, targets = [...changed], everything = all;
+          settle = first = 0;
+          all = false;
+          changed.clear();
+          if (!wide.matches || !root || !root.clientWidth || !sheet) return;
+          if (sheet.disabled) {
+            sheet.disabled = root.scrollWidth - root.clientWidth > 32;
+          } else if (everything || targets.some(el => {
+            if (!el.isConnected) return false;
+            const box = el.getBoundingClientRect();
+            return Math.max(box.right, box.left + el.scrollWidth) > root.clientWidth + 32;
+          })) check();
+        };
+        const note = target => {
+          const body = document.body;
+          if (target === body || !body?.contains(target)) all = true;
+          else changed.add(target);
+        };
+        const schedule = () => {
+          const now = performance.now();
+          first ||= now;
+          clearTimeout(settle);
+          settle = setTimeout(recheck, Math.max(0, Math.min(200, first + 1000 - now)));
+        };
         addEventListener('load', () => {
           check();
-          if (document.body) new MutationObserver(() => {
+          new MutationObserver(records => {
             if (!wide.matches) return;
-            clearTimeout(settle);
-            settle = setTimeout(check, 200);
-          }).observe(document.body, { childList: true, subtree: true });
+            for (const record of records) {
+              if (record.type === 'attributes') { note(record.target); continue; }
+              for (const node of record.addedNodes) note(node.nodeType === 1 ? node : record.target);
+            }
+            schedule();
+          }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+          // An image or a style sheet that loads after it's added: load doesn't bubble, nor reach window.
+          document.addEventListener('load', event => {
+            if (!wide.matches) return;
+            note(event.target);
+            schedule();
+          }, true);
         }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });
         """)

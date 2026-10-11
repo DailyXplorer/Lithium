@@ -177,6 +177,50 @@ struct BrowserTests {
         #expect(await overflow("clip"))
     }
 
+    /// Content made wide without adding it, by a panel shown after load or a style sheet added to
+    /// head, keeps its sideways scrolling too.
+    @Test func panelShownAfterLoadStaysScrollable() async throws {
+        let (listener, browser, tab) = try await narrowPage("<section id='panel' hidden><div style='width: 1500px; height: 20px'></div></section><p id='row'>row</p>")
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('panel').hidden = false")
+        #expect(await sidewaysOverflow(tab, "visible"))
+        _ = try? await tab.webView.evaluateJavaScript("document.getElementById('panel').hidden = true")
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.head.append(Object.assign(document.createElement('style'), { textContent: '#row { width: 1500px }' }))
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// An image that gets its width when it loads, after it was added, keeps its sideways scrolling.
+    @Test func imageLoadedAfterItsAddedStaysScrollable() async throws {
+        let (listener, browser, tab) = try await narrowPage("<p>narrow</p>")
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("document.body.append(Object.assign(document.createElement('img'), { id: 'image' }))")
+        // Measured once added, still empty.
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            document.getElementById('image').src = 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='1500' height='20'/>")
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
+    /// A page that never stops changing (a ticker) is still measured: wide content it adds keeps its
+    /// sideways scrolling.
+    @Test func pageThatKeepsChangingIsStillMeasured() async throws {
+        let (listener, browser, tab) = try await narrowPage("<p id='tick'>0</p>")
+        defer { listener.cancel(); browser.close(tab) }
+        #expect(await sidewaysOverflow(tab, "clip"))
+        _ = try? await tab.webView.evaluateJavaScript("""
+            setInterval(() => { document.getElementById('tick').textContent = Date.now() }, 50);
+            document.body.append(Object.assign(document.createElement('div'), { style: 'width: 1500px; height: 20px' }))
+            """)
+        #expect(await sidewaysOverflow(tab, "visible"))
+    }
+
     /// The session is restored before NSApplication exists, so a settings tab can't ask NSApp for its icon.
     @Test func restoresAnInternalTabAtLaunch() throws {
         SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))
@@ -1432,6 +1476,25 @@ struct BrowserTests {
         #expect(await waitUntil(5) { browser.videoPopout.tab === tab })
         browser.close(tab)
         #expect(browser.videoPopout.tab == nil)
+    }
+
+    /// A page narrow at load, in a view wide enough for sideways overflow to be clipped.
+    private func narrowPage(_ body: String) async throws -> (NWListener, Browser, Tab) {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Narrow</title><body style='margin: 0; height: 100vh'>\(body)</body>"),
+        ])
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        tab.webView.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        _ = await waitUntil(30) { tab.title == "Narrow" && !tab.isLoading }
+        return (listener, browser, tab)
+    }
+
+    private func sidewaysOverflow(_ tab: Tab, _ expected: String) async -> Bool {
+        await pollValue(10) {
+            let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+            return value == expected ? value : nil
+        } != nil
     }
 
     @discardableResult

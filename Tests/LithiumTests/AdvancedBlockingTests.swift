@@ -102,9 +102,9 @@ struct AdvancedBlockingTests {
 
     /// Every uBO scriptlet the bundled lists run against YouTube's ad placements reaches the page.
     /// They are read from the lists, not named here: uBO swaps them as YouTube changes its player.
-    @Test(.enabled(if: bundledFilters != nil, "No generated filter lists: run scripts/update-filters.py"))
-    func bundledListsCarryYouTubeAdScriptlets() async throws {
-        let folder = try #require(Self.bundledFilters)
+    /// It fails, not skips, without the lists: a skip would let a converter that drops a scriptlet pass.
+    @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
+        let folder = try #require(Self.bundledFilters, "No generated filter lists: run scripts/update-filters.py")
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))
         #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
         let script = try #require(blocking.script(for: URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!))
@@ -126,21 +126,29 @@ struct AdvancedBlockingTests {
     static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
         let ubo = try #require(UBOScriptlets.bundled)
         let youTube: Set<Substring> = ["youtube.com", "www.youtube.com"]
-        // No site, or only `~` exclusions, is every site, as in uBO.
+        // No site, or only `~` exclusions, is every site, as in uBO. A `~` exclusion of YouTube wins over a listed site.
         let onYouTube = { (sites: Substring) in
             let entries = sites.split(separator: ",")
+            if entries.contains(where: { $0.hasPrefix("~") && youTube.contains($0.dropFirst()) }) { return false }
             let permitted = entries.filter { !$0.hasPrefix("~") }
-            return permitted.isEmpty ? !entries.contains { youTube.contains($0.dropFirst()) } : permitted.contains { youTube.contains($0) }
+            return permitted.isEmpty || permitted.contains { youTube.contains($0) }
         }
-        // uBO trims the spaces around each argument and resolves aliases, so `set,a` and `set-constant.js, a` are one scriptlet.
+        // uBO trims the spaces around each argument, drops its quotes and resolves aliases,
+        // so `set,a` and `set-constant.js, 'a'` are one scriptlet.
+        let unquoted = { (argument: String) -> String in
+            guard argument.count > 1, let quote = argument.first, "\"'`".contains(quote), argument.last == quote else { return argument }
+            return String(argument.dropFirst().dropLast())
+        }
         let key = { (body: String) -> String in
-            var arguments = body.split(separator: ",", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            var arguments = body.split(separator: ",", omittingEmptySubsequences: false)
+                .map { unquoted($0.trimmingCharacters(in: .whitespaces)) }
             arguments[0] = ubo.resourceName(arguments[0]) ?? arguments[0]
             return arguments.joined(separator: ",")
         }
         var run: [String] = []
         var excepted: Set<String> = []
-        for filter in filters where filter.hasSuffix(")") {
+        // Trimmed, so a line with trailing spaces still counts and a converter that drops it shows.
+        for filter in filters.map({ $0.trimmingCharacters(in: .whitespaces) }) where filter.hasSuffix(")") {
             let isException = filter.contains("#@#+js(")
             guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), onYouTube(filter[..<marker.lowerBound]) else { continue }
             let body = filter[marker.upperBound..<filter.index(before: filter.endIndex)].trimmingCharacters(in: .whitespaces)
@@ -186,6 +194,20 @@ struct AdvancedBlockingTests {
         #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
         #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js(json-prune, adPlacements)"]).isEmpty)
         #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js()"]).isEmpty)
+    }
+
+    /// As in uBO, exception arguments match once unquoted, a `~` site wins over its parent, and trailing spaces don't drop a rule.
+    @Test func youTubeAdScriptletsUnquoteArgumentsAndHonourExcludedSites() throws {
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            #"youtube.com#@#+js(set, "ytInitialPlayerResponse.adPlacements", 'undefined')"#,
+        ]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com,~www.youtube.com##+js(json-prune, adPlacements)"]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(json-prune, adPlacements)",
+            "youtube.com,~www.youtube.com#@#+js(json-prune, adPlacements)",
+        ]).keys.sorted() == ["json-prune.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)  "]).keys.sorted() == ["json-prune.js"])
     }
 
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.

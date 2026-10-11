@@ -285,11 +285,17 @@ struct ChosenFilters: Sendable {
             counts = info
         }
 
-        // What this set doesn't use goes: converting a group again is a few seconds at most.
+        // What this set doesn't use goes: converting a group again is a few seconds at most. A
+        // staging folder may be another build's still being written; quitting mid-write leaves it
+        // behind, so it goes once untouched for a day.
         try? JSONEncoder().encode(usedKeys).write(to: indexFile)
         let used = Set(converted.map(\.folder.lastPathComponent) + [engineFolder.lastPathComponent, indexFile.lastPathComponent])
-        for other in (try? fileManager.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: nil)) ?? []
-        where !used.contains(other.lastPathComponent) && !other.lastPathComponent.hasPrefix(".staging-") {
+        for other in (try? fileManager.contentsOfDirectory(at: storage.built, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        where !used.contains(other.lastPathComponent) {
+            if other.lastPathComponent.hasPrefix(".staging-") {
+                guard let modified = try? other.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                      Date().timeIntervalSince(modified) >= 24 * 60 * 60 else { continue }
+            }
             try? fileManager.removeItem(at: other)
         }
         return ChosenFilters(groups: groups, engineFolder: engineFolder, engineStamp: stamp,

@@ -534,6 +534,31 @@ struct BrowserTests {
         if let reopened = browser.selectedTab { browser.close(reopened) }
     }
 
+    /// A sign-in window that closes itself once done isn't a tab the user closed: Reopen Closed Tab
+    /// skips it for the tab closed before it.
+    @Test func aPopupThatClosesItselfIsntReopened() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", #"<title>Opener</title><button id="signin" onclick="window.open('/popup', '', 'width=400,height=300')">Sign in</button>"#),
+            "/popup": ("Content-Type: text/html", "<title>Popup</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let page = URL(string: "data:text/html,closed")!
+        browser.close(browser.newTab(url: page))
+        let opener = browser.newTab(url: base)
+        defer { browser.close(opener, remembering: false) }
+        #expect(await waitUntil(30) { opener.title == "Opener" && !opener.isLoading })
+        _ = try await opener.webView.evaluateJavaScript("document.getElementById('signin').click(); 0")
+        #expect(await waitUntil(30) { browser.tabs.contains { $0.scriptOpener === opener && $0.title == "Popup" && !$0.isLoading } })
+        let popup = try #require(browser.tabs.first { $0.scriptOpener === opener })
+        _ = try await popup.webView.evaluateJavaScript("window.close(); 0")
+        #expect(await waitUntil(30) { !browser.tabs.contains { $0 === popup } })
+
+        browser.reopenClosedTab()
+        #expect(browser.selectedTab?.url == page)
+        if let reopened = browser.selectedTab { browser.close(reopened, remembering: false) }
+    }
+
     /// A tab opened by no page (a typed address, a link from another app) that only fetched a file
     /// gives back what it was opened over, a tab or the start page, not the tab at the top of the list.
     @Test func aTabClosedByItsDownloadGoesBackToWhatWasShown() async throws {

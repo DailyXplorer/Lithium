@@ -98,6 +98,20 @@ struct BrowserTests {
         #expect(!browser.find.isVisible)
     }
 
+    /// A bar over a link's window isn't the closing tab's: closing the selected tab leaves it open.
+    @Test func closingTheSelectedTabKeepsALinksFindBar() async throws {
+        let browser = Browser()
+        // Stands in for the link's tab: the bar only checks that it's over one.
+        let kept = browser.newTab(url: URL(string: "about:blank")!)
+        defer { browser.close(kept) }
+        let closed = browser.newTab(url: URL(string: "about:blank")!)
+        browser.find.show(focusingField: false, inLink: kept)
+        defer { browser.find.hide() }
+
+        browser.close(closed)
+        #expect(browser.find.isVisible && browser.find.linkTab === kept)
+    }
+
     /// A wide page clips sideways overflow; a split pane's width or zooming in leaves it scrollable,
     /// so a fixed-width layout's right side can still be reached. So does a layout wider than the
     /// view: only overflow about a scrollbar wide is clipped.

@@ -52,6 +52,8 @@ enum Theme {
     @MainActor private(set) static var pickedFonts: (family: String, fonts: [String: NSFont?]) = ("", [:])
     /// Fonts installed or removed while Lithium runs: a font reinstalled since its miss is found at the next redraw.
     @MainActor private static var fontSetObserver: (any NSObjectProtocol)?
+    /// Lookups that missed the cache, for the tests.
+    @MainActor private(set) static var pickedFontLookups = 0
 
     /// Nil for a family not on this Mac.
     @MainActor static func pickedFont(_ family: String, _ size: CGFloat, _ weight: Font.Weight) -> NSFont? {
@@ -59,6 +61,7 @@ enum Theme {
         let key = "\(size) \(weightValue(weight))"
         if let cached = pickedFonts.fonts[key] { return cached }
         // NSFontManager's weights run 0 to 15: 5 regular, 6 medium, 8 semibold, 9 bold.
+        pickedFontLookups += 1
         let scale = switch weightValue(weight) { case 500: 6; case 600: 8; case 700: 9; default: 5 }
         let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: scale, size: size)
         if font == nil, fontSetObserver == nil {

@@ -4,8 +4,9 @@ import Testing
 @testable import Lithium
 
 /// Each test has its own choice and defaults: the shared one sets the font of every page other
-/// tests load.
+/// tests load. Serialized: the tests share Theme's picked-font cache.
 @MainActor
+@Suite(.serialized)
 struct FontChoiceTests {
     private func defaults() -> UserDefaults {
         UserDefaults(suiteName: "FontChoiceTests-\(UUID().uuidString)")!
@@ -51,10 +52,11 @@ struct FontChoiceTests {
         #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
         #expect(Theme.pickedFonts.family == "No Such Font 9C2E")
         #expect(Theme.pickedFonts.fonts.count == 1, "the miss is remembered")
+        let lookups = Theme.pickedFontLookups
         #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
         #expect(Theme.pickedFonts.fonts.count == 1)
+        #expect(Theme.pickedFontLookups == lookups, "the miss comes from the cache")
         NotificationCenter.default.post(name: NSFont.fontSetChangedNotification, object: nil)
-        // Other tests may pick a font while this one waits: only this family's miss matters.
         let remembered = { Theme.pickedFonts.family == "No Such Font 9C2E" && !Theme.pickedFonts.fonts.isEmpty }
         let deadline = Date().addingTimeInterval(2)
         while remembered(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }

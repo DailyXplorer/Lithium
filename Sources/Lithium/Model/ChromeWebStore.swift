@@ -223,6 +223,14 @@ enum ChromeWebStore {
                 && unreadPatterns.isSubset(of: approved.unreadPatterns)
                 && apiPermissions.isSubset(of: approved.apiPermissions)
         }
+
+        /// API permissions beyond `approved` that `warnings` doesn't name, being warning-free (`storage`,
+        /// `cookies`) or optional, though they are granted: asking about them names them.
+        func unnamedPermissions(beyond approved: Access) -> [String] {
+            apiPermissions.subtracting(approved.apiPermissions).filter { permission in
+                ChromeWebStore.permissionWarnings[permission].map { !permissions.contains($0) } ?? true
+            }.sorted()
+        }
     }
 
     struct SitePattern: Hashable {

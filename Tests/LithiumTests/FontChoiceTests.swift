@@ -45,13 +45,20 @@ struct FontChoiceTests {
         #expect(Theme.pickedFont("No Such Font 7F3A", 13, .regular) == nil)
     }
 
-    /// Every view asks on each redraw: a missing font is looked up once, not every time.
-    @Test func aMissingFontIsLookedUpOnce() {
+    /// Every view asks on each redraw: a missing font is remembered, until fonts are installed or
+    /// removed on the Mac, so one reinstalled while Lithium runs comes back without a relaunch.
+    @Test func aMissingFontIsRememberedUntilTheFontsChange() async {
         #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
         #expect(Theme.pickedFonts.family == "No Such Font 9C2E")
         #expect(Theme.pickedFonts.fonts.count == 1, "the miss is remembered")
         #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
         #expect(Theme.pickedFonts.fonts.count == 1)
+        NotificationCenter.default.post(name: NSFont.fontSetChangedNotification, object: nil)
+        // Other tests may pick a font while this one waits: only this family's miss matters.
+        let remembered = { Theme.pickedFonts.family == "No Such Font 9C2E" && !Theme.pickedFonts.fonts.isEmpty }
+        let deadline = Date().addingTimeInterval(2)
+        while remembered(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(!remembered(), "looked up again after the fonts change")
     }
 
     @Test func thePickedInterfaceFontKeepsSizeAndWeight() throws {

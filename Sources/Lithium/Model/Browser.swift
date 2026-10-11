@@ -428,6 +428,7 @@ final class Browser {
     /// A favorite's notification that came while the window wasn't key put a dot on its tile; the
     /// user is now looking at that page.
     func windowDidBecomeKey() {
+        quickLinks.mainWindowBecameKey()
         selectedTab?.didOpen()
     }
 
@@ -641,7 +642,11 @@ final class Browser {
     /// Settings, History and Reopen Closed Tab from the menu: they open or select a tab in the main
     /// window, which comes forward first from a link's window, or that tab would change out of sight.
     func inMainWindow(_ command: () -> Void) {
-        if !canChangeTabs { window?.makeKeyAndOrderFront(nil) }
+        if !canChangeTabs, let window {
+            // Ordering front alone leaves a minimized window in the Dock.
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        }
         command()
     }
     /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.

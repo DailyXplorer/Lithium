@@ -190,8 +190,9 @@ struct QuickLinksTests {
         #expect(browser.canChangeTabs, "a closed link's window gives them back")
     }
 
-    /// Settings, History and Reopen Closed Tab from a link's window bring the main window forward,
-    /// where they open or select their tab; from the main window, they leave it as it is.
+    /// `inMainWindow`, which Settings, History and Reopen Closed Tab run in: from a link's window it
+    /// brings the main window forward, out of the Dock if minimized, where they open or select their
+    /// tab; from the main window, it leaves it as it is. The menu items themselves can't be read headless.
     @Test func mainWindowCommandsBringItForward() throws {
         let (browser, _) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
@@ -209,6 +210,32 @@ struct QuickLinksTests {
         browser.inMainWindow { ran += 1 }
         #expect(ran == 2)
         #expect(main.frontCount == 1)
+        #expect(main.deminiaturizeCount == 0)
+
+        main.isInDock = true
+        browser.quickLinks.windowBecameKey(tab)
+        browser.inMainWindow { ran += 1 }
+        #expect(ran == 3)
+        #expect(main.deminiaturizeCount == 1)
+        #expect(main.frontCount == 2)
+    }
+
+    /// A page's alert or file picker on a link's window takes the key as a sheet: the link stays the
+    /// window the menu acts on, until the main window becomes key. The window itself can't be made
+    /// headless (it orders itself in), so the sheet check is passed in.
+    @Test func linkWindowKeepsTheMenuWhileASheetIsUp() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.windowResignedKey(tab, toSheet: true)
+        #expect(!browser.canChangeTabs)
+        #expect(browser.commandTab === tab)
+
+        browser.windowDidBecomeKey()
+        #expect(browser.canChangeTabs)
+        #expect(browser.commandTab !== tab)
     }
 
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
@@ -399,6 +426,15 @@ private final class Windows {
 private final class RecordingWindow: NSWindow {
     private(set) var closeCount = 0
     private(set) var frontCount = 0
+    private(set) var deminiaturizeCount = 0
+    var isInDock = false
+
+    override var isMiniaturized: Bool { isInDock }
+
+    override func deminiaturize(_ sender: Any?) {
+        deminiaturizeCount += 1
+        isInDock = false
+    }
 
     /// Recorded, never put on screen.
     override func makeKeyAndOrderFront(_ sender: Any?) {

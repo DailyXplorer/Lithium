@@ -74,7 +74,7 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        browser?.quickLinks.windowResignedKey(page)
+        browser?.quickLinks.windowResignedKey(page, toSheet: attachedSheet != nil)
     }
 
     func windowWillClose(_ notification: Notification) {

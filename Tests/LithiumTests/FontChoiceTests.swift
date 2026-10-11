@@ -4,8 +4,9 @@ import Testing
 @testable import Lithium
 
 /// Each test has its own choice and defaults: the shared one sets the font of every page other
-/// tests load.
+/// tests load. Serialized: the tests share Theme's picked-font cache.
 @MainActor
+@Suite(.serialized)
 struct FontChoiceTests {
     private func defaults() -> UserDefaults {
         UserDefaults(suiteName: "FontChoiceTests-\(UUID().uuidString)")!
@@ -43,6 +44,25 @@ struct FontChoiceTests {
         fonts.setInterface("No Such Font 7F3A")
         #expect(fonts.websiteFamily == "DM Sans")
         #expect(Theme.pickedFont("No Such Font 7F3A", 13, .regular) == nil)
+    }
+
+    /// Every view asks on each redraw: a missing font is remembered, until fonts are installed or
+    /// removed on the Mac, so one reinstalled while Lithium runs comes back without a relaunch.
+    @Test func aMissingFontIsRememberedUntilTheFontsChange() async {
+        #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
+        #expect(Theme.pickedFonts.family == "No Such Font 9C2E")
+        #expect(Theme.pickedFonts.fonts.count == 1, "the miss is remembered")
+        let lookups = Theme.pickedFontLookups
+        #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
+        #expect(Theme.pickedFonts.fonts.count == 1)
+        #expect(Theme.pickedFontLookups == lookups, "the miss comes from the cache")
+        // Waits on the observer's own count: another suite drawing in another family empties the cache too.
+        let changes = Theme.fontSetChanges
+        NotificationCenter.default.post(name: NSFont.fontSetChangedNotification, object: nil)
+        let deadline = Date().addingTimeInterval(2)
+        while Theme.fontSetChanges == changes, Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(Theme.fontSetChanges > changes, "the fonts change is seen")
+        #expect(Theme.pickedFonts.family != "No Such Font 9C2E" || Theme.pickedFonts.fonts.isEmpty, "looked up again after the fonts change")
     }
 
     @Test func thePickedInterfaceFontKeepsSizeAndWeight() throws {

@@ -41,10 +41,14 @@ final class QuickLinks {
     }
 
     /// The same web view, so the page doesn't reload and keeps what was typed or played in it.
-    func moveToMainWindow(_ tab: Tab) {
-        guard let browser, remove(tab) else { return }
+    /// Not while a sheet is up (a page's alert, a file picker): closing the window under it would
+    /// leave the page waiting on an answer. False when it didn't move.
+    @discardableResult
+    func moveToMainWindow(_ tab: Tab) -> Bool {
+        guard windows[tab.id]?.attachedSheet == nil, let browser, remove(tab) else { return false }
         browser.adopt(tab)
         browser.window?.makeKeyAndOrderFront(nil)
+        return true
     }
 
     /// Not into Reopen Closed Tab: it never was a tab.

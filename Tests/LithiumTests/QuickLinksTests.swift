@@ -256,6 +256,30 @@ struct QuickLinksTests {
         #expect(browser.commandTab !== tab)
     }
 
+    /// Move to Main Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
+    /// window under the page's alert or file picker: the page stays where its sheet is.
+    @Test func linkWithASheetUpStaysInItsWindow() throws {
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        let window = try #require(windows.opened.first?.window)
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.windowResignedKey(tab, toSheet: true)
+        window.pageSheet = NSWindow()
+
+        #expect(!browser.quickLinks.moveToMainWindow(tab))
+        #expect(window.closeCount == 0)
+        #expect(browser.quickLinks.contains(tab))
+        #expect(browser.quickLinks.keyTab === tab)
+        #expect(!browser.regularTabs.contains { $0 === tab })
+
+        window.pageSheet = nil
+        #expect(browser.quickLinks.moveToMainWindow(tab))
+        #expect(window.closeCount == 1)
+        #expect(browser.regularTabs.contains { $0 === tab })
+    }
+
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
     /// steps through that page's matches, and Escape there closes the bar.
     @Test func findWorksInALinksWindow() async throws {
@@ -448,9 +472,12 @@ private final class RecordingWindow: NSWindow {
     var isInDock = false
     /// Set: taken as on screen (true) or closed (false), never ordered in.
     var isShown: Bool?
+    /// Set: taken as the sheet attached to it, never shown.
+    var pageSheet: NSWindow?
 
     override var isMiniaturized: Bool { isInDock }
     override var isVisible: Bool { isShown.map { $0 && !isInDock } ?? super.isVisible }
+    override var attachedSheet: NSWindow? { pageSheet ?? super.attachedSheet }
 
     override func deminiaturize(_ sender: Any?) {
         deminiaturizeCount += 1

@@ -72,8 +72,7 @@ struct BrowserCommands: Commands {
             Button("Open Location…") { browser.focusAddressFromMenu(newTab: false) }
                 .keyboardShortcut("l")
             Button("Move to Main Window") {
-                guard let tab = browser.quickLinks.keyTab else { return }
-                browser.quickLinks.moveToMainWindow(tab)
+                guard let tab = browser.quickLinks.keyTab, browser.quickLinks.moveToMainWindow(tab) else { return }
                 openWindow(id: "browser")
             }
             .keyboardShortcut("o")

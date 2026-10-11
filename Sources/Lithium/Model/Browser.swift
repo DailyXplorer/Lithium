@@ -1308,12 +1308,15 @@ final class Browser {
     }
 
     /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists, and the open
-    /// tabs' lists, which the session saves at quit.
+    /// tabs' lists, which the session saves at quit. Quick Links' too: moved in, they become tabs.
     func clearHistory() async {
         await history.clear()
         await clearIcons()
         closedTabs.removeAll()
-        tabs.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
+        pages.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
+        // The file keeps the lists the last quit wrote until the session is written again, which
+        // a crash or force quit may never get to.
+        if savedWithHistory != nil { saveSession(now: true) }
     }
 
     /// A private tab's host doesn't count: keeping its icon would keep an earlier visit.

@@ -1357,6 +1357,9 @@ struct BrowserTests {
         #expect(try savesHistory(sleeping))
 
         await browser.clearHistory()
+        // Already off the file, should the app crash before quitting.
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
         browser.saveNow()
         #expect(try !savesHistory(shown))
         #expect(try !savesHistory(sleeping))
@@ -1365,6 +1368,11 @@ struct BrowserTests {
         shown.sleep(configuration: browser.makeConfiguration(for: shown.url))
         browser.saveNow()
         #expect(try !savesHistory(shown))
+        // Woken in a new web view, its pages from then on are saved again.
+        browser.select(shown)
+        #expect(await waitUntil(30) { loaded(shown) })
+        browser.saveNow()
+        #expect(try savesHistory(shown))
     }
 
     /// A session write that failed is tried again at the next save, though nothing changed since.

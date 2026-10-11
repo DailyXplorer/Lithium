@@ -55,12 +55,14 @@ enum PageStyle {
         };
         // As in reaches: a carousel's track moving inside its clipping box mustn't restyle the page,
         // nor what's in a fixed box. A box clips only what it contains: an absolutely positioned
-        // one escapes the static boxes up to the positioned one it's placed in.
+        // one escapes the static boxes up to the positioned one it's placed in. Text is clipped by
+        // its parent's ancestors, not by the parent, whose box may grow with it.
         const clipped = node => {
-          let css = getComputedStyle(node.nodeType === 1 ? node : node.parentElement);
+          const owner = node.nodeType === 1 ? node : node.parentElement;
+          let css = getComputedStyle(owner);
           if (css.position === 'fixed') return true;
-          let escapes = node.nodeType === 1 && css.position === 'absolute';
-          for (let el = node.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+          let escapes = css.position === 'absolute';
+          for (let el = owner.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
             css = getComputedStyle(el);
             if (css.position === 'fixed') return true;
             if (escapes && css.position === 'static') continue;

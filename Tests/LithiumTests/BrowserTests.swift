@@ -236,14 +236,14 @@ struct BrowserTests {
     /// A change that makes other content wide keeps its sideways scrolling: a class that shows a
     /// sibling, a narrow element added before a row it pushes past the edge, a style sheet in body.
     /// So does content that widens none of body's children: an absolutely positioned box in a static
-    /// one, added, shown or given a long word, a block added to html after body, a `display: contents`
+    /// one, added, shown or given a long word, even a clipping one, a block added to html after body, a `display: contents`
     /// wrapper's child and a long word put straight into body.
     @Test func contentWidenedByAnotherChangeStaysScrollable() async throws {
         let (listener, browser, tab) = try await narrowPage("""
             <style>.wide { display: none; width: 1500px; height: 20px } .toggle.on ~ .wide { display: block }</style>
             <p class='toggle'>toggle</p><div class='wide'></div>
             <div id='line' style='white-space: nowrap'><span style='display: inline-block; width: 1180px'></span></div>
-            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div><span id='tip' style='position: absolute; left: 0; top: 0'>x</span></div>
+            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div><span id='tip' style='position: absolute; left: 0; top: 0'>x</span><div id='pop' style='position: absolute; left: 1000px; top: 0; overflow: hidden'></div></div>
             <div id='card' style='overflow: hidden'><p>card</p></div><div id='bare' style='display: contents'></div>
             """)
         defer { listener.cancel(); browser.close(tab) }
@@ -265,7 +265,8 @@ struct BrowserTests {
             // A static clipping box doesn't clip an absolutely positioned box placed above it.
             ("card.append(Object.assign(document.createElement('span'), { id: 'out', style: 'position: absolute; left: 1100px; width: 300px; height: 20px' }))", "out.remove()"),
             ("bare.textContent = 'W'.repeat(300)", "bare.textContent = ''"),
-            ("document.append(document.createComment('x')); wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
+            // Nor does a clipping box placed that way clip itself as its text widens it.
+            ("pop.textContent = 'W'.repeat(300)", "pop.textContent = ''"),
             ("document.documentElement.append(Object.assign(document.createElement('div'), { id: 'after', style: 'width: 1500px; height: 20px' }))", "after.remove()"),
             ("document.body.append(Object.assign(document.createElement('style'), { id: 'sheet', textContent: '.wide { display: block }' }))", "sheet.remove()"),
             ("document.body.insertAdjacentHTML('beforeend', `<div id='contents' style='display: contents'><div style='width: 1500px; height: 20px'></div></div>`)", "contents.remove()"),

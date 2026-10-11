@@ -444,7 +444,7 @@ final class Privacy {
             + (loaded.contains(FilterLists.myFiltersID)
                 ? [(list: FilterLists.myFiltersID, group: FilterLists.myFiltersID, file: storage.myFilters)] : [])
         let search = Task.detached(priority: .userInitiated) {
-            folder.map { BlockedPage.reason(for: url, in: $0, adding: extra, leavingOut: off) } ?? BlockedPage.Reason(groups: [])
+            folder.map { BlockedPage.reason(for: url, in: $0, adding: extra, leavingOut: off, compiled: loaded) } ?? BlockedPage.Reason(groups: [])
         }
         var reason = await withTaskCancellationHandler { await search.value } onCancel: { search.cancel() }
         // Cut short for a tab gone elsewhere: what it found so far isn't the answer.

@@ -76,9 +76,10 @@ struct BlockedPage: Equatable {
     /// list may be the one whose group still blocks the page. Lists that flag danger come first;
     /// nothing found at all leaves every group still loaded to let the page through. `extra` are the
     /// lists the user added and their own filters, each with its group; `off` the shipped lists
-    /// turned off: a group none of whose lists is left isn't loaded.
+    /// turned off: a group none of whose lists is left isn't loaded. `compiled`, when known, the
+    /// groups WebKit has: a failed build leaves out groups still holding lists left on.
     static func reason(for url: URL, in folder: URL, adding extra: [(list: String, group: String, file: URL)] = [],
-                       leavingOut off: Set<String> = []) -> Reason {
+                       leavingOut off: Set<String> = [], compiled: Set<String>? = nil) -> Reason {
         guard let manifest = Manifest.read(in: folder) else { return Reason(groups: []) }
         var groupsOfList: [String: Set<String>] = [:]
         var files: [String: URL] = [:]
@@ -119,7 +120,9 @@ struct BlockedPage: Equatable {
             if isForPages(a.filter) != isForPages(b.filter) { return isForPages(a.filter) }
             return a.filter.count > b.filter.count
         }
-        let loaded = manifest.groups.filter { _, entry in entry.lists.map { $0.isEmpty || !off.isSuperset(of: $0) } ?? true }
+        let loaded = manifest.groups.filter { group, entry in
+            (compiled?.contains(group) ?? true) && (entry.lists.map { $0.isEmpty || !off.isSuperset(of: $0) } ?? true)
+        }
         let groups = matches.isEmpty ? Set(loaded.keys).union(extra.map(\.group))
             : Set(matches.flatMap { groupsOfList[$0.list] ?? [] })
         return Reason(list: best?.list, filter: best?.filter, groups: groups)

@@ -451,6 +451,52 @@ struct FilterListsTests {
         #expect(privacy.filterError == nil)
     }
 
+    /// A blocked page is searched for in the lists as chosen: an added list is, a list turned off
+    /// isn't. Nothing found names the groups WebKit has, but not one whose lists are all off, nor
+    /// one a failed build left out: "Always allow" would save it for the site.
+    @Test func blockedPagesAreSearchedInTheListsAsChosen() async throws {
+        let key = "filterChoices"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let set = try shippedSet(["security": ["ubo-badware": "||blocked.lithium.test^$doc"],
+                                  "ads": ["easylist": "||ads.lithium.test^", "ubo-filters": "||more.lithium.test^"],
+                                  "malware": ["urlhaus": "||malware.lithium.test^"]])
+        // The search reads the groups' lists from the folder's manifest.
+        try JSONEncoder().encode(set.manifest).write(to: set.folder.appending(path: "manifest.json"))
+        let privacy = Privacy()
+        privacy.filterStorage = storage
+        privacy.filterSet = set
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubFilterList.self]
+        privacy.filterSession = URLSession(configuration: configuration)
+        let url = URL(string: "https://\(UUID().uuidString.lowercased()).lists.test/list.txt")!
+        let id = FilterLists.id(of: url)
+        StubFilterList.serve(Data("||added.lithium.test^\n".utf8), at: url)
+        #expect(await privacy.addFilterList(url.absoluteString) == nil)
+        #expect(await privacy.setFilterList("ubo-badware", enabled: false) == nil)
+        let added = URL(string: "https://added.lithium.test/")!, blocked = URL(string: "https://blocked.lithium.test/")!
+
+        let byAdded = await privacy.blockReason(for: added)
+        #expect(byAdded.list == id && BlockedPage.title(of: id) == "a list you added")
+        #expect(byAdded.groups == [FilterLists.extraGroup])
+        let byOff = await privacy.blockReason(for: blocked)
+        #expect(byOff.list == nil, "the list turned off isn't searched")
+        #expect(byOff.groups == ["ads", "malware", FilterLists.extraGroup])
+
+        // A failed build loads only the malware group: the others block nothing.
+        try FileManager.default.removeItem(at: storage.built)
+        try Data().write(to: storage.built)
+        #expect(await privacy.setFilterList("easylist", enabled: false) == nil)
+        #expect(privacy.filterError?.hasPrefix("Lithium couldn’t apply your filter lists.") == true)
+        #expect(await privacy.blockReason(for: added).groups == ["malware"])
+        #expect(await privacy.blockReason(for: blocked).groups == ["malware"])
+    }
+
     /// The daily update reloads an added list it refreshed even when the shipped lists fail to
     /// download, and backs off after that failure.
     @Test(.timeLimit(.minutes(1))) func aFailedUpdateStillReloadsAddedListsAndBacksOff() async throws {

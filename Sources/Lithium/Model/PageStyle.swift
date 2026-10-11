@@ -16,14 +16,15 @@ enum PageStyle {
     /// Also when the page changes after load: content that gets wide (an app's table, an SPA's next
     /// route, a panel shown by a class, a late image or style sheet) changes neither html's width
     /// nor, in an app shell, body's height. A burst is measured 200 ms after it ends, a page that
-    /// never stops changing once a second. Turning the clip off restyles the page, so while it's on
-    /// that only happens when what changed reaches past the right edge (or is body, html or head);
-    /// while it's off, the plain measurement is enough. A layout that narrows again is clipped
-    /// again, as on resize, and one wider than the view, even for a moment, scrolls while it is.
+    /// never stops changing once a second, and only while the window is wide. Turning the clip off
+    /// restyles the page, so while it's on that only happens when one of body's children, or what
+    /// overflows it, reaches past the right edge; while it's off, the plain measurement is enough.
+    /// A layout that narrows again is clipped again, as on resize, and one wider than the view, even
+    /// for a moment, scrolls while it is. A change inside a shadow root is only measured with the
+    /// next change outside one.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
-        let pending = false, settle = 0, first = 0, all = false;
-        const changed = new Set();
+        let pending = false, settle = 0, first = 0;
         const check = () => {
           pending = false;
           const root = document.scrollingElement, sheet = style.sheet;
@@ -31,24 +32,21 @@ enum PageStyle {
           sheet.disabled = true;
           sheet.disabled = root.scrollWidth - root.clientWidth > 32;
         };
+        // Fixed boxes don't widen the page, nor do scrolling or clipping ones with what they hide.
+        // An element without a box (display: contents, a framework's wrapper) is looked into.
+        const reaches = (parent, limit) => [...parent.children].some(el => {
+          const box = el.getBoundingClientRect();
+          if (!box.width && !box.height && getComputedStyle(el).display === 'contents') return reaches(el, limit);
+          if (Math.max(box.right, box.left + el.scrollWidth) <= limit) return false;
+          const css = getComputedStyle(el);
+          return css.position !== 'fixed' && (box.right > limit || css.overflowX === 'visible');
+        });
         const recheck = () => {
-          const root = document.scrollingElement, sheet = style.sheet, targets = [...changed], everything = all;
+          const root = document.scrollingElement, sheet = style.sheet, body = document.body;
           settle = first = 0;
-          all = false;
-          changed.clear();
-          if (!wide.matches || !root || !root.clientWidth || !sheet) return;
-          if (sheet.disabled) {
-            sheet.disabled = root.scrollWidth - root.clientWidth > 32;
-          } else if (everything || targets.some(el => {
-            if (!el.isConnected) return false;
-            const box = el.getBoundingClientRect();
-            return Math.max(box.right, box.left + el.scrollWidth) > root.clientWidth + 32;
-          })) check();
-        };
-        const note = target => {
-          const body = document.body;
-          if (target === body || !body?.contains(target)) all = true;
-          else changed.add(target);
+          if (!wide.matches || !root || !root.clientWidth || !sheet || !body) return;
+          if (sheet.disabled) sheet.disabled = root.scrollWidth - root.clientWidth > 32;
+          else if (reaches(body, root.clientWidth + 32)) check();
         };
         const schedule = () => {
           const now = performance.now();
@@ -56,22 +54,20 @@ enum PageStyle {
           clearTimeout(settle);
           settle = setTimeout(recheck, Math.max(0, Math.min(200, first + 1000 - now)));
         };
+        const observer = new MutationObserver(schedule);
+        const watch = () => {
+          if (wide.matches) observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'width', 'height'] });
+          else observer.disconnect();
+        };
         addEventListener('load', () => {
           check();
-          new MutationObserver(records => {
-            if (!wide.matches) return;
-            for (const record of records) {
-              if (record.type === 'attributes') { note(record.target); continue; }
-              for (const node of record.addedNodes) note(node.nodeType === 1 ? node : record.target);
-            }
-            schedule();
-          }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
-          // An image or a style sheet that loads after it's added: load doesn't bubble, nor reach window.
-          document.addEventListener('load', event => {
-            if (!wide.matches) return;
-            note(event.target);
-            schedule();
-          }, true);
+          watch();
+          wide.addEventListener('change', watch);
+          // An image, style sheet or video that gets its size after it's added: these events don't
+          // bubble, nor reach window.
+          for (const type of ['load', 'loadedmetadata']) {
+            document.addEventListener(type, () => { if (wide.matches) schedule(); }, true);
+          }
         }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });
         """)

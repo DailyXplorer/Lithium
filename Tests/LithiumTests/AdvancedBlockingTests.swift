@@ -125,19 +125,31 @@ struct AdvancedBlockingTests {
     /// Read from the raw `+js()` lines, not through the converter under test, so a rule it drops still counts.
     static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
         let ubo = try #require(UBOScriptlets.bundled)
-        let onYouTube = { (sites: Substring) in sites.split(separator: ",").contains { $0 == "youtube.com" || $0 == "www.youtube.com" } }
+        let youTube: Set<Substring> = ["youtube.com", "www.youtube.com"]
+        // No site, or only `~` exclusions, is every site, as in uBO.
+        let onYouTube = { (sites: Substring) in
+            let entries = sites.split(separator: ",")
+            let permitted = entries.filter { !$0.hasPrefix("~") }
+            return permitted.isEmpty ? !entries.contains { youTube.contains($0.dropFirst()) } : permitted.contains { youTube.contains($0) }
+        }
+        // uBO trims the spaces around each argument and resolves aliases, so `set,a` and `set-constant.js, a` are one scriptlet.
+        let key = { (body: String) -> String in
+            var arguments = body.split(separator: ",", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            arguments[0] = ubo.resourceName(arguments[0]) ?? arguments[0]
+            return arguments.joined(separator: ",")
+        }
         var run: [String] = []
         var excepted: Set<String> = []
         for filter in filters where filter.hasSuffix(")") {
             let isException = filter.contains("#@#+js(")
             guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), onYouTube(filter[..<marker.lowerBound]) else { continue }
             let body = filter[marker.upperBound..<filter.index(before: filter.endIndex)].trimmingCharacters(in: .whitespaces)
-            if isException { excepted.insert(body) } else if body.contains("adPlacements") { run.append(body) }
+            if isException { excepted.insert(key(body)) } else if body.contains("adPlacements") { run.append(body) }
         }
         // A bare `youtube.com#@#+js()` turns off every scriptlet there.
         guard !excepted.contains("") else { return [:] }
         var scriptlets: [String: String] = [:]
-        for body in run where !excepted.contains(body) {
+        for body in run where !excepted.contains(key(body)) {
             let token = String(body.prefix { $0 != "," }).trimmingCharacters(in: .whitespaces)
             guard let name = ubo.resourceName(token), let resource = ubo.resources[name] else {
                 Issue.record("\(token) isn't a bundled uBO scriptlet")
@@ -160,6 +172,20 @@ struct AdvancedBlockingTests {
         ])
         #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
         #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "youtube.com#@#+js()"]).isEmpty)
+    }
+
+    /// Rules for every site run on YouTube too, and an exception matches however its arguments are spaced or named.
+    @Test func youTubeAdScriptletsCountSiteWideRulesAndMatchExceptionsAsUBODoes() throws {
+        let scriptlets = try Self.youTubeAdScriptlets(in: [
+            "##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)",
+            "~example.org##+js(trusted-edit-inbound-object.js, JSON.parse, adPlacements)",
+            "~youtube.com##+js(json-prune, adPlacements)",
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com#@#+js(set-constant.js,ytInitialPlayerResponse.adPlacements,  undefined)",
+        ])
+        #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js(json-prune, adPlacements)"]).isEmpty)
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "#@#+js()"]).isEmpty)
     }
 
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.

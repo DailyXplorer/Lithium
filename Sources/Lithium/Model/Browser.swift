@@ -1318,6 +1318,9 @@ final class Browser {
         saveSession(now: true)
         await history.clear()
         await clearIcons()
+        // Again for a tab closed or woken meanwhile. The quit save above already leaves lists out.
+        closedTabs.removeAll()
+        pages.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
     }
 
     /// A private tab's host doesn't count: keeping its icon would keep an earlier visit.

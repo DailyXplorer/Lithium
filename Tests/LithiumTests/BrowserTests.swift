@@ -1444,6 +1444,37 @@ struct BrowserTests {
         await clearing.value
     }
 
+    /// A tab closed while the visits are still being cleared doesn't come back with ⇧⌘T, and a
+    /// tab woken meanwhile keeps no back list for the quit save.
+    @Test func tabsClosedOrWokenWhileTheHistoryClearsAreCleared() async throws {
+        let browser = Browser()
+        let woken = try await tabWithSavedBackList(in: browser)
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>Shown</title>\(UUID().uuidString)")!)
+        let closed = browser.newTab(url: URL(string: "data:text/html,<title>Closed</title>\(UUID().uuidString)")!)
+        defer { browser.close(woken); browser.close(shown); browser.saveNow() }
+        browser.select(shown)
+        woken.sleep(configuration: browser.makeConfiguration(for: woken.url))
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        browser.close(closed)
+        browser.select(woken)
+        #expect(await waitUntil(30) { loaded(woken) })
+        woken.load(URL(string: "data:text/html,<title>Third</title>\(UUID().uuidString)")!)
+        #expect(await waitUntil(10) { loaded(woken) && woken.webView.title == "Third" && woken.canGoBack })
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
+
+        #expect(!browser.canReopenClosedTab)
+        browser.saveNow()
+        #expect(try !savesBackList(woken))
+    }
+
     /// A session write that failed is tried again at the next save, though nothing changed since.
     @Test func aFailedSessionWriteIsTriedAgain() throws {
         let browser = Browser()

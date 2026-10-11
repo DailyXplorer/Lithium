@@ -17,14 +17,29 @@ struct BrowserTests {
     /// new uBO scriptlets); it must still get uBO's YouTube scriptlets, or its video plays an ad.
     @Test func restoredTabGetsTheAdScriptletsWhileTheEngineBuilds() async throws {
         try? FileManager.default.removeItem(at: URL.applicationSupportDirectory.appending(path: "Lithium/AdvancedEngine"))
+        // A downloaded set, newer than the one the app ships: the test needs no generated lists.
+        let filters = URL.applicationSupportDirectory.appending(path: "Lithium/Filters")
+        try FileManager.default.createDirectory(at: filters, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: filters) }
+        try "".write(to: filters.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        try "www.youtube.com##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)"
+            .write(to: filters.appending(path: "scriptlets.txt"), atomically: true, encoding: .utf8)
+        let manifest = Manifest(format: Manifest.currentFormat, updated: ISO8601DateFormatter().string(from: Date()),
+                                groups: [:], advancedRules: 0, scriptletRules: 1)
+        try JSONEncoder().encode(manifest).write(to: filters.appending(path: "manifest.json"))
         let url = URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!
         SessionStore.save(Session(tabs: [.init(url: url, title: "YouTube", customTitle: nil, pinID: nil)], selectedIndex: 0))
         let browser = Browser()
         let tab = try #require(browser.selectedTab)
         browser.windowDidAppear()
         let controller = tab.webView.configuration.userContentController
-        #expect(await waitUntil(120) { !controller.userScripts.isEmpty })
-        #expect(controller.userScripts.contains { $0.source.contains("function trustedJsonEditXhrRequest(") })
+        // Farbling goes in with the engine's script, once the tab's protections are set; the
+        // now-playing script, there from the start, says nothing about them.
+        let farbling = browser.privacy.farblingSource(for: url)
+        #expect(await waitUntil(120) { controller.userScripts.contains { $0.source == farbling } })
+        let script = try #require(browser.privacy.advanced.script(for: url))
+        #expect(script.contains("adPlacements"))
+        #expect(controller.userScripts.contains { $0.source == script })
     }
 
     /// Launch leaves restored tabs asleep and bare: no web view configuration, no icon read, and

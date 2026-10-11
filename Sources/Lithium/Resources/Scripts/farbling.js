@@ -91,6 +91,7 @@
   const dispatchEvent = member(EventTarget.prototype, 'dispatchEvent').value;
   const nodeType = member(Node.prototype, 'nodeType').get;
   const parentNode = member(Node.prototype, 'parentNode').get;
+  const isConnected = member(Node.prototype, 'isConnected').get;
   const documentView = member(Document.prototype, 'defaultView').get;
   // By node type: elements, documents, fragments and shadow roots.
   const queryAll = { __proto__: null,
@@ -598,12 +599,16 @@
       const count = found === null ? 0 : read(nodeCount, found);
       for (let i = 0; i < count; i++) protectFrame(found[i]);
     };
-    // Runs on every DOM insertion of the page, so it does as little as it can.
+    // Runs on every DOM insertion of the page, so it does as little as it can. A subtree still
+    // out of the document isn't searched: its frames have no window yet, and frameworks build
+    // their trees that way, one insertion at a time. The insertion that puts it in searches it.
     const protectInserted = (node) => {
       if (node === null || typeof node !== 'object' || read(nodeType, node) !== 1) return;
       const name = read(elementName, node);
       if (name === 'iframe' || name === 'frame') protectFrame(node);
-      else if (read(firstElementChild, node) && apply(querySelector, node, ['iframe, frame']) !== null) protectAll(framesIn(node));
+      else if (read(firstElementChild, node) && read(isConnected, node) && apply(querySelector, node, ['iframe, frame']) !== null) {
+        protectAll(framesIn(node));
+      }
     };
     // A fragment hands its children over on insertion, so its frames are listed before.
     const framesBefore = (node) => node !== null && typeof node === 'object' && read(nodeType, node) === 11 ? framesIn(node) : null;

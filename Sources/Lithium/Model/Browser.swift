@@ -115,6 +115,9 @@ final class Browser {
     /// As macOS last reported it: the source only speaks when the level changes.
     @ObservationIgnored private var memoryLevel: DispatchSource.MemoryPressureEvent = .normal
     @ObservationIgnored private var savedSession: Session?
+    /// The file's, history included, when the last write was a quit's or the file was read at
+    /// launch: `savedSession` leaves the history out, as saves before quitting do.
+    @ObservationIgnored private var savedWithHistory: Session?
     /// The last one handed to a write off the main thread, which may not have ended.
     @ObservationIgnored private var queuedSession: Session?
     @ObservationIgnored private var sessionSave: Task<Void, Never>?
@@ -186,7 +189,7 @@ final class Browser {
         let saved = SessionStore.load()
         restore(saved)
         // Written only when restoring changed it (a tab left out, a space gone), not at every launch.
-        savedSession = saved
+        (savedSession, savedWithHistory) = (saved.withoutHistory, saved)
         saveSession()
         Task { [tidyTitles] in
             // Off the launch path: the model loads once the window is up.
@@ -1164,7 +1167,8 @@ final class Browser {
 
     // MARK: Session
 
-    /// `quitting` adds the loaded tabs' back and forward pages.
+    /// `quitting` adds the tabs' back and forward pages, left out of other saves: WebKit serializes a
+    /// loaded tab's on the main thread, and every save would rewrite each sleeping tab's.
     private func session(quitting: Bool) -> Session {
         var session = Session()
         var places: [Tab.ID: Int] = [:]
@@ -1177,7 +1181,7 @@ final class Browser {
             let lastShown = tab.spaceID != currentSpaceID && spaceSelections[tab.spaceID] == tab.id
             session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID,
                                             spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID,
-                                            history: quitting || tab.isAsleep ? tab.history as? Data : nil))
+                                            history: quitting ? tab.history as? Data : nil))
         }
         session.splits = savedSplits(at: places)
         session.folders = savedFolders
@@ -1254,10 +1258,10 @@ final class Browser {
         if now {
             titleSave?.cancel()
             titleSave = nil
-            // Kept as written without the loaded tabs' history, which later saves leave out.
+            // Kept as written without the history, which later saves leave out.
             let quitting = self.session(quitting: true)
-            guard session != savedSession || queuedSession != session || quitting != session else { return }
-            if SessionStore.save(quitting) { (savedSession, queuedSession) = (session, session) }
+            guard session != savedSession || queuedSession != session || quitting != (savedWithHistory ?? session) else { return }
+            if SessionStore.save(quitting) { (savedSession, queuedSession, savedWithHistory) = (session, session, quitting) }
             return
         }
         let written = queuedSession ?? savedSession
@@ -1275,6 +1279,7 @@ final class Browser {
         titleSave?.cancel()
         titleSave = nil
         queuedSession = session
+        savedWithHistory = nil
         SessionStore.saveInBackground(session) { [weak self] written in
             guard let self else { return }
             if written {
@@ -1302,11 +1307,13 @@ final class Browser {
         if pinsUnsaved { savePins() }
     }
 
-    /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists.
+    /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists, and the open
+    /// tabs' lists, which the session saves at quit.
     func clearHistory() async {
         await history.clear()
         await clearIcons()
         closedTabs.removeAll()
+        tabs.filter { !$0.isEphemeral }.forEach { $0.forgetHistory() }
     }
 
     /// A private tab's host doesn't count: keeping its icon would keep an earlier visit.

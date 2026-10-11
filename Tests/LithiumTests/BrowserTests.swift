@@ -882,7 +882,8 @@ struct BrowserTests {
     }
 
     /// A tab comes back after a relaunch with its back history, saved at quit, and keeps it while
-    /// asleep. Saves before quitting leave a loaded tab's out: WebKit serializes it on the main thread.
+    /// asleep. Saves before quitting leave it out: WebKit serializes a loaded tab's on the main
+    /// thread, and a sleeping tab's would be rewritten at every save.
     @Test func aRelaunchKeepsATabsHistory() async throws {
         let id = UUID().uuidString
         func isSecond(_ url: URL?) -> Bool { url?.absoluteString.contains("second-\(id)") == true }
@@ -898,12 +899,16 @@ struct BrowserTests {
         browser.saveNow()
         #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil)
 
+        let writes = SessionStore.writes
         let relaunched = Browser()
         let restored = try #require(relaunched.tabs.first { isSecond($0.url) })
         #expect(restored.isAsleep)
         let otherTab = relaunched.newTab(url: URL(string: "data:text/html,other-\(id)")!, selecting: false)
         defer { relaunched.close(restored); relaunched.close(otherTab); relaunched.saveNow() }
         #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.url.absoluteString.contains("other-\(id)") } })
+        #expect(SessionStore.writes == writes + 1, "not written again at launch")
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save while asleep")
+        relaunched.saveNow()
         #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil, "kept while asleep")
 
         relaunched.select(restored)
@@ -1055,6 +1060,8 @@ struct BrowserTests {
         browser.close(popup)
         #expect(browser.selectedTab === favorite)
         #expect(favorite.unread.shown == .dot)
+        // `browser.window` is weak: this keeps the window alive until here.
+        #expect(browser.window === window)
     }
 
     /// A tab zoomed in wakes from sleep at the same zoom.
@@ -1325,6 +1332,39 @@ struct BrowserTests {
         #expect(browser.canReopenClosedTab)
         await browser.clearHistory()
         #expect(!browser.canReopenClosedTab)
+    }
+
+    /// Clearing the history leaves the open tabs' back lists out of the quit save, so a relaunch
+    /// doesn't bring the pages back, whether the tab is loaded or asleep.
+    @Test func clearingTheHistoryForgetsOpenTabsBackLists() async throws {
+        let id = UUID().uuidString
+        let browser = Browser()
+        func savesHistory(_ tab: Tab) throws -> Bool {
+            try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+        }
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>First</title>shown-\(id)")!)
+        let sleeping = browser.newTab(url: URL(string: "data:text/html,<title>First</title>sleeping-\(id)")!)
+        defer { browser.close(shown); browser.close(sleeping); browser.saveNow() }
+        for (tab, name) in [(shown, "shown"), (sleeping, "sleeping")] {
+            #expect(await waitUntil(120) { loaded(tab) })
+            tab.load(URL(string: "data:text/html,<title>Second</title>\(name)-second-\(id)")!)
+            #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        }
+        browser.select(shown)
+        sleeping.sleep(configuration: browser.makeConfiguration(for: sleeping.url))
+        browser.saveNow()
+        #expect(try savesHistory(shown))
+        #expect(try savesHistory(sleeping))
+
+        await browser.clearHistory()
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
+        #expect(try !savesHistory(sleeping))
+        // Nor kept when it sleeps.
+        browser.select(sleeping)
+        shown.sleep(configuration: browser.makeConfiguration(for: shown.url))
+        browser.saveNow()
+        #expect(try !savesHistory(shown))
     }
 
     /// A session write that failed is tried again at the next save, though nothing changed since.

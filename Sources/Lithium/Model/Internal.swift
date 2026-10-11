@@ -276,6 +276,8 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             }
         case "removeExtension":
             if let id = value as? String { await browser.extensions.remove(id: id) }
+        case "updateExtension":
+            if let id = value as? String { await updateExtension(id, in: browser, window: message.webView?.window) }
         case "openExtensionOptions":
             if let id = value as? String { browser.extensions.openOptions(id: id) }
         case "openWebStore":
@@ -345,6 +347,29 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         } catch {
             NSAlert(error: error).runModal()
             return false
+        }
+    }
+
+    /// Shows what the refused version can do, as adding it from the store does, before it replaces
+    /// the installed one.
+    private func updateExtension(_ id: String, in browser: Browser, window: NSWindow?) async {
+        let name = browser.extensions.installed.first { $0.id == id }?.name ?? id
+        let present = { @MainActor (alert: NSAlert) async -> NSApplication.ModalResponse in
+            if let window { await alert.beginSheetModal(for: window) } else { alert.runModal() }
+        }
+        do {
+            try await browser.extensions.updateRefused(id: id) { warnings in
+                let alert = NSAlert()
+                alert.messageText = "Update “\(name)”?"
+                alert.informativeText = warnings.isEmpty ? "It needs no special access." : "It can:\n" + warnings.map { "• \($0)" }.joined(separator: "\n")
+                alert.addButton(withTitle: "Update")
+                alert.addButton(withTitle: "Cancel")
+                return await present(alert) == .alertFirstButtonReturn
+            }
+        } catch ChromeWebStore.PackageError.moreAccess {
+            // Declined: the installed version stays, and Settings still offers the newer one.
+        } catch {
+            _ = await present(NSAlert(error: error))
         }
     }
 

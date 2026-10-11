@@ -378,6 +378,38 @@ struct ExtensionsTests {
         #expect(relaunched.installed == [InstalledExtension(id: id, name: "Tiny", version: "2.1", isEnabled: true)])
     }
 
+    /// A refused version could never be accepted, short of removing the extension and its data:
+    /// Settings shows what it can do, and once accepted it replaces the installed one in place.
+    @Test(.timeLimit(.minutes(1))) func aRefusedUpdateCanBeAccepted() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        extensions.latestVersions = { _ in [self.id: "2.0"] }
+        let greedy = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "2.0", "host_permissions": ["<all_urls>"]}"#)
+        extensions.downloadArchive = { _ in greedy }
+        await extensions.updateIfDue()
+        try #require(extensions.installed.first?.refusedVersion == "2.0")
+
+        var shown: [[String]] = []
+        await #expect(throws: ChromeWebStore.PackageError.moreAccess) {
+            try await extensions.updateRefused(id: id) { warnings in
+                shown.append(warnings)
+                return false
+            }
+        }
+        #expect(extensions.installed.first?.version == "1.0")
+        #expect(extensions.installed.first?.refusedVersion == "2.0")
+
+        try await extensions.updateRefused(id: id) { warnings in
+            shown.append(warnings)
+            return true
+        }
+        #expect(shown == Array(repeating: ["Read and change all your data on all websites"], count: 2))
+        #expect(extensions.installed == [InstalledExtension(id: id, name: "Tiny", version: "2.0", isEnabled: true)])
+        #expect(extensions.contexts[id] != nil)
+    }
+
     /// Settings showed no icon for a turned-off extension: it has no context to draw one from.
     @Test func aTurnedOffExtensionKeepsItsIcon() async throws {
         let folder = folder()

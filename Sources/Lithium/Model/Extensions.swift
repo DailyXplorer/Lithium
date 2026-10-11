@@ -262,6 +262,19 @@ final class Extensions: NSObject {
 
     static let updateInterval: TimeInterval = 24 * 60 * 60
 
+    /// A refused version was otherwise never installed, and removing the extension deletes its
+    /// data: from Settings, the latest version replaces it in place once `confirm` accepts what it
+    /// can do, as `ChromeWebStore.warnings` words it. Throws `moreAccess` if declined.
+    func updateRefused(id: String, confirm: @escaping @MainActor ([String]) async -> Bool) async throws {
+        guard installed.contains(where: { $0.id == id && $0.refusedVersion != nil }) else { return }
+        let archive = try await downloadArchive(id)
+        try await serially(id) {
+            // Removed while it downloaded: not added back.
+            guard self.installed.contains(where: { $0.id == id }) else { return }
+            try await self.replace(id, with: archive, approved: try await self.access(id), isUpdate: true, confirm: confirm)
+        }
+    }
+
     /// Settings shows a turned-off extension's icon too: with no context, it's read from the
     /// manifest's `icons`, the smallest at least `size` points wide.
     func icon(_ id: String, size: Int = 32) -> NSImage? {
@@ -293,7 +306,11 @@ final class Extensions: NSObject {
     }
 
     /// `isUpdate` leaves the extension on or off, as it is when the new version is in place.
-    private func replace(_ id: String, with archive: Data, approved: ChromeWebStore.Access?, isUpdate: Bool = false) async throws {
+    /// `confirm` is asked about a package needing more than `approved`, which is refused without it.
+    private func replace(
+        _ id: String, with archive: Data, approved: ChromeWebStore.Access?, isUpdate: Bool = false,
+        confirm: (@MainActor ([String]) async -> Bool)? = nil
+    ) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let package = folder.appending(path: ".\(id)-\(UUID().uuidString).zip")
         try archive.write(to: package)
@@ -313,7 +330,8 @@ final class Extensions: NSObject {
                 permissions: staged.requestedPermissions.map(\.rawValue),
                 patterns: staged.allRequestedMatchPatterns.map(\.string)
             )
-            guard ChromeWebStore.Access(manifest: manifest).isCovered(by: approved), granted.isCovered(by: approved) else {
+            let isCovered = ChromeWebStore.Access(manifest: manifest).isCovered(by: approved) && granted.isCovered(by: approved)
+            if !isCovered, await confirm?(ChromeWebStore.warnings(for: manifest)) != true {
                 throw ChromeWebStore.PackageError.moreAccess
             }
         }

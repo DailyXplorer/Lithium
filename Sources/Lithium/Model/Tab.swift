@@ -402,11 +402,12 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    func restore(url: URL, title: String) {
+    func restore(url: URL, title: String, history: Data? = nil) {
         self.url = url
         self.title = title
         restoredIconURL = url
         isAsleep = true
+        sleepingState = history
         hasHadPage = true
     }
 
@@ -1841,7 +1842,7 @@ extension Tab: WKWebExtensionTab {
     }
 
     /// A sleeping tab keeps its old page one Back away: with its history saved, the old page's load
-    /// is superseded; without (restored from the last session), it wakes onto the old page first.
+    /// is superseded; without (restored after a crash), it wakes onto the old page first.
     /// Between an extension's pages and websites, it wakes in a new web view without its history.
     func loadURL(_ url: URL, for context: WKWebExtensionContext) async throws {
         guard Extensions.mayOpen(url) else { throw Extensions.RefusedAddress() }

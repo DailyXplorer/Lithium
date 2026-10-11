@@ -1164,7 +1164,8 @@ final class Browser {
 
     // MARK: Session
 
-    private var session: Session {
+    /// `quitting` adds the loaded tabs' back and forward pages.
+    private func session(quitting: Bool) -> Session {
         var session = Session()
         var places: [Tab.ID: Int] = [:]
         for tab in tabs {
@@ -1175,7 +1176,8 @@ final class Browser {
             let title = tab.isShowingError ? "" : tab.title
             let lastShown = tab.spaceID != currentSpaceID && spaceSelections[tab.spaceID] == tab.id
             session.tabs.append(Session.Tab(url: url, title: title, customTitle: tab.customTitle, pinID: tab.pinID,
-                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID))
+                                            spaceID: Space.saved(tab.spaceID), lastShown: lastShown ? true : nil, folderID: tab.folderID,
+                                            history: quitting || tab.isAsleep ? tab.history as? Data : nil))
         }
         session.splits = savedSplits(at: places)
         session.folders = savedFolders
@@ -1199,7 +1201,7 @@ final class Browser {
             let space = saved.spaceID.flatMap { id in spaces.contains { $0.id == id } ? id : nil } ?? Space.mainID
             // Its configuration is made as it wakes: most restored tabs stay asleep for a while.
             let tab = Tab(browser: self, configuration: nil, space: space)
-            tab.restore(url: saved.url, title: saved.title)
+            tab.restore(url: saved.url, title: saved.title, history: saved.history)
             tab.customTitle = saved.customTitle
             tab.pinID = saved.pinID.flatMap { id in pins.contains { $0.id == id && $0.space == space } ? id : nil }
             tab.folderID = saved.folderID.flatMap { id in tab.pinID == nil && folderExists(id, in: space) ? id : nil }
@@ -1243,7 +1245,7 @@ final class Browser {
     private func saveSession(now: Bool = false, titlesDue: Bool = false) {
         sessionSave?.cancel()
         sessionSave = nil
-        let session = withObservationTracking { self.session } onChange: { [weak self] in
+        let session = withObservationTracking { self.session(quitting: false) } onChange: { [weak self] in
             Task { @MainActor in self?.sessionChanged() }
         }
         // A failed write leaves the old file: the next save tries again rather than taking it as written.
@@ -1252,8 +1254,10 @@ final class Browser {
         if now {
             titleSave?.cancel()
             titleSave = nil
-            guard session != savedSession || queuedSession != session else { return }
-            if SessionStore.save(session) { (savedSession, queuedSession) = (session, session) }
+            // Kept as written without the loaded tabs' history, which later saves leave out.
+            let quitting = self.session(quitting: true)
+            guard session != savedSession || queuedSession != session || quitting != session else { return }
+            if SessionStore.save(quitting) { (savedSession, queuedSession) = (session, session) }
             return
         }
         let written = queuedSession ?? savedSession

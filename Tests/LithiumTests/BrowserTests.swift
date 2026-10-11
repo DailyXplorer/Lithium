@@ -881,6 +881,38 @@ struct BrowserTests {
         #expect(!tab.canGoBack)
     }
 
+    /// A tab comes back after a relaunch with its back history, saved at quit, and keeps it while
+    /// asleep. Saves before quitting leave a loaded tab's out: WebKit serializes it on the main thread.
+    @Test func aRelaunchKeepsATabsHistory() async throws {
+        let id = UUID().uuidString
+        func isSecond(_ url: URL?) -> Bool { url?.absoluteString.contains("second-\(id)") == true }
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        // Written now, not a moment into the next test, which counts writes.
+        defer { browser.close(tab); browser.saveNow() }
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" })
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { isSecond($0.url) } })
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history == nil, "not at every save")
+        browser.saveNow()
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil)
+
+        let relaunched = Browser()
+        let restored = try #require(relaunched.tabs.first { isSecond($0.url) })
+        #expect(restored.isAsleep)
+        let otherTab = relaunched.newTab(url: URL(string: "data:text/html,other-\(id)")!, selecting: false)
+        defer { relaunched.close(restored); relaunched.close(otherTab); relaunched.saveNow() }
+        #expect(await waitUntil(10) { SessionStore.load().tabs.contains { $0.url.absoluteString.contains("other-\(id)") } })
+        #expect(SessionStore.load().tabs.first { isSecond($0.url) }?.history != nil, "kept while asleep")
+
+        relaunched.select(restored)
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "Second" })
+        #expect(await waitUntil(5) { restored.canGoBack })
+        restored.webView.goBack()
+        #expect(await waitUntil(10) { loaded(restored) && restored.webView.title == "First" })
+    }
+
     /// Low memory spares a tab used a moment ago; critical memory puts every background tab to sleep, never the selected one.
     @Test func memoryPressureSleepsBackgroundTabs() async throws {
         let browser = Browser()

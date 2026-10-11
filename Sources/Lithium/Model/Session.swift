@@ -12,6 +12,9 @@ struct Session: Codable, Equatable {
         /// The tab last shown in a space other than the one shown at quit.
         var lastShown: Bool? = nil
         var folderID: TabFolder.ID? = nil
+        /// Its back and forward pages (`WKWebView.interactionState`): a sleeping tab's at every
+        /// save, already at hand; a loaded tab's only at quit, as WebKit serializes them on the main thread.
+        var history: Data? = nil
     }
 
     var tabs: [Tab] = []

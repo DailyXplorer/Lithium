@@ -54,6 +54,8 @@ enum Theme {
     @MainActor private static var fontSetObserver: (any NSObjectProtocol)?
     /// Lookups that missed the cache, for the tests.
     @MainActor private(set) static var pickedFontLookups = 0
+    /// Font set changes seen by the observer, for the tests: only it moves this, unlike the family.
+    @MainActor private(set) static var fontSetChanges = 0
 
     /// Nil for a family not on this Mac.
     @MainActor static func pickedFont(_ family: String, _ size: CGFloat, _ weight: Font.Weight) -> NSFont? {
@@ -66,7 +68,10 @@ enum Theme {
         let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: scale, size: size)
         if font == nil, fontSetObserver == nil {
             fontSetObserver = NotificationCenter.default.addObserver(forName: NSFont.fontSetChangedNotification, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { pickedFonts = ("", [:]) }
+                MainActor.assumeIsolated {
+                    pickedFonts = ("", [:])
+                    fontSetChanges += 1
+                }
             }
         }
         pickedFonts.fonts.updateValue(font, forKey: key)

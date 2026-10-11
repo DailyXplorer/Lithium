@@ -56,11 +56,13 @@ struct FontChoiceTests {
         #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
         #expect(Theme.pickedFonts.fonts.count == 1)
         #expect(Theme.pickedFontLookups == lookups, "the miss comes from the cache")
+        // Waits on the observer's own count: another suite drawing in another family empties the cache too.
+        let changes = Theme.fontSetChanges
         NotificationCenter.default.post(name: NSFont.fontSetChangedNotification, object: nil)
-        let remembered = { Theme.pickedFonts.family == "No Such Font 9C2E" && !Theme.pickedFonts.fonts.isEmpty }
         let deadline = Date().addingTimeInterval(2)
-        while remembered(), Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
-        #expect(!remembered(), "looked up again after the fonts change")
+        while Theme.fontSetChanges == changes, Date() < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+        #expect(Theme.fontSetChanges > changes, "the fonts change is seen")
+        #expect(Theme.pickedFonts.family != "No Such Font 9C2E" || Theme.pickedFonts.fonts.isEmpty, "looked up again after the fonts change")
     }
 
     @Test func thePickedInterfaceFontKeepsSizeAndWeight() throws {

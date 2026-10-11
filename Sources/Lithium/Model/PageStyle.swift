@@ -20,7 +20,7 @@ enum PageStyle {
     /// restyles the page, so while it's on that only happens when one of body's children, or what
     /// overflows it, or a node that changed reaches past the right edge (absolutely positioned
     /// content doesn't widen its parent; text in body and nodes outside it aren't body's children),
-    /// unless it's fixed or inside a clipping box; while it's off, the plain measurement is enough.
+    /// unless it's in a fixed box or a box that clips it; while it's off, the plain measurement is enough.
     /// A layout that narrows again is clipped again, as on resize, and one wider than the view, even
     /// for a moment, scrolls while it is. A change inside a shadow root is only measured with the
     /// next change outside one.
@@ -53,11 +53,19 @@ enum PageStyle {
           const box = node.getBoundingClientRect();
           return Math.max(box.right, box.left + node.scrollWidth);
         };
-        // As in reaches: a carousel's track moving inside its clipping box mustn't restyle the page.
+        // As in reaches: a carousel's track moving inside its clipping box mustn't restyle the page,
+        // nor what's in a fixed box. A box clips only what it contains: an absolutely positioned
+        // one escapes the static boxes up to the positioned one it's placed in.
         const clipped = node => {
-          if (node.nodeType === 1 && getComputedStyle(node).position === 'fixed') return true;
+          let css = getComputedStyle(node.nodeType === 1 ? node : node.parentElement);
+          if (css.position === 'fixed') return true;
+          let escapes = node.nodeType === 1 && css.position === 'absolute';
           for (let el = node.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
-            if (getComputedStyle(el).overflowX !== 'visible') return true;
+            css = getComputedStyle(el);
+            if (css.position === 'fixed') return true;
+            if (escapes && css.position === 'static') continue;
+            if (css.overflowX !== 'visible') return true;
+            escapes = css.position === 'absolute';
           }
           return false;
         };
@@ -76,14 +84,11 @@ enum PageStyle {
           clearTimeout(settle);
           settle = setTimeout(recheck, Math.max(0, Math.min(200, first + 1000 - now)));
         };
-        // Text deeper down is measured with the element it's in.
+        // Text is measured where it lays out, which may be outside its parent's box (display: contents).
         const observer = new MutationObserver(records => {
-          const body = document.body;
           for (const record of records) {
             if (record.type === 'attributes') changed.add(record.target);
-            else for (const node of record.addedNodes) {
-              changed.add(node.nodeType === 1 || record.target === body || record.target === document.documentElement ? node : record.target);
-            }
+            else for (const node of record.addedNodes) changed.add(node);
           }
           schedule();
         });

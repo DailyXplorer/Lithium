@@ -244,6 +244,7 @@ struct BrowserTests {
             <p class='toggle'>toggle</p><div class='wide'></div>
             <div id='line' style='white-space: nowrap'><span style='display: inline-block; width: 1180px'></span></div>
             <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div><span id='tip' style='position: absolute; left: 0; top: 0'>x</span></div>
+            <div id='card' style='overflow: hidden'><p>card</p></div><div id='bare' style='display: contents'></div>
             """)
         defer { listener.cancel(); browser.close(tab) }
         #expect(await sidewaysOverflow(tab, "clip"))
@@ -261,6 +262,10 @@ struct BrowserTests {
             ("wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
             ("menu.style.display = 'block'", "menu.style.display = 'none'"),
             ("tip.textContent = 'W'.repeat(300)", "tip.textContent = 'x'"),
+            // A static clipping box doesn't clip an absolutely positioned box placed above it.
+            ("card.append(Object.assign(document.createElement('span'), { id: 'out', style: 'position: absolute; left: 1100px; width: 300px; height: 20px' }))", "out.remove()"),
+            ("bare.textContent = 'W'.repeat(300)", "bare.textContent = ''"),
+            ("document.append(document.createComment('x')); wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
             ("document.documentElement.append(Object.assign(document.createElement('div'), { id: 'after', style: 'width: 1500px; height: 20px' }))", "after.remove()"),
             ("document.body.append(Object.assign(document.createElement('style'), { id: 'sheet', textContent: '.wide { display: block }' }))", "sheet.remove()"),
             ("document.body.insertAdjacentHTML('beforeend', `<div id='contents' style='display: contents'><div style='width: 1500px; height: 20px'></div></div>`)", "contents.remove()"),

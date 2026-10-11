@@ -96,26 +96,65 @@ struct AdvancedBlockingTests {
         #expect(blocking.script(for: URL(string: "https://example.org/")!)?.contains("lithiumProbe") == true)
     }
 
-    @Test func bundledListsCarryYouTubeAdScriptlets() async throws {
-        let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
+    /// The lists scripts/update-filters.py generates into the app; a checkout that never ran it has none.
+    nonisolated private static let bundledFilters = Resources.bundle.url(forResource: "Filters", withExtension: nil)
+        .flatMap { FileManager.default.fileExists(atPath: $0.appending(path: "scriptlets.txt").path) ? $0 : nil }
+
+    /// Every uBO scriptlet the bundled lists run against YouTube's ad placements reaches the page.
+    /// They are read from the lists, not named here: uBO swaps them as YouTube changes its player.
+    @Test(.enabled(if: bundledFilters != nil, "No generated filter lists: run scripts/update-filters.py"))
+    func bundledListsCarryYouTubeAdScriptlets() async throws {
+        let folder = try #require(Self.bundledFilters)
         let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))
-        await blocking.load(folder: folder, stamp: UUID().uuidString)
+        #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
         let script = try #require(blocking.script(for: URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!))
         #expect(script.contains("adPlacements"))
-        // uBO-only scriptlets YouTube's ads are fought with; AdGuard's library has neither.
-        #expect(script.contains("function trustedJsonEditXhrRequest("))
-        #expect(script.contains("function trustedPreventDomBypass("))
+        let filters = try String(contentsOf: folder.appending(path: "scriptlets.txt"), encoding: .utf8)
+        let scriptlets = try Self.youTubeAdScriptlets(in: filters.split(whereSeparator: \.isNewline).map(String.init))
+        #expect(!scriptlets.isEmpty, "the lists have no YouTube scriptlet against adPlacements")
+        for (name, code) in scriptlets {
+            #expect(script.contains(code), "\(name) isn't in YouTube's script")
+        }
         // The real lists run end to end: the page loads and the player answer comes back without its ads.
         let result = try #require(try await FakeYouTube.run(Self.playerProbe, script: script))
         #expect(result.hasPrefix(#"["undefined","#) && result.contains("videoDetails"))
         #expect(!result.contains("adPlacements") && !result.contains("adSlots"))
     }
 
+    /// uBO's scriptlets that `filters` run on www.youtube.com against `adPlacements`, by name, with their code.
+    private static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
+        let ubo = try #require(UBOScriptlets.bundled)
+        let onYouTube = { (sites: Substring) in sites.split(separator: ",").contains { $0 == "youtube.com" || $0 == "www.youtube.com" } }
+        var run: [String] = []
+        var excepted: Set<String> = []
+        for rule in ubo.adguardRules(fromUBO: filters) {
+            if let marker = rule.range(of: "#@%#") {
+                if onYouTube(rule[..<marker.lowerBound]) { excepted.insert(String(rule[marker.upperBound...])) }
+            } else if let marker = rule.range(of: "#%#"), onYouTube(rule[..<marker.lowerBound]), rule.contains("adPlacements") {
+                run.append(String(rule[marker.upperBound...]))
+            }
+        }
+        var scriptlets: [String: String] = [:]
+        for content in run where !excepted.contains(content) {
+            guard let token = content.firstMatch(of: /^\/\/scriptlet\("([^"]+)"/)?.1,
+                  let name = ubo.resourceName(String(token)), let resource = ubo.resources[name] else { continue }
+            scriptlets[name] = resource.code
+        }
+        return scriptlets
+    }
+
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.
+    /// Its own lists, sized so the build takes a while as the real ones' does, so it runs in any checkout.
     @Test func pagesOpenedDuringARebuildDontWaitForIt() async throws {
-        let folder = try #require(Resources.bundle.url(forResource: "Filters", withExtension: nil))
-        let blocking = AdvancedBlocking(container: FileManager.default.temporaryDirectory.appending(path: "engine-\(UUID())"))
-        await blocking.load(folder: folder, stamp: UUID().uuidString)
+        let folder = FileManager.default.temporaryDirectory.appending(path: "advanced-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try (0..<20_000).map { "site\($0).example#$#.ad-\($0) { display: none !important; }" }.joined(separator: "\n")
+            .write(to: folder.appending(path: "advanced.txt"), atomically: true, encoding: .utf8)
+        try "www.youtube.com##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)"
+            .write(to: folder.appending(path: "scriptlets.txt"), atomically: true, encoding: .utf8)
+        let blocking = AdvancedBlocking(container: folder.appending(path: "engine"))
+        #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
         let url = URL(string: "https://www.youtube.com/watch?v=x")!
 
         var rebuilt = false

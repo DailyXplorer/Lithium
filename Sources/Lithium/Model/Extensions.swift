@@ -334,9 +334,13 @@ final class Extensions: NSObject {
                 permissions: staged.requestedPermissions.map(\.rawValue),
                 patterns: staged.allRequestedMatchPatterns.map(\.string)
             )
-            let isCovered = ChromeWebStore.Access(manifest: manifest).isCovered(by: approved) && granted.isCovered(by: approved)
-            if !isCovered, await confirm?(ChromeWebStore.warnings(for: manifest)) != true {
-                throw ChromeWebStore.PackageError.moreAccess
+            let wanted = ChromeWebStore.Access(manifest: manifest)
+            if !(wanted.isCovered(by: approved) && granted.isCovered(by: approved)) {
+                guard let confirm else { throw ChromeWebStore.PackageError.moreAccess }
+                // Nothing is granted unnamed: what Chrome doesn't warn about is listed by name.
+                let unnamed = wanted.unnamedPermissions(beyond: approved)
+                let warnings = ChromeWebStore.warnings(for: manifest) + (unnamed.isEmpty ? [] : ["Use these features: \(unnamed.joined(separator: ", "))"])
+                guard await confirm(warnings) else { throw ChromeWebStore.PackageError.moreAccess }
             }
         }
 

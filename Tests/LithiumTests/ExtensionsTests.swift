@@ -410,6 +410,29 @@ struct ExtensionsTests {
         #expect(extensions.contexts[id] != nil)
     }
 
+    /// An update adding only permissions Chrome doesn't warn about asked for "more access" without
+    /// naming any, and accepting granted them unseen.
+    @Test(.timeLimit(.minutes(1))) func anUpdatePromptNamesPermissionsWithNoWarning() async throws {
+        let folder = folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = Extensions(folder: folder, configuration: .nonPersistent())
+        try await extensions.install(archive: try archive(), id: id)
+        extensions.latestVersions = { _ in [self.id: "2.0"] }
+        let newer = try archive(manifest: #"{"manifest_version": 3, "name": "Tiny", "version": "2.0", "permissions": ["tabs", "storage", "cookies"]}"#)
+        extensions.downloadArchive = { _ in newer }
+        await extensions.updateIfDue()
+        try #require(extensions.installed.first?.refusedVersion == "2.0")
+
+        var shown: [String] = []
+        await #expect(throws: ChromeWebStore.PackageError.moreAccess) {
+            try await extensions.updateRefused(id: id) { warnings in
+                shown = warnings
+                return false
+            }
+        }
+        #expect(shown == ["Read your browsing history", "Use these features: cookies, storage"])
+    }
+
     /// Clicked again while the first click's download ran, Update downloaded and asked twice, or
     /// reinstalled the version just accepted.
     @Test(.timeLimit(.minutes(1))) func aSecondUpdateClickWhileDownloadingDoesNothing() async throws {

@@ -972,9 +972,10 @@ final class Browser {
                     : remaining[min(position, remaining.count - 1)].id)
             }
             // The tab shown next may be asleep. As `select` does, the user now sees its page: a
-            // favorite's dot left by a notification while its popup was in front goes.
+            // favorite's dot left by a notification while its popup was in front goes. Not while the
+            // window isn't key: `windowDidBecomeKey` clears it when the user looks.
             selectedTab?.markActive()
-            selectedTab?.didOpen()
+            if window?.isKeyWindow != false { selectedTab?.didOpen() }
             if let selectedTab { recentTabs.didShow(selectedTab, after: nil) }
         }
         recentTabs.didClose(tab)

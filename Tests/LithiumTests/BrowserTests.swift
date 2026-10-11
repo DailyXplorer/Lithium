@@ -1002,6 +1002,29 @@ struct BrowserTests {
         #expect(favorite.unread.shown == nil)
     }
 
+    /// A popup that closes itself while the window isn't key leaves the favorite's dot: the user
+    /// hasn't seen the page yet.
+    @Test func aFavoritesDotStaysWhenItsPopupClosesInTheBackground() async {
+        let browser = Browser()
+        // Never shown, so never key.
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        browser.window = window
+        let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
+        defer { browser.close(favorite) }
+        #expect(await waitUntil(120) { loaded(favorite) })
+        browser.pin(favorite)
+        defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
+        browser.select(favorite)
+        let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
+        #expect(browser.selectedTab === popup)
+
+        favorite.receive(.notification)
+        browser.close(popup)
+        #expect(browser.selectedTab === favorite)
+        #expect(favorite.unread.shown == .dot)
+    }
+
     /// A tab zoomed in wakes from sleep at the same zoom.
     @Test func sleepingTabKeepsItsZoom() async throws {
         let browser = Browser()

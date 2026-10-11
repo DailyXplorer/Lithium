@@ -212,6 +212,8 @@ struct BrowserTests {
         defer { listener.cancel(); browser.close(tab) }
         #expect(await sidewaysOverflow(tab, "clip"))
         _ = try? await tab.webView.evaluateJavaScript("document.body.append(Object.assign(document.createElement('img'), { id: 'image' }))")
+        // Measured empty first: only its load can bring the sideways scrolling back.
+        try await Task.sleep(for: .milliseconds(600))
         _ = try? await tab.webView.evaluateJavaScript("""
             document.getElementById('image').src = 'data:image/svg+xml,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='1500' height='20'/>")
             """)
@@ -224,11 +226,15 @@ struct BrowserTests {
 
     /// A change that makes other content wide keeps its sideways scrolling: a class that shows a
     /// sibling, a narrow element added before a row it pushes past the edge, a style sheet in body.
+    /// So does content that widens none of body's children: an absolutely positioned box in a static
+    /// one, added or shown, a block added to html after body, a `display: contents` wrapper's child
+    /// and a long word put straight into body.
     @Test func contentWidenedByAnotherChangeStaysScrollable() async throws {
         let (listener, browser, tab) = try await narrowPage("""
             <style>.wide { display: none; width: 1500px; height: 20px } .toggle.on ~ .wide { display: block }</style>
             <p class='toggle'>toggle</p><div class='wide'></div>
             <div id='line' style='white-space: nowrap'><span style='display: inline-block; width: 1180px'></span></div>
+            <div id='wrap'><p>wrap</p><div id='menu' style='display: none; position: absolute; left: 0; top: 0; width: 1500px; height: 20px'></div></div>
             """)
         defer { listener.cancel(); browser.close(tab) }
         #expect(await sidewaysOverflow(tab, "clip"))
@@ -242,9 +248,19 @@ struct BrowserTests {
         #expect(await sidewaysOverflow(tab, "visible"))
         _ = try? await tab.webView.evaluateJavaScript("document.getElementById('push').remove()")
         #expect(await sidewaysOverflow(tab, "clip"))
-        _ = try? await tab.webView.evaluateJavaScript("""
-            document.body.append(Object.assign(document.createElement('style'), { textContent: '.wide { display: block }' }))
-            """)
+        for (show, hide) in [
+            ("wrap.append(Object.assign(document.createElement('span'), { id: 'far', style: 'position: absolute; left: 1300px; width: 100px; height: 20px' }))", "far.remove()"),
+            ("menu.style.display = 'block'", "menu.style.display = 'none'"),
+            ("document.documentElement.append(Object.assign(document.createElement('div'), { id: 'after', style: 'width: 1500px; height: 20px' }))", "after.remove()"),
+            ("document.body.append(Object.assign(document.createElement('style'), { id: 'sheet', textContent: '.wide { display: block }' }))", "sheet.remove()"),
+            ("document.body.insertAdjacentHTML('beforeend', `<div id='contents' style='display: contents'><div style='width: 1500px; height: 20px'></div></div>`)", "contents.remove()"),
+        ] {
+            _ = try? await tab.webView.evaluateJavaScript(show)
+            #expect(await sidewaysOverflow(tab, "visible"), "\(show)")
+            _ = try? await tab.webView.evaluateJavaScript(hide)
+            #expect(await sidewaysOverflow(tab, "clip"), "\(hide)")
+        }
+        _ = try? await tab.webView.evaluateJavaScript("document.body.textContent = 'W'.repeat(300)")
         #expect(await sidewaysOverflow(tab, "visible"))
     }
 

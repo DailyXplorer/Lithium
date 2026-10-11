@@ -18,13 +18,16 @@ enum PageStyle {
     /// nor, in an app shell, body's height. A burst is measured 200 ms after it ends, a page that
     /// never stops changing once a second, and only while the window is wide. Turning the clip off
     /// restyles the page, so while it's on that only happens when one of body's children, or what
-    /// overflows it, reaches past the right edge; while it's off, the plain measurement is enough.
+    /// overflows it, or a node that changed reaches past the right edge (absolutely positioned
+    /// content doesn't widen its parent; text in body and nodes outside it aren't body's children);
+    /// while it's off, the plain measurement is enough.
     /// A layout that narrows again is clipped again, as on resize, and one wider than the view, even
     /// for a moment, scrolls while it is. A change inside a shadow root is only measured with the
     /// next change outside one.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
         let pending = false, settle = 0, first = 0;
+        const changed = new Set();
         const check = () => {
           pending = false;
           const root = document.scrollingElement, sheet = style.sheet;
@@ -41,12 +44,23 @@ enum PageStyle {
           const css = getComputedStyle(el);
           return css.position !== 'fixed' && (box.right > limit || css.overflowX === 'visible');
         });
+        const right = node => {
+          if (node.nodeType !== 1) {
+            const range = document.createRange();
+            range.selectNode(node);
+            return range.getBoundingClientRect().right;
+          }
+          const box = node.getBoundingClientRect();
+          return Math.max(box.right, box.left + node.scrollWidth);
+        };
         const recheck = () => {
-          const root = document.scrollingElement, sheet = style.sheet, body = document.body;
+          const root = document.scrollingElement, sheet = style.sheet, body = document.body, nodes = [...changed];
           settle = first = 0;
+          changed.clear();
           if (!wide.matches || !root || !root.clientWidth || !sheet || !body) return;
+          const limit = root.clientWidth + 32;
           if (sheet.disabled) sheet.disabled = root.scrollWidth - root.clientWidth > 32;
-          else if (reaches(body, root.clientWidth + 32)) check();
+          else if (reaches(body, limit) || nodes.some(node => node.isConnected && right(node) > limit)) check();
         };
         const schedule = () => {
           const now = performance.now();
@@ -54,7 +68,17 @@ enum PageStyle {
           clearTimeout(settle);
           settle = setTimeout(recheck, Math.max(0, Math.min(200, first + 1000 - now)));
         };
-        const observer = new MutationObserver(schedule);
+        // Text deeper down is measured with the element it's in.
+        const observer = new MutationObserver(records => {
+          const body = document.body;
+          for (const record of records) {
+            if (record.type === 'attributes') changed.add(record.target);
+            else for (const node of record.addedNodes) {
+              if (node.nodeType === 1 || record.target === body || record.target === document.documentElement) changed.add(node);
+            }
+          }
+          schedule();
+        });
         const watch = () => {
           if (wide.matches) observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'width', 'height'] });
           else observer.disconnect();
@@ -66,7 +90,7 @@ enum PageStyle {
           // An image, style sheet or video that gets its size after it's added: these events don't
           // bubble, nor reach window.
           for (const type of ['load', 'loadedmetadata']) {
-            document.addEventListener(type, () => { if (wide.matches) schedule(); }, true);
+            document.addEventListener(type, event => { if (wide.matches) { changed.add(event.target); schedule(); } }, true);
           }
         }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });

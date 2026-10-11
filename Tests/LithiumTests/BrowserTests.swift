@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Network
 import os
+import SQLite3
 import class SwiftUI.NSHostingView
 import Testing
 import WebKit
@@ -1373,6 +1374,74 @@ struct BrowserTests {
         #expect(await waitUntil(30) { loaded(shown) })
         browser.saveNow()
         #expect(try savesHistory(shown))
+    }
+
+    /// A tab whose back list the session file holds, as a quit leaves it.
+    private func tabWithSavedBackList(in browser: Browser) async throws -> Tab {
+        let id = UUID().uuidString
+        let tab = browser.newTab(url: URL(string: "data:text/html,<title>First</title>first-\(id)")!)
+        #expect(await waitUntil(120) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Second</title>second-\(id)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Second" && tab.canGoBack })
+        browser.saveNow()
+        #expect(try savesBackList(tab))
+        return tab
+    }
+
+    private func savesBackList(_ tab: Tab) throws -> Bool {
+        try #require(SessionStore.load().tabs.first { $0.url == tab.url }).history != nil
+    }
+
+    /// A routine save that failed leaves the quit's lists on the file: clearing the history still
+    /// takes them off.
+    @Test func clearingTheHistoryAfterAFailedWriteTakesTheListsOffTheFile() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        let quitFile = try Data(contentsOf: SessionStore.fileURL)
+        // A folder where the file goes: the routine save of the next tab fails.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try FileManager.default.createDirectory(at: SessionStore.fileURL, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: SessionStore.fileURL) }
+        let url = URL(string: "data:text/html,<title>\(UUID().uuidString)</title>")!
+        let reached = OSAllocatedUnfairLock(initialState: false)
+        SessionStore.beforeWrite = { session in
+            if session.tabs.contains(where: { $0.url == url }) { reached.withLock { $0 = true } }
+        }
+        defer { SessionStore.beforeWrite = nil }
+        let other = browser.newTab(url: url)
+        defer { browser.close(other) }
+        #expect(await waitUntil(10) { reached.withLock { $0 } })
+        // Waits for that write, on the same queue, and fails the same way.
+        #expect(!SessionStore.save(Session()))
+        // The failed write left the old file.
+        try FileManager.default.removeItem(at: SessionStore.fileURL)
+        try quitFile.write(to: SessionStore.fileURL)
+        #expect(try savesBackList(tab))
+
+        await browser.clearHistory()
+        #expect(try !savesBackList(tab))
+    }
+
+    /// A quit while the visits are still being cleared saves the open tabs without their lists.
+    @Test func quittingWhileTheHistoryClearsLeavesTheListsOut() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        defer { browser.close(tab); browser.saveNow() }
+        // Another connection holds the history's write lock, so the clear can't finish before the quit.
+        let file = URL.applicationSupportDirectory.appending(path: "Lithium/history.sqlite")
+        var blocker: OpaquePointer?
+        try #require(sqlite3_open(file.path, &blocker) == SQLITE_OK)
+        defer { sqlite3_close(blocker) }
+        try #require(sqlite3_exec(blocker, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK)
+
+        let clearing = Task { await browser.clearHistory() }
+        #expect(await waitUntil(10) { browser.history.isClearing })
+        // What the app does as it quits.
+        browser.saveNow()
+        #expect(try !savesBackList(tab))
+        sqlite3_exec(blocker, "COMMIT", nil, nil, nil)
+        await clearing.value
     }
 
     /// A session write that failed is tried again at the next save, though nothing changed since.

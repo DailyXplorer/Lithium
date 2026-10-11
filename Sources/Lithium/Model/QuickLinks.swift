@@ -41,10 +41,14 @@ final class QuickLinks {
     }
 
     /// The same web view, so the page doesn't reload and keeps what was typed or played in it.
-    func moveToMainWindow(_ tab: Tab) {
-        guard let browser, remove(tab) else { return }
+    /// Not while a sheet is up (a page's alert, a file picker): closing the window under it would
+    /// leave the page waiting on an answer. False when it didn't move.
+    @discardableResult
+    func moveToMainWindow(_ tab: Tab) -> Bool {
+        guard windows[tab.id]?.attachedSheet == nil, let browser, remove(tab) else { return false }
         browser.adopt(tab)
         browser.window?.makeKeyAndOrderFront(nil)
+        return true
     }
 
     /// Not into Reopen Closed Tab: it never was a tab.
@@ -68,8 +72,15 @@ final class QuickLinks {
         keyTab = tab
     }
 
-    func windowResignedKey(_ tab: Tab) {
-        if keyTab === tab { keyTab = nil }
+    /// A sheet on the link's window (a page's alert, a file picker) takes the key from it, but the
+    /// link stays in front: the menu's commands keep acting on it until another window becomes key.
+    func windowResignedKey(_ tab: Tab, toSheet: Bool = false) {
+        if keyTab === tab, !toSheet { keyTab = nil }
+    }
+
+    /// The main window in front: no link's window is, even one that resigned to its sheet.
+    func mainWindowBecameKey() {
+        keyTab = nil
     }
 
     private func remove(_ tab: Tab) -> Bool {

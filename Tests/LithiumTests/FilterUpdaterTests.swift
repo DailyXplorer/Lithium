@@ -23,7 +23,13 @@ func downloadsAndCompilesTheRealLists() async throws {
     let blocking = AdvancedBlocking(container: destination.appending(path: "engine"))
     await blocking.load(folder: destination, stamp: UUID().uuidString)
     let youtube = try #require(blocking.script(for: URL(string: "https://www.youtube.com/watch?v=x")!))
-    #expect(youtube.contains("function trustedJsonEditXhrRequest("))
+    #expect(youtube.contains("adPlacements"))
+    let filters = try String(contentsOf: destination.appending(path: "scriptlets.txt"), encoding: .utf8)
+    let scriptlets = try AdvancedBlockingTests.youTubeAdScriptlets(in: filters.split(whereSeparator: \.isNewline).map(String.init))
+    #expect(!scriptlets.isEmpty)
+    for (name, code) in scriptlets {
+        #expect(youtube.contains(code), "\(name) isn't in YouTube's script")
+    }
 }
 
 /// Loads a real HTTPS page; run with LITHIUM_NETWORK_TESTS=1.

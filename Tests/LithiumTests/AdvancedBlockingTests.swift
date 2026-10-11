@@ -122,25 +122,44 @@ struct AdvancedBlockingTests {
     }
 
     /// uBO's scriptlets that `filters` run on www.youtube.com against `adPlacements`, by name, with their code.
-    private static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
+    /// Read from the raw `+js()` lines, not through the converter under test, so a rule it drops still counts.
+    static func youTubeAdScriptlets(in filters: [String]) throws -> [String: String] {
         let ubo = try #require(UBOScriptlets.bundled)
         let onYouTube = { (sites: Substring) in sites.split(separator: ",").contains { $0 == "youtube.com" || $0 == "www.youtube.com" } }
         var run: [String] = []
         var excepted: Set<String> = []
-        for rule in ubo.adguardRules(fromUBO: filters) {
-            if let marker = rule.range(of: "#@%#") {
-                if onYouTube(rule[..<marker.lowerBound]) { excepted.insert(String(rule[marker.upperBound...])) }
-            } else if let marker = rule.range(of: "#%#"), onYouTube(rule[..<marker.lowerBound]), rule.contains("adPlacements") {
-                run.append(String(rule[marker.upperBound...]))
-            }
+        for filter in filters where filter.hasSuffix(")") {
+            let isException = filter.contains("#@#+js(")
+            guard let marker = filter.range(of: isException ? "#@#+js(" : "##+js("), onYouTube(filter[..<marker.lowerBound]) else { continue }
+            let body = filter[marker.upperBound..<filter.index(before: filter.endIndex)].trimmingCharacters(in: .whitespaces)
+            if isException { excepted.insert(body) } else if body.contains("adPlacements") { run.append(body) }
         }
+        // A bare `youtube.com#@#+js()` turns off every scriptlet there.
+        guard !excepted.contains("") else { return [:] }
         var scriptlets: [String: String] = [:]
-        for content in run where !excepted.contains(content) {
-            guard let token = content.firstMatch(of: /^\/\/scriptlet\("([^"]+)"/)?.1,
-                  let name = ubo.resourceName(String(token)), let resource = ubo.resources[name] else { continue }
+        for body in run where !excepted.contains(body) {
+            let token = String(body.prefix { $0 != "," }).trimmingCharacters(in: .whitespaces)
+            guard let name = ubo.resourceName(token), let resource = ubo.resources[name] else {
+                Issue.record("\(token) isn't a bundled uBO scriptlet")
+                continue
+            }
             scriptlets[name] = resource.code
         }
         return scriptlets
+    }
+
+    /// The expected set comes from the rules as written: YouTube's, against ad placements, less its exceptions.
+    @Test func youTubeAdScriptletsAreReadFromTheRawRules() throws {
+        let scriptlets = try Self.youTubeAdScriptlets(in: [
+            "www.youtube.com##+js(json-prune-fetch-response, adPlacements adSlots, , propsToMatch, /player?)",
+            "youtube.com,example.org##+js(trusted-edit-inbound-object.js, JSON.parse, adPlacements)",
+            "youtube.com##+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com#@#+js(set, ytInitialPlayerResponse.adPlacements, undefined)",
+            "youtube.com##+js(set, ytInitialData.foo, undefined)",
+            "example.org##+js(json-prune, adPlacements)",
+        ])
+        #expect(Set(scriptlets.keys) == ["json-prune-fetch-response.js", "trusted-edit-inbound-object.js"])
+        #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)", "youtube.com#@#+js()"]).isEmpty)
     }
 
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.
@@ -159,13 +178,14 @@ struct AdvancedBlockingTests {
 
         var rebuilt = false
         let rebuild = Task {
-            await blocking.load(folder: folder, stamp: UUID().uuidString)
+            #expect(await blocking.load(folder: folder, stamp: UUID().uuidString))
             rebuilt = true
         }
+        // Each turn is timed from before its sleep, so a build that holds the main actor shows up here.
         var slowest = Duration.zero
         while !rebuilt {
-            try await Task.sleep(for: .milliseconds(10))
             let start = ContinuousClock.now
+            try await Task.sleep(for: .milliseconds(10))
             #expect(blocking.script(for: url)?.contains("adPlacements") == true)
             slowest = max(slowest, ContinuousClock.now - start)
         }

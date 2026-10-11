@@ -939,6 +939,8 @@ final class Browser {
         let partner = leaveSplit(tab)
         let wasSelected = tab.id == selectedTabID
         if wasSelected {
+            // As `select` does: left open, the bar would search the tab shown next. A link's window keeps its bar.
+            if find.linkTab == nil { find.hide() }
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }

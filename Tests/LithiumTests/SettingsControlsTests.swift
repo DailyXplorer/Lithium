@@ -89,6 +89,57 @@ struct SettingsControlsTests {
         for problem in problems { Issue.record("\(problem)") }
     }
 
+    /// Every segmented control in every section, with each section shown at once: its labels stay
+    /// on one line so its pills are all as tall, and it stays inside its row. At the default width
+    /// it sits beside its label; `wide` is false at the narrowest a tab gets (the smallest window
+    /// with the sidebar), where it may go under its label instead.
+    private static func segmentProbe(wide: Bool) -> String {
+        """
+        const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); };
+        await until(() => $('#version').textContent && innerWidth === width);
+        const problems = [];
+        const sections = [...document.querySelectorAll('section')];
+        sections.forEach((s) => s.style.display = 'block');
+        const controls = document.querySelectorAll('.segmented');
+        if (controls.length < 4) problems.push(`${controls.length} segmented controls`);
+        for (const control of controls) {
+          const name = `${width}px ${control.id}`, box = control.getBoundingClientRect(), row = control.closest('.row');
+          const buttons = [...control.querySelectorAll('button')];
+          for (const button of buttons) {
+            const text = document.createRange();
+            text.selectNodeContents(button);
+            const lines = new Set([...text.getClientRects()].map((r) => Math.round(r.top))).size;
+            if (lines !== 1) problems.push(`${name} “${button.textContent}” on ${lines} lines`);
+            const height = button.getBoundingClientRect().height, first = buttons[0].getBoundingClientRect().height;
+            if (height !== first) problems.push(`${name} “${button.textContent}” ${height}px tall, not ${first}px`);
+          }
+          if (box.right > row.getBoundingClientRect().right + 0.5) problems.push(`${name} overflows its row`);
+          if (wide && box.top >= row.firstElementChild.getBoundingClientRect().bottom) problems.push(`${name} under its label`);
+        }
+        sections.forEach((s) => s.style.display = '');
+        const labels = [...document.querySelectorAll('#energy-saving button')].map((b) => b.textContent).join(' · ');
+        if (labels !== 'Always · On battery · Off') problems.push(`energy saving: ${labels}`);
+        return problems;
+        """
+    }
+
+    @Test func segmentedLabelsStayOnOneLine() async throws {
+        let configuration = WKWebViewConfiguration()
+        InternalSchemeHandler.shared.install(on: configuration)
+        configuration.userContentController.addScriptMessageHandler(SampleBridge(), contentWorld: .page, name: InternalBridge.name)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 700), configuration: configuration)
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.load(URLRequest(url: URL(string: "lithium://settings#advanced")!))
+        try await loaded.wait()
+        // The smallest window (`LithiumApp`) less the sidebar and the page's margin.
+        for width in [960, 760 - Int(Layout.sidebarWidth + Layout.margin)] {
+            webView.frame.size.width = CGFloat(width)
+            let problems = try #require(try await webView.callAsyncJavaScript(Self.segmentProbe(wide: width == 960), arguments: ["width": width], contentWorld: .page) as? [String])
+            for problem in problems { Issue.record("\(problem)") }
+        }
+    }
+
     /// Answers like `SampleBridge`, slowly, and counts the sidebar colors it is sent.
     @MainActor
     private final class SlowBridge: NSObject, WKScriptMessageHandlerWithReply {

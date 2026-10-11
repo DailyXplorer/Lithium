@@ -30,9 +30,6 @@ struct ToolbarView: View {
             if let agent = browser.agent, agent.isConnected {
                 AgentButton(agent: agent)
             }
-            if browser.energy.isOn {
-                EnergyButton()
-            }
             ExtensionsButton(tab: tab)
             DownloadsButton()
             SummaryButton(tab: tab)
@@ -248,6 +245,8 @@ struct PageMenuItems: View {
             .disabled(tab?.canTranslate != true)
         Button("Pop Out Video") { browser.videoPopout.showSelected() }
             .disabled(!browser.videoPopout.canShowSelected)
+        // Checked while it is on, whatever the setting: the toolbar shows no indicator for it.
+        Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.energy.turn(on: $0) }))
         Divider()
         Button("Show All History") { browser.openHistory() }
         Button("Extensions") { browser.openSettings(section: "extensions") }

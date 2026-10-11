@@ -43,6 +43,10 @@ final class EnergySaver {
         update()
     }
 
+    /// The ⋯ menu's and the address bar's quick switch: Settings' Always or Off, since a switch
+    /// flipped by hand shouldn't then wait on the power source.
+    func turn(on: Bool) { mode = on ? .always : .off }
+
     func update() {
         isOn = switch mode {
         case .always: true

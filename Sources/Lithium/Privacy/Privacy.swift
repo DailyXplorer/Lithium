@@ -393,9 +393,14 @@ final class Privacy {
         }
     }
 
-    /// From the list's identifier, `lithium-<group>-<stamp>-p<preparation>`.
+    /// From the list's identifier: `lithium-<group>-<stamp>-p<preparation>` for a shipped group,
+    /// `lithium-<group>-h<hash>-p<preparation>` for one built from the user's choice.
     static func group(of list: WKContentRuleList) -> String? {
-        list.identifier.wholeMatch(of: /lithium-(.+)-\d+-p\d+/).map { String($0.1) }
+        group(ofIdentifier: list.identifier)
+    }
+
+    nonisolated static func group(ofIdentifier identifier: String) -> String? {
+        identifier.wholeMatch(of: /lithium-(.+)-(?:\d+|h[0-9a-f]+)-p\d+/).map { String($0.1) }
     }
 
     /// Groups the site's pages go without; empty for nearly every site.
@@ -430,8 +435,16 @@ final class Privacy {
         let lists = "\(generation) \(folder?.path ?? "")"
         let lookup = BlockLookup(privateSession: privateSession, url: url)
         if blockReasons.lists == lists, let reason = blockReasons.reasons[lookup] { return reason }
+        // The lists the user added and their own filters block pages too, in groups only a build
+        // makes: searched when those groups are loaded. Lists turned off block nothing.
+        let loaded = Set(ruleLists.compactMap(Self.group(of:)))
+        let storage = filterStorage, off = filterChoices.off
+        let extra = (loaded.contains(FilterLists.extraGroup)
+            ? filterChoices.extraLists.map { (list: $0.id, group: FilterLists.extraGroup, file: storage.copy(of: $0.id)) } : [])
+            + (loaded.contains(FilterLists.myFiltersID)
+                ? [(list: FilterLists.myFiltersID, group: FilterLists.myFiltersID, file: storage.myFilters)] : [])
         let search = Task.detached(priority: .userInitiated) {
-            folder.map { BlockedPage.reason(for: url, in: $0) } ?? BlockedPage.Reason(groups: [])
+            folder.map { BlockedPage.reason(for: url, in: $0, adding: extra, leavingOut: off) } ?? BlockedPage.Reason(groups: [])
         }
         var reason = await withTaskCancellationHandler { await search.value } onCancel: { search.cancel() }
         // Cut short for a tab gone elsewhere: what it found so far isn't the answer.

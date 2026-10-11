@@ -139,9 +139,25 @@ struct AdvancedBlockingTests {
             guard argument.count > 1, let quote = argument.first, "\"'`".contains(quote), argument.last == quote else { return argument }
             return String(argument.dropFirst().dropLast())
         }
+        // A quote opening an argument holds its commas, as uBO's `nextArg` reads it, so `'a,b'` is one argument.
+        let split = { (body: String) -> [String] in
+            var pieces = [""]
+            var open: Character?
+            for character in body {
+                if let quote = open {
+                    if character == quote { open = nil }
+                } else if character == "," {
+                    pieces.append("")
+                    continue
+                } else if "\"'`".contains(character), pieces[pieces.count - 1].allSatisfy(\.isWhitespace) {
+                    open = character
+                }
+                pieces[pieces.count - 1].append(character)
+            }
+            return pieces.map { unquoted($0.trimmingCharacters(in: .whitespaces)) }
+        }
         let key = { (body: String) -> String in
-            var arguments = body.split(separator: ",", omittingEmptySubsequences: false)
-                .map { unquoted($0.trimmingCharacters(in: .whitespaces)) }
+            var arguments = split(body)
             arguments[0] = ubo.resourceName(arguments[0]) ?? arguments[0]
             return arguments.joined(separator: ",")
         }
@@ -158,7 +174,7 @@ struct AdvancedBlockingTests {
         guard !excepted.contains("") else { return [:] }
         var scriptlets: [String: String] = [:]
         for body in run where !excepted.contains(key(body)) {
-            let token = String(body.prefix { $0 != "," }).trimmingCharacters(in: .whitespaces)
+            let token = split(body)[0]
             guard let name = ubo.resourceName(token), let resource = ubo.resources[name] else {
                 Issue.record("\(token) isn't a bundled uBO scriptlet")
                 continue
@@ -208,6 +224,15 @@ struct AdvancedBlockingTests {
             "youtube.com,~www.youtube.com#@#+js(json-prune, adPlacements)",
         ]).keys.sorted() == ["json-prune.js"])
         #expect(try Self.youTubeAdScriptlets(in: ["youtube.com##+js(json-prune, adPlacements)  "]).keys.sorted() == ["json-prune.js"])
+    }
+
+    /// As in uBO's parser, a quoted scriptlet name counts, and a quoted argument keeps its commas whichever quotes wrap it.
+    @Test func youTubeAdScriptletsReadQuotedNamesAndQuotedCommas() throws {
+        #expect(try Self.youTubeAdScriptlets(in: [#"youtube.com##+js("json-prune", adPlacements)"#]).keys.sorted() == ["json-prune.js"])
+        #expect(try Self.youTubeAdScriptlets(in: [
+            "youtube.com##+js(set, 'ytInitialPlayerResponse.adPlacements,x', undefined)",
+            #"youtube.com#@#+js(set, "ytInitialPlayerResponse.adPlacements,x", undefined)"#,
+        ]).isEmpty)
     }
 
     /// The daily filter update rebuilds the engine while pages keep opening; they must neither wait for it nor lose their rules.

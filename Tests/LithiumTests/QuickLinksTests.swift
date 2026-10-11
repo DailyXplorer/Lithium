@@ -169,6 +169,26 @@ struct QuickLinksTests {
         #expect(browser.videoPopout.canShowSelected)
     }
 
+    /// With a link's window in front, the Tabs menu's commands (Next Tab, ⌃⇥, ⌘1–9, ⌃1–9, New
+    /// Folder, Pin…) are off: they would wake and switch the main window's tabs out of sight.
+    @Test func tabCommandsWaitForTheMainWindow() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        #expect(browser.canChangeTabs)
+
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        #expect(browser.canChangeTabs, "a link's window not in front yet")
+        browser.quickLinks.windowBecameKey(tab)
+        #expect(!browser.canChangeTabs)
+        browser.quickLinks.windowResignedKey(tab)
+        #expect(browser.canChangeTabs)
+
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.close(tab)
+        #expect(browser.canChangeTabs, "a closed link's window gives them back")
+    }
+
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
     /// steps through that page's matches, and Escape there closes the bar.
     @Test func findWorksInALinksWindow() async throws {

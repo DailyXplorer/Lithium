@@ -184,25 +184,29 @@ struct BrowserCommands: Commands {
                 .disabled(browser.commandTab?.canGoForward != true)
         }
         CommandMenu("Tabs") {
+            // Not while a link's window is in front (`Browser.canChangeTabs`): its page gets the keys.
             Button("Next Tab") { browser.selectAdjacentTab(1) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled(!browser.canChangeTabs)
             Button("Previous Tab") { browser.selectAdjacentTab(-1) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled(!browser.canChangeTabs)
             Button("Next Recent Tab") { browser.cycleRecentTabs(backward: false) }
                 .keyboardShortcut(.tab, modifiers: .control)
+                .disabled(!browser.canChangeTabs)
             Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
+                .disabled(!browser.canChangeTabs)
             Divider()
-            // Not while a link's window is in front, where they would change a tab out of sight.
             Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
-                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true || browser.quickLinks.keyTab != nil)
+                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true || !browser.canChangeTabs)
             Button("Copy Link") { browser.copyLink(of: browser.commandTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.url == nil)
             Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(browser.selectedTab?.url == nil || browser.quickLinks.keyTab != nil)
+                .disabled(browser.selectedTab?.url == nil || !browser.canChangeTabs)
             if Tab.canMute {
                 Button(browser.commandTab?.isMuted == true ? "Unmute Tab" : "Mute Tab") {
                     browser.commandTab?.isMuted.toggle()
@@ -212,8 +216,9 @@ struct BrowserCommands: Commands {
             Divider()
             Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
                 .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(!browser.canChangeTabs)
             // A favorite's page stays in the grid: only the tab list has folders.
-            if let tab = browser.selectedTab, tab.pinID == nil, browser.quickLinks.keyTab == nil {
+            if let tab = browser.selectedTab, tab.pinID == nil, browser.canChangeTabs {
                 MoveToFolderMenu(browser: browser, tab: tab, title: "Move Tab to Folder", showsShortcut: true)
             } else {
                 Menu("Move Tab to Folder") {}
@@ -223,6 +228,7 @@ struct BrowserCommands: Commands {
             ForEach(1..<10) { number in
                 Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")))
+                    .disabled(!browser.canChangeTabs)
             }
             if browser.hasSpaces {
                 Divider()
@@ -230,6 +236,7 @@ struct BrowserCommands: Commands {
                 ForEach(Array(browser.spaces.prefix(Space.limit).enumerated()), id: \.element.id) { index, space in
                     Button("Go to \(space.name)") { withAnimation(.snappy(duration: 0.25)) { browser.switchToSpace(at: index) } }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
+                        .disabled(!browser.canChangeTabs)
                 }
             }
         }

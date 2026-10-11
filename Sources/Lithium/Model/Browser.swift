@@ -634,6 +634,9 @@ final class Browser {
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
     /// The page the menu's page commands (Reload, Back, Print…) act on.
     var commandTab: Tab? { quickLinks.keyTab ?? selectedTab }
+    /// The Tabs menu's selection and tab-list commands act on the main window: not while a link's
+    /// window is in front, where they would wake and switch tabs out of sight.
+    var canChangeTabs: Bool { quickLinks.keyTab == nil }
     /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabList(in: currentSpaceID) }
     var agentTabs: [Tab] { agentGroup(in: currentSpaceID) }

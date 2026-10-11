@@ -45,6 +45,15 @@ struct FontChoiceTests {
         #expect(Theme.pickedFont("No Such Font 7F3A", 13, .regular) == nil)
     }
 
+    /// Every view asks on each redraw: a missing font is looked up once, not every time.
+    @Test func aMissingFontIsLookedUpOnce() {
+        #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
+        #expect(Theme.pickedFonts.family == "No Such Font 9C2E")
+        #expect(Theme.pickedFonts.fonts.count == 1, "the miss is remembered")
+        #expect(Theme.pickedFont("No Such Font 9C2E", 13, .regular) == nil)
+        #expect(Theme.pickedFonts.fonts.count == 1)
+    }
+
     @Test func thePickedInterfaceFontKeepsSizeAndWeight() throws {
         let regular = try #require(Theme.pickedFont("Helvetica Neue", 13, .regular))
         let bold = try #require(Theme.pickedFont("Helvetica Neue", 13, .bold))

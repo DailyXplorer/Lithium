@@ -48,17 +48,19 @@ enum Theme {
     @MainActor private static var dmSansFonts: [String: NSFont] = [:]
 
     /// Every view asks on each redraw, so each size and weight is matched once per family.
-    @MainActor private static var pickedFonts: (family: String, fonts: [String: NSFont]) = ("", [:])
+    /// A miss is kept as nil too, or a picked font later removed from the Mac is looked up again on every redraw.
+    @MainActor private(set) static var pickedFonts: (family: String, fonts: [String: NSFont?]) = ("", [:])
 
     /// Nil for a family not on this Mac.
     @MainActor static func pickedFont(_ family: String, _ size: CGFloat, _ weight: Font.Weight) -> NSFont? {
         if pickedFonts.family != family { pickedFonts = (family, [:]) }
         let key = "\(size) \(weightValue(weight))"
-        if let font = pickedFonts.fonts[key] { return font }
+        if let cached = pickedFonts.fonts[key] { return cached }
         // NSFontManager's weights run 0 to 15: 5 regular, 6 medium, 8 semibold, 9 bold.
         let scale = switch weightValue(weight) { case 500: 6; case 600: 8; case 700: 9; default: 5 }
         let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: scale, size: size)
-        pickedFonts.fonts[key] = font
+        // Assigning nil through the subscript would drop the key instead of keeping the miss.
+        pickedFonts.fonts.updateValue(font, forKey: key)
         return font
     }
 

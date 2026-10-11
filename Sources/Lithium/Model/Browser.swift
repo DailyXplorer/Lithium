@@ -428,6 +428,7 @@ final class Browser {
     /// A favorite's notification that came while the window wasn't key put a dot on its tile; the
     /// user is now looking at that page.
     func windowDidBecomeKey() {
+        quickLinks.mainWindowBecameKey()
         selectedTab?.didOpen()
     }
 
@@ -634,6 +635,25 @@ final class Browser {
     var selectedTab: Tab? { tabs.first { $0.id == selectedTabID } }
     /// The page the menu's page commands (Reload, Back, Print…) act on.
     var commandTab: Tab? { quickLinks.keyTab ?? selectedTab }
+    /// The Tabs menu's selection and tab-list commands act on the main window: not while a link's
+    /// window is in front, where they would wake and switch tabs out of sight.
+    var canChangeTabs: Bool { quickLinks.keyTab == nil }
+
+    /// Settings, History and Reopen Closed Tab from the menu: they open or select a tab in the main
+    /// window, which comes forward first from a link's window or the Dock, or that tab would change
+    /// out of sight. A closed main window opens again (`open`).
+    func inMainWindow(open: () -> Void, _ command: () -> Void) {
+        if let window, window.isVisible || window.isMiniaturized {
+            if window.isMiniaturized || !canChangeTabs {
+                // Ordering front alone leaves a minimized window in the Dock.
+                if window.isMiniaturized { window.deminiaturize(nil) }
+                window.makeKeyAndOrderFront(nil)
+            }
+        } else {
+            open()
+        }
+        command()
+    }
     /// The tab list of the space shown. Tabs an agent opened sit apart, in the Agent group below it.
     var regularTabs: [Tab] { tabList(in: currentSpaceID) }
     var agentTabs: [Tab] { agentGroup(in: currentSpaceID) }
@@ -939,6 +959,8 @@ final class Browser {
         let partner = leaveSplit(tab)
         let wasSelected = tab.id == selectedTabID
         if wasSelected {
+            // As `select` does: left open, the bar would search the tab shown next. A link's window keeps its bar.
+            if find.linkTab == nil { find.hide() }
             let position = order.firstIndex { $0 === tab } ?? 0
             let remaining = order.filter { $0 !== tab }
             let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in tabs.contains { $0 === opener } ? opener : nil }

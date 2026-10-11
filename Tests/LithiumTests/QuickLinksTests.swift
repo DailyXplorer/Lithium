@@ -169,6 +169,117 @@ struct QuickLinksTests {
         #expect(browser.videoPopout.canShowSelected)
     }
 
+    /// With a link's window in front, the guard of the Tabs menu's commands (Next Tab, ⌃⇥, ⌘1–9,
+    /// ⌃1–9, New Folder, Pin…) is off: they would wake and switch the main window's tabs out of sight.
+    /// The menu items themselves can't be read headless.
+    @Test func tabCommandsWaitForTheMainWindow() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        #expect(browser.canChangeTabs)
+
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        #expect(browser.canChangeTabs, "a link's window not in front yet")
+        browser.quickLinks.windowBecameKey(tab)
+        #expect(!browser.canChangeTabs)
+        browser.quickLinks.windowResignedKey(tab)
+        #expect(browser.canChangeTabs)
+
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.close(tab)
+        #expect(browser.canChangeTabs, "a closed link's window gives them back")
+    }
+
+    /// `inMainWindow`, which Settings, History and Reopen Closed Tab run in: from a link's window it
+    /// brings the main window forward, out of the Dock if minimized (even with no link in front),
+    /// where they open or select their tab, and opens it again if closed; from the main window, it
+    /// leaves it as it is. The menu items themselves can't be read headless.
+    @Test func mainWindowCommandsBringItForward() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let main = RecordingWindow(contentRect: NSRect(x: -5000, y: 0, width: 400, height: 300), styleMask: .borderless, backing: .buffered, defer: true)
+        main.isReleasedWhenClosed = false
+        main.isShown = true
+        browser.window = main
+        var ran = 0, opened = 0
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(ran == 1)
+        #expect(main.frontCount == 0)
+
+        main.isInDock = true
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(ran == 2)
+        #expect(main.deminiaturizeCount == 1, "minimized with no link in front")
+        #expect(main.frontCount == 1)
+
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        browser.quickLinks.windowBecameKey(tab)
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(ran == 3)
+        #expect(main.frontCount == 2)
+        #expect(main.deminiaturizeCount == 1)
+
+        main.isInDock = true
+        browser.quickLinks.windowBecameKey(tab)
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(ran == 4)
+        #expect(main.deminiaturizeCount == 2)
+        #expect(main.frontCount == 3)
+        #expect(opened == 0)
+
+        main.isShown = false
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(opened == 1, "a closed main window opens again")
+        #expect(main.frontCount == 3)
+        browser.window = nil
+        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
+        #expect(opened == 2)
+        #expect(ran == 6)
+    }
+
+    /// A page's alert or file picker on a link's window takes the key as a sheet: the link stays the
+    /// window the menu acts on, until the main window becomes key. The window itself can't be made
+    /// headless (it orders itself in), so the sheet check is passed in.
+    @Test func linkWindowKeepsTheMenuWhileASheetIsUp() throws {
+        let (browser, _) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.windowResignedKey(tab, toSheet: true)
+        #expect(!browser.canChangeTabs)
+        #expect(browser.commandTab === tab)
+
+        browser.windowDidBecomeKey()
+        #expect(browser.canChangeTabs)
+        #expect(browser.commandTab !== tab)
+    }
+
+    /// Move to Main Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
+    /// window under the page's alert or file picker: the page stays where its sheet is.
+    @Test func linkWithASheetUpStaysInItsWindow() throws {
+        let (browser, windows) = makeBrowser(enabled: true)
+        defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.close(tab) }
+        let window = try #require(windows.opened.first?.window)
+        browser.quickLinks.windowBecameKey(tab)
+        browser.quickLinks.windowResignedKey(tab, toSheet: true)
+        window.pageSheet = NSWindow()
+
+        #expect(!browser.quickLinks.moveToMainWindow(tab))
+        #expect(window.closeCount == 0)
+        #expect(browser.quickLinks.contains(tab))
+        #expect(browser.quickLinks.keyTab === tab)
+        #expect(!browser.regularTabs.contains { $0 === tab })
+
+        window.pageSheet = nil
+        #expect(browser.quickLinks.moveToMainWindow(tab))
+        #expect(window.closeCount == 1)
+        #expect(browser.regularTabs.contains { $0 === tab })
+    }
+
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
     /// steps through that page's matches, and Escape there closes the bar.
     @Test func findWorksInALinksWindow() async throws {
@@ -356,6 +467,27 @@ private final class Windows {
 
 private final class RecordingWindow: NSWindow {
     private(set) var closeCount = 0
+    private(set) var frontCount = 0
+    private(set) var deminiaturizeCount = 0
+    var isInDock = false
+    /// Set: taken as on screen (true) or closed (false), never ordered in.
+    var isShown: Bool?
+    /// Set: taken as the sheet attached to it, never shown.
+    var pageSheet: NSWindow?
+
+    override var isMiniaturized: Bool { isInDock }
+    override var isVisible: Bool { isShown.map { $0 && !isInDock } ?? super.isVisible }
+    override var attachedSheet: NSWindow? { pageSheet ?? super.attachedSheet }
+
+    override func deminiaturize(_ sender: Any?) {
+        deminiaturizeCount += 1
+        isInDock = false
+    }
+
+    /// Recorded, never put on screen.
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        frontCount += 1
+    }
 
     override func close() {
         closeCount += 1

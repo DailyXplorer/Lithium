@@ -186,6 +186,26 @@ struct FilterListsTests {
         #expect(edited.groups.first { $0.name == "ads" }?.identifier != ads.identifier)
     }
 
+    /// A staging folder a build interrupted by quitting left behind goes with the next build, once
+    /// untouched for a day; one of a build under way stays.
+    @Test func anAbandonedStagingFolderIsRemoved() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let set = try shippedSet(["ads": ["one": "||ads.lithium.test^", "two": "||more.lithium.test^"]])
+        let choices = FilterChoices(off: ["two"])
+        _ = try await build(set, choices)
+        let abandoned = storage.built.appending(path: ".staging-\(UUID().uuidString)")
+        let current = storage.built.appending(path: ".staging-\(UUID().uuidString)")
+        for folder in [abandoned, current] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try "[]".write(to: folder.appending(path: "rules.json"), atomically: false, encoding: .utf8)
+        }
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 24 * 60 * 60)], ofItemAtPath: abandoned.path)
+
+        _ = try await build(set, choices)
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(FileManager.default.fileExists(atPath: current.path))
+    }
+
     /// A chosen group that fails to compile is left out, not replaced by the shipped group of the
     /// same name, which still holds the lists the user turned off.
     @Test func aFailedChosenGroupDoesntBringBackTheShippedOne() async throws {

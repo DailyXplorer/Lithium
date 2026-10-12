@@ -118,6 +118,7 @@ extension BarAction {
         case .enterZenMode, .exitZenMode: .fitPage
         case .translatePage, .showOriginal: .translate
         case .clearSiteData: .trash
+        case .turnOnEnergySaving, .turnOffEnergySaving: .leaf
         case .settings: .settings
         }
     }

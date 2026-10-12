@@ -6,7 +6,7 @@ import WebKit
 enum BarAction: Hashable, CaseIterable {
     case copyLink, newPrivateTab, duplicateTab, reopenClosedTab
     case pinTab, unpinTab, openSplitView, exitSplitView, enterZenMode, exitZenMode
-    case translatePage, showOriginal, clearSiteData, settings
+    case translatePage, showOriginal, clearSiteData, turnOnEnergySaving, turnOffEnergySaving, settings
 
     var title: String {
         switch self {
@@ -23,6 +23,8 @@ enum BarAction: Hashable, CaseIterable {
         case .translatePage: "Translate page"
         case .showOriginal: "Show original"
         case .clearSiteData: "Clear site data"
+        case .turnOnEnergySaving: "Turn on energy saving"
+        case .turnOffEnergySaving: "Turn off energy saving"
         case .settings: "Settings"
         }
     }
@@ -31,7 +33,8 @@ enum BarAction: Hashable, CaseIterable {
         switch self {
         case .copyLink: ["Copy URL", "Copy address"]
         case .newPrivateTab: ["Private window", "Incognito"]
-        case .duplicateTab: []
+        // Energy saving: none, so a search for "battery saver" stays a search on Return.
+        case .duplicateTab, .turnOnEnergySaving, .turnOffEnergySaving: []
         case .reopenClosedTab: ["Undo close tab", "Restore tab"]
         case .pinTab: ["Add to favorites"]
         case .unpinTab: ["Remove from favorites"]
@@ -156,6 +159,7 @@ extension Browser {
         actions.append(isZenMode ? .exitZenMode : .enterZenMode)
         if let tab, tab.canTranslate { actions.append(tab.pageTranslation?.isActive == true ? .showOriginal : .translatePage) }
         if let scheme = tab?.url?.scheme?.lowercased(), ["http", "https"].contains(scheme) { actions.append(.clearSiteData) }
+        actions.append(energy.isOn ? .turnOffEnergySaving : .turnOnEnergySaving)
         actions.append(.settings)
         return actions
     }
@@ -177,6 +181,7 @@ extension Browser {
             withAnimation(.snappy(duration: 0.2)) { toggleZenMode() }
         case .translatePage, .showOriginal: toggleTranslation(tab)
         case .clearSiteData: clearSiteData(of: tab)
+        case .turnOnEnergySaving, .turnOffEnergySaving: turnEnergySaving(on: action == .turnOnEnergySaving)
         case .settings: openSettings()
         }
     }

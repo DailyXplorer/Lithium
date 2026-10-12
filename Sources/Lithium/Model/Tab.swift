@@ -589,7 +589,16 @@ final class Tab: NSObject, Identifiable {
         }
         // Its title may have changed while off screen, where it doesn't ask the model.
         if !isAsleep { browser?.tidyTitles.update(self) }
-        wakeIfAsleep()
+        // Shown as Lithium opens (the selected tab, a split's pages), a restored page waits for the
+        // last session's cookies (`Browser.cookieRestore`), or it would load signed out.
+        if let restoring = browser?.cookieRestore {
+            Task { [weak self] in
+                await restoring.value
+                self?.wakeIfAsleep()
+            }
+        } else {
+            wakeIfAsleep()
+        }
     }
 
     /// Without selecting it: a restored favorite wakes this way at launch.

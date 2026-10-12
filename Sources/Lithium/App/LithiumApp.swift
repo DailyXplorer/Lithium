@@ -29,8 +29,30 @@ struct LithiumApp: App {
 /// and the session's last save as the app quits.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var quitReplied = true
+
+    /// The session cookies are read from WebKit's network process, asynchronously: the quit waits
+    /// for them, but no more than two seconds, so a stuck process can't keep Lithium open.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        Downloads.shared.shouldTerminate()
+        let reply = Downloads.shared.shouldTerminate()
+        guard reply == .terminateNow else { return reply }
+        quitReplied = false
+        Task {
+            await LithiumApp.sharedBrowser.saveSessionCookies()
+            replyToQuit(sender)
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if !quitReplied { LithiumApp.sharedBrowser.cookieSaveCutShort() }
+            replyToQuit(sender)
+        }
+        return .terminateLater
+    }
+
+    private func replyToQuit(_ sender: NSApplication) {
+        guard !quitReplied else { return }
+        quitReplied = true
+        sender.reply(toApplicationShouldTerminate: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

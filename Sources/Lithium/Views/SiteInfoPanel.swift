@@ -48,7 +48,7 @@ private struct LiveSiteInfo: View {
             showsCertificate: $showsCertificate,
             onClear: {
                 Task {
-                    await info.clear()
+                    await browser.clearData([info]).value
                     browser.navigate(tab, .reload)
                 }
             },

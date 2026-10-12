@@ -10,7 +10,7 @@ import WebKit
 /// throwaway one: `scripts/test --filter SpaceSignInTests`.
 @MainActor
 /// Three minutes: a signed-out page fails each check only after its 30-second wait, and a test
-/// makes up to three, so a regression fails on its check rather than on the time limit.
+/// makes up to four, so a regression fails on its check rather than on the time limit.
 @Suite(.serialized, .timeLimit(.minutes(3)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct SpaceSignInTests {
     @Test func aFavoriteStaysSignedInAcrossSpaceSwitches() async throws {

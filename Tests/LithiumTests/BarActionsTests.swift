@@ -32,8 +32,18 @@ struct BarActionMatchTests {
         #expect(BarAction.matches("zen", among: [.enterZenMode]).first?.match.isWhole == true)
         #expect(named("cookies") == [.clearSiteData])
         #expect(named("incognito") == [.newPrivateTab])
+        #expect(named("energy", among: [.turnOffEnergySaving]) == [.turnOffEnergySaving])
         #expect(named("reopen tab") == [.reopenClosedTab], "words may skip words of the name")
         #expect(named("Paramètres").isEmpty)
+    }
+
+    /// Energy saving's actions flip a setting, so a search that names it ("energy saving", "battery
+    /// saver") stays a search on Return: only the whole title runs one.
+    @Test func energySavingRunsOnlyFromItsWholeTitle() {
+        let energy = BarAction.matches("energy saving", among: all)
+        #expect(!energy.isEmpty && energy.allSatisfy { !$0.match.isWhole })
+        #expect(named("battery saver").isEmpty)
+        #expect(BarAction.matches("turn on energy saving", among: all).first?.match.isWhole == true)
     }
 
     /// Everyday searches stay searches: too short, three letters that aren't a whole name, past a
@@ -123,8 +133,13 @@ struct BarActionsTests {
     private static let prefix = "data:text/html,"
 
     private func browser(with names: [String]) -> Browser {
+        // Before the browser reads it: a run killed mid-test may have left Always or Off.
+        UserDefaults.standard.removeObject(forKey: Preference.energySaving)
         let browser = Browser()
         reset(browser)
+        // Plugged in, whatever the Mac running the tests is on: energy saving starts off.
+        browser.energy.isOnLimitedPower = { false }
+        browser.energy.update()
         for name in names.reversed() { browser.newTab(url: page(name)) }
         return browser
     }
@@ -134,6 +149,7 @@ struct BarActionsTests {
         browser.pins.forEach(browser.unpin)
         if browser.isZenMode { browser.toggleZenMode() }
         UserDefaults.standard.removeObject(forKey: Preference.zenMode)
+        UserDefaults.standard.removeObject(forKey: Preference.energySaving)
     }
 
     private func page(_ name: String) -> URL { URL(string: Self.prefix + name)! }
@@ -157,10 +173,10 @@ struct BarActionsTests {
     @Test func offersOnlyWhatCanRunNow() {
         let browser = browser(with: ["a", "b"])
         defer { reset(browser) }
-        #expect(browser.barActions(for: nil) == [.newPrivateTab, .enterZenMode, .settings])
+        #expect(browser.barActions(for: nil) == [.newPrivateTab, .enterZenMode, .turnOnEnergySaving, .settings])
 
         let a = tab("a", in: browser)
-        #expect(browser.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .enterZenMode, .settings],
+        #expect(browser.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .enterZenMode, .turnOnEnergySaving, .settings],
                 "a data: page has no site data to clear")
         browser.close(tab("b", in: browser))
         #expect(browser.barActions(for: a).contains(.reopenClosedTab))
@@ -224,6 +240,41 @@ struct BarActionsTests {
 
         type("settings", on: tab("a", in: browser), in: browser)
         #expect(browser.selectedTab?.url?.absoluteString.hasPrefix(Internal.settingsURL.absoluteString) == true)
+    }
+
+    /// With no toolbar indicator, the bar turns energy saving on and off: on is Always, so it holds
+    /// on the charger, and off is Off, so it stays off on battery.
+    @Test func energySavingTurnsOnAndOff() {
+        let browser = browser(with: ["a"])
+        defer { reset(browser) }
+        #expect(browser.energy.mode == .onBattery && !browser.energy.isOn)
+        type("turn on energy saving", on: tab("a", in: browser), in: browser)
+        #expect(browser.energy.mode == .always && browser.energy.isOn)
+        #expect(browser.barActions(for: nil).contains(.turnOffEnergySaving))
+        #expect(!browser.barActions(for: nil).contains(.turnOnEnergySaving))
+
+        browser.energy.isOnLimitedPower = { true }
+        type("turn off energy saving", on: tab("a", in: browser), in: browser)
+        #expect(browser.energy.mode == .off && !browser.energy.isOn)
+        #expect(UserDefaults.standard.string(forKey: Preference.energySaving) == "off", "the same setting as Settings'")
+    }
+
+    /// Settings may be on screen when the ⋯ menu or the bar switches energy saving, so it never
+    /// shows the mode as it was.
+    @Test func energySwitchUpdatesAnOpenSettingsPage() async throws {
+        let browser = browser(with: [])
+        defer { reset(browser) }
+        browser.openSettings(section: "advanced")
+        let webView = try #require(browser.selectedTab?.webView)
+        let shown = { () async -> String? in
+            (try? await webView.callAsyncJavaScript("return document.querySelector('#energy-saving button.on')?.dataset.value", contentWorld: .page)) as? String
+        }
+        #expect(await poll(30) { await shown() == "onBattery" })
+        // Through the bar's Return, typed over Settings itself, so its wiring is what's checked.
+        type("turn on energy saving", on: browser.selectedTab, in: browser)
+        #expect(await poll(10) { await shown() == "always" })
+        type("turn off energy saving", on: browser.selectedTab, in: browser)
+        #expect(await poll(10) { await shown() == "off" })
     }
 
     /// Clear site data removes the site's cookies from the tab's own store, here a private one;

@@ -54,8 +54,12 @@ h3 + .row, .rows > .row:first-child { border-top: 0; }
 .on .radio { border: 5.5px solid var(--accent); }
 
 /* Controls */
-.segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--line); }
-.segmented button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; }
+/* Never squeezed: a label wrapping onto two lines makes its pill taller than the others. A row
+   too narrow for its label and the control puts the control under the label instead. */
+.segmented { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--line); }
+.segmented button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; cursor: pointer; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.row:has(> .segmented) { flex-wrap: wrap; row-gap: 10px; }
+.row:has(> .segmented) > :first-child { flex: 1 1 160px; }
 .segmented button.on { background: var(--accent-soft); color: var(--accent); }
 .segmented button:not(.on):hover { color: var(--ink); }
 

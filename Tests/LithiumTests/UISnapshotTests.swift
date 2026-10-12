@@ -165,20 +165,23 @@ struct UISnapshotTests {
             ("extensions", "extensions", nil),
             ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
+            // The segmented controls at the narrowest a tab gets: the smallest window with the sidebar.
+            ("appearance-narrow", "appearance", nil), ("advanced-narrow", "advanced", nil),
             // Last: the page keeps the interface font it picked.
             ("appearance-interface-font", "appearance", "render({ ...lastState, appearance: { ...lastState.appearance, interfaceFont: 'Avenir Next' } })"),
         ]
         for section in sections {
+            let width = section.name.hasSuffix("-narrow") ? 760 - Layout.sidebarWidth - Layout.margin : 960
             _ = try await webView.evaluateJavaScript("location.hash = '\(section.hash)'; \(section.script ?? ""); 0")
             try await Task.sleep(for: .milliseconds(100))
             // A window never shown keeps the sticky sidebar's old paint; redrawing it shows the current section.
             _ = try await webView.evaluateJavaScript("document.querySelector('nav').style.display = 'none'; document.body.offsetHeight; document.querySelector('nav').style.display = ''; 0")
             for isDark in [false, true] {
                 window.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
-                window.setFrame(NSRect(x: -5000, y: 0, width: 960, height: 700), display: false)
+                window.setFrame(NSRect(x: -5000, y: 0, width: width, height: 700), display: false)
                 try await Task.sleep(for: .milliseconds(400))
                 let height = try await webView.evaluateJavaScript("document.querySelector('main').scrollHeight") as? Double ?? 700
-                window.setFrame(NSRect(x: -5000, y: 0, width: 960, height: max(700, height)), display: false)
+                window.setFrame(NSRect(x: -5000, y: 0, width: width, height: max(700, height)), display: false)
                 try await Task.sleep(for: .milliseconds(300))
                 let image = try await webView.takeSnapshot(configuration: nil)
                 let png = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:]))
@@ -316,18 +319,6 @@ struct UISnapshotTests {
         .padding(12)
         for isDark in [false, true] {
             try render(list, isDark: isDark).write(to: directory.appending(path: "bar-actions-\(isDark ? "dark" : "light").png"))
-        }
-    }
-
-    /// The energy saving indicator's panel, on battery and always on.
-    @Test func energyPanelSnapshots() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        Theme.registerFonts()
-        for mode in [EnergySaving.onBattery, .always] {
-            for isDark in [false, true] {
-                let png = try render(EnergyPanel(mode: mode, openSettings: {}), isDark: isDark)
-                try png.write(to: directory.appending(path: "energy-panel-\(mode.rawValue)-\(isDark ? "dark" : "light").png"))
-            }
         }
     }
 
@@ -612,6 +603,8 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "allowedPages": ["tlauncher.org"],
         ] as [String: Any],
         "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],
+        // Settings' render reads every key: one missing stops it before the rest of the page.
+        "appLinks": [[String: String]](),
         "max": [
             "tidyTitles": true, "tidyDownloads": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
             "summaryLanguages": [["code": "en", "name": "English"], ["code": "fr", "name": "French"]],

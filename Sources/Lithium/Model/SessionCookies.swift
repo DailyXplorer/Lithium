@@ -4,9 +4,8 @@ import Security
 import WebKit
 
 /// Session cookies (no expiry), which WebKit keeps only in memory, so sign-ins come back with the
-/// tabs after a relaunch, as in Chrome. Saved at quit, put back at the next launch and the file
-/// deleted then: it never exists while Lithium runs, so whatever clears data meanwhile (a site's
-/// data, a space) is what the next quit saves. A crash loses the session's, as before.
+/// tabs after a relaunch, as in Chrome. Saved at quit and with the session (`Browser.saveSessionCookies`),
+/// so a crash loses only what came since; put back at the next launch, and the file deleted then.
 @MainActor
 enum SessionCookies {
     /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins.
@@ -33,44 +32,66 @@ enum SessionCookies {
             }
             if !cookies.isEmpty { saved[id.uuidString] = cookies }
         }
-        guard !saved.isEmpty else { return forget() }
-        do {
-            let plist = try PropertyListSerialization.data(fromPropertyList: ["saved": now, "stores": saved], format: .binary, options: 0)
-            guard let key = key.read(true) else { return forget() }
-            let sealed = try AES.GCM.seal(plist, using: key).combined ?? Data()
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try sealed.write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-        } catch {
-            forget()
+        guard !saved.isEmpty,
+              let plist = try? PropertyListSerialization.data(fromPropertyList: ["saved": now, "stores": saved], format: .binary, options: 0)
+        else { return forget() }
+        // Off the main thread: the Keychain may block, on a prompt for the key.
+        let (key, url) = (key, fileURL)
+        let written = await Task.detached {
+            guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined else { return false }
+            return write(sealed, to: url)
+        }.value
+        if !written { forget() }
+    }
+
+    /// Made 0600 before it takes the file's place, so others can't read it even for a moment.
+    nonisolated private static func write(_ data: Data, to url: URL) -> Bool {
+        let folder = url.deletingLastPathComponent()
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return false }
+        let temporary = folder.appending(path: ".\(url.lastPathComponent)-\(UUID().uuidString)")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { return false }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        guard (try? handle.write(contentsOf: data)) != nil, (try? handle.close()) != nil,
+              rename(temporary.path, url.path) == 0 else {
+            try? FileManager.default.removeItem(at: temporary)
+            return false
         }
+        return true
     }
 
     /// Puts each store's cookies back in that store only, then deletes the file. Nil, at the cost
-    /// of one file check, when there is nothing to restore. A file that can't be read (no key, another
+    /// of one file check, when there is no file. A file that can't be read (no key, another
     /// key, damaged, too old) restores nothing.
-    static func restore(into store: (Space.ID) -> WKWebsiteDataStore?, now: Date = Date()) -> Task<Void, Never>? {
+    static func restore(into store: @escaping (Space.ID) -> WKWebsiteDataStore?, now: Date = Date()) -> Task<Void, Never>? {
         guard let sealed = try? Data(contentsOf: fileURL) else { return nil }
-        forget()
-        var restores: [(WKWebsiteDataStore, [HTTPCookie])] = []
-        if let key = key.read(false),
-           let box = try? AES.GCM.SealedBox(combined: sealed),
-           let plist = try? AES.GCM.open(box, using: key),
-           let file = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
-           let saved = file["saved"] as? Date, now.timeIntervalSince(saved) < maxAge,
-           let stores = file["stores"] as? [String: [[String: Any]]] {
-            for (id, cookies) in stores {
-                guard let id = UUID(uuidString: id), let target = store(id) else { continue }
-                restores.append((target, cookies.compactMap { properties in
-                    HTTPCookie(properties: Dictionary(uniqueKeysWithValues: properties.map { (HTTPCookiePropertyKey($0.key), $0.value) }))
-                }))
-            }
-        }
-        guard !restores.isEmpty else { return nil }
+        let key = key
         return Task {
-            for (store, cookies) in restores {
-                for cookie in cookies { await store.httpCookieStore.setCookie(cookie) }
+            // Off the main thread: the Keychain may block, on a prompt for the key.
+            let plist = await Task.detached {
+                key.read(false).flatMap { key in (try? AES.GCM.SealedBox(combined: sealed)).flatMap { try? AES.GCM.open($0, using: key) } }
+            }.value
+            var restores: [(WKWebsiteDataStore, HTTPCookie)] = []
+            if let plist,
+               let file = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
+               let saved = file["saved"] as? Date, now.timeIntervalSince(saved) < maxAge,
+               let stores = file["stores"] as? [String: [[String: Any]]] {
+                for (id, cookies) in stores {
+                    guard let id = UUID(uuidString: id), let target = store(id) else { continue }
+                    restores += cookies.compactMap { properties in
+                        HTTPCookie(properties: Dictionary(uniqueKeysWithValues: properties.map { (HTTPCookiePropertyKey($0.key), $0.value) }))
+                    }.map { (target, $0) }
+                }
             }
+            // All at once: one at a time, pages would wait a round trip to WebKit per cookie.
+            await withTaskGroup(of: Void.self) { group in
+                for (store, cookie) in restores {
+                    group.addTask { await store.httpCookieStore.setCookie(cookie) }
+                }
+            }
+            // Only once they are back: a quit or crash before then still finds them in the file.
+            // Unless a save rewrote it meanwhile, after a restore Lithium stopped waiting for.
+            if (try? Data(contentsOf: fileURL)) == sealed { forget() }
         }
     }
 
@@ -106,7 +127,25 @@ enum SessionCookies {
             var added = item
             added[kSecValueData] = key.withUnsafeBytes { Data($0) }
             added[kSecAttrLabel] = "Lithium sign-in cookies"
-            return SecItemAdd(added as CFDictionary, nil) == errSecSuccess ? key : nil
+            var status = SecItemAdd(added as CFDictionary, nil)
+            // One this build can't read (signed differently, access refused, damaged) would otherwise
+            // stop every save. Replaced: the file it opened is about to be rewritten.
+            if status == errSecDuplicateItem, SecItemDelete(item as CFDictionary) == errSecSuccess {
+                status = SecItemAdd(added as CFDictionary, nil)
+            }
+            return status == errSecSuccess ? key : nil
         }
+    }
+}
+
+extension Task where Success == Void, Failure == Never {
+    /// Until it ends or `limit` passes, whichever comes first; it goes on either way.
+    func wait(atMost limit: Duration) async {
+        let timer = Task<Void, Never> { try? await Task<Never, Never>.sleep(for: limit) }
+        Task<Void, Never> {
+            await value
+            timer.cancel()
+        }
+        await timer.value
     }
 }

@@ -217,7 +217,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             let infos = browser.siteDataStores.map { SiteInfo(host: host, store: $0) }
             for info in infos { await info.load() }
             if action == "clearSiteData" {
-                for info in infos { await info.clear() }
+                await browser.clearData(infos).value
                 // Its open pages would go on without the data they expect; private tabs keep theirs.
                 let site = SiteInfo.registrable(host)
                 browser.tabs.filter { !$0.isAsleep && !$0.isEphemeral && SiteInfo.registrable($0.url?.host() ?? "") == site }.forEach { browser.navigate($0, .reload) }

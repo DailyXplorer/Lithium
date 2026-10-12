@@ -187,8 +187,7 @@ extension Browser {
         guard let tab, let url = tab.url else { return nil }
         let info = SiteInfo(url: url, store: tab.dataStore)
         return Task {
-            await info.load()
-            await info.clear()
+            await clearData([info]).value
             navigate(tab, .reload)
         }
     }

@@ -9,7 +9,9 @@ import WebKit
 /// space's store. A whole Browser keeps its data in the home folder, so this suite only runs in a
 /// throwaway one: `scripts/test --filter SpaceSignInTests`.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+/// Three minutes: a signed-out page fails each check only after its 30-second wait, and a test
+/// makes up to three, so a regression fails on its check rather than on the time limit.
+@Suite(.serialized, .timeLimit(.minutes(3)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct SpaceSignInTests {
     @Test func aFavoriteStaysSignedInAcrossSpaceSwitches() async throws {
         let site = try await SignInSite.start()
@@ -149,6 +151,55 @@ struct SpaceSignInTests {
         #expect(await signedIn(link))
     }
 
+    /// Back from an extension's page, which keeps a store of its own, the tab gets a new web view
+    /// with the space's store (`needsNewWebView`). No extension is installed: an unknown one's page
+    /// takes the same branches.
+    @Test func aTabBackFromAnExtensionPageIsSignedIn() async throws {
+        let site = try await SignInSite.start()
+        defer { site.stop() }
+        let (browser, work, favorite) = try await signedInFavorite(on: site)
+        defer { reset(browser) }
+
+        browser.switchToSpace(Space.mainID)
+        browser.switchToSpace(work.id)
+        let page = try #require(URL(string: "\(Extensions.scheme)://lithium-test/page.html"))
+        browser.navigate(favorite, .open(page))
+        let extensionPage = favorite.webView
+        #expect(extensionPage.configuration.websiteDataStore.identifier == nil)
+        let commits = favorite.commits
+        browser.navigate(favorite, .open(site.home))
+        #expect(favorite.webView !== extensionPage)
+        #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
+        #expect(await signedIn(favorite, after: commits))
+    }
+
+    /// The main space, a space sharing its data and a private tab of the separate space keep their
+    /// own stores, so none of them gets its sign-in.
+    @Test func otherStoresDontGetTheSpaceSignIn() async throws {
+        let site = try await SignInSite.start()
+        defer { site.stop() }
+        let (browser, work, _) = try await signedInFavorite(on: site)
+        defer { reset(browser) }
+
+        let privateStore = WKWebsiteDataStore.nonPersistent()
+        let privateTab = browser.newTab(url: site.home, privateStore: privateStore, space: work.id)
+        #expect(privateTab.webView.configuration.websiteDataStore === privateStore)
+        #expect(await settledTitle(privateTab) == "Sign in", "private tab")
+
+        var shared = browser.newSpaceDraft()
+        shared.name = "Shared"
+        browser.addSpace(shared)
+        let sharedTab = browser.newTab(url: site.home)
+        #expect(sharedTab.spaceID == shared.id)
+        browser.switchToSpace(Space.mainID)
+        let mainTab = browser.newTab(url: site.home)
+        #expect(mainTab.spaceID == Space.mainID)
+        for (tab, name) in [(sharedTab, "shared space"), (mainTab, "main space")] {
+            #expect(tab.webView.configuration.websiteDataStore === WKWebsiteDataStore.default(), "\(name)")
+            #expect(await settledTitle(tab) == "Sign in", "\(name)")
+        }
+    }
+
     // MARK: Helpers
 
     /// A space with its own data, shown, and a favorite of it signed in to `site`.
@@ -183,8 +234,13 @@ struct SpaceSignInTests {
 
     /// Whether the next page the tab shows, past any redirects, is the signed-in one.
     private func signedIn(_ tab: Lithium.Tab, after commits: Int = 0) async -> Bool {
-        await poll(30) { tab.commits > commits && !tab.isLoading && ["Signed in", "Sign in"].contains(tab.title) }
-        return tab.title == "Signed in"
+        await settledTitle(tab, after: commits) == "Signed in"
+    }
+
+    /// Nil when no new page settles: the title shown meanwhile is the last page's.
+    private func settledTitle(_ tab: Lithium.Tab, after commits: Int = 0) async -> String? {
+        let settled = await poll(30) { tab.commits > commits && !tab.isLoading && ["Signed in", "Sign in"].contains(tab.title) }
+        return settled ? tab.title : nil
     }
 
     private func reloadsSignedIn(_ tab: Lithium.Tab, in browser: Browser) async -> Bool {

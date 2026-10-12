@@ -603,6 +603,8 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "allowedPages": ["tlauncher.org"],
         ] as [String: Any],
         "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],
+        // Settings' render reads every key: one missing stops it before the rest of the page.
+        "appLinks": [[String: String]](),
         "max": [
             "tidyTitles": true, "tidyDownloads": true, "summaries": true, "summaryLanguage": "", "summarySystemLanguage": "English",
             "summaryLanguages": [["code": "en", "name": "English"], ["code": "fr", "name": "French"]],

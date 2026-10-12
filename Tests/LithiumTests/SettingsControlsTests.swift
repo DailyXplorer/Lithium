@@ -95,8 +95,6 @@ struct SettingsControlsTests {
     /// with the sidebar), where it may go under its label instead.
     private static func segmentProbe(wide: Bool) -> String {
         """
-        const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); };
-        await until(() => $('#version').textContent && innerWidth === width);
         const problems = [];
         if (innerWidth !== width) problems.push(`page is ${innerWidth}px, not ${width}px`);
         const sections = [...document.querySelectorAll('section')];
@@ -136,6 +134,12 @@ struct SettingsControlsTests {
         // The smallest window (`LithiumApp`) less the sidebar and the page's margin.
         for width in [960, 760 - Int(Layout.sidebarWidth + Layout.margin)] {
             webView.frame.size.width = CGFloat(width)
+            // Waited for and checked from here: a page outside any window gets its timers about once
+            // a second, so a wait in the page that never ends (a render stopped by a missing key in
+            // the sample state) took minutes, then measured an unrendered page.
+            #expect(await poll(15) {
+                (try? await webView.evaluateJavaScript("$('#version').textContent !== '' && innerWidth === \(width)") as? Bool) == true
+            }, "Settings rendered at \(width)px")
             let problems = try #require(try await webView.callAsyncJavaScript(Self.segmentProbe(wide: width == 960), arguments: ["width": width], contentWorld: .page) as? [String])
             for problem in problems { Issue.record("\(problem)") }
         }
@@ -180,5 +184,14 @@ struct SettingsControlsTests {
         #expect(bridge.colors.first == "#000001")
         #expect(bridge.colors.last == "#000030")
         #expect(bridge.colors.count <= 3)
+    }
+
+    private func poll(_ seconds: Double, _ condition: () async -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return await condition()
     }
 }

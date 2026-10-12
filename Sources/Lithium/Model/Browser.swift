@@ -28,6 +28,9 @@ final class Browser {
     @ObservationIgnored private(set) var spaceStepsForward = true
     /// Clearing a deleted space's store; awaited in tests.
     @ObservationIgnored private(set) var storeCleanup: Task<Void, Never>?
+    /// The last session's session cookies going back in their stores (`SessionCookies`), nil once
+    /// they are: pages wait for it, or they'd load signed out.
+    @ObservationIgnored private(set) var cookieRestore: Task<Void, Never>?
     private(set) var addressFocusToken = 0
     /// Moves only when the user picks a tab or the start page, so the peeked sidebar slides back on a
     /// pick yet stays out while tabs close or spaces switch in a row.
@@ -188,6 +191,13 @@ final class Browser {
         if extensions.checksForUpdates { Task { [extensions] in await extensions.updateIfDue() } }
         let saved = SessionStore.load()
         restore(saved)
+        // After the spaces, whose stores get their own cookies back.
+        if let restoring = SessionCookies.restore(into: { $0 == Space.mainID ? .default() : spaceStore(for: $0) }) {
+            cookieRestore = Task { [weak self] in
+                await restoring.value
+                self?.cookieRestore = nil
+            }
+        }
         // Written only when restoring changed it (a tab left out, a space gone), not at every launch.
         (savedSession, savedWithHistory) = (saved.withoutHistory, saved)
         saveSession()
@@ -424,6 +434,17 @@ final class Browser {
 
     func windowDidAppear() {
         installEventMonitors()
+        if let cookieRestore {
+            Task { [weak self] in
+                await cookieRestore.value
+                self?.wakeRestoredPages()
+            }
+        } else {
+            wakeRestoredPages()
+        }
+    }
+
+    private func wakeRestoredPages() {
         selectedTab?.markActive()
         if launchFavorites == nil { wakeRestoredFavorites() }
     }
@@ -688,7 +709,15 @@ final class Browser {
     }
 
     /// A link from another app: in a small window of its own when Settings says so, else a new tab.
+    /// A link that launched Lithium waits for the restored cookies, like the restored tabs.
     func openFromOtherApp(_ url: URL) {
+        if let cookieRestore {
+            Task { [weak self] in
+                await cookieRestore.value
+                self?.openFromOtherApp(url)
+            }
+            return
+        }
         if quickLinks.isEnabled, QuickLinks.takes(url) { quickLinks.open(url) } else { newTab(url: url) }
     }
 
@@ -1305,6 +1334,15 @@ final class Browser {
         saveSession(now: true)
         history.writeTitles()
         if pinsUnsaved { savePins() }
+    }
+
+    /// At quit. Private tabs' stores are never saved; a deleted space's store is no longer here.
+    func saveSessionCookies() async {
+        // A quit as Lithium opens: the last session's cookies are still going back.
+        await cookieRestore?.value
+        var stores = [Space.mainID: WKWebsiteDataStore.default()]
+        for space in spaces where space.separatesData { stores[space.id] = spaceStore(for: space.id) }
+        await SessionCookies.save(stores)
     }
 
     /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists, and the open

@@ -78,7 +78,7 @@ enum SessionCookies {
                 return (plist, key)
             }.value
             if let opened { knownKey = opened.key }
-            var restores: [(WKWebsiteDataStore, HTTPCookie)] = []
+            var restores: [(id: Space.ID, store: WKWebsiteDataStore, cookie: HTTPCookie)] = []
             if let plist = opened?.plist,
                let file = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
                let saved = file["saved"] as? Date, now.timeIntervalSince(saved) < maxAge,
@@ -87,14 +87,19 @@ enum SessionCookies {
                     guard let id = UUID(uuidString: id), let target = store(id) else { continue }
                     restores += cookies.compactMap { properties in
                         HTTPCookie(properties: Dictionary(uniqueKeysWithValues: properties.map { (HTTPCookiePropertyKey($0.key), $0.value) }))
-                    }.filter { !skipping(id, $0) }.map { (target, $0) }
+                    }.filter { !skipping(id, $0) }.map { (id, target, $0) }
                 }
             }
             // All at once: one at a time, pages would wait a round trip to WebKit per cookie.
             await withTaskGroup(of: Void.self) { group in
-                for (store, cookie) in restores {
+                for (_, store, cookie) in restores {
                     group.addTask { await store.httpCookieStore.setCookie(cookie) }
                 }
+            }
+            // Cleared while on its way, the clear having run without it (a restore held up past the
+            // pages' bound). The clear's save waits for this task, so the file loses it too.
+            for (id, store, cookie) in restores where skipping(id, cookie) {
+                await store.httpCookieStore.deleteCookie(cookie)
             }
         }
     }

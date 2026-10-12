@@ -72,6 +72,20 @@ struct SessionCookiesTests {
         #expect(await restoresNothing())
     }
 
+    /// A site cleared after the restore picked its cookies, while one is still on its way to WebKit
+    /// (held past the pages' bound): the clear ran without it, so it goes once it lands.
+    @Test func aCookieClearedOnItsWayIsGoneOnceItLands() async throws {
+        await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])])
+        let restored = WKWebsiteDataStore.nonPersistent()
+        var cleared = false
+        let restoring = try #require(SessionCookies.restore(into: { _ in restored }, skipping: { _, _ in
+            defer { cleared = true }
+            return cleared
+        }))
+        await restoring.value
+        #expect(await restored.httpCookieStore.allCookies().isEmpty)
+    }
+
     /// A restore stuck in WebKit holds pages back no longer than the limit.
     @Test func aStuckRestoreIsWaitedForAtMostItsLimit() async {
         let stuck = Task<Void, Never> { try? await Task<Never, Never>.sleep(for: .seconds(60)) }

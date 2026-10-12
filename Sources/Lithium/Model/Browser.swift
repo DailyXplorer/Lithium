@@ -1529,7 +1529,8 @@ final class Browser {
         let store = spaceStores.removeValue(forKey: id) ?? WKWebsiteDataStore(forIdentifier: id)
         storeCleanup = Task { [cookieRestore] in
             // Its restored cookies would otherwise land after; a restore held up past the bound
-            // finds no store for the deleted space (`spaceStore(for:)`).
+            // finds no store for the deleted space (`spaceStore(for:)`), or sets them in memory
+            // only, in a store no page uses and no save reads.
             await cookieRestore?.value
             await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
             await removeUnusedStores()

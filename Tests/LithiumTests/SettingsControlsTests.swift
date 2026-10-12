@@ -10,7 +10,6 @@ import WebKit
 struct SettingsControlsTests {
     private static let probe = """
         const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); };
-        await until(() => $('#version').textContent && $('#interface-font').options.length > 1);
         const problems = [];
         const check = (name, actual, expected) => { if (actual !== expected) problems.push(`${name}: ${actual}, not ${expected}`); };
         const segmented = $('#start-kind'), seg = getComputedStyle(segmented);
@@ -85,6 +84,11 @@ struct SettingsControlsTests {
         webView.navigationDelegate = loaded
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         try await loaded.wait()
+        // Waited for from here, like `segmentedLabelsStayOnOneLine`: a render that stops early
+        // fails in seconds rather than after minutes of throttled in-page timers.
+        #expect(await poll(15) {
+            (try? await webView.evaluateJavaScript("$('#version').textContent !== '' && $('#interface-font').options.length > 1") as? Bool) == true
+        }, "Settings rendered")
         let problems = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String])
         for problem in problems { Issue.record("\(problem)") }
     }

@@ -103,6 +103,11 @@ final class SiteInfo {
         hasData = !cookies.isEmpty || !records.isEmpty
     }
 
+    /// Before a clear that waits its turn (`Browser.clearData`): the button stops at the click.
+    func willClear() {
+        isClearing = true
+    }
+
     func clear() async {
         isClearing = true
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: records)

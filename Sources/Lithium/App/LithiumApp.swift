@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Task {
             try? await Task.sleep(for: .seconds(2))
+            if !quitReplied { LithiumApp.sharedBrowser.cookieSaveCutShort() }
             replyToQuit(sender)
         }
         return .terminateLater

@@ -116,7 +116,7 @@ struct SessionCookiesTests {
         #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
     }
 
-    /// Without a quit: the session save, a crash, then a relaunch.
+    /// Without a quit: the session save alone writes them, for a relaunch after a crash.
     @Test func theSessionSaveKeepsThemForACrash() async throws {
         let site = try await EchoSite.start()
         defer { site.stop() }
@@ -132,6 +132,59 @@ struct SessionCookiesTests {
         await browser.cookieSave?.value
 
         #expect(await savedCookies(of: [Space.mainID, work.id]) == [Space.mainID: ["main"], work.id: ["work"]])
+    }
+
+    /// A sign-in soon after a session save, then no change: saved once the next save is due.
+    @Test func aSignInSoonAfterASaveIsSavedWhenTheNextIsDue() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        browser.cookieSaveInterval = .seconds(4)
+        #expect(await title(of: browser.newTab(url: site.echo, space: Space.mainID)) == "none")
+        try await Task.sleep(for: Browser.sessionSaveDelay * 2)
+        await (try #require(browser.cookieSave, "saved with the session")).value
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        #expect(await poll { FileManager.default.fileExists(atPath: SessionCookies.fileURL.path) })
+        browser.cookieSaveInterval = nil
+        await browser.cookieSave?.value
+
+        #expect(await savedCookies(of: [Space.mainID]) == [Space.mainID: ["main"]])
+    }
+
+    /// A restore held up past the pages' limit (a Keychain prompt left open): a save waits for
+    /// it rather than drop the cookies still going back.
+    @Test func aSaveWaitsForARestorePastItsLimit() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let key = SessionCookies.key
+        defer { SessionCookies.key = key }
+        let secret = SymmetricKey(size: .bits256)
+        SessionCookies.key = SessionCookies.FileKey { _ in secret }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        browser.saveNow()
+        await browser.saveSessionCookies()
+        await forgetLiveCookies(browser)
+
+        let answered = DispatchSemaphore(value: 0)
+        defer { answered.signal() }
+        SessionCookies.key = SessionCookies.FileKey { creating in
+            if !creating { answered.wait() }
+            return secret
+        }
+        let again = Browser()
+        defer { reset(again) }
+        let saving = Task { await again.saveSessionCookies() }
+        try await Task.sleep(for: .seconds(6))
+        #expect(again.cookieRestore == nil, "pages stopped waiting")
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "kept while the cookies are still going back")
+        answered.signal()
+        await saving.value
+
+        SessionCookies.key = SessionCookies.FileKey { _ in secret }
+        #expect(await savedCookies(of: [Space.mainID]) == [Space.mainID: ["main"]])
     }
 
     /// The site's data cleared from its panel, and a space deleted, after the cookies were saved.
@@ -158,10 +211,40 @@ struct SessionCookiesTests {
         let (browser, _) = await makeBrowserWithWorkSpace()
         defer { reset(browser) }
         #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        await browser.saveSessionCookies()
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "saved before the clear")
         let clearing = browser.clearData([SiteInfo(host: "127.0.0.1", store: .default())])
         await browser.saveSessionCookies()
         #expect(await savedCookies(of: [Space.mainID]) == [:])
         await clearing.value
+    }
+
+    /// A quit that stops waiting for its save during a clear: the file goes, rather than keep
+    /// what the clear removes for the next launch to put back.
+    @Test func aQuitCutShortDuringAClearDropsTheFile() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        await browser.saveSessionCookies()
+        browser.cookieSaveCutShort()
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "kept without a clear")
+        let clearing = browser.clearData([SiteInfo(host: "127.0.0.1", store: .default())])
+        browser.cookieSaveCutShort()
+        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
+        await clearing.value
+    }
+
+    /// The Clear button stops at the click, though the clear may wait for the restore.
+    @Test func aClearShowsAtOnce() async {
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        let info = SiteInfo(host: "127.0.0.1", store: .default())
+        let clearing = browser.clearData([info])
+        #expect(info.isClearing)
+        await clearing.value
+        #expect(!info.isClearing)
     }
 
     /// Cleared as Lithium opens, before the restored cookies are back: they don't come back after.

@@ -270,9 +270,10 @@ struct BarActionsTests {
             (try? await webView.callAsyncJavaScript("return document.querySelector('#energy-saving button.on')?.dataset.value", contentWorld: .page)) as? String
         }
         #expect(await poll(30) { await shown() == "onBattery" })
-        browser.turnEnergySaving(on: true)
+        // Through the bar's Return, typed over Settings itself, so its wiring is what's checked.
+        type("turn on energy saving", on: browser.selectedTab, in: browser)
         #expect(await poll(10) { await shown() == "always" })
-        browser.turnEnergySaving(on: false)
+        type("turn off energy saving", on: browser.selectedTab, in: browser)
         #expect(await poll(10) { await shown() == "off" })
     }
 

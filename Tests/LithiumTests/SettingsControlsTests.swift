@@ -9,7 +9,7 @@ import WebKit
 @MainActor
 struct SettingsControlsTests {
     private static let probe = """
-        const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); };
+        const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); return test(); };
         const problems = [];
         const check = (name, actual, expected) => { if (actual !== expected) problems.push(`${name}: ${actual}, not ${expected}`); };
         const segmented = $('#start-kind'), seg = getComputedStyle(segmented);
@@ -18,7 +18,8 @@ struct SettingsControlsTests {
         for (const hash of ['appearance', 'max', 'permissions', 'site/www.example.com']) {
           // `hashchange` comes as a later task: until then the old section is still the active one.
           location.hash = hash;
-          await until(() => $('#' + hash.split('/')[0]).classList.contains('active'));
+          // A section that never shows would leave the previous one's dropdowns to be measured.
+          if (!(await until(() => $('#' + hash.split('/')[0]).classList.contains('active')))) { problems.push(`${hash}: never shown`); continue; }
           const selects = document.querySelectorAll('section.active select');
           if (!selects.length) problems.push(`${hash}: no dropdown`);
           for (const select of selects) {
@@ -86,7 +87,7 @@ struct SettingsControlsTests {
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         try await loaded.wait()
         // Waited for from here, like `segmentedLabelsStayOnOneLine`, and the probe skipped on a
-        // render that stops early: its in-page waits would take minutes on throttled timers.
+        // render that stops early: it reads dropdowns only a finished render builds.
         try #require(await poll(15) {
             (try? await webView.evaluateJavaScript("$('#version').textContent !== '' && $('#interface-font').options.length > 1") as? Bool) == true
         }, "Settings rendered")

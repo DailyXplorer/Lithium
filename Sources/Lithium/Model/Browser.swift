@@ -289,6 +289,16 @@ final class Browser {
         }
     }
 
+    /// The ⋯ menu's and the address bar's quick switch: Settings' Always or Off, since a switch
+    /// flipped by hand shouldn't then wait on the power source. An open Settings page renders the
+    /// mode only when it is shown, and may be on screen now, so it is told.
+    func turnEnergySaving(on: Bool) {
+        energy.mode = on ? .always : .off
+        for tab in tabs where Internal.isInternal(tab.url) && tab.url?.host() == Internal.settingsURL.host() {
+            tab.loadedWebView?.evaluateJavaScript("call('state').then(render)", in: nil, in: .page)
+        }
+    }
+
     /// Links' windows follow too: made under it, they would keep it, even once in the main window.
     private func energyChanged() {
         for case let webView? in (tabs + quickLinks.tabs).map(\.loadedWebView) { BackgroundThrottling.apply(energy.isOn, to: webView) }

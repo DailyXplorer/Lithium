@@ -98,6 +98,7 @@ struct SettingsControlsTests {
         const until = async (test) => { for (let i = 0; i < 200 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); };
         await until(() => $('#version').textContent && innerWidth === width);
         const problems = [];
+        if (innerWidth !== width) problems.push(`page is ${innerWidth}px, not ${width}px`);
         const sections = [...document.querySelectorAll('section')];
         sections.forEach((s) => s.style.display = 'block');
         const controls = document.querySelectorAll('.segmented');
@@ -114,7 +115,7 @@ struct SettingsControlsTests {
             if (height !== first) problems.push(`${name} “${button.textContent}” ${height}px tall, not ${first}px`);
           }
           if (box.right > row.getBoundingClientRect().right + 0.5) problems.push(`${name} overflows its row`);
-          if (wide && box.top >= row.firstElementChild.getBoundingClientRect().bottom) problems.push(`${name} under its label`);
+          if (\(wide) && box.top >= row.firstElementChild.getBoundingClientRect().bottom) problems.push(`${name} under its label`);
         }
         sections.forEach((s) => s.style.display = '');
         const labels = [...document.querySelectorAll('#energy-saving button')].map((b) => b.textContent).join(' · ');

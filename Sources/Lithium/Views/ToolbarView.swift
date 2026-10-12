@@ -246,7 +246,7 @@ struct PageMenuItems: View {
         Button("Pop Out Video") { browser.videoPopout.showSelected() }
             .disabled(!browser.videoPopout.canShowSelected)
         // Checked while it is on, whatever the setting: the toolbar shows no indicator for it.
-        Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.energy.turn(on: $0) }))
+        Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.turnEnergySaving(on: $0) }))
         Divider()
         Button("Show All History") { browser.openHistory() }
         Button("Extensions") { browser.openSettings(section: "extensions") }

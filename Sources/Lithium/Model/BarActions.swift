@@ -33,7 +33,8 @@ enum BarAction: Hashable, CaseIterable {
         switch self {
         case .copyLink: ["Copy URL", "Copy address"]
         case .newPrivateTab: ["Private window", "Incognito"]
-        case .duplicateTab: []
+        // Energy saving: none, so a search for "battery saver" stays a search on Return.
+        case .duplicateTab, .turnOnEnergySaving, .turnOffEnergySaving: []
         case .reopenClosedTab: ["Undo close tab", "Restore tab"]
         case .pinTab: ["Add to favorites"]
         case .unpinTab: ["Remove from favorites"]
@@ -43,7 +44,6 @@ enum BarAction: Hashable, CaseIterable {
         case .translatePage: ["Translate"]
         case .showOriginal: ["Original page", "Stop translating"]
         case .clearSiteData: ["Clear cookies", "Delete cookies"]
-        case .turnOnEnergySaving, .turnOffEnergySaving: ["Energy saving", "Battery saver"]
         case .settings: ["Preferences"]
         }
     }
@@ -181,7 +181,7 @@ extension Browser {
             withAnimation(.snappy(duration: 0.2)) { toggleZenMode() }
         case .translatePage, .showOriginal: toggleTranslation(tab)
         case .clearSiteData: clearSiteData(of: tab)
-        case .turnOnEnergySaving, .turnOffEnergySaving: energy.turn(on: action == .turnOnEnergySaving)
+        case .turnOnEnergySaving, .turnOffEnergySaving: turnEnergySaving(on: action == .turnOnEnergySaving)
         case .settings: openSettings()
         }
     }

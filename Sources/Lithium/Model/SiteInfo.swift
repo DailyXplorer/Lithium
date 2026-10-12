@@ -59,7 +59,7 @@ final class SiteInfo {
     @ObservationIgnored private var cookies: [HTTPCookie] = []
     @ObservationIgnored private var records: [WKWebsiteDataRecord] = []
     /// The tab's own: a private tab's panel never reads or clears the user's store.
-    private let store: WKWebsiteDataStore
+    let store: WKWebsiteDataStore
 
     init(host: String, connection: Connection = .secure, store: WKWebsiteDataStore = .default()) {
         self.host = host
@@ -93,10 +93,15 @@ final class SiteInfo {
         return PublicSuffixList.effectiveTLDPlusOne(host) ?? host
     }
 
+    /// A cookie's domain may start with a dot (`.example.com`).
+    nonisolated static func site(ofCookieDomain domain: String) -> String {
+        registrable(domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")))
+    }
+
     func load() async {
         let site = site
         let allCookies = await store.httpCookieStore.allCookies()
-        cookies = allCookies.filter { Self.registrable($0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == site }
+        cookies = allCookies.filter { Self.site(ofCookieDomain: $0.domain) == site }
         records = await store.dataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes())
             .filter { Self.registrable($0.displayName) == site }
         cookieCount = cookies.count

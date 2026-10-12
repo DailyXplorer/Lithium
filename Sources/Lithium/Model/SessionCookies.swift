@@ -5,7 +5,8 @@ import WebKit
 
 /// Session cookies (no expiry), which WebKit keeps only in memory, so sign-ins come back with the
 /// tabs after a relaunch, as in Chrome. Saved at quit and with the session (`Browser.saveSessionCookies`),
-/// so a crash loses only what came since; put back at the next launch, and the file deleted then.
+/// so a crash loses only what came since; put back at the next launch. The file stays, for a crash
+/// before the next save, which replaces it.
 @MainActor
 enum SessionCookies {
     /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins.
@@ -18,6 +19,9 @@ enum SessionCookies {
 
     /// A site's session ends long before: an older file is from a session left long ago.
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
+
+    /// The file's key once a save or the restore had it, for `drop`, which can't wait for the Keychain.
+    private static var knownKey: SymmetricKey?
 
     /// Every store keyed by its space (`Space.mainID` for the default store). Removes the file
     /// when there is nothing to save, so it never outlives the sign-ins it held.
@@ -37,11 +41,11 @@ enum SessionCookies {
         else { return forget() }
         // Off the main thread: the Keychain may block, on a prompt for the key.
         let (key, url) = (key, fileURL)
-        let written = await Task.detached {
-            guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined else { return false }
-            return write(sealed, to: url)
+        let written = await Task.detached { () -> SymmetricKey? in
+            guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined, write(sealed, to: url) else { return nil }
+            return key
         }.value
-        if !written { forget() }
+        if let written { knownKey = written } else { forget() }
     }
 
     /// Made 0600 before it takes the file's place, so others can't read it even for a moment.
@@ -60,19 +64,22 @@ enum SessionCookies {
         return true
     }
 
-    /// Puts each store's cookies back in that store only, then deletes the file. Nil, at the cost
-    /// of one file check, when there is no file. A file that can't be read (no key, another
-    /// key, damaged, too old) restores nothing.
-    static func restore(into store: @escaping (Space.ID) -> WKWebsiteDataStore?, now: Date = Date()) -> Task<Void, Never>? {
+    /// Puts each store's cookies back in that store only, but those `skipping` names (a site
+    /// cleared meanwhile). Nil, at the cost of one file check, when there is no file. A file that
+    /// can't be read (no key, another key, damaged, too old) restores nothing.
+    static func restore(into store: @escaping (Space.ID) -> WKWebsiteDataStore?, skipping: @escaping (Space.ID, HTTPCookie) -> Bool = { _, _ in false },
+                        now: Date = Date()) -> Task<Void, Never>? {
         guard let sealed = try? Data(contentsOf: fileURL) else { return nil }
         let key = key
         return Task {
             // Off the main thread: the Keychain may block, on a prompt for the key.
-            let plist = await Task.detached {
-                key.read(false).flatMap { key in (try? AES.GCM.SealedBox(combined: sealed)).flatMap { try? AES.GCM.open($0, using: key) } }
+            let opened = await Task.detached { () -> (plist: Data, key: SymmetricKey)? in
+                guard let key = key.read(false), let plist = unseal(sealed, with: key) else { return nil }
+                return (plist, key)
             }.value
+            if let opened { knownKey = opened.key }
             var restores: [(WKWebsiteDataStore, HTTPCookie)] = []
-            if let plist,
+            if let plist = opened?.plist,
                let file = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
                let saved = file["saved"] as? Date, now.timeIntervalSince(saved) < maxAge,
                let stores = file["stores"] as? [String: [[String: Any]]] {
@@ -80,7 +87,7 @@ enum SessionCookies {
                     guard let id = UUID(uuidString: id), let target = store(id) else { continue }
                     restores += cookies.compactMap { properties in
                         HTTPCookie(properties: Dictionary(uniqueKeysWithValues: properties.map { (HTTPCookiePropertyKey($0.key), $0.value) }))
-                    }.map { (target, $0) }
+                    }.filter { !skipping(id, $0) }.map { (target, $0) }
                 }
             }
             // All at once: one at a time, pages would wait a round trip to WebKit per cookie.
@@ -89,10 +96,27 @@ enum SessionCookies {
                     group.addTask { await store.httpCookieStore.setCookie(cookie) }
                 }
             }
-            // Only once they are back: a quit or crash before then still finds them in the file.
-            // Unless a save rewrote it meanwhile, after a restore Lithium stopped waiting for.
-            if (try? Data(contentsOf: fileURL)) == sealed { forget() }
         }
+    }
+
+    /// A quit that can't wait for the save after a clear: the cleared sites' cookies leave the
+    /// file now, the others stay. Without the key at hand, the whole file goes: clearing wins.
+    static func drop(_ sites: [(store: Space.ID, site: String)]) {
+        guard let key = knownKey, let sealed = try? Data(contentsOf: fileURL), let plist = unseal(sealed, with: key),
+              var file = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
+              var stores = file["stores"] as? [String: [[String: Any]]]
+        else { return forget() }
+        for (id, site) in sites {
+            stores[id.uuidString]?.removeAll { SiteInfo.site(ofCookieDomain: $0[HTTPCookiePropertyKey.domain.rawValue] as? String ?? "") == site }
+        }
+        file["stores"] = stores
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: file, format: .binary, options: 0),
+              let resealed = try? AES.GCM.seal(data, using: key).combined, write(resealed, to: fileURL)
+        else { return forget() }
+    }
+
+    nonisolated private static func unseal(_ sealed: Data, with key: SymmetricKey) -> Data? {
+        (try? AES.GCM.SealedBox(combined: sealed)).flatMap { try? AES.GCM.open($0, using: key) }
     }
 
     static func forget() {

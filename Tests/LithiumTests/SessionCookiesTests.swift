@@ -14,7 +14,7 @@ import WebKit
 struct SessionCookiesTests {
     private static let day: TimeInterval = 24 * 60 * 60
 
-    @Test func aSavedSessionCookieGoesBackAndTheFileGoes() async throws {
+    @Test func aSavedSessionCookieGoesBackAndTheFileStays() async throws {
         let saved = try await store(with: [sessionCookie("sid")])
         await SessionCookies.save([Space.mainID: saved])
         let permissions = try FileManager.default.attributesOfItem(atPath: SessionCookies.fileURL.path)[.posixPermissions] as? Int
@@ -24,13 +24,10 @@ struct SessionCookiesTests {
             .filter { $0.contains("session-cookies") } == ["session-cookies"], "no temporary file left")
 
         let restored = WKWebsiteDataStore.nonPersistent()
-        let restoring = SessionCookies.restore(into: { $0 == Space.mainID ? restored : nil })
-        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "kept until the cookies are back")
-        await restoring?.value
+        await SessionCookies.restore(into: { $0 == Space.mainID ? restored : nil })?.value
         #expect(await restored.httpCookieStore.allCookies().map(\.name) == ["sid"])
         #expect(await restored.httpCookieStore.allCookies().first?.isSessionOnly == true)
-        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
-        #expect(SessionCookies.restore(into: { _ in restored }) == nil, "read once")
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "kept for a crash before the next save")
     }
 
     @Test func cookiesThatExpireAreLeftToWebKit() async throws {
@@ -113,7 +110,8 @@ struct SessionCookiesTests {
         #expect(await poll { again.tabs.contains { $0.url == site.echo && $0.spaceID == work.id } })
         let opened = try #require(again.tabs.first { $0.url == site.echo && $0.spaceID == work.id })
         #expect(await title(of: opened) == "work=1")
-        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
+        // A crash now, before any save, still finds them at the next launch.
+        #expect(await savedCookies(of: [Space.mainID, work.id]) == [Space.mainID: ["main"], work.id: ["work"]])
     }
 
     /// Without a quit: the session save alone writes them, for a relaunch after a crash.
@@ -219,21 +217,32 @@ struct SessionCookiesTests {
         await clearing.value
     }
 
-    /// A quit that stops waiting for its save during a clear: the file goes, rather than keep
-    /// what the clear removes for the next launch to put back.
-    @Test func aQuitCutShortDuringAClearDropsTheFile() async throws {
+    /// A quit that stops waiting for its save during a clear: the cleared site's cookies leave the
+    /// file rather than come back at the next launch, and other sites' stay.
+    @Test func aQuitCutShortDuringAClearDropsOnlyWhatItClears() async throws {
         let site = try await EchoSite.start()
         defer { site.stop() }
         let (browser, _) = await makeBrowserWithWorkSpace()
         defer { reset(browser) }
+        let other = sessionCookie("other", domain: "example.test")
+        await WKWebsiteDataStore.default().httpCookieStore.setCookie(other)
         #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
         await browser.saveSessionCookies()
         browser.cookieSaveCutShort()
-        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "kept without a clear")
+        #expect(await savedCookies(of: [Space.mainID]) == [Space.mainID: ["main"]], "kept without a clear")
+
         let clearing = browser.clearData([SiteInfo(host: "127.0.0.1", store: .default())])
         browser.cookieSaveCutShort()
-        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
+        #expect(await savedCookies(of: [Space.mainID]) == [:])
+        #expect(await savedCookies(of: [Space.mainID], domain: "example.test") == [Space.mainID: ["other"]])
         await clearing.value
+
+        // Once the clear's save is done, a quit cut short leaves a new sign-in alone.
+        #expect(await title(of: browser.newTab(url: site.set("again"), space: Space.mainID)) == "set")
+        await browser.saveSessionCookies()
+        browser.cookieSaveCutShort()
+        #expect(await savedCookies(of: [Space.mainID]) == [Space.mainID: ["again"]])
+        await WKWebsiteDataStore.default().httpCookieStore.deleteCookie(other)
     }
 
     /// The Clear button stops at the click, though the clear may wait for the restore.
@@ -266,6 +275,79 @@ struct SessionCookiesTests {
         #expect(await WKWebsiteDataStore.default().httpCookieStore.allCookies().filter { $0.domain == "127.0.0.1" }.isEmpty)
     }
 
+    /// A clear while the restore is held up (a Keychain prompt left open) goes ahead once pages
+    /// stop waiting, and the restore, when it comes, leaves the cleared site out.
+    @Test func aClearDuringAHeldUpRestoreGoesAheadAndWins() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let key = SessionCookies.key
+        defer { SessionCookies.key = key }
+        let secret = SymmetricKey(size: .bits256)
+        SessionCookies.key = SessionCookies.FileKey { _ in secret }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        browser.saveNow()
+        await browser.saveSessionCookies()
+        await forgetLiveCookies(browser)
+
+        let answered = DispatchSemaphore(value: 0)
+        defer { answered.signal() }
+        SessionCookies.key = SessionCookies.FileKey { creating in
+            if !creating { answered.wait() }
+            return secret
+        }
+        let again = Browser()
+        defer { reset(again) }
+        let info = SiteInfo(host: "127.0.0.1", store: .default())
+        let clearing = again.clearData([info])
+        try await Task.sleep(for: .seconds(6))
+        #expect(!info.isClearing, "went ahead")
+        answered.signal()
+        await clearing.value
+
+        #expect(await WKWebsiteDataStore.default().httpCookieStore.allCookies().filter { $0.domain == "127.0.0.1" }.isEmpty)
+        SessionCookies.key = SessionCookies.FileKey { _ in secret }
+        #expect(await savedCookies(of: [Space.mainID]) == [:])
+    }
+
+    /// Session changes while the restore is held up: one save once it is back, not one per change.
+    @Test func savesHeldUpByTheRestoreAreOne() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let key = SessionCookies.key
+        defer { SessionCookies.key = key }
+        let secret = SymmetricKey(size: .bits256)
+        SessionCookies.key = SessionCookies.FileKey { _ in secret }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        browser.saveNow()
+        await browser.saveSessionCookies()
+        await forgetLiveCookies(browser)
+
+        let answered = DispatchSemaphore(value: 0)
+        defer { answered.signal() }
+        let saves = Count()
+        SessionCookies.key = SessionCookies.FileKey { creating in
+            if creating { saves.add() } else { answered.wait() }
+            return secret
+        }
+        let again = Browser()
+        defer { reset(again) }
+        again.cookieSaveInterval = .milliseconds(100)
+        for name in ["a", "b", "c"] {
+            #expect(await title(of: again.newTab(url: site.set(name), space: Space.mainID)) == "set")
+            try await Task.sleep(for: Browser.sessionSaveDelay * 2)
+        }
+        // Only the saves the changes above asked for.
+        again.cookieSaveInterval = nil
+        answered.signal()
+        #expect(await poll { saves.value > 0 })
+        try await Task.sleep(for: .seconds(1))
+        #expect(saves.value == 1)
+    }
+
     /// A space's store opens with its first page: a save doesn't open one to look in it.
     @Test func aSaveLeavesStoresNotInUseAlone() async {
         let (browser, work) = await makeBrowserWithWorkSpace()
@@ -276,8 +358,8 @@ struct SessionCookiesTests {
 
     // MARK: Helpers
 
-    private func sessionCookie(_ name: String) -> HTTPCookie {
-        HTTPCookie(properties: [.name: name, .value: "1", .domain: "127.0.0.1", .path: "/"])!
+    private func sessionCookie(_ name: String, domain: String = "127.0.0.1") -> HTTPCookie {
+        HTTPCookie(properties: [.name: name, .value: "1", .domain: domain, .path: "/"])!
     }
 
     private func store(with cookies: [HTTPCookie]) async throws -> WKWebsiteDataStore {
@@ -286,20 +368,20 @@ struct SessionCookiesTests {
         return store
     }
 
-    /// Restored into a store of its own, which a file that can't be read leaves empty; the file goes either way.
+    /// Restored into a store of its own, which a file that can't be read leaves empty.
     private func restoresNothing() async -> Bool {
         let probe = WKWebsiteDataStore.nonPersistent()
         await SessionCookies.restore(into: { _ in probe })?.value
-        return await probe.httpCookieStore.allCookies().isEmpty && !FileManager.default.fileExists(atPath: SessionCookies.fileURL.path)
+        return await probe.httpCookieStore.allCookies().isEmpty
     }
 
-    /// The names of the 127.0.0.1 cookies saved for each store, read by a restore (which deletes the file).
-    private func savedCookies(of ids: [Space.ID]) async -> [Space.ID: [String]] {
+    /// The names of the `domain` cookies saved for each store, read by a restore.
+    private func savedCookies(of ids: [Space.ID], domain: String = "127.0.0.1") async -> [Space.ID: [String]] {
         let probes = Dictionary(uniqueKeysWithValues: ids.map { ($0, WKWebsiteDataStore.nonPersistent()) })
         await SessionCookies.restore(into: { probes[$0] })?.value
         var names: [Space.ID: [String]] = [:]
         for (id, probe) in probes {
-            let found = await probe.httpCookieStore.allCookies().filter { $0.domain == "127.0.0.1" }.map(\.name).sorted()
+            let found = await probe.httpCookieStore.allCookies().filter { $0.domain == domain }.map(\.name).sorted()
             if !found.isEmpty { names[id] = found }
         }
         return names
@@ -400,4 +482,13 @@ private final class EchoSite: @unchecked Sendable {
         let html = "<title>\(title)</title>"
         return "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\(headers)Cache-Control: no-store\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
     }
+}
+
+/// Bumped from the Keychain seam, off the main thread.
+private final class Count: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+    func add() { lock.withLock { count += 1 } }
 }

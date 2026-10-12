@@ -31,8 +31,8 @@ final class Browser {
     /// The last session's session cookies going back in their stores (`SessionCookies`), nil once
     /// they are: pages wait for it, or they'd load signed out.
     @ObservationIgnored private(set) var cookieRestore: Task<Void, Never>?
-    /// The same restore, without the bound pages have: saves and clears wait for all of it, or a
-    /// save would drop the cookies still going back, and a clear would see them land after it.
+    /// The same restore, without the bound pages have: saves wait for all of it, or a save would
+    /// drop the cookies still going back.
     @ObservationIgnored private var cookieRestoreToEnd: Task<Void, Never>?
     /// Saves of the session cookies run one after another; the last, awaited in tests.
     @ObservationIgnored private(set) var cookieSave: Task<Void, Never>?
@@ -40,6 +40,9 @@ final class Browser {
     @ObservationIgnored private var dataClear: Task<Void, Never>?
     /// Clears whose cookie save hasn't rewritten the file yet.
     @ObservationIgnored private var runningClears = 0
+    /// The sites those clears remove, by store: a restore past its bound skips them, and a quit
+    /// that can't wait for the save drops them from the file.
+    @ObservationIgnored private var clearedSites: [(store: Space.ID, site: String)] = []
     /// How often at most the session save also saves the session cookies; nil for none, as in
     /// tests, which save them themselves.
     @ObservationIgnored var cookieSaveInterval: Duration? = ExternalApps.runsTests ? nil : .seconds(60)
@@ -207,7 +210,9 @@ final class Browser {
         let saved = SessionStore.load()
         restore(saved)
         // After the spaces, whose stores get their own cookies back.
-        if let restoring = SessionCookies.restore(into: { [weak self] id in id == Space.mainID ? .default() : self?.spaceStore(for: id) }) {
+        if let restoring = SessionCookies.restore(into: { [weak self] id in id == Space.mainID ? .default() : self?.spaceStore(for: id) }, skipping: { [weak self] id, cookie in
+            self?.clearedSites.contains { $0.store == id && $0.site == SiteInfo.site(ofCookieDomain: cookie.domain) } ?? false
+        }) {
             cookieRestoreToEnd = restoring
             cookieRestore = Task { [weak self] in
                 // Bounded like the quit: a stuck network process mustn't keep pages from ever loading.
@@ -1374,21 +1379,29 @@ final class Browser {
         cookieSaveDue = due + cookieSaveInterval
         nextCookieSave = Task { [weak self] in
             try? await Task.sleep(until: due)
+            // Not queued behind a restore held up (a Keychain prompt): the one save reads the
+            // stores once it is back, so it covers every change meanwhile.
+            await self?.cookieRestoreToEnd?.value
             self?.nextCookieSave = nil
             await self?.saveSessionCookies()
         }
     }
 
     /// The site panel's and Settings' clear, through here so a cookie save waits for it. After the
-    /// restored cookies are back, or they'd land after it; then the saved ones go too.
+    /// restored cookies are back, or they'd land after it, but no longer than pages wait: a
+    /// restore held up past that skips the cleared sites. Then the saved ones go too.
     @discardableResult
     func clearData(_ infos: [SiteInfo]) -> Task<Void, Never> {
         // Shown at once, though the clear may wait for another or for the restore.
         infos.forEach { $0.willClear() }
         runningClears += 1
-        let clear = Task { [cookieRestoreToEnd, previous = dataClear] in
+        // Private stores are never saved: only the default store and the spaces' (by identifier).
+        clearedSites += infos.compactMap { info in
+            (info.store.identifier ?? (info.store.isPersistent ? Space.mainID : nil)).map { ($0, info.site) }
+        }
+        let clear = Task { [cookieRestore, previous = dataClear] in
             await previous?.value
-            await cookieRestoreToEnd?.value
+            await cookieRestore?.value
             for info in infos {
                 await info.load()
                 await info.clear()
@@ -1398,14 +1411,16 @@ final class Browser {
         return Task { [weak self] in
             await clear.value
             await self?.saveSessionCookies(replacing: true)
-            self?.runningClears -= 1
+            guard let self else { return }
+            runningClears -= 1
+            if runningClears == 0 { clearedSites = [] }
         }
     }
 
     /// A quit that stopped waiting for its cookie save. During a clear, the file may still hold
-    /// what it clears, which the next launch would put back: it goes, as clearing wins.
+    /// what it clears, which the next launch would put back: those sites go, as clearing wins.
     func cookieSaveCutShort() {
-        if runningClears > 0 { SessionCookies.forget() }
+        if !clearedSites.isEmpty { SessionCookies.drop(clearedSites) }
     }
 
     /// Also the closed tabs ⇧⌘T would bring back, with their back and forward lists, and the open
@@ -1512,9 +1527,10 @@ final class Browser {
     /// view of the store lives. One still held goes when the next space with its own data is made.
     private func removeStore(of id: Space.ID) {
         let store = spaceStores.removeValue(forKey: id) ?? WKWebsiteDataStore(forIdentifier: id)
-        storeCleanup = Task { [cookieRestoreToEnd] in
-            // Its restored cookies would otherwise land after.
-            await cookieRestoreToEnd?.value
+        storeCleanup = Task { [cookieRestore] in
+            // Its restored cookies would otherwise land after; a restore held up past the bound
+            // finds no store for the deleted space (`spaceStore(for:)`).
+            await cookieRestore?.value
             await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
             await removeUnusedStores()
             // Its saved ones go too.

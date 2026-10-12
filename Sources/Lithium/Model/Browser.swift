@@ -434,17 +434,6 @@ final class Browser {
 
     func windowDidAppear() {
         installEventMonitors()
-        if let cookieRestore {
-            Task { [weak self] in
-                await cookieRestore.value
-                self?.wakeRestoredPages()
-            }
-        } else {
-            wakeRestoredPages()
-        }
-    }
-
-    private func wakeRestoredPages() {
         selectedTab?.markActive()
         if launchFavorites == nil { wakeRestoredFavorites() }
     }
@@ -476,6 +465,7 @@ final class Browser {
         guard favoriteWake == nil, tabs.contains(where: { $0.pinID != nil && $0.isAsleep }) else { return }
         favoriteWake = Task { [weak self, delay = favoriteWakeDelay] in
             var woken: Set<ObjectIdentifier> = []
+            await self?.cookieRestore?.value
             while true {
                 try? await Task.sleep(for: delay)
                 guard let self, memoryLevel == .normal, let tab = tabs.first(where: {

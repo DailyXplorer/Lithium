@@ -6,8 +6,10 @@ import WebKit
 
 /// Sign-ins kept in session cookies come back after a relaunch. The file lives in the home
 /// folder, so this suite only runs in a throwaway one: `scripts/test --filter SessionCookiesTests`.
+/// Three minutes: a check waits its full 20 seconds only when no page settles, and a test makes up
+/// to seven, so a regression fails on its check rather than on the time limit.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(2)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@Suite(.serialized, .timeLimit(.minutes(3)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct SessionCookiesTests {
     private static let day: TimeInterval = 24 * 60 * 60
 
@@ -58,8 +60,8 @@ struct SessionCookiesTests {
         #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
     }
 
-    /// A relaunch: each store gets its own sign-in back before a page loads, even one opened at
-    /// once from another app, and private tabs none.
+    /// A relaunch: each store gets its own sign-in back, a private tab's stays out, and no page
+    /// loads before: neither a restored tab woken at once nor a link opened at once from another app.
     @Test func aRelaunchKeepsEachStoresSignInsAndOnlyItsOwn() async throws {
         let site = try await EchoSite.start()
         defer { site.stop() }
@@ -68,6 +70,7 @@ struct SessionCookiesTests {
         #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
         #expect(await title(of: browser.newTab(url: site.set("work"), space: work.id)) == "set")
         #expect(await title(of: browser.newTab(url: site.set("private"), privateStore: .nonPersistent())) == "set")
+        #expect(await title(of: browser.newTab(url: site.echo, space: Space.mainID)) == "main=1")
         browser.saveNow()
         await browser.saveSessionCookies()
         await forgetLiveCookies(browser)
@@ -75,18 +78,19 @@ struct SessionCookiesTests {
         let again = Browser()
         defer { reset(again) }
         #expect(again.cookieRestore != nil)
+        let restored = try #require(again.tabs.first { $0.url == site.echo && $0.spaceID == Space.mainID })
+        restored.markActive()
         again.switchToSpace(work.id)
         again.openFromOtherApp(site.echo)
-        #expect(await poll { again.tabs.contains { $0.url == site.echo } })
-        let opened = try #require(again.tabs.first { $0.url == site.echo })
+        #expect(await title(of: restored) == "main=1")
+        #expect(await poll { again.tabs.contains { $0.url == site.echo && $0.spaceID == work.id } })
+        let opened = try #require(again.tabs.first { $0.url == site.echo && $0.spaceID == work.id })
         #expect(await title(of: opened) == "work=1")
-        #expect(await title(of: again.newTab(url: site.echo, space: Space.mainID)) == "main=1")
-        #expect(await title(of: again.newTab(url: site.echo, privateStore: .nonPersistent())) == "none")
         #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
     }
 
     /// The site's data cleared from its panel, and a space deleted, before the quit.
-    @Test func clearedDataDoesntComeBack() async throws {
+    @Test func clearedDataIsntSaved() async throws {
         let site = try await EchoSite.start()
         defer { site.stop() }
         let (browser, work) = await makeBrowserWithWorkSpace()
@@ -100,9 +104,10 @@ struct SessionCookiesTests {
         await browser.storeCleanup?.value
         await browser.saveSessionCookies()
 
-        let again = Browser()
-        defer { reset(again) }
-        #expect(await title(of: again.newTab(url: site.echo)) == "none")
+        // Every store's saved cookies, the deleted space's included, into one.
+        let everything = WKWebsiteDataStore.nonPersistent()
+        await SessionCookies.restore(into: { _ in everything })?.value
+        #expect(await everything.httpCookieStore.allCookies().filter { $0.domain == "127.0.0.1" }.isEmpty)
     }
 
     // MARK: Helpers

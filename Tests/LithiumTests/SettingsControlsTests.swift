@@ -16,8 +16,9 @@ struct SettingsControlsTests {
         const height = segmented.getBoundingClientRect().height;
         const text = getComputedStyle(segmented.querySelector('button')).fontSize;
         for (const hash of ['appearance', 'max', 'permissions', 'site/www.example.com']) {
+          // `hashchange` comes as a later task: until then the old section is still the active one.
           location.hash = hash;
-          await until(() => document.querySelector('section.active select'));
+          await until(() => $('#' + hash.split('/')[0]).classList.contains('active'));
           const selects = document.querySelectorAll('section.active select');
           if (!selects.length) problems.push(`${hash}: no dropdown`);
           for (const select of selects) {
@@ -84,9 +85,9 @@ struct SettingsControlsTests {
         webView.navigationDelegate = loaded
         webView.load(URLRequest(url: URL(string: "lithium://settings#appearance")!))
         try await loaded.wait()
-        // Waited for from here, like `segmentedLabelsStayOnOneLine`: a render that stops early
-        // fails in seconds rather than after minutes of throttled in-page timers.
-        #expect(await poll(15) {
+        // Waited for from here, like `segmentedLabelsStayOnOneLine`, and the probe skipped on a
+        // render that stops early: its in-page waits would take minutes on throttled timers.
+        try #require(await poll(15) {
             (try? await webView.evaluateJavaScript("$('#version').textContent !== '' && $('#interface-font').options.length > 1") as? Bool) == true
         }, "Settings rendered")
         let problems = try #require(try await webView.callAsyncJavaScript(Self.probe, contentWorld: .page) as? [String])

@@ -76,27 +76,27 @@ enum TitleCleaner {
     /// gets a capital first letter.
     static func capitalized(_ label: String, like title: String) -> String {
         // A counter ("(3) ") would hide the word that really opens the title.
-        let titleWords = wordRuns(title.replacing(counter, with: "")).map(String.init)
+        let parts = split(title.replacing(counter, with: ""), by: separators + colons).map { wordRuns($0).map(String.init) }
+        let titleWords = parts.flatMap { $0 }
         // In Title Case every word has a capital, so only an inner capital ("iPhone") or an
-        // acronym ("NASA") still marks a proper noun; a title mostly in caps marks none. Short
-        // words ("A", "To") only count when the title has no longer ones.
+        // acronym ("NASA") still marks a proper noun; a title mostly in caps marks none, except in
+        // a part written normally ("MOON MISSION LIVE: NASA Artemis II launch"). Short words
+        // ("A", "To") only count when the title has no longer ones.
         let letterWords = titleWords.filter { $0.first?.isLetter == true }
         let longWords = letterWords.filter { $0.count >= 4 }
         let counted = longWords.isEmpty ? letterWords : longWords
         let titleCase = counted.filter { $0.first?.isUppercase == true }.count * 4 > counted.count * 3
-        let allCaps = counted.filter { $0 == $0.uppercased() }.count * 2 > counted.count
-        let lowercase = Set(titleWords.filter { $0 == $0.lowercased() })
-        let properNouns: [String: String] = allCaps ? [:] : Dictionary(
-            titleWords.enumerated()
-                .filter { index, word in
-                    word.contains(where: \.isUppercase)
-                        && !(titleCase && word.first?.isUppercase == true && !word.dropFirst().contains(where: \.isUppercase))
-                        // "The" opening the title or a part of it ("Review: The best…") is not a proper noun.
-                        && !(openingWords.contains(word.lowercased()) && (index == 0 || lowercase.contains(word.lowercased())))
-                }
-                .map { ($1.lowercased(), $1) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        let allCaps = mostlyCaps(titleWords)
+        var properNouns: [String: String] = [:]
+        for words in parts where !(allCaps && mostlyCaps(words)) {
+            for (index, word) in words.enumerated()
+            where word.contains(where: \.isUppercase)
+                && !(titleCase && word.first?.isUppercase == true && !word.dropFirst().contains(where: \.isUppercase))
+                // "The" opening the title or a part of it ("Review: The best…") is not a proper noun.
+                && !(index == 0 && openingWords.contains(word.lowercased())) {
+                properNouns[word.lowercased()] = properNouns[word.lowercased()] ?? word
+            }
+        }
         var result = ""
         var rest = label.startIndex
         for word in wordRuns(label) {
@@ -112,6 +112,15 @@ enum TitleCleaner {
         }
         let locale = language(of: title).map { Locale(identifier: $0.minimalIdentifier) } ?? .current
         return String(first).capitalized(with: locale) + result.dropFirst()
+    }
+
+    /// More than half the words of four letters or more in caps. With no such word, all words in
+    /// caps: "AI vs ML vs GPT" is a list of acronyms, not shouting.
+    private static func mostlyCaps(_ words: [String]) -> Bool {
+        let letterWords = words.filter { $0.first?.isLetter == true }
+        let longWords = letterWords.filter { $0.count >= 4 }
+        guard !longWords.isEmpty else { return !letterWords.isEmpty && letterWords.allSatisfy { $0 == $0.uppercased() } }
+        return longWords.filter { $0 == $0.uppercased() }.count * 2 > longWords.count
     }
 
     private static func words(_ text: String) -> Set<String> {

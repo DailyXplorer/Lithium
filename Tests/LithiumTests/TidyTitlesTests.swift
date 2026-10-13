@@ -52,16 +52,30 @@ struct TitleCleanerTests {
         ("privacy policy", "PRIVACY POLICY AND TERMS OF USE FOR THE EXAMPLE SITE", "Privacy policy"),
         ("new moon mission", "BREAKING: NEW MOON MISSION ANNOUNCED", "New moon mission"),
         ("new moon mission", "NEW MOON MISSION ANNOUNCED | spacenews.com", "New moon mission"),
-        // No word of an all-caps title reads as a name, so an acronym is lost too.
-        ("nasa moon mission", "NASA ANNOUNCES MOON MISSION", "Nasa moon mission"),
+        ("nasa artemis ii launch", "MOON MISSION LIVE: NASA Artemis II launch today", "NASA Artemis II launch"),
+        ("rag vs llm models", "AI vs ML vs GPT vs LLM vs RAG vs MCP", "RAG vs LLM models"),
         ("Do it on a Mac", "How To Do It On A PC Or A Mac", "Do it on a Mac"),
-        // A name in a Title Case title relies on the model writing it right.
-        ("google agenda", "Google Agenda: Plan Your Week Better", "Google agenda"),
         ("guide to the galaxy", "(3) The hitchhiker's guide to a galaxy far away", "Guide to the galaxy"),
         ("phones for the money", "Review: The best phones for the money in 2026", "Phones for the money"),
+        ("phones for the money", "Review: The best phones of 2026", "Phones for the money"),
+        ("vitamin a rich foods", "Vitamin A rich foods: a guide for parents", "Vitamin A rich foods"),
+        ("voyage à zürich", "Voyage à Zürich : les meilleures adresses du quartier", "Voyage à Zürich"),
+        ("istanbul gezi rehberi", "istanbul gezi rehberi: gezilecek yerler ve yapılacak şeyler listesi", "İstanbul gezi rehberi"),
     ])
     func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
         #expect(TitleCleaner.capitalized(label, like: title) == expected)
+    }
+
+    /// Casing alone can't tell a name from a Title Case or all-caps word, so these rely on the
+    /// model writing the name right.
+    @Test(arguments: [
+        ("google agenda", "Google Agenda: Plan Your Week Better", "Google Agenda"),
+        ("nasa moon mission", "NASA ANNOUNCES MOON MISSION", "NASA moon mission"),
+    ])
+    func losesNamesInTitleCaseAndAllCapsTitles(label: String, title: String, expected: String) {
+        withKnownIssue {
+            #expect(TitleCleaner.capitalized(label, like: title) == expected)
+        }
     }
 
     @Test func detectsTheTitleLanguage() {

@@ -23,6 +23,9 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         /// A stream with no end, as its media element says: Web Audio and media still loading have no
         /// duration either.
         var isLive: Bool
+        /// Which of the frame's sounds this is (a media element, or Web Audio since WebKit last heard the
+        /// page): a second ping is another sound, its position or volume changing the same one.
+        var source: Int?
         var rate: Double
         var hasPrevious: Bool
         var hasNext: Bool
@@ -53,6 +56,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             duration = number("duration").flatMap { 0 < $0 && $0 <= PlaybackTime.longest ? $0 : nil }
             time = min(number("time") ?? 0, duration ?? PlaybackTime.longest)
             isLive = body["live"] as? Bool ?? false
+            source = (body["source"] as? NSNumber)?.intValue
             rate = number("rate").flatMap { $0 > 0 ? $0 : nil } ?? 1
             hasPrevious = body["previous"] as? Bool ?? false
             hasNext = body["next"] as? Bool ?? false
@@ -124,7 +128,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// An iframe's last word from before WebKit heard its tab, one per tab: WebKit often hears a
     /// sound only after the first report, which would otherwise be lost.
     @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
-    /// A sound not known to last, one per frame of each tab, with when it was last reported playing: a
+    /// A sound not known to last, one per frame of each tab, with when it was first reported playing: a
     /// ping or music, told apart by whether WebKit still hears it `sustain` seconds later.
     @ObservationIgnored private var unproven: [ObjectIdentifier: [String: (media: Media, frame: Frame, since: Date)]] = [:]
     /// The last wait for such a sound; awaited in tests.
@@ -194,14 +198,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// plays; the page itself is taken at its word. One sound at a time: the tab heard before is
     /// paused once WebKit hears the new one, unless it is in a call or muted. Only a sound that lasts
     /// claims: one longer than `brief` or a live stream at once, any other (a chat's ping, Web Audio,
-    /// media still loading) once it has `lasted`, still heard `sustain` seconds after its frame last
+    /// media still loading) once it has `lasted`, still heard `sustain` seconds after its frame first
     /// reported it.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: ""), lasted: Bool = false) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let key = ObjectIdentifier(tab)
         if unheard[key]?.frame.id == frame.id { unheard[key] = nil }
-        // A frame's next word starts its wait over: it may be another ping, still heard at the old check.
-        unproven[key]?[frame.id] = nil
+        // Kept only for the same sound: another one (a second ping) may still be heard at the old check.
+        let waited = unproven[key]?.removeValue(forKey: frame.id)
         // An iframe's word needs WebKit's ear, back from the back-forward cache too.
         let isTrusted = !frame.isSubframe || isHeard(tab) != false
         let lasts = { (media: Media) in lasted || media.isLive || media.duration.map { $0 > Self.brief } == true }
@@ -241,15 +245,21 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         } else if holds {
             discard(tab, pageGone: false)
         } else if let media, !media.isPaused, media.isAudible, !tab.isMuted, !lasts(media) {
-            prove(media, from: tab, frame: frame)
+            if let waited, waited.media.source == media.source {
+                // The same sound again (its position, metadata or volume): its check stays.
+                unproven[key, default: [:]][frame.id] = (media, frame, waited.since)
+            } else {
+                prove(media, from: tab, frame: frame)
+            }
         } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
             // Turned down only for want of WebKit's ear.
             unheard[key] = (media, frame)
         }
     }
 
-    /// One check, `sustain` seconds after the frame last reported the sound playing: it claims if WebKit
-    /// still hears its tab and the frame has said nothing since. Web Audio that plays on sends no other report.
+    /// One check, `sustain` seconds after the frame first reported the sound playing: it claims if WebKit
+    /// still hears its tab and the frame has reported no other sound nor a pause since. Web Audio that
+    /// plays on sends no other report.
     private func prove(_ media: Media, from tab: Tab, frame: Frame) {
         let key = ObjectIdentifier(tab), since = Date()
         unproven[key, default: [:]][frame.id] = (media, frame, since)

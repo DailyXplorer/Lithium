@@ -47,6 +47,8 @@ struct NowPlayingTests {
         #expect(media.rate == 1.5)
         #expect(!media.hasPrevious && media.hasNext)
         #expect(!media.isLive)
+        #expect(media.source == nil)
+        #expect(NowPlaying.Media(message: ["source": 3], at: date)?.source == 3)
 
         let live = try #require(NowPlaying.Media(message: ["artwork": "javascript:alert(1)", "duration": NSNull(), "live": true], at: date))
         #expect(live.artwork == nil)
@@ -314,10 +316,10 @@ struct NowPlayingBrowserTests {
         }
 
         player.receive(sound(["duration": 600]), from: video)
-        player.receive(sound(["duration": 2.3]), from: chat)
+        player.receive(sound(["duration": 2.3, "source": 1]), from: chat)
         try await Task.sleep(for: .seconds(1))
         started = Date()
-        player.receive(sound(["duration": 2.3]), from: chat)
+        player.receive(sound(["duration": 2.3, "source": 2]), from: chat)
         await player.proving?.value
         #expect(player.tab === video && paused.isEmpty)
     }
@@ -410,6 +412,29 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === video && paused == [video, music])
         await player.proving?.value
         #expect(player.tab === video && paused == [video, music], "the video claimed meanwhile")
+    }
+
+    /// A sound its page keeps reporting (its position, metadata or volume) is checked 3 s after it
+    /// started, not after its last report: it claims then, with one wait.
+    @Test func claimsASoundReportedAgainAndAgain() async throws {
+        let browser = Browser()
+        let (video, music) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        player.isHeard = { _ in true }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true, "source": 1], at: Date())
+
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date()), from: video)
+        player.receive(playing, from: music)
+        let check = player.proving
+        for _ in 0..<5 {
+            try await Task.sleep(for: .milliseconds(800))
+            player.receive(playing, from: music)
+        }
+        #expect(player.tab === music && paused == [video])
+        #expect(player.proving == check, "one wait for the sound")
     }
 
     /// A sound of unknown length WebKit no longer hears, or the page reports paused, within 3 s never claims.
@@ -1400,6 +1425,35 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { page.last?.isPaused == true })
         await NowPlaying.run("play", in: page.webView)
         #expect(await waitUntil { try await page.run("return sound.paused") as? Bool == false }, "Play still plays its media")
+    }
+
+    /// Each report names its sound: a media element keeps its own through a volume change, another
+    /// element has another, and Web Audio a new one each time WebKit starts hearing the page.
+    @Test func namesEachSound() async throws {
+        let page = try await PlayingPage("<script>\(Self.wav)</script>")
+        defer { page.close() }
+        try await page.play("window.first = Object.assign(new Audio(wav()), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let first = try #require(page.last?.source)
+        try await page.run("first.volume = 0.5")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(page.last?.source == first, "the same element")
+
+        try await page.play("window.second = Object.assign(new Audio(wav()), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.source != first })
+        let second = try #require(page.last?.source)
+        try await page.run("first.pause(); second.pause()")
+        #expect(await waitUntil { page.last?.isPaused == true })
+
+        await NowPlaying.run("heard", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let heard = try #require(page.last?.source)
+        #expect(![first, second].contains(heard))
+        await NowPlaying.run("silent", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == true })
+        await NowPlaying.run("heard", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == false })
+        #expect(page.last?.source.map { ![first, second, heard].contains($0) } == true, "heard again: another sound")
     }
 
     /// A page that muted the media it plays, then heard through Web Audio: it plays, and is heard.

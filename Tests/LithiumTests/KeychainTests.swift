@@ -22,6 +22,21 @@ import Testing
         #expect(!Keychain.hasSigningIdentity(URL(fileURLWithPath: "/nonexistent/Lithium.app")))
     }
 
+    /// The same binary, Apple-signed and then re-signed ad hoc, as the linker signs a debug build.
+    @Test func anAdHocSignatureHasNoIdentity() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "keychain-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: url)
+        #expect(Keychain.hasSigningIdentity(url))
+        let codesign = Process()
+        codesign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        codesign.arguments = ["--force", "--sign", "-", url.path]
+        try codesign.run()
+        codesign.waitUntilExit()
+        try #require(codesign.terminationStatus == 0)
+        #expect(!Keychain.hasSigningIdentity(url))
+    }
+
     /// Nor the installed app's sign-in file, which their own key would replace.
     @MainActor @Test func testsNeverUseTheKeychain() {
         #expect(!Keychain.isAllowed)
@@ -55,11 +70,12 @@ import Testing
         #expect(fake.calls == [])
     }
 
-    /// The only test that keeps the launched executable: before that, the Keychain stays shut.
+    /// The only test that runs `atLaunch`: before that, the Keychain stays shut.
     @MainActor @Test func theKeychainIsShutUntilTheLaunchedExecutableIsKept() {
         #expect(Keychain.launchedExecutable == nil)
         #expect(!Keychain.Store.login.runsCodeOnDisk(), "nothing kept at launch")
-        Keychain.keepLaunchedExecutable()
+        defer { SecKeychainSetUserInteractionAllowed(true) }
+        Keychain.atLaunch()
         #expect(Keychain.launchedExecutable == Keychain.executableOnDisk(Bundle.main.executablePath))
         #expect(Keychain.Store.login.runsCodeOnDisk(), "the test process is the code on disk")
     }

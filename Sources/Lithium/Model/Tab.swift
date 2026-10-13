@@ -1673,15 +1673,22 @@ extension Tab: WKUIDelegate {
         Task { decisionHandler(await askPermission([.location], origin: origin) ? .grant : .deny) }
     }
 
-    /// Private WebKit (`WKUIDelegatePrivate`), called only on a delegate that has it: the key that
-    /// wraps the CryptoKeys a site stores. Without it WebKit reads its own login Keychain item.
+    /// Private WebKit (`WKUIDelegatePrivate`), called only on a delegate that responds to it: the
+    /// key that wraps the CryptoKeys a site stores. Without it WebKit reads its own login Keychain
+    /// item. Only builds that may not use the Keychain answer (`answers`).
     @objc(_webCryptoMasterKeyForWebView:completionHandler:)
     func webCryptoMasterKey(_ webView: WKWebView, completionHandler: @escaping @MainActor (Data?) -> Void) {
-        let allowed = Keychain.isAllowed
-        Task {
-            // Off the main thread: the first one this launch reads the Keychain.
-            completionHandler(await Task.detached { Keychain.webCryptoKey(allowed: allowed) }.value)
-        }
+        completionHandler(Keychain.launchWebCryptoKey)
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        Self.answers(selector, keychainAllowed: Keychain.isAllowed) && super.responds(to: selector)
+    }
+
+    /// The installed app leaves the key to WebKit, which keeps using its own item as it always has:
+    /// a new key would leave every CryptoKey sites already stored unreadable.
+    nonisolated static func answers(_ selector: Selector?, keychainAllowed: Bool) -> Bool {
+        selector != #selector(webCryptoMasterKey(_:completionHandler:)) || !keychainAllowed
     }
 
     private func askPermission(_ kinds: [PermissionKind], origin: WKSecurityOrigin) async -> Bool {

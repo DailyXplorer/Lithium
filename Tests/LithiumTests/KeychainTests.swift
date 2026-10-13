@@ -43,18 +43,22 @@ import Testing
         #expect(SessionCookies.fileURL.lastPathComponent == "session-cookies-unkeyed")
     }
 
-    @Test func theInstalledAppHandsWebKitItsStoredWebCryptoKey() {
-        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32))
-        let keychain = fake.keychain()
-        #expect(Keychain.webCryptoKey(allowed: true, keychain: keychain) == Data(repeating: 7, count: 32))
-        #expect(Keychain.webCryptoKey(allowed: true, keychain: keychain) == Data(repeating: 7, count: 32))
-        #expect(fake.calls == ["copy"])
+    /// WebKit asks for the key only a delegate that responds: the installed app's never does, so
+    /// the CryptoKeys sites stored stay under WebKit's own item.
+    @Test func onlyBuildsOffTheKeychainAnswerForTheWebCryptoKey() {
+        let selector = NSSelectorFromString("_webCryptoMasterKeyForWebView:completionHandler:")
+        #expect(!Tab.answers(selector, keychainAllowed: true))
+        #expect(Tab.answers(selector, keychainAllowed: false))
+        let other = NSSelectorFromString("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:")
+        #expect(Tab.answers(other, keychainAllowed: true))
+        #expect(Tab.answers(other, keychainAllowed: false))
     }
 
+    /// Other builds get a key of WebKit's size that stays the same for the launch.
     @Test func otherBuildsHandWebKitALaunchKey() {
-        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32))
-        #expect(Keychain.webCryptoKey(allowed: false, keychain: fake.keychain()) == Keychain.launchWebCryptoKey)
-        #expect(fake.calls == [])
+        #expect(Keychain.launchWebCryptoKey.count == 16)
+        #expect(Keychain.launchWebCryptoKey == Keychain.launchWebCryptoKey)
+        #expect(Keychain.launchWebCryptoKey != Data(count: 16))
     }
 
     /// The app replaced on disk under it (an update): its Keychain items trust the new code.
@@ -70,14 +74,17 @@ import Testing
         #expect(fake.calls == [])
     }
 
-    /// The only test that runs `atLaunch`: before that, the Keychain stays shut.
+    /// The only test that runs `atLaunch`: before that, the Keychain stays shut. It leaves every
+    /// other Keychain user in the process (WebKit, extensions' hosts) as it was.
     @MainActor @Test func theKeychainIsShutUntilTheLaunchedExecutableIsKept() {
         #expect(Keychain.launchedExecutable == nil)
         #expect(!Keychain.Store.login.runsCodeOnDisk(), "nothing kept at launch")
-        defer { SecKeychainSetUserInteractionAllowed(true) }
         Keychain.atLaunch()
         #expect(Keychain.launchedExecutable == Keychain.executableOnDisk(Bundle.main.executablePath))
         #expect(Keychain.Store.login.runsCodeOnDisk(), "the test process is the code on disk")
+        var interaction: DarwinBoolean = false
+        #expect(SecKeychainGetUserInteractionAllowed(&interaction) == errSecSuccess)
+        #expect(interaction.boolValue, "prompts stay on process-wide")
     }
 
     /// An update writes a new executable in the old one's place.

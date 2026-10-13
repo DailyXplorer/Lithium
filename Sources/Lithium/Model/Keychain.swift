@@ -2,16 +2,17 @@ import Foundation
 import Security
 
 /// One secret Lithium keeps in the login Keychain, read at most once a launch and never with a
-/// prompt. No explicit `kSecAttrAccess`, so an update may lose access to the items (not verified
-/// on macOS either way). One this build can't read without asking is replaced instead or, if
-/// macOS won't let it go, left alone for the launch.
+/// prompt. The installed app is signed with a stable self-signed identity, so every rebuild has the
+/// same designated requirement and keeps access to its items (a reinstall showed no prompt). One
+/// this build can't read without asking is replaced instead or, if macOS won't let it go, left
+/// alone for the launch.
 final class Keychain: @unchecked Sendable {
     /// Only the installed app, signed with its own identity, uses the user's Keychain. Any other
     /// build (debug, ad-hoc signed, a test run, a throwaway home) would read the same items as
     /// another app, and the answer to its prompt changes who may read them: the real app gets asked
     /// next. Those builds keep their secrets in memory. Decided at launch (`atLaunch`), on the app
     /// as it was then: a bundle replaced on disk later doesn't change the answer.
-    @MainActor static let isAllowed: Bool = {
+    static let isAllowed: Bool = {
         #if DEBUG
         let isDebug = true
         #else
@@ -57,11 +58,8 @@ final class Keychain: @unchecked Sendable {
         return "\(file) \(modified.timeIntervalSince1970)"
     }
 
-    /// Prompts off process-wide, so WebKit's own Keychain reads in this process fail rather than
-    /// ask too: Keychain calls then return errSecInteractionNotAllowed where they would show one.
-    /// And the build judged as launched, before an update can replace it on disk.
+    /// The build judged as launched, before an update can replace it on disk.
     @MainActor static func atLaunch() {
-        SecKeychainSetUserInteractionAllowed(false)
         _ = isAllowed
         keepLaunchedExecutable()
     }
@@ -73,17 +71,10 @@ final class Keychain: @unchecked Sendable {
     static let sessionCookies = Keychain(service: "app.lithium.browser.session-cookies", account: "file-key",
                                          label: "Lithium sign-in cookies", size: 32)
 
-    /// Wraps the CryptoKeys sites store (IndexedDB). Lithium hands it to WebKit
-    /// (`Tab.webCryptoMasterKey`), whose own item would ask for the password after every update.
-    static let webCrypto = Keychain(service: "app.lithium.browser.webcrypto", account: "master-key",
-                                    label: "Lithium WebCrypto key", size: 16)
-
-    /// Where the Keychain is off or fails: WebKit would otherwise fall back to its own item.
+    /// What builds that may not use the Keychain hand WebKit (`Tab.webCryptoMasterKey`) to wrap the
+    /// CryptoKeys sites store, instead of WebKit's own login Keychain item. Theirs are throwaway
+    /// profiles: a key for the launch is enough.
     static let launchWebCryptoKey = randomBytes(16)
-
-    static func webCryptoKey(allowed: Bool, keychain: Keychain = webCrypto) -> Data {
-        (allowed ? keychain.secret(creating: true) : nil) ?? launchWebCryptoKey
-    }
 
     /// SecItem calls, so tests never reach the user's Keychain.
     struct Store: Sendable {

@@ -8,6 +8,7 @@ enum TitleCleaner {
 
     private static let separators = [" - ", " – ", " — ", " | ", " · ", " • ", " :: "]
     private static let colons = [" : ", ": "]
+    private static let openingWords: Set = ["the", "a", "an", "of", "to", "in", "on", "for", "and", "with", "le", "la", "les", "un", "une", "des", "du", "de"]
 
     /// A notification counter at the start of a title, "(3) " or "[99+] ": the count and its "+".
     static var counter: Regex<(Substring, Substring, Substring)> { /^[\(\[](\d+)(\+?)[\)\]]\s*/ }
@@ -75,12 +76,19 @@ enum TitleCleaner {
     /// gets a capital first letter.
     static func capitalized(_ label: String, like title: String) -> String {
         let titleWords = wordRuns(title).map(String.init)
-        // "The" opening a title that also writes "the" is not a proper noun.
-        let lowercase = Set(titleWords.filter { $0 == $0.lowercased() })
-        let properNouns = Dictionary(
-            titleWords
-                .filter { $0.contains(where: \.isUppercase) && !lowercase.contains($0.lowercased()) }
-                .map { ($0.lowercased(), $0) },
+        // In Title Case every word has a capital, so only an inner capital ("iPhone") or an
+        // acronym ("NASA") still marks a proper noun; a title in all caps marks none.
+        let longWords = titleWords.filter { $0.count >= 4 && $0.first?.isLetter == true }
+        let titleCase = longWords.filter { $0.first?.isUppercase == true }.count * 4 > longWords.count * 3
+        let properNouns: [String: String] = !title.contains(where: \.isLowercase) ? [:] : Dictionary(
+            titleWords.enumerated()
+                .filter { index, word in
+                    word.contains(where: \.isUppercase)
+                        && !(titleCase && word.first?.isUppercase == true && !word.dropFirst().contains(where: \.isUppercase))
+                        // "The" opening a title is not a proper noun.
+                        && !(index == 0 && openingWords.contains(word.lowercased()))
+                }
+                .map { ($1.lowercased(), $1) },
             uniquingKeysWith: { first, _ in first }
         )
         var result = ""

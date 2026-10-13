@@ -44,6 +44,13 @@ struct TitleCleanerTests {
         ("nasa moon mission", "NASA announces a new moon mission for 2027", "NASA moon mission"),
         ("guide to the galaxy", "The hitchhiker's guide to the galaxy", "Guide to the galaxy"),
         ("google agenda", "Google Agenda - planning de la semaine", "Google Agenda"),
+        ("travel guide to paris", "Paris travel guide - best things to do in paris", "Travel guide to Paris"),
+        ("Build a web browser", "How to Build a Web Browser From Scratch in 2026: A Complete Step-by-Step Guide for Beginners | Smashing Magazine", "Build a web browser"),
+        ("build a website", "How To Build A Website", "Build a website"),
+        ("Swift concurrency", "Concurrency | Documentation - The Swift Programming Language (Swift 6.2)", "Swift concurrency"),
+        ("iphone tips", "Best iPhone Tips And Tricks For Beginners", "iPhone tips"),
+        ("privacy policy", "PRIVACY POLICY AND TERMS OF USE FOR THE EXAMPLE SITE", "Privacy policy"),
+        ("new moon mission", "BREAKING: NEW MOON MISSION ANNOUNCED", "New moon mission"),
     ])
     func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
         #expect(TitleCleaner.capitalized(label, like: title) == expected)

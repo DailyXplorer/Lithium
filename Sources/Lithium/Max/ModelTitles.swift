@@ -4,7 +4,7 @@ import FoundationModels
 @available(macOS 26.0, *)
 @Generable
 struct ShortTabTitle {
-    @Guide(description: "What the page is about in two or three words, four at most, never the website's name, in sentence case: a capital first letter and proper nouns as the title writes them")
+    @Guide(description: "What the page is about in two or three words, four at most, never the website's name, in sentence case: a capital first letter and proper nouns as the title writes them, never all lowercase or all caps")
     let label: String
 }
 

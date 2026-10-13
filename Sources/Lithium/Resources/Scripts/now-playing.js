@@ -245,7 +245,12 @@
   let held = false;
   const listen = addEventListener.bind(globalThis);
   const unlisten = removeEventListener.bind(globalThis);
-  const release = (event) => { if (event.isTrusted) hold(false); };
+  // The tab's other frames held with it are freed too (`free`): a page's button may drive its iframe's player.
+  const release = (event) => {
+    if (!event.isTrusted) return;
+    hold(false);
+    post({ frame, released: true });
+  };
   // Each context the page tried to resume while held, with its own resume: it won't ask again.
   const refused = new Map();
   // Kept through a second hold: a context still suspended won't ask again.
@@ -303,6 +308,8 @@
         case 'hush': hold(true); if (!call('pause')) active?.pause(); break;
         // Its tab played again from the app: an iframe held with it, which is not the one that plays.
         case 'release': playAgain(); break;
+        // Clicked in another frame of its tab: may play again, its Web Audio still left to the page.
+        case 'free': hold(false); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
         // WebKit started or stopped hearing the page.

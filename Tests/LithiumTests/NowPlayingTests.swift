@@ -1158,19 +1158,20 @@ struct NowPlayingPageTests {
     @Test func holdsTheWebAudioOfTheFrameThatPlayed() async throws {
         let page = try await PlayingPage("""
             <iframe srcdoc="<script>
+              \(Self.wav)
               window.context = new AudioContext();
               const silence = context.createConstantSource();
               silence.offset.value = 0;
               silence.connect(context.destination);
               silence.start();
               context.onstatechange = () => { if (context.state === 'suspended') context.resume(); };
-              \(Self.played)
             </script>"></iframe>
             """, muted: false)
         defer { page.close() }
         let embedded = "document.querySelector('iframe').contentWindow"
         let state = { () async throws -> String? in try await page.run("return \(embedded).context?.state") as? String }
         #expect(await waitUntil { try await state() == "running" })
+        try await page.play("Object.assign(new (\(embedded).Audio)(\(embedded).wav()), { loop: true })")
         #expect(await waitUntil { page.last?.isPaused == false })
         let frame = try #require(page.lastFrame)
         #expect(!frame.isMainFrame)
@@ -1430,7 +1431,7 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { try await state() == "running" }, "played again")
     }
 
-    /// A page's message, as `userContentController` gets it: the buttons go to the page itself, or to
+    /// A page's message, as `userContentController` passes it on: the buttons go to the page itself, or to
     /// the iframe through its `WKFrameInfo`. A message with no frame, or from a closed tab, is dropped.
     @Test func tellsTheFrameAMessageCameFrom() async throws {
         let page = try await PlayingPage(Self.iframeSynth)
@@ -1536,6 +1537,48 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { try await state() == "running" })
     }
 
+    /// A click in the page frees the iframe held with it: the page's own button may drive the
+    /// iframe's player, which would otherwise refuse to play.
+    @Test func freesTheIframesHeldWithAClickedPage() async throws {
+        let page = try await PlayingPage("""
+            <script>\(Self.wav)</script>
+            <iframe style="position: fixed; top: 0; right: 0; width: 50px; height: 50px" srcdoc="<script>\(Self.wav)</script>"></iframe>
+            """)
+        defer { page.close() }
+        let embedded = "document.querySelector('iframe').contentWindow"
+        try await page.play("\(embedded).sound = Object.assign(new (\(embedded).Audio)(\(embedded).wav()), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let played = try #require(page.lastFrame)
+        #expect(!played.isMainFrame)
+
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        defer { [first, second].forEach(browser.close) }
+        let player = browser.nowPlaying
+        var hushed: [WKFrameInfo] = []
+        var told: [(command: String, frame: WKFrameInfo?)] = []
+        player.hush = { _, frames in hushed = frames }
+        player.tell = { _, command, frame in told.append((command, frame)) }
+        player.isHeard = { _ in true }
+        player.receive(["frame": "played", "media": ["paused": false, "audible": true]], from: first, frameInfo: played)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: second)
+        #expect(hushed.count == 1 && hushed.first === played)
+
+        await NowPlaying.hush(page.webView, frames: hushed)
+        let replay = "return await \(embedded).sound.play().then(() => false, () => true)"
+        #expect(await waitUntil { try await page.run("return \(embedded).sound.paused") as? Bool == true })
+        #expect(try await page.run(replay) as? Bool == true, "held")
+
+        try page.click()
+        #expect(await waitUntil { page.releasedFrame != nil })
+        let clicked = try #require(page.releasedFrame)
+        #expect(clicked.isMainFrame)
+        player.receive(["frame": "page", "released": true], from: first, frameInfo: clicked)
+        #expect(told.map(\.command) == ["free", "free"] && told.first!.frame == nil && told.last!.frame === played)
+        for (command, frame) in told { await NowPlaying.run(command, in: page.webView, frame: frame) }
+        #expect(try await page.run(replay) as? Bool == false, "freed by the click in the page")
+    }
+
     /// A detached element played through Web Audio, as a player of its own stream may: both stop.
     @Test func hushesMediaPlayedThroughWebAudio() async throws {
         let page = try await PlayingPage("<script>\(Self.wav)</script>", muted: false)
@@ -1598,6 +1641,8 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     private(set) var lastFrame: WKFrameInfo?
     /// The last iframe that said it has Web Audio.
     private(set) var audioFrame: WKFrameInfo?
+    /// The last frame a click freed of its hold.
+    private(set) var releasedFrame: WKFrameInfo?
     private let folder: URL
     private let window: NSWindow
 
@@ -1647,6 +1692,10 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         if (message.body as? [String: Any])?["audio"] != nil {
             audioFrame = message.frameInfo
+            return
+        }
+        if (message.body as? [String: Any])?["released"] != nil {
+            releasedFrame = message.frameInfo
             return
         }
         lastFrame = message.frameInfo

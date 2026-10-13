@@ -76,12 +76,79 @@ enum DownloadNames {
     /// Longer names get cut in the downloads list and in Finder.
     static let maxLength = 80
 
-    /// The model's answer, if it is a short name about what the page and file said.
+    /// The model's answer, if it is a short name about what the page and file said that says more
+    /// than the site's name: not the same words recased, nor one that lost an order number or "n°1".
     static func acceptable(_ answer: String, for source: DownloadSource) -> String? {
         let said = [source.title ?? "", source.filename, source.page?.path() ?? "", source.file?.path() ?? ""].joined(separator: " ")
-        guard let accepted = TitleCleaner.acceptable(answer, original: said, host: source.page?.host() ?? source.file?.host() ?? ""),
+        guard let accepted = TitleCleaner.acceptable(answer, original: said, host: source.page?.host() ?? source.file?.host() ?? "", maxLength: maxLength),
               let name = sanitized(accepted), !isGeneric(name) else { return nil }
+        let original = ((source.filename.removingPercentEncoding ?? source.filename) as NSString).deletingPathExtension
+        guard folded(name) != folded(original) else { return nil }
+        // A vague name's numbers are counters ("IMG_2041"), but not its dates ("scan-2026-10-12")
+        // nor a code that only looks like hex ("FAC2026100045"). "03-04-2025" is 3 April or
+        // March 4: either reading's day will do.
+        let kept = numericDates.map { date in
+            let (dated, dates) = datesWithoutMonths(in: original, by: date)
+            let labelled = dated.lowercased().split { !$0.isLetter && !$0.isNumber }.filter(isLabelledNumber)
+            return isGeneric(original) ? codes(in: dates + " " + labelled.joined(separator: " ")) : codes(in: dated)
+        }
+        guard kept.contains(where: { $0.isSubset(of: codes(in: name)) }) else { return nil }
         return name
+    }
+
+    /// A label of two to four letters then a number, as an invoice's or an order's:
+    /// "fa2026100045", "dec2026"; not a camera's prefix and counter ("img2041", "p7"), nor a hex
+    /// hash ("abcdef123456").
+    private static func isLabelledNumber(_ word: Substring) -> Bool {
+        let letters = word.prefix { $0.isLetter }
+        return (2...4).contains(letters.count) && letters.count < word.count && word.dropFirst(letters.count).allSatisfy(\.isNumber)
+            && !vague.contains(String(letters))
+    }
+
+    /// "2025-06-12", "12.06.2025" or "2026-10", not "2026-28": a year, then a month and maybe a
+    /// day, or the reverse. Captures the year and the day; when both of the first two numbers
+    /// could be the day, one reading takes the first and the other the second.
+    private static let numericDates: [NSRegularExpression] = [true, false].map { dayFirst in
+        let dayMonth = #"(0?[1-9]|[12]\d|3[01])[-_.](?:0?[1-9]|1[0-2])"#
+        let monthDay = #"(?:0?[1-9]|1[0-2])[-_.](0?[1-9]|[12]\d|3[01])"#
+        let reversed = dayFirst ? dayMonth + "|" + monthDay : monthDay + "|" + dayMonth
+        return try! NSRegularExpression(pattern: #"(?<!\d)(?:((?:19|20)\d\d)[-_.](?:0?[1-9]|1[0-2])(?:[-_.](0?[1-9]|[12]\d|3[01]))?|(?:"# + reversed + #")[-_.]((?:19|20)\d\d))(?!\d)"#)
+    }
+
+    /// `text` with its numeric dates cut to their years and days, and those years and days: a date
+    /// the model writes out ("12 June 2025") keeps only them in digits.
+    private static func datesWithoutMonths(in text: String, by numericDate: NSRegularExpression) -> (text: String, dates: String) {
+        let all = NSRange(text.startIndex..., in: text)
+        let parts = numericDate.matches(in: text, range: all).flatMap { match in
+            (1...5).compactMap { Range(match.range(at: $0), in: text).map { String(text[$0]) } }
+        }
+        return (numericDate.stringByReplacingMatches(in: text, range: all, withTemplate: " $1$5 $2$3$4 "), parts.joined(separator: " "))
+    }
+
+    /// Case and separators aside: "quarterly_report" and "Quarterly report" say the same.
+    private static func folded(_ text: String) -> String {
+        text.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// The numbers, dates and codes in a name ("n°1", "2026-28", "INV4821"), less the hashes and
+    /// random tokens a server adds ("iqhqpvt6ri5vna2zlwwgggaqwa", "3f9a2c7e").
+    private static func codes(in text: String) -> Set<String> {
+        let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+        return Set(words.flatMap { word -> [String] in
+            // A token's letters and digits take turns; a code's come in a run or two
+            // ("invoice48213", "FAC2026100045", "dec2026").
+            let turns = zip(word, word.dropFirst()).filter { $0.isNumber != $1.isNumber }.count
+            // An order number takes three turns too ("ORD12345X9"), but keeps a run of three digits
+            // or more; "k3j9xq" has none. Past five turns it's a token, run or not ("ORD1A2B3C4" goes).
+            let hasNumber = word.split { !$0.isNumber }.contains { $0.count >= 3 }
+            if word.count >= 6, turns >= 5 || (turns >= 3 && !hasNumber) { return [] }
+            // Its numbers, as a clear name may write them: "invoice48213" as "invoice 48213",
+            // "07" as "7".
+            return word.split { !$0.isNumber }.map { run in
+                let number = run.drop { $0 == "0" }
+                return number.isEmpty ? "0" : String(number)
+            }
+        })
     }
 
     /// `name` with the site's extension. An extension `name` ends in itself goes: Finder hides the

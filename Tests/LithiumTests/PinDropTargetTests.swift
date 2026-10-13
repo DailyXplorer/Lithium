@@ -48,14 +48,24 @@ struct PinDropTargetTests {
     }
 
     /// A drop target on a favorite tile swallows its right-click, so the tile's context menu (with
-    /// "Unpin") never opens. The menu needs a window on screen, so this guards the tile's source instead.
+    /// "Unpin") never opens. The menu needs a window on screen, so this guards the tile's source instead,
+    /// both in `PinTile` and where `PinGrid` builds each tile.
     @Test func favoriteTilesHaveNoDropTargetOfTheirOwn() throws {
         let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Sources/Lithium/Views/SidebarView.swift").standardized
         let source = try String(contentsOf: file, encoding: .utf8)
-        let tile = try #require(source.components(separatedBy: "private struct PinTile: View {").dropFirst().first?
-            .components(separatedBy: "\nprivate struct ").first)
+        func code(of name: String) throws -> String {
+            let body = try #require(source.components(separatedBy: "private struct \(name): View {").dropFirst().first?
+                .components(separatedBy: "\nprivate struct ").first)
+            return body.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+        }
+        let tile = try code(of: "PinTile")
         #expect(tile.contains(".contextMenu"))
         #expect(!tile.contains(".dropDestination"))
         #expect(!tile.contains(".onDrop"))
+        // The grid's own drop target comes after its coordinate space; everything before it wraps the tiles.
+        let tiles = try #require(try code(of: "PinGrid").components(separatedBy: ".coordinateSpace(").first)
+        #expect(tiles.contains("PinTile("))
+        #expect(!tiles.contains(".dropDestination"))
+        #expect(!tiles.contains(".onDrop"))
     }
 }

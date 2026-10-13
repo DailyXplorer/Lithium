@@ -251,10 +251,32 @@ struct NowPlayingBrowserTests {
         #expect(paused == [first, second], "a tab never pauses itself")
     }
 
-    /// A chat's ping takes no player and pauses nothing: only a sound to listen to does.
-    @Test func pausesNothingForASoundEffect() {
+    /// A chat's 1 s ping in a background tab takes no player and pauses nothing, even while WebKit hears it.
+    @Test func pausesNothingForAPing() async {
         let browser = Browser()
         let (video, chat) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        player.isHeard = { _ in true }
+        let sound = { (message: [String: Any]) in
+            NowPlaying.Media(message: message.merging(["audible": true]) { $1 }, at: Date())
+        }
+
+        player.receive(sound(["paused": false, "duration": 600]), from: video)
+        player.receive(sound(["paused": false]), from: chat)
+        player.receive(sound(["paused": false, "duration": 1]), from: chat)
+        #expect(player.tab === video && paused.isEmpty)
+        player.receive(sound(["paused": true, "duration": 1]), from: chat)
+        await player.proving?.value
+        #expect(player.tab === video && player.media?.duration == 600 && paused.isEmpty, "over before the check")
+    }
+
+    /// A sound longer than a few seconds, or a live stream, claims at once from a background tab.
+    @Test func claimsALongSoundAtOnce() {
+        let browser = Browser()
+        let (video, music) = (browser.newTab(), browser.newTab())
         browser.select(video)
         let player = browser.nowPlaying
         var paused: [Tab] = []
@@ -265,37 +287,53 @@ struct NowPlayingBrowserTests {
         }
 
         player.receive(sound(["duration": 600]), from: video)
-        player.receive(sound(["duration": 1]), from: chat)
-        #expect(player.tab === video && paused.isEmpty, "a ping in a background tab")
-        player.receive(sound([:]), from: chat)
-        #expect(player.tab === video && paused.isEmpty, "nor a sound of unknown length there, not yet (Web Audio)")
-        browser.select(chat)
-        player.receive(sound(["duration": 1]), from: chat)
-        #expect(player.tab === video && paused.isEmpty, "a ping in the tab on screen")
-        player.receive(sound(["loading": true]), from: chat)
-        player.receive(sound(["duration": 1]), from: chat)
-        #expect(player.tab === video && paused.isEmpty, "nor one still loading there, whose length comes next")
-        player.receive(sound([:]), from: chat)
-        #expect(player.tab === chat && paused == [video], "a sound of unknown length there does")
-
-        browser.select(video)
+        player.receive(sound(["duration": 6]), from: music)
+        #expect(player.tab === music && paused == [video])
         player.receive(sound(["duration": 600]), from: video)
-        player.receive(sound(["live": true]), from: chat)
-        #expect(player.tab === chat && paused == [video, chat, video], "a live stream does from a background tab too")
-        player.receive(sound(["duration": 6]), from: video)
-        #expect(player.tab === video && paused == [video, chat, video, chat], "as a sound longer than a few seconds")
+        player.receive(sound(["live": true]), from: music)
+        #expect(player.tab === music && paused == [video, music, video], "a live stream")
+        player.receive(sound([:]), from: video)
+        #expect(player.tab === music, "not yet a sound still loading")
+        player.receive(sound(["duration": 600]), from: video)
+        #expect(player.tab === video && paused == [video, music, video, music], "once its length comes")
     }
 
-    /// Web Audio in a background tab has no length: still heard a couple of seconds later, it is
-    /// music (Deezer) and claims; a ping WebKit no longer hears by then doesn't.
-    @Test func takesWebAudioThatPlaysOnFromABackgroundTab() async {
+    /// A sound of unknown length (Web Audio) still heard 2 s after it started claims then, and pauses the
+    /// tab heard before; another sound that claims meanwhile drops its claim.
+    @Test func claimsASoundStillHeardAfterAWhile() async {
         let browser = Browser()
-        let (video, chat, music) = (browser.newTab(), browser.newTab(), browser.newTab())
+        let (video, music, chat) = (browser.newTab(), browser.newTab(), browser.newTab())
         browser.select(video)
         let player = browser.nowPlaying
         var paused: [Tab] = []
         player.hush = { tab, _ in paused.append(tab) }
-        var heard: Set<ObjectIdentifier> = [ObjectIdentifier(video), ObjectIdentifier(chat), ObjectIdentifier(music)]
+        player.isHeard = { _ in true }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let long = NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date())
+
+        player.receive(long, from: video)
+        player.receive(playing, from: music)
+        player.receive(playing, from: music)
+        #expect(player.tab === video && paused.isEmpty, "not yet")
+        await player.proving?.value
+        #expect(player.tab === music && player.media?.isPaused == false && paused == [video])
+
+        player.receive(playing, from: chat)
+        player.receive(long, from: video)
+        #expect(player.tab === video && paused == [video, music])
+        await player.proving?.value
+        #expect(player.tab === video && paused == [video, music], "the video claimed meanwhile")
+    }
+
+    /// A sound of unknown length WebKit no longer hears, or the page reports paused, within 2 s never claims.
+    @Test func dropsASoundOverTooSoon() async {
+        let browser = Browser()
+        let (video, chat) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        var heard: Set<ObjectIdentifier> = [ObjectIdentifier(video), ObjectIdentifier(chat)]
         player.isHeard = { heard.contains(ObjectIdentifier($0)) }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
 
@@ -303,17 +341,30 @@ struct NowPlayingBrowserTests {
         player.receive(playing, from: chat)
         heard.remove(ObjectIdentifier(chat))
         await player.proving?.value
-        #expect(player.tab === video && paused.isEmpty, "a ping over before then")
-
-        player.receive(playing, from: music)
-        player.receive(playing, from: music)
-        await player.proving?.value
-        #expect(player.tab === music && player.media?.isPaused == false && paused == [video], "music still heard")
+        #expect(player.tab === video && paused.isEmpty, "no longer heard")
 
         heard.insert(ObjectIdentifier(chat))
         player.receive(playing, from: chat)
+        player.receive(NowPlaying.Media(message: ["paused": true, "audible": true], at: Date()), from: chat)
         await player.proving?.value
-        #expect(player.tab === chat && paused == [video, music], "the chat's music, after its ping")
+        #expect(player.tab === video && paused.isEmpty, "reported paused")
+    }
+
+    /// A sound waiting to claim is dropped with its tab.
+    @Test func dropsTheWaitWhenItsTabCloses() async {
+        let browser = Browser()
+        let (video, chat) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        player.isHeard = { _ in true }
+
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date()), from: video)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: chat)
+        browser.close(chat)
+        await player.proving?.value
+        #expect(player.tab === video && paused.isEmpty)
     }
 
     /// A call's participants are heard through the page's media: other sound mustn't silence them.
@@ -1707,31 +1758,13 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { player.tab === musicTab && player.media?.isPaused == false })
         try await chat.play("ping")
         #expect(await waitUntil { chat.messages.contains { $0?.duration == 1 } && chat.last?.isPaused == true }, "the ping played to its end")
+        await player.proving?.value
         #expect(player.tab === musicTab && player.media?.isPaused == false)
         #expect(try await isMusicPlaying())
 
         try await chat.play("song")
         #expect(await waitUntil { player.tab === chatTab })
         #expect(await waitUntil { try await isMusicPlaying() == false })
-    }
-
-    /// The chat holds the player with a voice note when it pings: the player keeps the voice note, and
-    /// Play plays it, not the ping.
-    @Test func keepsTheMediaOverItsOwnPagesPing() async throws {
-        let page = try await PlayingPage("<script>\(Self.wav)\nwindow.note = new Audio(wav(30)); window.ping = new Audio(wav(1));</script>")
-        defer { page.close() }
-
-        try await page.play("note")
-        #expect(await waitUntil { page.last?.duration == 30 && page.last?.isPaused == false })
-        try await page.run("note.pause()")
-        #expect(await waitUntil { page.last?.isPaused == true })
-        try await page.play("ping")
-        #expect(await waitUntil { try await page.run("return ping.ended") as? Bool == true })
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(!page.messages.contains { $0?.duration == 1 } && page.last?.isPaused == true, "the ping is never reported")
-
-        await NowPlaying.run("play", in: page.webView)
-        #expect(await waitUntil { page.last?.duration == 30 && page.last?.isPaused == false })
     }
 
     private func waitUntil(_ seconds: Double = 5, _ condition: () async throws -> Bool) async -> Bool {

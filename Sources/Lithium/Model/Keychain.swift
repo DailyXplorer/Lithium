@@ -2,10 +2,10 @@ import Foundation
 import Security
 
 /// One secret Lithium keeps in the login Keychain, read at most once a launch and never with a
-/// prompt. No explicit `kSecAttrAccess`: the default one already trusts the app by its designated
-/// requirement. What an update can still fail on is the item's partition list, which names the
-/// build (its cdhash) when the app has no team ID, and only the user's password changes that. One
-/// this build can't read without it is replaced instead.
+/// prompt. No explicit `kSecAttrAccess`: the default trusts the creating app, and the item's
+/// partition list most likely names the build (its cdhash) when the app has no team ID, which no
+/// access set here can widen (unverified). One this build can't read without asking is replaced
+/// instead or, if macOS won't let it go, left alone for the launch.
 final class Keychain: @unchecked Sendable {
     /// Only the installed app, signed with its own identity, uses the user's Keychain. Any other
     /// build (debug, ad-hoc signed, a test run, a throwaway home) would read the same items as
@@ -38,19 +38,19 @@ final class Keychain: @unchecked Sendable {
 
     /// False once the app was replaced on disk under this process (an update): the items trust the
     /// new code, and this process asking for them is what shows a prompt.
-    static func runsCodeOnDisk() -> Bool {
-        runs(launched: launchedExecutable, onDisk: executableOnDisk())
+    static func runsCodeOnDisk(launched: String? = launchedExecutable, path: String? = Bundle.main.executablePath) -> Bool {
+        runs(launched: launched, onDisk: executableOnDisk(path))
     }
 
     static func runs(launched: String?, onDisk: String?) -> Bool {
         launched != nil && onDisk == launched
     }
 
-    static let launchedExecutable = executableOnDisk()
+    static let launchedExecutable = executableOnDisk(Bundle.main.executablePath)
 
     /// A new file (another inode) or a rewritten one once an update replaced the app.
-    private static func executableOnDisk() -> String? {
-        guard let path = Bundle.main.executablePath, let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+    static func executableOnDisk(_ path: String?) -> String? {
+        guard let path, let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let file = attributes[.systemFileNumber], let modified = attributes[.modificationDate] as? Date
         else { return nil }
         return "\(file) \(modified.timeIntervalSince1970)"
@@ -94,7 +94,7 @@ final class Keychain: @unchecked Sendable {
             },
             add: { SecItemAdd($0 as CFDictionary, nil) },
             delete: { SecItemDelete($0 as CFDictionary) },
-            runsCodeOnDisk: Keychain.runsCodeOnDisk)
+            runsCodeOnDisk: { Keychain.runsCodeOnDisk() })
     }
 
     private enum State {

@@ -57,6 +57,29 @@ import Testing
         #expect(fake.calls == [])
     }
 
+    /// An update writes a new executable in the old one's place.
+    @Test func anExecutableReplacedOnDiskIsNoLongerTheOneLaunched() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "keychain-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("1".utf8).write(to: url)
+        let launched = try #require(Keychain.executableOnDisk(url.path))
+        #expect(Keychain.runsCodeOnDisk(launched: launched, path: url.path))
+        try Data("2".utf8).write(to: url, options: .atomic)
+        #expect(!Keychain.runsCodeOnDisk(launched: launched, path: url.path), "replaced by an update")
+        try FileManager.default.removeItem(at: url)
+        #expect(!Keychain.runsCodeOnDisk(launched: launched, path: url.path), "gone from disk")
+    }
+
+    /// An item macOS won't let this build delete without asking: no key this launch, asked once.
+    @Test func anItemThatCantBeReplacedIsLeftAloneForTheLaunch() {
+        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32), readable: false, refusesDeleting: true)
+        let keychain = fake.keychain()
+        #expect(keychain.secret(creating: true) == nil)
+        #expect(keychain.secret(creating: true) == nil)
+        #expect(fake.calls == ["copy", "add", "delete"])
+        #expect(fake.stored == Data(repeating: 7, count: 32))
+    }
+
     @Test func anItemFoundIsReadOnceALaunch() {
         let fake = FakeKeychain(stored: Data(repeating: 7, count: 32))
         let keychain = fake.keychain()
@@ -117,12 +140,14 @@ private final class FakeKeychain: @unchecked Sendable {
     private var _withoutUI: [String] = []
     private let readable: Bool
     private let refusesAdding: Bool
+    private let refusesDeleting: Bool
     private let runsCodeOnDisk: Bool
 
-    init(stored: Data?, readable: Bool = true, refusesAdding: Bool = false, runsCodeOnDisk: Bool = true) {
+    init(stored: Data?, readable: Bool = true, refusesAdding: Bool = false, refusesDeleting: Bool = false, runsCodeOnDisk: Bool = true) {
         _stored = stored
         self.readable = readable
         self.refusesAdding = refusesAdding
+        self.refusesDeleting = refusesDeleting
         self.runsCodeOnDisk = runsCodeOnDisk
     }
 
@@ -160,6 +185,7 @@ private final class FakeKeychain: @unchecked Sendable {
                 self.lock.withLock {
                     self._calls.append("delete")
                     self.noteUI("delete", query)
+                    if self.refusesDeleting { return errSecInteractionNotAllowed }
                     self._stored = nil
                     return errSecSuccess
                 }

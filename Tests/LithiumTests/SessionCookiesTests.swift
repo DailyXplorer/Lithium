@@ -57,6 +57,25 @@ struct SessionCookiesTests {
         #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "no key, nothing restored: the file stays")
         await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])], replacing: true)
         #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "after a clear, no key, no file")
+
+        SessionCookies.key = .memory()
+        await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])])
+        SessionCookies.key = SessionCookies.FileKey { _ in nil }
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
+        await SessionCookies.save([Space.mainID: try await store(with: [])], replacing: true)
+        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "a clear leaving nothing, no key: no file")
+    }
+
+    /// Most people have no sign-in to keep: their saves never ask the Keychain.
+    @Test func anEmptySaveWithNoFileReadsNoKey() async throws {
+        let key = SessionCookies.key
+        defer { SessionCookies.key = key }
+        SessionCookies.forget()
+        let reads = Count()
+        SessionCookies.key = SessionCookies.FileKey { _ in reads.add(); return nil }
+        await SessionCookies.save([Space.mainID: try await store(with: [])])
+        #expect(reads.value == 0)
+        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
     }
 
     /// The Keychain may block on a prompt: a key that only comes off the main thread still works.

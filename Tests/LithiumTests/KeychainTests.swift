@@ -55,14 +55,11 @@ import WebKit
         #expect(Tab.answers(other, keychainAllowed: false))
     }
 
-    /// A throwaway profile gets a key of WebKit's size that stays the same for the launch; a debug
-    /// build on the owner's profile gets none, so it can't wrap CryptoKeys the installed app reads.
-    @Test func onlyThrowawayProfilesGetALaunchKey() {
-        #expect(Keychain.webCryptoKey(throwawayProfile: false) == nil)
-        let key = Keychain.webCryptoKey(throwawayProfile: true)
-        #expect(key?.count == 16)
-        #expect(key != Data(count: 16))
-        #expect(Keychain.webCryptoKey?.count == 16, "a test run")
+    /// A key of WebKit's size that stays the same for the launch, whatever the profile: handed
+    /// none, WebKit could read its login Keychain item.
+    @Test func buildsOffTheKeychainGetALaunchKey() {
+        #expect(Keychain.webCryptoKey.count == 16)
+        #expect(Keychain.webCryptoKey != Data(count: 16))
         #expect(Keychain.webCryptoKey == Keychain.webCryptoKey)
     }
 
@@ -171,7 +168,7 @@ import WebKit
         #expect(fake.calls == ["copy", "add", "delete", "add"])
         #expect(fake.stored == made)
         #expect(fake.labels == ["Lithium test key", "Lithium test key"])
-        #expect(fake.withoutUI == ["copy", "delete"], "fails rather than asks")
+        #expect(fake.withoutUI == ["copy", "add", "delete", "add"], "fails rather than asks")
     }
 
     @Test func noItemIsMadeOnFirstUse() {
@@ -226,7 +223,6 @@ import WebKit
     @Test func anotherBuildsTabHandsWebKitTheLaunchKey() {
         let tab = Tab(browser: Browser(), configuration: nil, keychainAllowed: false)
         #expect(tab.responds(to: Self.selector))
-        #expect(Keychain.webCryptoKey != nil)
         #expect(key(from: tab) == [Keychain.webCryptoKey])
     }
 }
@@ -275,6 +271,7 @@ private final class FakeKeychain: @unchecked Sendable {
                 self.lock.withLock {
                     self._calls.append("add")
                     self._labels.append(attributes[kSecAttrLabel as String] as? String ?? "")
+                    self.noteUI("add", attributes)
                     if self.refusesAdding { return errSecInteractionNotAllowed }
                     guard self._stored == nil else { return errSecDuplicateItem }
                     self._stored = attributes[kSecValueData as String] as? Data

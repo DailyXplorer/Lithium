@@ -74,15 +74,10 @@ final class Keychain: @unchecked Sendable {
                                          label: "Lithium sign-in cookies", size: 32)
 
     /// What builds that may not use the Keychain hand WebKit (`Tab.webCryptoMasterKey`) to wrap the
-    /// CryptoKeys sites store, instead of WebKit's own login Keychain item. A test run or a fixed
-    /// home is a throwaway profile: a key for the launch is enough. Any other (a debug build on the
-    /// owner's profile) gets none, so it can't store CryptoKeys the installed app couldn't read.
-    static let webCryptoKey = webCryptoKey(throwawayProfile: ExternalApps.runsTests
-                                           || ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil)
-
-    static func webCryptoKey(throwawayProfile: Bool) -> Data? {
-        throwawayProfile ? randomBytes(16) : nil
-    }
+    /// CryptoKeys sites store, instead of WebKit's own login Keychain item. Never nil: WebKit may
+    /// read its item when handed none. A key for the launch, so CryptoKeys these builds store last
+    /// one launch; a debug build is a bare executable, whose WebKit data isn't the installed app's.
+    static let webCryptoKey = randomBytes(16)
 
     /// SecItem calls, so tests never reach the user's Keychain.
     struct Store: Sendable {

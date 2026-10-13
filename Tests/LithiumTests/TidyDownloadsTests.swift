@@ -90,8 +90,8 @@ struct DownloadNamesTests {
         #expect(answer("Account photo", for: "IMG_2041.jpg") == "Account photo")
     }
 
-    /// A code glued to a word is no hash, however long; a token whose letters and digits take
-    /// turns is one, however short.
+    /// A code glued to a word is no hash, however long, nor one that looks like hex; a token of
+    /// six or more characters whose letters and digits take turns five times is one.
     @Test func tellsCodesFromRandomTokens() {
         func answer(_ answer: String, for filename: String) -> String? {
             DownloadNames.acceptable(answer, for: DownloadSource(filename: filename, title: "Invoice history · Power Co", page: URL(string: "https://power.example/account/bills")))
@@ -102,9 +102,15 @@ struct DownloadNamesTests {
         #expect(answer("Electricity invoice FAC2026100045", for: "Invoice FAC2026100045.pdf") == "Electricity invoice FAC2026100045")
         #expect(answer("Electricity invoice", for: "invoice-decade2026.pdf") == nil)
         #expect(answer("Electricity invoice", for: "invoice-k3j9xq2mlp.pdf") == "Electricity invoice")
+        #expect(answer("Electricity invoice", for: "FAC2026100045.pdf") == nil)
+        #expect(answer("Electricity invoice FAC2026100045", for: "FAC2026100045.pdf") == "Electricity invoice FAC2026100045")
+        #expect(answer("Electricity invoice", for: "DEC2026.pdf") == nil)
+        #expect(answer("Electricity invoice", for: "ORD12345X9.pdf") == nil)
+        #expect(answer("Electricity invoice ORD12345X9", for: "ORD12345X9.pdf") == "Electricity invoice ORD12345X9")
+        #expect(answer("Electricity invoice", for: "550e8400-e29b-41d4-a716-446655440000.pdf") == "Electricity invoice")
     }
 
-    /// A numeric date may be written out, but its year stays, in a vague name too.
+    /// A numeric date may be written out, but its year and day stay, in a vague name too.
     @Test func datesKeepTheirYear() {
         func answer(_ answer: String, for filename: String) -> String? {
             DownloadNames.acceptable(answer, for: DownloadSource(filename: filename, title: "Sales · Shop", page: URL(string: "https://shop.example/sales")))
@@ -112,7 +118,11 @@ struct DownloadNamesTests {
         #expect(answer("Sales invoice 12 June 2025", for: "invoice-2025-06-12.pdf") == "Sales invoice 12 June 2025")
         #expect(answer("Sales invoice 12 June 2025", for: "invoice-12.06.2025.pdf") == "Sales invoice 12 June 2025")
         #expect(answer("Sales invoice June", for: "invoice-2025-06-12.pdf") == nil)
+        #expect(answer("Sales invoice 2025", for: "invoice-2025-06-12.pdf") == nil)
+        #expect(answer("Sales invoice June 2025", for: "invoice-12.06.2025.pdf") == nil)
+        #expect(answer("Sales invoice 25 June 2025", for: "invoice-06.25.2025.pdf") == "Sales invoice 25 June 2025")
         #expect(answer("Sales export", for: "export-2026-10-12.csv") == nil)
+        #expect(answer("Sales export 2026", for: "export-2026-10-12.csv") == nil)
         #expect(answer("Sales export 12 October 2026", for: "export-2026-10-12.csv") == "Sales export 12 October 2026")
     }
 }
@@ -276,6 +286,24 @@ struct TidyDownloadFilesTests {
         #expect(item.originalFilename == "invoice_48213.pdf")
     }
 
+    /// A PDF shown at a `data:` address is saved without it: its path is the file's bytes.
+    @Test func savedDataAddressNeverReachesTheModel() async throws {
+        let tidy = Downloads.shared.tidy
+        tidy.isEnabled = true
+        var asked: [DownloadSource] = []
+        tidy.namer = { asked.append($0); return nil }
+        defer { tidy.isEnabled = false; tidy.namer = nil }
+        let token = UUID().uuidString.prefix(6)
+
+        Downloads.shared.save(Data("%PDF-1.4".utf8), suggestedFilename: "download.pdf", from: URL(string: "data:application/pdf;base64,JVBERi0xLjQ="), title: "Lease \(token)")
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(5) { item.state == .finished })
+        let saved = try #require(item.destination)
+        defer { try? FileManager.default.removeItem(at: saved) }
+        #expect(asked.count == 1)
+        #expect(asked.first?.page == nil && asked.first?.file == nil)
+    }
+
     /// A file the user moved or renamed since is theirs: undo leaves it alone.
     @Test func undoLeavesAFileTheUserMoved() async throws {
         let tidy = Downloads.shared.tidy
@@ -331,11 +359,12 @@ struct TidyDownloadFilesTests {
         let (listener, base) = try await LocalHTTP.serve([
             "/": ("Content-Type: text/html", "<title>Invoice \(token)</title><p>Bills</p>"),
             "/bill": ("Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"document(3).pdf\"", "%PDF-1.4 bill"),
+            "/clear": ("Content-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"Invoice 2026-10.pdf\"", "%PDF-1.4 clear"),
         ])
         defer { listener.cancel() }
         let tidy = Downloads.shared.tidy
         tidy.isEnabled = true
-        tidy.namer = { _ in nil }
+        tidy.namer = { $0.filename == "Invoice 2026-10.pdf" ? "Invoice October 2026 \(token)" : nil }
         defer { tidy.isEnabled = false; tidy.namer = nil }
         var proposed: [String] = []
         Downloads.shared.chooseDestination = { url, _ in
@@ -356,6 +385,14 @@ struct TidyDownloadFilesTests {
         #expect(file.lastPathComponent == "Invoice \(token).pdf")
         #expect(named.originalFilename == "document(3).pdf")
         #expect(try String(contentsOf: file, encoding: .utf8) == "%PDF-1.4 bill")
+
+        // A clear name the site gave takes the model's.
+        let clear = try await download(base.appending(path: "clear"), in: tab)
+        #expect(await waitUntil(30) { clear.state != .downloading })
+        let clearFile = try #require(clear.destination)
+        defer { try? FileManager.default.removeItem(at: clearFile) }
+        #expect(clearFile.lastPathComponent == "Invoice October 2026 \(token).pdf")
+        #expect(clear.originalFilename == "Invoice 2026-10.pdf")
 
         let menu = await tab.webView.startDownload(using: URLRequest(url: base.appending(path: "bill")))
         tab.perform(NSSelectorFromString("_webView:contextMenuDidCreateDownload:"), with: tab.webView, with: menu)

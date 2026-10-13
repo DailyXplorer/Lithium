@@ -200,10 +200,12 @@ final class Downloads: NSObject, WKDownloadDelegate {
         guard tidy.applies(to: suggestedFilename) else {
             return place(data, item, as: suggestedFilename, from: source)
         }
-        // The last download's naming used up the loaded model: load it again within the budget.
+        // Loaded when the reader opened the PDF; this only helps if a download since used it up.
         tidy.prepare()
+        // Only a web address reaches the model: a `data:` one's path is the file itself.
+        let page = source.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0 : nil }
         Task {
-            let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: source, file: source))
+            let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: page, file: page))
             place(data, item, as: tidied ?? suggestedFilename, from: source, renamedFrom: tidied.map { _ in suggestedFilename })
         }
     }

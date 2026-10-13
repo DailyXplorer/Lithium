@@ -53,6 +53,8 @@ struct SessionCookiesTests {
         SessionCookies.key = SessionCookies.FileKey { _ in nil }
         await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])])
         #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "no key, the file stays")
+        await SessionCookies.save([Space.mainID: try await store(with: [])])
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "no key, nothing restored: the file stays")
         await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])], replacing: true)
         #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "after a clear, no key, no file")
     }
@@ -217,6 +219,27 @@ struct SessionCookiesTests {
         await browser.storeCleanup?.value
 
         #expect(await savedCookies(of: [Space.mainID, work.id]) == [:])
+    }
+
+    /// A clear while the Keychain is locked: the file it can't open goes, other sites' sign-ins with it,
+    /// rather than give the cleared site's back at the next launch.
+    @Test func aClearWithoutTheKeyRemovesTheFile() async throws {
+        let site = try await EchoSite.start()
+        defer { site.stop() }
+        let key = SessionCookies.key
+        defer { SessionCookies.key = key }
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        let other = sessionCookie("other", domain: "example.test")
+        await WKWebsiteDataStore.default().httpCookieStore.setCookie(other)
+        #expect(await title(of: browser.newTab(url: site.set("main"), space: Space.mainID)) == "set")
+        await browser.saveSessionCookies()
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "saved before the clear")
+
+        SessionCookies.key = SessionCookies.FileKey { _ in nil }
+        await browser.clearData([SiteInfo(host: "127.0.0.1", store: .default())]).value
+        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path))
+        await WKWebsiteDataStore.default().httpCookieStore.deleteCookie(other)
     }
 
     /// A quit while a site's data is still being cleared waits for the clear.

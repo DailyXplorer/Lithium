@@ -46,6 +46,10 @@ import Testing
     /// The app replaced on disk under it (an update): its Keychain items trust the new code.
     @Test func aProcessWhoseAppWasReplacedLeavesTheKeychainAlone() {
         #expect(Keychain.runsCodeOnDisk(), "the test process is the code on disk")
+        #expect(Keychain.runs(launched: "12 1700000000.0", onDisk: "12 1700000000.0"))
+        #expect(!Keychain.runs(launched: "12 1700000000.0", onDisk: "13 1700000500.0"), "replaced by an update")
+        #expect(!Keychain.runs(launched: "12 1700000000.0", onDisk: nil), "gone from disk")
+        #expect(!Keychain.runs(launched: nil, onDisk: nil), "unknown at launch")
         let fake = FakeKeychain(stored: Data(repeating: 7, count: 32), runsCodeOnDisk: false)
         let keychain = fake.keychain()
         #expect(keychain.secret(creating: true) == nil)

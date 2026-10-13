@@ -40,7 +40,12 @@ enum SessionCookies {
         }
         guard !saved.isEmpty,
               let plist = try? PropertyListSerialization.data(fromPropertyList: ["saved": now, "stores": saved], format: .binary, options: 0)
-        else { return forget() }
+        else {
+            // Without the key, this launch restored nothing: none here doesn't mean none to keep.
+            let key = key
+            if !replacing, await Task.detached(operation: { key.read(false) }).value == nil { return }
+            return forget()
+        }
         // Off the main thread: the Keychain may block, on a prompt for the key.
         let (key, url) = (key, fileURL)
         let written = await Task.detached { () -> SymmetricKey? in

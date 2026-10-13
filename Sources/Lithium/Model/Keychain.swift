@@ -2,8 +2,10 @@ import Foundation
 import Security
 
 /// One secret Lithium keeps in the login Keychain, read at most once a launch and never with a
-/// prompt: one this build can't read without the user's password (macOS ties an item to the build
-/// that made it when the app has no team ID, so an update can't read it) is replaced instead.
+/// prompt. No explicit `kSecAttrAccess`: the default one already trusts the app by its designated
+/// requirement. What an update can still fail on is the item's partition list, which names the
+/// build (its cdhash) when the app has no team ID, and only the user's password changes that. One
+/// this build can't read without it is replaced instead.
 final class Keychain: @unchecked Sendable {
     /// Only the installed app, signed with its own identity, uses the user's Keychain. Any other
     /// build (debug, ad-hoc signed, a test run, a throwaway home) would read the same items as
@@ -37,7 +39,11 @@ final class Keychain: @unchecked Sendable {
     /// False once the app was replaced on disk under this process (an update): the items trust the
     /// new code, and this process asking for them is what shows a prompt.
     static func runsCodeOnDisk() -> Bool {
-        launchedExecutable != nil && executableOnDisk() == launchedExecutable
+        runs(launched: launchedExecutable, onDisk: executableOnDisk())
+    }
+
+    static func runs(launched: String?, onDisk: String?) -> Bool {
+        launched != nil && onDisk == launched
     }
 
     static let launchedExecutable = executableOnDisk()

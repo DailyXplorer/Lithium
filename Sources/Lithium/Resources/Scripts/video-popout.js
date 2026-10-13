@@ -45,6 +45,8 @@ const css = `
     object-fit: contain !important; background: #000 !important;
   }
   video[${mark}]::backdrop { background: #000; }
+  /* The page, shrunk to the player, overflows it: its scroll bars are drawn over the top layer. */
+  html { overflow: hidden !important; }
 `;
 
 const show = () => {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SidebarHeader: View {
     var body: some View {
@@ -141,6 +142,8 @@ private struct PinGrid: View {
     @State private var isTargeted = false
     /// Each tile's frame in the grid, to find the slot a drop lands on.
     @State private var tileFrames: [Pin.ID: CGRect] = [:]
+    /// The slot under a drag, outlined so the user sees which favorite a drop replaces.
+    @State private var targetedSlot: Int?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
@@ -160,7 +163,7 @@ private struct PinGrid: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(Array(browser.spacePins.enumerated()), id: \.element.id) { index, pin in
-                        PinTile(pin: pin)
+                        PinTile(pin: pin, isTargeted: index == targetedSlot)
                             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.space)) }) { tileFrames[pin.id] = $0 }
                     }
                 }
@@ -175,16 +178,53 @@ private struct PinGrid: View {
         // One drop target for the whole grid: a drop target on each tile swallows its right-click, so the
         // tile's context menu never opens. On a tile, a favorite moves into its slot and a tab is pinned
         // there; on the space around the tiles, at the end.
-        .dropDestination(for: String.self) { items, location in
-            browser.dropOnFavorites(items, at: slot(at: location))
-        } isTargeted: { isTargeted = $0 }
+        .onDrop(of: [.text], delegate: FavoritesDrop(browser: browser, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
     }
 
     private static let space = "PinGrid"
+}
+
+/// A delegate rather than `.dropDestination`, whose hover reports only a Bool: following the pointer
+/// tells which tile to outline.
+private struct FavoritesDrop: DropDelegate {
+    let browser: Browser
+    let frames: [Pin.ID: CGRect]
+    @Binding var isTargeted: Bool
+    @Binding var targetedSlot: Int?
 
     private func slot(at location: CGPoint) -> Int? {
-        browser.spacePins.firstIndex { tileFrames[$0.id]?.contains(location) == true }
+        favoriteSlot(at: location, order: browser.spacePins.map(\.id), frames: frames)
     }
+
+    func dropEntered(info: DropInfo) { isTargeted = true }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        targetedSlot = slot(at: info.location)
+        return nil
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+        targetedSlot = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let index = slot(at: info.location)
+        dropExited(info: info)
+        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        let browser = browser
+        _ = provider.loadTransferable(type: String.self) { result in
+            let items = (try? result.get()).map { [$0] } ?? []
+            Task { @MainActor in _ = browser.dropOnFavorites(items, at: index) }
+        }
+        return true
+    }
+}
+
+/// The slot whose tile holds `location`, in `order`; `nil` (the end of the grid) between or around tiles.
+/// `frames` and `location` must share a coordinate space.
+func favoriteSlot(at location: CGPoint, order: [Pin.ID], frames: [Pin.ID: CGRect]) -> Int? {
+    order.firstIndex { frames[$0]?.contains(location) == true }
 }
 
 /// A favorite drags as `pin:<id>` and a tab as its bare id, both UUID strings: the prefix tells them apart.
@@ -210,6 +250,7 @@ private extension Browser {
 
 private struct PinTile: View {
     let pin: Pin
+    let isTargeted: Bool
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isHovered = false
@@ -222,6 +263,10 @@ private struct PinTile: View {
             .frame(height: 48)
             .overlay {
                 BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: live?.unread.shown)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
             }
             .contentShape(Rectangle())
             .onTapGesture { browser.activate(pin) }

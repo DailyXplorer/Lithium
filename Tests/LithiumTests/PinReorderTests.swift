@@ -78,6 +78,37 @@ struct PinReorderTests {
         #expect(order(browser).last == "last")
     }
 
+    /// `pins` holds every space's favorites: a drop on a tile of the second space's grid must use
+    /// that grid's slots, not the slots in `pins`.
+    @Test func dropOnATileOfAnotherSpaceTakesThatTilesSlot() {
+        let browser = browserWithPins()
+        defer {
+            browser.pins.forEach(browser.unpin)
+            for space in browser.spaces.reversed() { browser.deleteSpace(space.id) }
+        }
+        browser.addSpace(browser.newSpaceDraft())
+        for name in ["x", "y", "z"] {
+            browser.pin(browser.newTab(url: URL(string: "data:text/html,\(name)")!))
+        }
+        let grid = browser.spacePins
+        let frames = Dictionary(uniqueKeysWithValues: grid.enumerated().map { index, pin in
+            (pin.id, CGRect(x: CGFloat(index) * 48, y: 0, width: 40, height: 48))
+        })
+        let onY = CGPoint(x: 68, y: 24), onX = CGPoint(x: 20, y: 24), betweenTiles = CGPoint(x: 44, y: 24)
+        #expect(browser.favoritesDropSlot(at: onY, frames: frames) == 1)
+
+        _ = browser.dropOnFavorites(["pin:\(grid[2].id.uuidString)"], at: onY, frames: frames)
+        #expect(order(browser) == ["a", "b", "c", "d", "e", "x", "z", "y"])
+
+        let tab = browser.newTab(url: URL(string: "data:text/html,new")!)
+        _ = browser.dropOnFavorites([tab.id.uuidString], at: onX, frames: frames)
+        #expect(order(browser) == ["a", "b", "c", "d", "e", "new", "x", "z", "y"])
+
+        // Off the tiles, a favorite goes to the end of the grid, not to the front.
+        _ = browser.dropOnFavorites(["pin:\(grid[0].id.uuidString)"], at: betweenTiles, frames: frames)
+        #expect(order(browser) == ["a", "b", "c", "d", "e", "new", "z", "y", "x"])
+    }
+
     @Test func pinningAnUnknownTabChangesNothing() {
         let browser = browserWithPins()
         browser.pinTab(withID: UUID().uuidString, at: 0)

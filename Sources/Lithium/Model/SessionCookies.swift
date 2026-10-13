@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Security
 import WebKit
 
 /// Session cookies (no expiry), which WebKit keeps only in memory, so sign-ins come back with the
@@ -9,13 +8,15 @@ import WebKit
 /// before the next save, which replaces it.
 @MainActor
 enum SessionCookies {
-    /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins.
+    /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins. Builds
+    /// that may not use the Keychain have their own: theirs, under a key of their own, would
+    /// replace the installed app's.
     static var fileURL: URL {
-        URL.applicationSupportDirectory.appending(path: "Lithium/session-cookies")
+        URL.applicationSupportDirectory.appending(path: Keychain.isAllowed ? "Lithium/session-cookies" : "Lithium/session-cookies-unkeyed")
     }
 
-    /// Tests keep theirs in memory: they never touch the user's Keychain.
-    static var key: FileKey = ExternalApps.runsTests ? .memory() : .keychain
+    /// Builds that may not use the user's Keychain (`Keychain.isAllowed`) keep theirs in memory.
+    static var key: FileKey = Keychain.isAllowed ? .keychain : .memory()
 
     /// A site's session ends long before: an older file is from a session left long ago.
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
@@ -24,8 +25,9 @@ enum SessionCookies {
     private static var knownKey: SymmetricKey?
 
     /// Every store keyed by its space (`Space.mainID` for the default store). Removes the file
-    /// when there is nothing to save, so it never outlives the sign-ins it held.
-    static func save(_ stores: [Space.ID: WKWebsiteDataStore], now: Date = Date()) async {
+    /// when there is nothing to save, so it never outlives the sign-ins it held. Without the key (a
+    /// locked Keychain) the file stays, unless `replacing` after a clear: clearing wins.
+    static func save(_ stores: [Space.ID: WKWebsiteDataStore], replacing: Bool = false, now: Date = Date()) async {
         var saved: [String: [[String: Any]]] = [:]
         for (id, store) in stores {
             // Only what a plist holds: a property WebKit adds later that it can't is left out.
@@ -38,14 +40,22 @@ enum SessionCookies {
         }
         guard !saved.isEmpty,
               let plist = try? PropertyListSerialization.data(fromPropertyList: ["saved": now, "stores": saved], format: .binary, options: 0)
-        else { return forget() }
+        else {
+            // Without the key, this launch restored nothing: none here doesn't mean none to keep (a
+            // sign-out this launch looks the same, and comes back with the key). No file, no question
+            // for the Keychain.
+            let key = key
+            if !replacing, FileManager.default.fileExists(atPath: fileURL.path),
+               await Task.detached(operation: { key.read(false) }).value == nil { return }
+            return forget()
+        }
         // Off the main thread: the Keychain may block, on a prompt for the key.
         let (key, url) = (key, fileURL)
         let written = await Task.detached { () -> SymmetricKey? in
             guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined, write(sealed, to: url) else { return nil }
             return key
         }.value
-        if let written { knownKey = written } else { forget() }
+        if let written { knownKey = written } else if replacing { forget() }
     }
 
     /// Made 0600 before it takes the file's place, so others can't read it even for a moment.
@@ -137,32 +147,9 @@ enum SessionCookies {
             return FileKey { _ in key }
         }
 
-        /// A generic password in the login Keychain, made on first use. One that can't be read
-        /// counts as none.
+        /// A generic password in the login Keychain, made on first use.
         static let keychain = FileKey { creating in
-            let item: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: "app.lithium.browser.session-cookies",
-                kSecAttrAccount: "file-key",
-            ]
-            var query = item
-            query[kSecReturnData] = true
-            var found: CFTypeRef?
-            if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data, data.count == 32 {
-                return SymmetricKey(data: data)
-            }
-            guard creating else { return nil }
-            let key = SymmetricKey(size: .bits256)
-            var added = item
-            added[kSecValueData] = key.withUnsafeBytes { Data($0) }
-            added[kSecAttrLabel] = "Lithium sign-in cookies"
-            var status = SecItemAdd(added as CFDictionary, nil)
-            // One this build can't read (signed differently, access refused, damaged) would otherwise
-            // stop every save. Replaced: the file it opened is about to be rewritten.
-            if status == errSecDuplicateItem, SecItemDelete(item as CFDictionary) == errSecSuccess {
-                status = SecItemAdd(added as CFDictionary, nil)
-            }
-            return status == errSecSuccess ? key : nil
+            Keychain.sessionCookies.secret(creating: creating).map { SymmetricKey(data: $0) }
         }
     }
 }

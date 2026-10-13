@@ -159,6 +159,8 @@
   const onMedia = (event) => {
     const media = event.target;
     if (media.isConnected) attached.add(media);
+    // Rewound or given another file, it plays another sound (a second ping); a loop plays on the same.
+    if (event.type === 'seeked' && !media.loop || event.type === 'emptied') ids.delete(media);
     let next = active;
     if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
     else if (isPlaying(media) && isAudible(media)) {

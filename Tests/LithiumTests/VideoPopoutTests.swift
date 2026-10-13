@@ -186,7 +186,7 @@ struct VideoPopoutTests {
         let videoBox = "const r = document.querySelector('video').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(' ')"
         // The player as it opens, resized tall (as for a vertical video), then wide.
         for (width, height) in [(320, 180), (180, 320), (480, 120)] {
-            webView.frame.size = NSSize(width: width, height: height)
+            webView.frame.size = NSSize(width: CGFloat(width), height: CGFloat(height))
             try await Task.sleep(for: .milliseconds(300))
             #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 40 500", "no scroll bars in the \(width)×\(height) player")
             #expect(try await webView.callAsyncJavaScript(videoBox, contentWorld: .page) as? String == "0 0 \(width) \(height)", "the video fits the \(width)×\(height) player")
@@ -197,6 +197,9 @@ struct VideoPopoutTests {
                 let color = snapshot.colorAt(x: Int(CGFloat(point.0) * scale), y: Int(CGFloat(point.1) * scale))
                 #expect(isVideo(color), "not the video at \(point) in the \(width)×\(height) player")
             }
+            // The video's frame, not just its black background: the centre is inside the frame at every size.
+            let centre = snapshot.colorAt(x: Int(CGFloat(width / 2) * scale), y: Int(CGFloat(height / 2) * scale))
+            #expect(isRed(centre), "the video plays in the \(width)×\(height) player")
         }
 
         webView.frame.size = NSSize(width: 320, height: 180)

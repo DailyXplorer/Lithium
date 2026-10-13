@@ -42,6 +42,12 @@ final class TidyDownloads {
     /// The file name to use instead of the site's, with its extension, or nil to keep it.
     func name(for source: DownloadSource) async -> String? {
         guard applies(to: source.filename) else { return nil }
+        // Only a web address reaches the model, from a save or a WebKit download: a `data:` one's
+        // path is the file itself.
+        var source = source
+        let web: (URL?) -> URL? = { $0.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0 : nil } }
+        source.page = web(source.page)
+        source.file = web(source.file)
         var name = DownloadNames.isGeneric(source.filename) ? DownloadNames.ruleName(source) : nil
         if let ask = asker(),
            let answer = await Self.first(within: Self.budget, { await ask(source) }),

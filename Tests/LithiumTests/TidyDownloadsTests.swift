@@ -88,10 +88,13 @@ struct DownloadNamesTests {
         #expect(answer("Quarterly Report", for: "quarterly_report.xlsx") == nil)
         // A vague name's numbers are a camera's counter: they may go.
         #expect(answer("Account photo", for: "IMG_2041.jpg") == "Account photo")
+        #expect(answer("Account photo", for: "IMG2041.jpg") == "Account photo")
+        #expect(answer("Account photo", for: "D092331.jpg") == "Account photo")
     }
 
     /// A code glued to a word is no hash, however long, nor one that looks like hex; a token of
-    /// six or more characters whose letters and digits take turns five times is one.
+    /// six or more characters whose letters and digits take turns five times is one, or three
+    /// times without a run of three digits.
     @Test func tellsCodesFromRandomTokens() {
         func answer(_ answer: String, for filename: String) -> String? {
             DownloadNames.acceptable(answer, for: DownloadSource(filename: filename, title: "Invoice history · Power Co", page: URL(string: "https://power.example/account/bills")))
@@ -108,6 +111,13 @@ struct DownloadNamesTests {
         #expect(answer("Electricity invoice", for: "ORD12345X9.pdf") == nil)
         #expect(answer("Electricity invoice ORD12345X9", for: "ORD12345X9.pdf") == "Electricity invoice ORD12345X9")
         #expect(answer("Electricity invoice", for: "550e8400-e29b-41d4-a716-446655440000.pdf") == "Electricity invoice")
+        #expect(answer("Electricity invoice", for: "FA2026100045.pdf") == nil)
+        #expect(answer("Electricity invoice", for: "abcdef123456.pdf") == "Electricity invoice")
+        #expect(answer("Electricity invoice", for: "invoice-k3j9xq.pdf") == "Electricity invoice")
+        #expect(answer("Electricity invoice", for: "invoice-ab123c4d.pdf") == nil)
+        #expect(answer("Electricity invoice", for: "invoice-a123b4c5.pdf") == "Electricity invoice")
+        // Past five turns, a run of digits doesn't save it: the trade-off for short hashes.
+        #expect(answer("Order history", for: "ORD1A2B3C4.pdf") == "Order history")
     }
 
     /// A numeric date may be written out, but its year and day stay, in a vague name too.
@@ -121,6 +131,10 @@ struct DownloadNamesTests {
         #expect(answer("Sales invoice 2025", for: "invoice-2025-06-12.pdf") == nil)
         #expect(answer("Sales invoice June 2025", for: "invoice-12.06.2025.pdf") == nil)
         #expect(answer("Sales invoice 25 June 2025", for: "invoice-06.25.2025.pdf") == "Sales invoice 25 June 2025")
+        // Day first or month first, either reading's day will do.
+        #expect(answer("Sales invoice 4 March 2025", for: "invoice-03-04-2025.pdf") == "Sales invoice 4 March 2025")
+        #expect(answer("Sales invoice 3 April 2025", for: "invoice-03-04-2025.pdf") == "Sales invoice 3 April 2025")
+        #expect(answer("Sales invoice 2025", for: "invoice-03-04-2025.pdf") == nil)
         #expect(answer("Sales export", for: "export-2026-10-12.csv") == nil)
         #expect(answer("Sales export 2026", for: "export-2026-10-12.csv") == nil)
         #expect(answer("Sales export 12 October 2026", for: "export-2026-10-12.csv") == "Sales export 12 October 2026")
@@ -191,6 +205,18 @@ struct TidyDownloadsTests {
         let start = ContinuousClock.now
         #expect(await tidy.name(for: source) == "October invoice.pdf")
         #expect(ContinuousClock.now - start < TidyDownloads.budget + .milliseconds(800))
+    }
+
+    /// A download started from a page at a `data:` address, through WebKit or a save: only web
+    /// addresses reach the model.
+    @Test func onlyWebAddressesReachTheModel() async {
+        let tidy = TidyDownloads(isEnabled: true)
+        var asked: [DownloadSource] = []
+        tidy.namer = { asked.append($0); return nil }
+        _ = await tidy.name(for: DownloadSource(filename: "lease.pdf", title: "Lease", page: URL(string: "data:application/pdf;base64,JVBERi0xLjQ="), file: URL(string: "https://files.example/lease.pdf")))
+        #expect(asked.count == 1)
+        #expect(asked.first?.page == nil)
+        #expect(asked.first?.file == URL(string: "https://files.example/lease.pdf"))
     }
 
     @Test func keepsTheNameWhenNothingSaysMore() async {

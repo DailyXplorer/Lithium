@@ -202,10 +202,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         }
         // Loaded when the reader opened the PDF; this only helps if a download since used it up.
         tidy.prepare()
-        // Only a web address reaches the model: a `data:` one's path is the file itself.
-        let page = source.flatMap { ["http", "https"].contains($0.scheme?.lowercased()) ? $0 : nil }
         Task {
-            let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: page, file: page))
+            let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: source, file: source))
             place(data, item, as: tidied ?? suggestedFilename, from: source, renamedFrom: tidied.map { _ in suggestedFilename })
         }
     }

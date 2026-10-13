@@ -85,29 +85,39 @@ enum DownloadNames {
         let original = ((source.filename.removingPercentEncoding ?? source.filename) as NSString).deletingPathExtension
         guard folded(name) != folded(original) else { return nil }
         // A vague name's numbers are counters ("IMG_2041"), but not its dates ("scan-2026-10-12")
-        // nor a code that only looks like hex ("FAC2026100045").
-        let (dated, dates) = datesWithoutMonths(in: original)
-        let labelled = dated.lowercased().split { !$0.isLetter && !$0.isNumber }.filter(isLabelledNumber)
-        let kept = isGeneric(original) ? codes(in: dates + " " + labelled.joined(separator: " ")) : codes(in: dated)
-        guard kept.isSubset(of: codes(in: name)) else { return nil }
+        // nor a code that only looks like hex ("FAC2026100045"). "03-04-2025" is 3 April or
+        // March 4: either reading's day will do.
+        let kept = numericDates.map { date in
+            let (dated, dates) = datesWithoutMonths(in: original, by: date)
+            let labelled = dated.lowercased().split { !$0.isLetter && !$0.isNumber }.filter(isLabelledNumber)
+            return isGeneric(original) ? codes(in: dates + " " + labelled.joined(separator: " ")) : codes(in: dated)
+        }
+        guard kept.contains(where: { $0.isSubset(of: codes(in: name)) }) else { return nil }
         return name
     }
 
-    /// A label then a number, as an invoice's or an order's: "fac2026100045", "dec2026"; not a
-    /// camera's prefix and counter ("img2041", "p7").
+    /// A label of two to four letters then a number, as an invoice's or an order's:
+    /// "fa2026100045", "dec2026"; not a camera's prefix and counter ("img2041", "p7"), nor a hex
+    /// hash ("abcdef123456").
     private static func isLabelledNumber(_ word: Substring) -> Bool {
         let letters = word.prefix { $0.isLetter }
-        return letters.count > 2 && letters.count < word.count && word.dropFirst(letters.count).allSatisfy(\.isNumber)
+        return (2...4).contains(letters.count) && letters.count < word.count && word.dropFirst(letters.count).allSatisfy(\.isNumber)
             && !vague.contains(String(letters))
     }
 
     /// "2025-06-12", "12.06.2025" or "2026-10", not "2026-28": a year, then a month and maybe a
-    /// day, or the reverse. Captures the year and the day, the first number unless it can't be a day.
-    private static let numericDate = try! NSRegularExpression(pattern: #"(?<!\d)(?:((?:19|20)\d\d)[-_.](?:0?[1-9]|1[0-2])(?:[-_.](0?[1-9]|[12]\d|3[01]))?|(?:(0?[1-9]|[12]\d|3[01])[-_.](?:0?[1-9]|1[0-2])|(?:0?[1-9]|1[0-2])[-_.](0?[1-9]|[12]\d|3[01]))[-_.]((?:19|20)\d\d))(?!\d)"#)
+    /// day, or the reverse. Captures the year and the day; when both of the first two numbers
+    /// could be the day, one reading takes the first and the other the second.
+    private static let numericDates: [NSRegularExpression] = [true, false].map { dayFirst in
+        let dayMonth = #"(0?[1-9]|[12]\d|3[01])[-_.](?:0?[1-9]|1[0-2])"#
+        let monthDay = #"(?:0?[1-9]|1[0-2])[-_.](0?[1-9]|[12]\d|3[01])"#
+        let reversed = dayFirst ? dayMonth + "|" + monthDay : monthDay + "|" + dayMonth
+        return try! NSRegularExpression(pattern: #"(?<!\d)(?:((?:19|20)\d\d)[-_.](?:0?[1-9]|1[0-2])(?:[-_.](0?[1-9]|[12]\d|3[01]))?|(?:"# + reversed + #")[-_.]((?:19|20)\d\d))(?!\d)"#)
+    }
 
     /// `text` with its numeric dates cut to their years and days, and those years and days: a date
     /// the model writes out ("12 June 2025") keeps only them in digits.
-    private static func datesWithoutMonths(in text: String) -> (text: String, dates: String) {
+    private static func datesWithoutMonths(in text: String, by numericDate: NSRegularExpression) -> (text: String, dates: String) {
         let all = NSRange(text.startIndex..., in: text)
         let parts = numericDate.matches(in: text, range: all).flatMap { match in
             (1...5).compactMap { Range(match.range(at: $0), in: text).map { String(text[$0]) } }
@@ -128,8 +138,10 @@ enum DownloadNames {
             // A token's letters and digits take turns; a code's come in a run or two
             // ("invoice48213", "FAC2026100045", "dec2026").
             let turns = zip(word, word.dropFirst()).filter { $0.isNumber != $1.isNumber }.count
-            // Five, not three: an order number such as "ORD12345X9" takes three.
-            if word.count >= 6, turns >= 5 { return [] }
+            // An order number takes three turns too ("ORD12345X9"), but keeps a run of three digits
+            // or more; "k3j9xq" has none. Past five turns it's a token, run or not ("ORD1A2B3C4" goes).
+            let hasNumber = word.split { !$0.isNumber }.contains { $0.count >= 3 }
+            if word.count >= 6, turns >= 5 || (turns >= 3 && !hasNumber) { return [] }
             // Its numbers, as a clear name may write them: "invoice48213" as "invoice 48213",
             // "07" as "7".
             return word.split { !$0.isNumber }.map { run in

@@ -124,7 +124,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// An iframe's last word from before WebKit heard its tab, one per tab: WebKit often hears a
     /// sound only after the first report, which would otherwise be lost.
     @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
-    /// A sound of unknown length, one per tab, with when it started: a ping or music, told apart by
+    /// A sound not known to last, one per tab, with when it started: a ping or music, told apart by
     /// whether WebKit still hears it `sustain` seconds later.
     @ObservationIgnored private var unproven: [ObjectIdentifier: (media: Media, frame: Frame, since: Date)] = [:]
     /// The last wait for such a sound; awaited in tests.
@@ -133,8 +133,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     static let settle: TimeInterval = 1.5
     /// A sound this long or shorter may be an effect (a chat's ping), not something to listen to.
     static let brief: TimeInterval = 5
-    /// A sound still heard this long after it started is no ping.
-    static let sustain: TimeInterval = 2
+    /// A sound still heard this long after it started is no ping: WhatsApp's lasts 2.3 s.
+    static let sustain: TimeInterval = 3
 
     @ObservationIgnored weak var browser: Browser?
     /// Whether WebKit hears the tab, nil when it can't tell; replaced in tests.
@@ -193,9 +193,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// the player is free. An iframe takes it only if WebKit hears the tab too: any ad may say it
     /// plays; the page itself is taken at its word. One sound at a time: the tab heard before is
     /// paused once WebKit hears the new one, unless it is in a call or muted. Only a sound that lasts
-    /// claims: one longer than `brief` or a live stream at once, one of unknown length (Web Audio, media
-    /// still loading) once it has `lasted`, still heard `sustain` seconds after it started; a known
-    /// shorter one (a chat's ping) never.
+    /// claims: one longer than `brief` or a live stream at once, any other (a chat's ping, Web Audio,
+    /// media still loading) once it has `lasted`, still heard `sustain` seconds after it started.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: ""), lasted: Bool = false) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let key = ObjectIdentifier(tab)
@@ -240,8 +239,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         } else if holds {
             discard(tab, pageGone: false)
         } else if let media, !media.isPaused, media.isAudible, !tab.isMuted, !lasts(media) {
-            // A known short sound never claims: a ping (WhatsApp's lasts 2.3 s) is still heard at the check.
-            if media.duration == nil { prove(media, from: tab, frame: frame, since: since) }
+            prove(media, from: tab, frame: frame, since: since)
         } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
             // Turned down only for want of WebKit's ear.
             unheard[key] = (media, frame)

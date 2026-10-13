@@ -8,12 +8,13 @@ import Testing
     private static let installed = URL(fileURLWithPath: "/System/Applications/Calculator.app")
 
     @Test func onlyTheInstalledSignedAppMayUseTheKeychain() {
-        #expect(Keychain.allows(isDebug: false, runsTests: false, environment: [:], bundle: Self.installed))
-        #expect(!Keychain.allows(isDebug: true, runsTests: false, environment: [:], bundle: Self.installed))
-        #expect(!Keychain.allows(isDebug: false, runsTests: true, environment: [:], bundle: Self.installed))
-        #expect(!Keychain.allows(isDebug: false, runsTests: false, environment: ["CFFIXED_USER_HOME": "/tmp/home"], bundle: Self.installed))
+        #expect(Keychain.allows(isDebug: false, runsTests: false, environment: [:], bundle: Self.installed, signed: true))
+        #expect(!Keychain.allows(isDebug: true, runsTests: false, environment: [:], bundle: Self.installed, signed: true))
+        #expect(!Keychain.allows(isDebug: false, runsTests: true, environment: [:], bundle: Self.installed, signed: true))
+        #expect(!Keychain.allows(isDebug: false, runsTests: false, environment: ["CFFIXED_USER_HOME": "/tmp/home"], bundle: Self.installed, signed: true))
         #expect(!Keychain.allows(isDebug: false, runsTests: false, environment: [:],
-                                 bundle: Self.installed.appending(path: "Contents/MacOS/Calculator")), "a bare binary")
+                                 bundle: Self.installed.appending(path: "Contents/MacOS/Calculator"), signed: true), "a bare binary")
+        #expect(!Keychain.allows(isDebug: false, runsTests: false, environment: [:], bundle: Self.installed, signed: false), "ad-hoc signed")
     }
 
     @Test func anAdHocSignedBuildHasNoIdentity() {
@@ -22,9 +23,34 @@ import Testing
         #expect(!Keychain.hasSigningIdentity(URL(fileURLWithPath: "/nonexistent/Lithium.app")))
     }
 
+    /// Nor the installed app's sign-in file, which their own key would replace.
     @MainActor @Test func testsNeverUseTheKeychain() {
         #expect(!Keychain.isAllowed)
-        #expect(Keychain.webCryptoKey(allowed: Keychain.isAllowed) == Keychain.launchWebCryptoKey)
+        #expect(SessionCookies.fileURL.lastPathComponent == "session-cookies-unkeyed")
+    }
+
+    @Test func theInstalledAppHandsWebKitItsStoredWebCryptoKey() {
+        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32))
+        let keychain = fake.keychain()
+        #expect(Keychain.webCryptoKey(allowed: true, keychain: keychain) == Data(repeating: 7, count: 32))
+        #expect(Keychain.webCryptoKey(allowed: true, keychain: keychain) == Data(repeating: 7, count: 32))
+        #expect(fake.calls == ["copy"])
+    }
+
+    @Test func otherBuildsHandWebKitALaunchKey() {
+        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32))
+        #expect(Keychain.webCryptoKey(allowed: false, keychain: fake.keychain()) == Keychain.launchWebCryptoKey)
+        #expect(fake.calls == [])
+    }
+
+    /// The app replaced on disk under it (an update): its Keychain items trust the new code.
+    @Test func aProcessWhoseAppWasReplacedLeavesTheKeychainAlone() {
+        #expect(Keychain.runsCodeOnDisk(), "the test process is the code on disk")
+        let fake = FakeKeychain(stored: Data(repeating: 7, count: 32), runsCodeOnDisk: false)
+        let keychain = fake.keychain()
+        #expect(keychain.secret(creating: true) == nil)
+        #expect(keychain.secret(creating: true) == nil)
+        #expect(fake.calls == [])
     }
 
     @Test func anItemFoundIsReadOnceALaunch() {
@@ -47,6 +73,7 @@ import Testing
         #expect(fake.calls == ["copy", "add", "delete", "add"])
         #expect(fake.stored == made)
         #expect(fake.labels == ["Lithium test key", "Lithium test key"])
+        #expect(fake.withoutUI == ["copy", "delete"], "fails rather than asks")
     }
 
     @Test func noItemIsMadeOnFirstUse() {
@@ -83,24 +110,34 @@ private final class FakeKeychain: @unchecked Sendable {
     private var _stored: Data?
     private var _calls: [String] = []
     private var _labels: [String] = []
+    private var _withoutUI: [String] = []
     private let readable: Bool
     private let refusesAdding: Bool
+    private let runsCodeOnDisk: Bool
 
-    init(stored: Data?, readable: Bool = true, refusesAdding: Bool = false) {
+    init(stored: Data?, readable: Bool = true, refusesAdding: Bool = false, runsCodeOnDisk: Bool = true) {
         _stored = stored
         self.readable = readable
         self.refusesAdding = refusesAdding
+        self.runsCodeOnDisk = runsCodeOnDisk
     }
 
     var stored: Data? { lock.withLock { _stored } }
     var calls: [String] { lock.withLock { _calls } }
     var labels: [String] { lock.withLock { _labels } }
+    /// The calls asked to fail rather than show a prompt.
+    var withoutUI: [String] { lock.withLock { _withoutUI } }
+
+    private func noteUI(_ call: String, _ query: [String: Any]) {
+        if query[kSecUseAuthenticationUI as String] as? String == kSecUseAuthenticationUIFail as String { _withoutUI.append(call) }
+    }
 
     func keychain() -> Keychain {
         Keychain(service: "test", account: "key", label: "Lithium test key", size: 32, store: Keychain.Store(
-            copy: { _ in
+            copy: { query in
                 self.lock.withLock {
                     self._calls.append("copy")
+                    self.noteUI("copy", query)
                     guard let stored = self._stored else { return (errSecItemNotFound, nil) }
                     return self.readable ? (errSecSuccess, stored) : (errSecInteractionNotAllowed, nil)
                 }
@@ -115,12 +152,14 @@ private final class FakeKeychain: @unchecked Sendable {
                     return errSecSuccess
                 }
             },
-            delete: { _ in
+            delete: { query in
                 self.lock.withLock {
                     self._calls.append("delete")
+                    self.noteUI("delete", query)
                     self._stored = nil
                     return errSecSuccess
                 }
-            }))
+            },
+            runsCodeOnDisk: { self.runsCodeOnDisk }))
     }
 }

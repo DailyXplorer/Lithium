@@ -21,7 +21,7 @@ struct SessionCookiesTests {
         #expect(permissions == 0o600)
 
         #expect(try FileManager.default.contentsOfDirectory(atPath: SessionCookies.fileURL.deletingLastPathComponent().path)
-            .filter { $0.contains("session-cookies") } == ["session-cookies"], "no temporary file left")
+            .filter { $0.contains("session-cookies") } == [SessionCookies.fileURL.lastPathComponent], "no temporary file left")
 
         let restored = WKWebsiteDataStore.nonPersistent()
         await SessionCookies.restore(into: { $0 == Space.mainID ? restored : nil })?.value
@@ -49,9 +49,12 @@ struct SessionCookiesTests {
         SessionCookies.key = .memory()
         #expect(await restoresNothing())
 
+        // A locked Keychain: the file waits for a launch that has the key, unless a clear would leave it behind.
         SessionCookies.key = SessionCookies.FileKey { _ in nil }
         await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])])
-        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "no key, no file")
+        #expect(FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "no key, the file stays")
+        await SessionCookies.save([Space.mainID: try await store(with: [sessionCookie("sid")])], replacing: true)
+        #expect(!FileManager.default.fileExists(atPath: SessionCookies.fileURL.path), "after a clear, no key, no file")
     }
 
     /// The Keychain may block on a prompt: a key that only comes off the main thread still works.

@@ -8,19 +8,20 @@ final class Keychain: @unchecked Sendable {
     /// Only the installed app, signed with its own identity, uses the user's Keychain. Any other
     /// build (debug, ad-hoc signed, a test run, a throwaway home) would read the same items as
     /// another app, and the answer to its prompt changes who may read them: the real app gets asked
-    /// next. Those builds keep their secrets in memory.
+    /// next. Those builds keep their secrets in memory. Decided at launch (`atLaunch`), on the app
+    /// as it was then: a bundle replaced on disk later doesn't change the answer.
     @MainActor static let isAllowed: Bool = {
         #if DEBUG
         let isDebug = true
         #else
         let isDebug = false
         #endif
-        return allows(isDebug: isDebug, runsTests: ExternalApps.runsTests,
-                      environment: ProcessInfo.processInfo.environment, bundle: Bundle.main.bundleURL)
+        return allows(isDebug: isDebug, runsTests: ExternalApps.runsTests, environment: ProcessInfo.processInfo.environment,
+                      bundle: Bundle.main.bundleURL, signed: hasSigningIdentity(Bundle.main.bundleURL))
     }()
 
-    static func allows(isDebug: Bool, runsTests: Bool, environment: [String: String], bundle: URL) -> Bool {
-        !isDebug && !runsTests && environment["CFFIXED_USER_HOME"] == nil && bundle.pathExtension == "app" && hasSigningIdentity(bundle)
+    static func allows(isDebug: Bool, runsTests: Bool, environment: [String: String], bundle: URL, signed: Bool) -> Bool {
+        !isDebug && !runsTests && environment["CFFIXED_USER_HOME"] == nil && bundle.pathExtension == "app" && signed
     }
 
     /// An ad-hoc signature, as the linker leaves, carries no certificate.
@@ -33,10 +34,28 @@ final class Keychain: @unchecked Sendable {
         return ((info as? [String: Any])?[kSecCodeInfoCertificates as String] as? [Any])?.isEmpty == false
     }
 
-    /// Process-wide, so WebKit's own Keychain reads in this process fail rather than ask too.
-    /// Keychain calls then return errSecInteractionNotAllowed where they would show a prompt.
-    @MainActor static func turnOffPrompts() {
+    /// False once the app was replaced on disk under this process (an update): the items trust the
+    /// new code, and this process asking for them is what shows a prompt.
+    static func runsCodeOnDisk() -> Bool {
+        launchedExecutable != nil && executableOnDisk() == launchedExecutable
+    }
+
+    static let launchedExecutable = executableOnDisk()
+
+    /// A new file (another inode) or a rewritten one once an update replaced the app.
+    private static func executableOnDisk() -> String? {
+        guard let path = Bundle.main.executablePath, let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let file = attributes[.systemFileNumber], let modified = attributes[.modificationDate] as? Date
+        else { return nil }
+        return "\(file) \(modified.timeIntervalSince1970)"
+    }
+
+    /// Prompts off process-wide, so WebKit's own Keychain reads in this process fail rather than
+    /// ask too: Keychain calls then return errSecInteractionNotAllowed where they would show one.
+    /// And the build judged as launched, before an update can replace it on disk.
+    @MainActor static func atLaunch() {
         SecKeychainSetUserInteractionAllowed(false)
+        _ = (isAllowed, launchedExecutable)
     }
 
     static let sessionCookies = Keychain(service: "app.lithium.browser.session-cookies", account: "file-key",
@@ -50,8 +69,8 @@ final class Keychain: @unchecked Sendable {
     /// Where the Keychain is off or fails: WebKit would otherwise fall back to its own item.
     static let launchWebCryptoKey = randomBytes(16)
 
-    static func webCryptoKey(allowed: Bool) -> Data {
-        (allowed ? webCrypto.secret(creating: true) : nil) ?? launchWebCryptoKey
+    static func webCryptoKey(allowed: Bool, keychain: Keychain = webCrypto) -> Data {
+        (allowed ? keychain.secret(creating: true) : nil) ?? launchWebCryptoKey
     }
 
     /// SecItem calls, so tests never reach the user's Keychain.
@@ -59,6 +78,7 @@ final class Keychain: @unchecked Sendable {
         var copy: @Sendable (_ query: [String: Any]) -> (status: OSStatus, data: Data?)
         var add: @Sendable (_ attributes: [String: Any]) -> OSStatus
         var delete: @Sendable (_ query: [String: Any]) -> OSStatus
+        var runsCodeOnDisk: @Sendable () -> Bool
 
         static let login = Store(
             copy: { query in
@@ -67,7 +87,8 @@ final class Keychain: @unchecked Sendable {
                 return (status, found as? Data)
             },
             add: { SecItemAdd($0 as CFDictionary, nil) },
-            delete: { SecItemDelete($0 as CFDictionary) })
+            delete: { SecItemDelete($0 as CFDictionary) },
+            runsCodeOnDisk: Keychain.runsCodeOnDisk)
     }
 
     private enum State {
@@ -92,8 +113,8 @@ final class Keychain: @unchecked Sendable {
     /// Keychain isn't asked again this launch, whatever it was.
     func secret(creating: Bool) -> Data? {
         lock.withLock {
-            if case .unread = state { state = read() }
-            if case .missing = state, creating { state = make() }
+            if case .unread = state { state = store.runsCodeOnDisk() ? read() : .unavailable }
+            if case .missing = state, creating { state = store.runsCodeOnDisk() ? make() : .unavailable }
             if case .found(let secret) = state { return secret }
             return nil
         }
@@ -102,6 +123,7 @@ final class Keychain: @unchecked Sendable {
     private func read() -> State {
         var query = item
         query[kSecReturnData as String] = true
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         let (status, data) = store.copy(query)
         guard status == errSecSuccess, let data, data.count == size else { return .missing }
         return .found(data)
@@ -115,7 +137,9 @@ final class Keychain: @unchecked Sendable {
         var status = store.add(added)
         // One this build can't read (made by another build, access refused, damaged) would
         // otherwise stop every save. Replaced: what it opened is about to be rewritten.
-        if status == errSecDuplicateItem, store.delete(item) == errSecSuccess {
+        var deleted = item
+        deleted[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        if status == errSecDuplicateItem, store.delete(deleted) == errSecSuccess {
             status = store.add(added)
         }
         return status == errSecSuccess ? .found(secret) : .unavailable

@@ -8,9 +8,11 @@ import WebKit
 /// before the next save, which replaces it.
 @MainActor
 enum SessionCookies {
-    /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins.
+    /// Encrypted, so the file alone (a backup, a synced folder) gives no one the sign-ins. Builds
+    /// that may not use the Keychain have their own: theirs, under a key of their own, would
+    /// replace the installed app's.
     static var fileURL: URL {
-        URL.applicationSupportDirectory.appending(path: "Lithium/session-cookies")
+        URL.applicationSupportDirectory.appending(path: Keychain.isAllowed ? "Lithium/session-cookies" : "Lithium/session-cookies-unkeyed")
     }
 
     /// Builds that may not use the user's Keychain (`Keychain.isAllowed`) keep theirs in memory.
@@ -23,8 +25,9 @@ enum SessionCookies {
     private static var knownKey: SymmetricKey?
 
     /// Every store keyed by its space (`Space.mainID` for the default store). Removes the file
-    /// when there is nothing to save, so it never outlives the sign-ins it held.
-    static func save(_ stores: [Space.ID: WKWebsiteDataStore], now: Date = Date()) async {
+    /// when there is nothing to save, so it never outlives the sign-ins it held. Without the key (a
+    /// locked Keychain) the file stays, unless `replacing` after a clear: clearing wins.
+    static func save(_ stores: [Space.ID: WKWebsiteDataStore], replacing: Bool = false, now: Date = Date()) async {
         var saved: [String: [[String: Any]]] = [:]
         for (id, store) in stores {
             // Only what a plist holds: a property WebKit adds later that it can't is left out.
@@ -44,7 +47,7 @@ enum SessionCookies {
             guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined, write(sealed, to: url) else { return nil }
             return key
         }.value
-        if let written { knownKey = written } else { forget() }
+        if let written { knownKey = written } else if replacing { forget() }
     }
 
     /// Made 0600 before it takes the file's place, so others can't read it even for a moment.

@@ -1374,7 +1374,7 @@ final class Browser {
             // Only the stores in use: one a space hasn't opened this session holds no session cookies.
             var stores = spaceStores
             stores[Space.mainID] = .default()
-            await SessionCookies.save(stores)
+            await SessionCookies.save(stores, replacing: replacing)
         }
         cookieSave = save
         await save.value

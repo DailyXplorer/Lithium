@@ -209,13 +209,13 @@ private struct FavoritesDrop: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        let index = slot(at: info.location)
+        let location = info.location
         dropExited(info: info)
         guard let provider = info.itemProviders(for: [.text]).first else { return false }
-        let browser = browser
+        let browser = browser, frames = frames
         _ = provider.loadTransferable(type: String.self) { result in
             let items = (try? result.get()).map { [$0] } ?? []
-            Task { @MainActor in _ = browser.dropOnFavorites(items, at: index) }
+            Task { @MainActor in _ = browser.dropOnFavorites(items, at: location, frames: frames) }
         }
         return true
     }
@@ -236,8 +236,13 @@ extension Browser {
         favoriteSlot(at: location, order: spacePins.map(\.id), frames: frames)
     }
 
+    /// A drop at `location`: on a tile, into its slot; around the tiles, at the end of the grid.
+    func dropOnFavorites(_ items: [String], at location: CGPoint, frames: [Pin.ID: CGRect]) -> Bool {
+        dropOnFavorites(items, at: favoritesDropSlot(at: location, frames: frames))
+    }
+
     /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
-    func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
+    private func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
         endTabDrag()
         guard let item = items.first else { return false }
         withAnimation(.snappy(duration: 0.2)) {

@@ -46,4 +46,16 @@ struct PinDropTargetTests {
         #expect(slot(60, 10, frames: frames) == nil)
         #expect(slot(5, 100, frames: frames) == 2)
     }
+
+    /// A drop target on a favorite tile swallows its right-click, so the tile's context menu (with
+    /// "Unpin") never opens. The menu needs a window on screen, so this guards the tile's source instead.
+    @Test func favoriteTilesHaveNoDropTargetOfTheirOwn() throws {
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Sources/Lithium/Views/SidebarView.swift").standardized
+        let source = try String(contentsOf: file, encoding: .utf8)
+        let tile = try #require(source.components(separatedBy: "private struct PinTile: View {").dropFirst().first?
+            .components(separatedBy: "\nprivate struct ").first)
+        #expect(tile.contains(".contextMenu"))
+        #expect(!tile.contains(".dropDestination"))
+        #expect(!tile.contains(".onDrop"))
+    }
 }

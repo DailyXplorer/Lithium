@@ -49,6 +49,8 @@ struct TitleCleanerTests {
         ("école de commerce", "Classement des écoles de commerce 2026", "École de commerce"),
         ("2026 tax guide", "2026 tax guide for freelancers in France", "2026 tax guide"),
         ("🎉 party ideas", "🎉 party ideas for a birthday at home", "🎉 party ideas"),
+        ("google agenda", "Google Agenda - planning de la semaine", "Google Agenda"),
+        ("fiche révision droit du travail", "fiche révision droit du travail pour le partiel de juin", "Fiche révision droit du travail"),
     ])
     func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
         #expect(TitleCleaner.capitalized(label, like: title) == expected)
@@ -91,7 +93,8 @@ func modelShortensRealTitles() async throws {
                 let shown = TitleCleaner.capitalized(accepted, like: original)
                 let words = { (text: String) in text.split { !$0.isLetter && !$0.isNumber } }
                 let head = words(shown).first ?? ""
-                #expect(shown.first?.isUppercase == true || (head.contains(where: \.isUppercase) && words(original).contains(head)), "\(shown)")
+                let startsLower = shown.first?.isLowercase == true
+                #expect(!startsLower || (head.contains(where: \.isUppercase) && words(original).contains(head)), "\(shown)")
             }
             #expect(accepted?.contains("://") != true)
         case .declined:

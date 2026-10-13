@@ -75,18 +75,24 @@ enum TitleCleaner {
     /// ("nasa" -> "NASA") and for a deliberate lowercase start ("iPhone"). Otherwise the label
     /// gets a capital first letter.
     static func capitalized(_ label: String, like title: String) -> String {
-        let titleWords = wordRuns(title).map(String.init)
+        // A counter ("(3) ") would hide the word that really opens the title.
+        let titleWords = wordRuns(title.replacing(counter, with: "")).map(String.init)
         // In Title Case every word has a capital, so only an inner capital ("iPhone") or an
-        // acronym ("NASA") still marks a proper noun; a title in all caps marks none.
-        let longWords = titleWords.filter { $0.count >= 4 && $0.first?.isLetter == true }
-        let titleCase = longWords.filter { $0.first?.isUppercase == true }.count * 4 > longWords.count * 3
-        let properNouns: [String: String] = !title.contains(where: \.isLowercase) ? [:] : Dictionary(
+        // acronym ("NASA") still marks a proper noun; a title mostly in caps marks none. Short
+        // words ("A", "To") only count when the title has no longer ones.
+        let letterWords = titleWords.filter { $0.first?.isLetter == true }
+        let longWords = letterWords.filter { $0.count >= 4 }
+        let counted = longWords.isEmpty ? letterWords : longWords
+        let titleCase = counted.filter { $0.first?.isUppercase == true }.count * 4 > counted.count * 3
+        let allCaps = counted.filter { $0 == $0.uppercased() }.count * 2 > counted.count
+        let lowercase = Set(titleWords.filter { $0 == $0.lowercased() })
+        let properNouns: [String: String] = allCaps ? [:] : Dictionary(
             titleWords.enumerated()
                 .filter { index, word in
                     word.contains(where: \.isUppercase)
                         && !(titleCase && word.first?.isUppercase == true && !word.dropFirst().contains(where: \.isUppercase))
-                        // "The" opening a title is not a proper noun.
-                        && !(index == 0 && openingWords.contains(word.lowercased()))
+                        // "The" opening the title or a part of it ("Review: The best…") is not a proper noun.
+                        && !(openingWords.contains(word.lowercased()) && (index == 0 || lowercase.contains(word.lowercased())))
                 }
                 .map { ($1.lowercased(), $1) },
             uniquingKeysWith: { first, _ in first }

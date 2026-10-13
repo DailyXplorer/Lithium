@@ -51,6 +51,14 @@ struct TitleCleanerTests {
         ("iphone tips", "Best iPhone Tips And Tricks For Beginners", "iPhone tips"),
         ("privacy policy", "PRIVACY POLICY AND TERMS OF USE FOR THE EXAMPLE SITE", "Privacy policy"),
         ("new moon mission", "BREAKING: NEW MOON MISSION ANNOUNCED", "New moon mission"),
+        ("new moon mission", "NEW MOON MISSION ANNOUNCED | spacenews.com", "New moon mission"),
+        // No word of an all-caps title reads as a name, so an acronym is lost too.
+        ("nasa moon mission", "NASA ANNOUNCES MOON MISSION", "Nasa moon mission"),
+        ("Do it on a Mac", "How To Do It On A PC Or A Mac", "Do it on a Mac"),
+        // A name in a Title Case title relies on the model writing it right.
+        ("google agenda", "Google Agenda: Plan Your Week Better", "Google agenda"),
+        ("guide to the galaxy", "(3) The hitchhiker's guide to a galaxy far away", "Guide to the galaxy"),
+        ("phones for the money", "Review: The best phones for the money in 2026", "Phones for the money"),
     ])
     func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
         #expect(TitleCleaner.capitalized(label, like: title) == expected)

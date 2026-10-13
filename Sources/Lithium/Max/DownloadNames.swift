@@ -76,12 +76,36 @@ enum DownloadNames {
     /// Longer names get cut in the downloads list and in Finder.
     static let maxLength = 80
 
-    /// The model's answer, if it is a short name about what the page and file said.
+    /// The model's answer, if it is a short name about what the page and file said that says more
+    /// than the site's name: not the same words recased, nor one that lost an order number or "n°1".
     static func acceptable(_ answer: String, for source: DownloadSource) -> String? {
         let said = [source.title ?? "", source.filename, source.page?.path() ?? "", source.file?.path() ?? ""].joined(separator: " ")
-        guard let accepted = TitleCleaner.acceptable(answer, original: said, host: source.page?.host() ?? source.file?.host() ?? ""),
+        guard let accepted = TitleCleaner.acceptable(answer, original: said, host: source.page?.host() ?? source.file?.host() ?? "", maxLength: maxLength),
               let name = sanitized(accepted), !isGeneric(name) else { return nil }
+        let original = ((source.filename.removingPercentEncoding ?? source.filename) as NSString).deletingPathExtension
+        guard folded(name) != folded(original) else { return nil }
+        // A vague name's numbers are counters ("IMG_2041"): only a clear name's must survive.
+        guard isGeneric(original) || codes(in: original).isSubset(of: codes(in: name)) else { return nil }
         return name
+    }
+
+    /// Case and separators aside: "quarterly_report" and "Quarterly report" say the same.
+    private static func folded(_ text: String) -> String {
+        text.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// The numbers, dates and codes in a name ("n°1", "2026-28", "INV4821"), less the hashes and
+    /// random tokens a server adds ("iqhqpvt6ri5vna2zlwwgggaqwa", "3f9a2c7e").
+    private static func codes(in text: String) -> Set<String> {
+        let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+        return Set(words.compactMap { word in
+            guard word.contains(where: \.isNumber) else { return nil }
+            let hasLetter = word.contains(where: \.isLetter)
+            if hasLetter, word.count >= 12 || (word.count >= 6 && word.allSatisfy(\.isHexDigit)) { return nil }
+            // "07" and "7" are the same day.
+            let number = word.drop { $0 == "0" }
+            return hasLetter || number.isEmpty ? String(word) : String(number)
+        })
     }
 
     /// `name` with the site's extension. An extension `name` ends in itself goes: Finder hides the

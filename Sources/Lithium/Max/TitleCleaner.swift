@@ -56,12 +56,12 @@ enum TitleCleaner {
 
     /// Guards against page titles written to steer the model: the answer must be a short
     /// single line that still shares a real word with what the page said about itself.
-    static func acceptable(_ candidate: String, original: String, host: String) -> String? {
+    static func acceptable(_ candidate: String, original: String, host: String, maxLength: Int = 40) -> String? {
         let trimmed = candidate
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”«».:"))
             .trimmingCharacters(in: .whitespaces)
-        guard (2...40).contains(trimmed.count),
+        guard (2...maxLength).contains(trimmed.count),
               !isSiteName(trimmed, site: siteName(host)),
               !trimmed.contains(where: \.isNewline),
               !trimmed.lowercased().contains("http"),

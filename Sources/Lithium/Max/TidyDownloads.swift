@@ -1,12 +1,16 @@
 import Foundation
 
-/// Names a download whose file name says nothing, before WebKit writes it: rules first, the
-/// on-device model when it answers within `budget`. Off by default: an unasked rename surprises.
+/// Gives every download a clear name before WebKit writes it: the on-device model when it answers
+/// within `budget`, else the rules for a name that says nothing, else the site's name. Off by
+/// default: an unasked rename surprises.
 @MainActor
 final class TidyDownloads {
     static let preferenceKey = "tidyDownloads"
-    /// The longest a download waits for the model before it starts under the rules' name.
-    static let budget = Duration.seconds(1)
+    /// The longest a download waits for the model before it starts under the rules' or site's
+    /// name. The model answers in well under a second once `prepare` has loaded it.
+    static let budget = Duration.seconds(2)
+    /// Unfinished files from another browser or a resumable transfer: renaming one breaks the resume.
+    private static let partialExtensions: Set<String> = ["download", "crdownload", "part", "partial"]
 
     var isEnabled: Bool {
         didSet { UserDefaults.standard.set(isEnabled, forKey: Self.preferenceKey) }
@@ -24,8 +28,9 @@ final class TidyDownloads {
         self.isEnabled = isEnabled
     }
 
-    func applies(to filename: String) -> Bool {
-        isEnabled && DownloadNames.isGeneric(filename)
+    /// Never for a name the user typed in a save panel.
+    func applies(to filename: String, asksWhere: Bool = false) -> Bool {
+        isEnabled && !asksWhere && !Self.partialExtensions.contains((filename as NSString).pathExtension.lowercased())
     }
 
     /// Loads the model as a download starts: WebKit asks for its name a moment later.
@@ -37,8 +42,8 @@ final class TidyDownloads {
     /// The file name to use instead of the site's, with its extension, or nil to keep it.
     func name(for source: DownloadSource) async -> String? {
         guard applies(to: source.filename) else { return nil }
-        var name = DownloadNames.ruleName(source)
-        if let ask = asker(), source.title?.isEmpty == false,
+        var name = DownloadNames.isGeneric(source.filename) ? DownloadNames.ruleName(source) : nil
+        if let ask = asker(),
            let answer = await Self.first(within: Self.budget, { await ask(source) }),
            let accepted = DownloadNames.acceptable(answer, for: source) {
             name = accepted

@@ -46,10 +46,11 @@ struct NowPlayingTests {
         #expect(media.duration == 200.5)
         #expect(media.rate == 1.5)
         #expect(!media.hasPrevious && media.hasNext)
+        #expect(!media.isLive)
 
-        let live = try #require(NowPlaying.Media(message: ["artwork": "javascript:alert(1)", "duration": NSNull()], at: date))
+        let live = try #require(NowPlaying.Media(message: ["artwork": "javascript:alert(1)", "duration": NSNull(), "live": true], at: date))
         #expect(live.artwork == nil)
-        #expect(live.duration == nil)
+        #expect(live.duration == nil && live.isLive)
         #expect(live.isPaused)
         #expect(live.rate == 1)
         #expect(NowPlaying.Media(message: NSNull(), at: date) == nil)
@@ -122,7 +123,7 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
-        let playing = NowPlaying.Media(message: ["paused": false], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date())
         let paused = NowPlaying.Media(message: ["paused": true], at: Date())
 
         player.receive(playing, from: first)
@@ -148,8 +149,8 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
-        let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
+        let muted = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": false], at: Date())
 
         player.receive(playing, from: first)
         player.receive(muted, from: second)
@@ -164,7 +165,7 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let tab = browser.newTab()
         let player = browser.nowPlaying
-        player.receive(NowPlaying.Media(message: ["paused": false], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date()), from: tab)
         #expect(browser.selectedTab === tab && player.tab === tab)
 
         tab.webViewWebContentProcessDidTerminate(tab.webView)
@@ -175,7 +176,7 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let tab = browser.newTab()
         let player = browser.nowPlaying
-        let playing = NowPlaying.Media(message: ["paused": false], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date())
         let paused = NowPlaying.Media(message: ["paused": true], at: Date())
         let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed"))
 
@@ -196,7 +197,7 @@ struct NowPlayingBrowserTests {
         let player = browser.nowPlaying
         var heard: Bool? = false
         player.isHeard = { _ in heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         let paused = NowPlaying.Media(message: ["paused": true], at: Date())
         let (page, ad) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "ad", isSubframe: true))
 
@@ -236,7 +237,7 @@ struct NowPlayingBrowserTests {
         var paused: [Tab] = []
         player.hush = { tab, _ in paused.append(tab) }
         player.isHeard = { _ in true }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
         player.receive(playing, from: first)
@@ -250,6 +251,38 @@ struct NowPlayingBrowserTests {
         #expect(paused == [first, second], "a tab never pauses itself")
     }
 
+    /// A chat's ping takes no player and pauses nothing: only a sound to listen to does.
+    @Test func pausesNothingForASoundEffect() {
+        let browser = Browser()
+        let (video, chat) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        player.isHeard = { _ in true }
+        let sound = { (message: [String: Any]) in
+            NowPlaying.Media(message: message.merging(["paused": false, "audible": true]) { $1 }, at: Date())
+        }
+
+        player.receive(sound(["duration": 600]), from: video)
+        player.receive(sound(["duration": 1]), from: chat)
+        #expect(player.tab === video && paused.isEmpty, "a ping in a background tab")
+        player.receive(sound([:]), from: chat)
+        #expect(player.tab === video && paused.isEmpty, "nor a sound of unknown length there (Web Audio, media still loading)")
+        browser.select(chat)
+        player.receive(sound(["duration": 1]), from: chat)
+        #expect(player.tab === video && paused.isEmpty, "a ping in the tab on screen")
+        player.receive(sound([:]), from: chat)
+        #expect(player.tab === chat && paused == [video], "a sound of unknown length there does")
+
+        browser.select(video)
+        player.receive(sound(["duration": 600]), from: video)
+        player.receive(sound(["live": true]), from: chat)
+        #expect(player.tab === chat && paused == [video, chat, video], "a live stream does from a background tab too")
+        player.receive(sound(["duration": 6]), from: video)
+        #expect(player.tab === video && paused == [video, chat, video, chat], "as a sound longer than a few seconds")
+    }
+
     /// A call's participants are heard through the page's media: other sound mustn't silence them.
     @Test func pausesNoTabInACall() {
         let browser = Browser()
@@ -259,7 +292,7 @@ struct NowPlayingBrowserTests {
         player.hush = { tab, _ in paused.append(tab) }
         player.isInCall = { $0 === call }
         player.isHeard = { _ in true }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
 
         player.receive(playing, from: call)
         player.receive(playing, from: video)
@@ -277,7 +310,7 @@ struct NowPlayingBrowserTests {
         player.hush = { tab, _ in paused.append(tab) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
 
         player.receive(playing, from: first)
         first.isMuted = true
@@ -299,15 +332,15 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let tab = browser.newTab()
         let player = browser.nowPlaying
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab)
         #expect(player.tab === tab)
 
         tab.isMuted = true
         #expect(player.tab == nil && player.media == nil)
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab)
         #expect(player.tab == nil, "a muted tab doesn't take it back")
         tab.isMuted = false
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab)
         #expect(player.tab === tab, "unmuted, its next report does")
     }
 
@@ -321,7 +354,7 @@ struct NowPlayingBrowserTests {
         player.hush = { tab, _ in paused.append(tab) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
         player.receive(playing, from: first)
@@ -370,7 +403,7 @@ struct NowPlayingBrowserTests {
         player.tell = { _, _, _ in }
         var heard = false
         player.isHeard = { $0 === first ? true : heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
 
         player.receive(playing, from: first)
         player.receive(playing, from: second)
@@ -391,7 +424,7 @@ struct NowPlayingBrowserTests {
         player.tell = { _, command, _ in told.append(command) }
         var heard = false
         player.isHeard = { $0 === first ? true : heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
         player.receive(playing, from: first)
@@ -412,7 +445,7 @@ struct NowPlayingBrowserTests {
         var paused: [Tab] = []
         player.hush = { tab, _ in paused.append(tab) }
         player.isHeard = { $0 !== second }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
 
         player.receive(playing, from: first)
@@ -431,7 +464,7 @@ struct NowPlayingBrowserTests {
         player.tell = { _, command, _ in told.append(command) }
         var heard = false
         player.isHeard = { _ in heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Song"], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true, "title": "Song"], at: Date())
         let paused = NowPlaying.Media(message: ["paused": true], at: Date())
         let embed = NowPlaying.Frame(id: "embed", isSubframe: true)
 
@@ -473,7 +506,7 @@ struct NowPlayingBrowserTests {
         }
         var heard = true
         player.isHeard = { _ in heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
 
         player.hearingChanged(tab)
         #expect(told == ["heard"])
@@ -507,7 +540,7 @@ struct NowPlayingBrowserTests {
         player.tell = { _, _, _ in }
         var heard = false
         player.isHeard = { _ in heard }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Song"], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true, "title": "Song"], at: Date())
         let embed = NowPlaying.Frame(id: "embed", isSubframe: true)
 
         player.receive(playing, from: tab, frame: embed)
@@ -534,8 +567,8 @@ struct NowPlayingBrowserTests {
         var paused: [Tab] = []
         player.hush = { tab, _ in paused.append(tab) }
         player.isHeard = { _ in false }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
-        let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
+        let muted = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": false], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
         let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
 
@@ -584,7 +617,7 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
-        let playing = NowPlaying.Media(message: ["paused": false], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date())
         let restored = NowPlaying.Media(message: ["paused": true, "restored": true], at: Date())
 
         player.receive(restored, from: first)
@@ -630,7 +663,7 @@ struct NowPlayingBrowserTests {
         let browser = Browser()
         let tab = browser.newTab()
         let player = browser.nowPlaying
-        let playing = { (date: Date) in NowPlaying.Media(message: ["paused": false], at: date) }
+        let playing = { (date: Date) in NowPlaying.Media(message: ["paused": false, "duration": 60], at: date) }
 
         player.receive(playing(Date()), from: tab)
         player.togglePlay()
@@ -664,7 +697,7 @@ struct NowPlayingBrowserTests {
         let player = browser.nowPlaying
         #expect(player.shownTab(besides: nil) == nil)
 
-        player.receive(NowPlaying.Media(message: ["paused": false], at: Date()), from: first)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date()), from: first)
         #expect(player.shownTab(besides: nil) === first)
         #expect(player.shownTab(besides: first) == nil, "the floating player already shows it")
         #expect(player.tab === first, "it keeps the player for when the video goes back")
@@ -1014,10 +1047,10 @@ struct NowPlayingPageTests {
         withExtendedLifetime(hearing) {}
     }
 
-    /// Two seconds of silence as a WAV blob's address, made in the page.
+    /// Two seconds of silence, or as many as given, as a WAV blob's address, made in the page.
     private static let wav = """
-        function wav() {
-          const rate = 8000, size = rate * 2 * 2, view = new DataView(new ArrayBuffer(44 + size));
+        function wav(seconds = 2) {
+          const rate = 8000, size = rate * 2 * seconds, view = new DataView(new ArrayBuffer(44 + size));
           const text = (at, string) => [...string].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
           text(0, 'RIFF'); view.setUint32(4, 36 + size, true); text(8, 'WAVEfmt ');
           view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
@@ -1281,8 +1314,8 @@ struct NowPlayingPageTests {
         player.hush = { _, frames in hushed = frames }
         player.isHeard = { _ in true }
         player.receive(["frame": "audio", "audio": true], from: first, frameInfo: audio)
-        player.receive(["frame": "played", "media": ["paused": false, "audible": true]], from: first, frameInfo: played)
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: second)
+        player.receive(["frame": "played", "media": ["paused": false, "duration": 60, "audible": true]], from: first, frameInfo: played)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: second)
         #expect(hushed.count == 2 && hushed.contains { $0 === audio } && hushed.contains { $0 === played },
                 "the frame that played and the one with Web Audio")
 
@@ -1324,7 +1357,7 @@ struct NowPlayingPageTests {
         var hushed: [WKFrameInfo] = []
         player.hush = { _, frames in hushed = frames }
         player.isHeard = { _ in true }
-        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
         player.receive(["frame": "audio", "audio": true], from: first, frameInfo: audio)
         player.receive(playing, from: first)
         player.receive(nil, from: first)
@@ -1356,7 +1389,7 @@ struct NowPlayingPageTests {
         player.tell = { _, command, frame in told.append((command, frame)) }
         player.isHeard = { _ in true }
         player.receive(["frame": "audio", "audio": true], from: tab, frameInfo: audio)
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab)
         player.receive(NowPlaying.Media(message: ["paused": true, "audible": true], at: Date()), from: tab)
         player.togglePlay()
         #expect(told.map(\.command) == ["play", "release"])
@@ -1394,7 +1427,7 @@ struct NowPlayingPageTests {
         player.tell = { _, command, frame in told.append((command, frame)) }
         player.isHeard = { _ in true }
         let played = NowPlaying.Frame(id: "played", info: audio, isSubframe: true)
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab, frame: played)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab, frame: played)
         player.receive(NowPlaying.Media(message: ["paused": true, "audible": true], at: Date()), from: tab, frame: played)
         player.togglePlay()
         #expect(told.map(\.command) == ["play", "release"] && told.last?.frame == nil, "the page too")
@@ -1450,7 +1483,7 @@ struct NowPlayingPageTests {
         var told: [WKFrameInfo?] = []
         player.tell = { _, _, frame in told.append(frame) }
         player.isHeard = { _ in true }
-        let playing: [String: Any] = ["paused": false, "audible": true]
+        let playing: [String: Any] = ["paused": false, "duration": 60, "audible": true]
         player.receive(["media": playing], from: tab, frameInfo: main)
         player.receive(["frame": "page", "media": playing], from: gone, frameInfo: main)
         #expect(player.tab == nil)
@@ -1560,8 +1593,8 @@ struct NowPlayingPageTests {
         player.hush = { _, frames in hushed = frames }
         player.tell = { _, command, frame in told.append((command, frame)) }
         player.isHeard = { _ in true }
-        player.receive(["frame": "played", "media": ["paused": false, "audible": true]], from: first, frameInfo: played)
-        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: second)
+        player.receive(["frame": "played", "media": ["paused": false, "duration": 60, "audible": true]], from: first, frameInfo: played)
+        player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: second)
         #expect(hushed.count == 1 && hushed.first === played)
 
         await NowPlaying.hush(page.webView, frames: hushed)
@@ -1618,6 +1651,37 @@ struct NowPlayingPageTests {
         #expect(page.last?.isPaused == false && page.last?.isAudible == true)
     }
 
+    /// A chat in a background tab pings (WhatsApp's `new Audio`): the song plays on and keeps the
+    /// player. A song the chat plays afterwards still pauses it.
+    @Test func playsOnThroughANotificationSound() async throws {
+        let music = try await PlayingPage("<script>\(Self.wav)</script><audio></audio><script>document.querySelector('audio').src = wav(30)</script>")
+        let chat = try await PlayingPage("<script>\(Self.wav)\nwindow.ping = new Audio(wav(1)); window.song = new Audio(wav(30));</script>")
+        defer { music.close(); chat.close() }
+        let browser = Browser()
+        let (musicTab, chatTab) = (browser.newTab(), browser.newTab())
+        defer { browser.close(musicTab); browser.close(chatTab) }
+        browser.select(musicTab)
+        let player = browser.nowPlaying
+        player.isHeard = { _ in true }
+        player.hush = { tab, frames in
+            if tab === musicTab { Task { await NowPlaying.hush(music.webView, frames: frames) } }
+        }
+        music.forward = { player.receive($0, from: musicTab, frameInfo: $1) }
+        chat.forward = { player.receive($0, from: chatTab, frameInfo: $1) }
+        let isMusicPlaying = { try await music.run("return !document.querySelector('audio').paused") as? Bool == true }
+
+        try await music.play("document.querySelector('audio')")
+        #expect(await waitUntil { player.tab === musicTab && player.media?.isPaused == false })
+        try await chat.play("ping")
+        #expect(await waitUntil { chat.messages.contains { $0?.duration == 1 } && chat.last?.isPaused == true }, "the ping played to its end")
+        #expect(player.tab === musicTab && player.media?.isPaused == false)
+        #expect(try await isMusicPlaying())
+
+        try await chat.play("song")
+        #expect(await waitUntil { player.tab === chatTab })
+        #expect(await waitUntil { try await isMusicPlaying() == false })
+    }
+
     private func waitUntil(_ seconds: Double = 5, _ condition: () async throws -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
@@ -1647,6 +1711,8 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     private let window: NSWindow
 
     var last: NowPlaying.Media? { messages.last ?? nil }
+    /// Gets each message as the app's channel would.
+    var forward: ((Any, WKFrameInfo) -> Void)?
 
     /// `before` runs in the page ahead of the script. Muted, the page's media play unmuted yet are
     /// never heard; WebKit's pause then leaves its Web Audio running, so the tests of that are left
@@ -1690,6 +1756,7 @@ private final class PlayingPage: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        forward?(message.body, message.frameInfo)
         if (message.body as? [String: Any])?["audio"] != nil {
             audioFrame = message.frameInfo
             return

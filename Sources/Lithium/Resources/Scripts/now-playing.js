@@ -66,6 +66,7 @@
       audible: media ? isAudible(media) : true,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
+      live: duration === Infinity,
       rate: media?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),

@@ -226,6 +226,21 @@
     schedule();
   });
 
+  // Paused for another tab's sound: WebKit then suspends the page's Web Audio, which a player may
+  // resume on its own, unaware why it stopped. Kept suspended until the page is played again.
+  let held = false;
+  const listen = addEventListener.bind(globalThis);
+  const unlisten = removeEventListener.bind(globalThis);
+  const release = (event) => { if (event.isTrusted) hold(false); };
+  const hold = (on) => {
+    held = on;
+    for (const type of ['pointerdown', 'keydown']) (on ? listen : unlisten)(type, release, true);
+  };
+  for (const proto of new Set([globalThis.AudioContext?.prototype, globalThis.webkitAudioContext?.prototype])) {
+    const resume = proto?.resume;
+    if (resume) proto.resume = function () { return held ? Promise.resolve() : resume.apply(this, arguments); };
+  }
+
   const call = (action) => {
     const handler = handlers[action];
     if (!handler) return false;
@@ -239,13 +254,19 @@
     value: (command) => {
       switch (command) {
         // Asked of the page first: a pause it hasn't made yet would otherwise win over the play.
-        case 'play': if (!call('play')) active?.play().catch(() => {}); break;
+        case 'play': hold(false); if (!call('play')) active?.play().catch(() => {}); break;
         case 'pause': if (!call('pause')) active?.pause(); break;
+        case 'hush': hold(true); if (!call('pause')) active?.pause(); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
         // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
+          // Heard while none of its media plays: the sound comes from elsewhere (Web Audio).
+          if (command === 'heard' && !isPlaying(active)) {
+            hadMedia = false;
+            if (active) changed(active, null);
+          }
           anchor();
           schedule();
           break;

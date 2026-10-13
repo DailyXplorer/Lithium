@@ -234,7 +234,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
@@ -256,7 +256,7 @@ struct NowPlayingBrowserTests {
         let (call, video, other) = (browser.newTab(), browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         player.isInCall = { $0 === call }
         player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -274,7 +274,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -318,7 +318,7 @@ struct NowPlayingBrowserTests {
         let (first, second, third) = (browser.newTab(), browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -341,7 +341,7 @@ struct NowPlayingBrowserTests {
         player.receive(stopped, from: second)
         heard = true
         player.receive(playing, from: second)
-        #expect(paused.isEmpty, "paused before WebKit heard it, it pauses nothing later")
+        #expect(paused == [first], "a pause before WebKit heard it (an ad, a new source) keeps the claim")
 
         player.receive(playing, from: first)
         paused = []
@@ -366,7 +366,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         player.tell = { _, _, _ in }
         var heard = false
         player.isHeard = { $0 === first ? true : heard }
@@ -490,7 +490,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.hush = { paused.append($0) }
+        player.hush = { tab, _ in paused.append(tab) }
         player.isHeard = { _ in false }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
         let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
@@ -924,7 +924,9 @@ struct NowPlayingPageTests {
             <script>
             const context = new AudioContext();
             const tone = context.createOscillator();
-            tone.connect(context.destination);
+            const mute = context.createGain();
+            mute.gain.value = 0;
+            tone.connect(mute).connect(context.destination);
             tone.start();
             navigator.mediaSession.metadata = new MediaMetadata({ title: 'Synth', artist: 'Tone' });
             </script>
@@ -1084,6 +1086,71 @@ struct NowPlayingPageTests {
         #expect(try await state() == "suspended")
         await NowPlaying.run("play", in: page.webView)
         #expect(await waitUntil { try await state() == "running" }, "played again")
+    }
+
+    /// A Web Audio player with no pause key of its own, which resumes whenever it is suspended: held
+    /// suspended until played again. Silent.
+    @Test func holdsTheWebAudioOfAPageWithoutAPauseKey() async throws {
+        let page = try await PlayingPage("""
+            <script>
+            window.context = new AudioContext();
+            const silence = context.createConstantSource();
+            silence.offset.value = 0;
+            silence.connect(context.destination);
+            silence.start();
+            context.onstatechange = () => { if (context.state === 'suspended') context.resume(); };
+            </script>
+            """)
+        defer { page.close() }
+        let state = { () async throws -> String? in try await page.run("return context.state") as? String }
+        #expect(await waitUntil { try await state() == "running" })
+
+        await NowPlaying.hush(page.webView)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await state() == "suspended")
+        await NowPlaying.run("play", in: page.webView)
+        try await page.run("context.resume()")
+        #expect(await waitUntil { try await state() == "running" }, "played again")
+    }
+
+    /// The same player in an iframe: the frame that played is held too, not only the page.
+    @Test func holdsTheWebAudioOfTheFrameThatPlayed() async throws {
+        let page = try await PlayingPage("""
+            <iframe srcdoc="<script>
+              \(Self.wav)
+              window.context = new AudioContext();
+              const silence = context.createConstantSource();
+              silence.offset.value = 0;
+              silence.connect(context.destination);
+              silence.start();
+              context.onstatechange = () => { if (context.state === 'suspended') context.resume(); };
+            </script>"></iframe>
+            """)
+        defer { page.close() }
+        let embedded = "document.querySelector('iframe').contentWindow"
+        let state = { () async throws -> String? in try await page.run("return \(embedded).context?.state") as? String }
+        #expect(await waitUntil { try await state() == "running" })
+        try await page.play("Object.assign(new (\(embedded).Audio)(\(embedded).wav()), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let frame = try #require(page.lastFrame)
+        #expect(!frame.isMainFrame)
+
+        await NowPlaying.hush(page.webView, frame: frame)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await state() == "suspended")
+    }
+
+    /// A page whose own media paused, then heard through Web Audio: it plays, whatever it played before.
+    @Test func reportsWebAudioAfterAPausedElement() async throws {
+        let page = try await PlayingPage("<script>\(Self.wav)</script>")
+        defer { page.close() }
+        try await page.play("window.sound = Object.assign(new Audio(wav()), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        try await page.run("sound.pause()")
+        #expect(await waitUntil { page.last?.isPaused == true })
+
+        await NowPlaying.run("heard", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == false })
     }
 
     /// A detached element played through Web Audio, as a player of its own stream may: both stop.

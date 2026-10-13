@@ -110,6 +110,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// The tab heard before, paused once WebKit hears the new one too: a page's word alone silences
     /// no other tab. WebKit may hear it only a report later, or after the last (`hearingChanged`).
     @ObservationIgnored private weak var unpaused: Tab?
+    /// The frame that played in `unpaused`, whose Web Audio the main frame's script can't hold.
+    @ObservationIgnored private var unpausedFrame: WKFrameInfo?
     /// An iframe's last word from before WebKit heard its tab, one per tab: WebKit often hears a
     /// sound only after the first report, which would otherwise be lost.
     @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
@@ -126,10 +128,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
         Task { await webView.pauseAllMediaPlayback() }
     }
-    /// Silences the tab heard before another (`hush(_:)`); replaced in tests.
-    @ObservationIgnored var hush: (Tab) -> Void = { tab in
+    /// Silences the tab heard before another (`hush(_:frame:)`); replaced in tests.
+    @ObservationIgnored var hush: (Tab, WKFrameInfo?) -> Void = { tab, frame in
         guard !tab.isAsleep, let webView = tab.loadedWebView else { return }
-        Task { await NowPlaying.hush(webView) }
+        Task { await NowPlaying.hush(webView, frame: frame) }
     }
     /// Replaced in tests.
     @ObservationIgnored var tell: (Tab, String, WKFrameInfo?) -> Void = { tab, command, frame in
@@ -181,14 +183,16 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
                 if let previous = self.tab, previous !== tab, !previous.isMuted,
                    let heard = self.media, !heard.isPaused, heard.isAudible {
                     unpaused = previous
+                    unpausedFrame = self.frame?.info
                 }
             }
             if let previous = unpaused, !media.isPaused, media.isAudible {
                 if isHeard(tab) != false {
                     unpaused = nil
-                    if !isInCall(previous), !previous.isMuted { hush(previous) }
+                    if !isInCall(previous), !previous.isMuted { hush(previous, unpausedFrame) }
                 }
-            } else {
+            } else if isHeard(tab) != false {
+                // A pause before WebKit hears the tab (a source swapped, an ad) keeps the claim.
                 unpaused = nil
             }
             self.tab = tab
@@ -281,12 +285,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
 
     /// The page pauses with its own pause key first, then WebKit pauses all its media and suspends its
     /// Web Audio: a page paused behind its back may start its sound again, unaware why it stopped.
-    static func hush(_ webView: WKWebView) async {
-        await run("pause", in: webView)
+    /// The page, and the frame that played, keep their Web Audio suspended until played again.
+    static func hush(_ webView: WKWebView, frame: WKFrameInfo? = nil) async {
+        await run("hush", in: webView)
+        if let frame { await run("hush", in: webView, frame: frame) }
         await webView.pauseAllMediaPlayback()
     }
 
-    /// "play", "pause", "previous" or "next", answered by the script of the frame that plays;
+    /// "play", "pause", "hush", "previous" or "next", answered by the script of the frame that plays;
     /// "heard" or "silent", what WebKit hears of the page.
     static func run(_ command: String, in webView: WKWebView, frame: WKFrameInfo? = nil) async {
         _ = try? await webView.callAsyncJavaScript(

@@ -210,6 +210,26 @@ struct VideoPopoutTests {
         #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls as before")
     }
 
+    /// Put back, a page that scrolls smoothly is where it was at once, not animated there. A page
+    /// that moved on to other content while the video was out (autoplay of the next one) stays at its top.
+    @Test func putBackScrollsOnlyTheSamePageAndAtOnce() async throws {
+        let (webView, window) = try await playingPage(Self.overflowingPage.replacingOccurrences(of: "<style>", with: "<style>html { scroll-behavior: smooth }"))
+        defer { window.orderOut(nil) }
+        webView.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
+        _ = try await webView.callAsyncJavaScript("scrollTo({ left: 40, top: 500, behavior: 'instant' })", contentWorld: .page)
+        let scroll = "return [scrollX, scrollY].join(' ')"
+
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await VideoPopout.run("hide", in: webView)
+        #expect(try await webView.callAsyncJavaScript(scroll, contentWorld: .page) as? String == "40 500", "the page is back where it was at once")
+
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await webView.callAsyncJavaScript("history.pushState(null, '', '?next')", contentWorld: .page)
+        _ = try await VideoPopout.run("hide", in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await webView.callAsyncJavaScript(scroll, contentWorld: .page) as? String == "0 0", "the next page stays at its top")
+    }
+
     private static let overflowingPage = """
         <!doctype html>
         <style>::-webkit-scrollbar { width: 16px; height: 16px; background: rgb(0, 255, 0); }</style>

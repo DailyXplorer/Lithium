@@ -61,8 +61,9 @@ const show = () => {
   store.video = video;
   video.setAttribute(mark, '');
   store.style ??= Object.assign(document.createElement('style'), { textContent: css });
-  // A page that fits the player can't stay scrolled: `hide` scrolls it back.
-  if (!store.style.isConnected) store.scroll = [scrollX, scrollY];
+  // A page that fits the player can't stay scrolled: `hide` scrolls it back, unless the page
+  // has moved on to other content meanwhile (autoplay of the next video).
+  if (!store.style.isConnected) store.scroll = { url: location.href, left: scrollX, top: scrollY };
   (document.head || document.documentElement).append(store.style);
   raise(video);
   keepRaised(video);
@@ -125,7 +126,9 @@ const hide = () => {
   store.frame = 0;
   if (store.style?.isConnected) {
     store.style.remove();
-    scrollTo(...store.scroll);
+    // Instant even on a page that scrolls smoothly: the page is put back as it was, not animated.
+    const { url, left, top } = store.scroll;
+    if (url === location.href) scrollTo({ left, top, behavior: 'instant' });
   }
   if (!video) return;
   if (video.matches(':popover-open')) video.hidePopover();

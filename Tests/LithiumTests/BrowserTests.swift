@@ -1427,7 +1427,9 @@ struct BrowserTests {
     /// off the main thread, not at every change; quitting writes what waits at once.
     @Test func titleChangesSaveTheSessionOnceAMomentLater() async throws {
         let browser = Browser()
-        browser.titleSaveDelay = .zero
+        // Longer than the 20 changes take on a busy machine: without it only `sessionSaveDelay`
+        // groups them, one write a second for as long as they last.
+        browser.titleSaveDelay = .seconds(3)
         let tab = browser.newTab(url: URL(string: "data:text/html,<title>Start</title>start")!)
         defer { browser.close(tab) }
         #expect(await waitUntil(120) { loaded(tab) && tab.title == "Start" })

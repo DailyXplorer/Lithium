@@ -31,6 +31,10 @@
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
+  const hasLength = (media) => media.readyState >= HTMLMediaElement.HAVE_METADATA;
+  // A sound effect (a chat's ping), as the app's `NowPlaying.brief` says, or media whose length is not
+  // known yet: it doesn't replace the media worth listening to, nor would Play then replay the ping.
+  const isBrief = (media) => !hasLength(media) || media.duration <= 5;
   // Without `hadMedia`, the page's sound is not its media's, though Play still plays them.
   const isRunning = () => hadMedia ? isPlaying(active) : sound === 'heard';
 
@@ -67,6 +71,7 @@
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
       live: duration === Infinity,
+      loading: !!media && !hasLength(media),
       rate: media?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
@@ -154,7 +159,7 @@
     if (media.isConnected) attached.add(media);
     let next = active;
     if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
-    else if (isPlaying(media) && isAudible(media)) {
+    else if (isPlaying(media) && isAudible(media) && (!active || media === active || isBrief(active) || !isBrief(media))) {
       next = media;
       hadMedia = true;
     }

@@ -234,7 +234,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
         let stopped = NowPlaying.Media(message: ["paused": true], at: Date())
@@ -256,7 +256,7 @@ struct NowPlayingBrowserTests {
         let (call, video, other) = (browser.newTab(), browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         player.isInCall = { $0 === call }
         player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -274,7 +274,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -318,7 +318,7 @@ struct NowPlayingBrowserTests {
         let (first, second, third) = (browser.newTab(), browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         var heard: Bool? = true
         player.isHeard = { $0 === first ? true : heard }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
@@ -366,7 +366,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         player.tell = { _, _, _ in }
         var heard = false
         player.isHeard = { $0 === first ? true : heard }
@@ -490,7 +490,7 @@ struct NowPlayingBrowserTests {
         let (first, second) = (browser.newTab(), browser.newTab())
         let player = browser.nowPlaying
         var paused: [Tab] = []
-        player.pause = { paused.append($0) }
+        player.hush = { paused.append($0) }
         player.isHeard = { _ in false }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
         let muted = NowPlaying.Media(message: ["paused": false, "audible": false], at: Date())
@@ -1043,11 +1043,83 @@ struct NowPlayingPageTests {
         try await page.play(embedded)
         #expect(await waitUntil { page.last?.isPaused == false })
 
-        await page.webView.pauseAllMediaPlayback()
+        await NowPlaying.hush(page.webView)
         #expect(await waitUntil {
             try await page.run("return document.querySelector('video').paused && \(embedded).paused") as? Bool == true
         })
         #expect(await waitUntil { page.last?.isPaused == true })
+    }
+
+    /// A Web Audio player (Deezer has no media element) that starts again when WebKit suspends it
+    /// behind its back: another tab's sound pauses it with its own pause key first, and its own
+    /// play brings it back. Silent.
+    @Test func hushesAPageThatWouldResume() async throws {
+        let page = try await PlayingPage("""
+            <script>
+            window.context = new AudioContext();
+            window.changes = [];
+            const silence = context.createConstantSource();
+            silence.offset.value = 0;
+            silence.connect(context.destination);
+            silence.start();
+            let playing = true;
+            context.onstatechange = () => {
+              changes.push(context.state);
+              if (playing && context.state === 'suspended') context.resume();
+            };
+            navigator.mediaSession.setActionHandler('pause', () => { playing = false; context.suspend(); });
+            navigator.mediaSession.setActionHandler('play', () => { playing = true; context.resume(); });
+            </script>
+            """)
+        defer { page.close() }
+        let state = { () async throws -> String? in try await page.run("return context.state") as? String }
+        #expect(await waitUntil { try await state() == "running" })
+
+        await page.webView.pauseAllMediaPlayback()
+        #expect(await waitUntil { try await page.run("return changes.join()") as? String == "running,suspended,running" },
+                "WebKit's pause alone: the page starts again")
+
+        await NowPlaying.hush(page.webView)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await state() == "suspended")
+        await NowPlaying.run("play", in: page.webView)
+        #expect(await waitUntil { try await state() == "running" }, "played again")
+    }
+
+    /// A detached element played through Web Audio, as a player of its own stream may: both stop.
+    @Test func hushesMediaPlayedThroughWebAudio() async throws {
+        let page = try await PlayingPage("<script>\(Self.wav)</script>")
+        defer { page.close() }
+        try await page.run("""
+            window.context = new AudioContext();
+            window.sound = Object.assign(new Audio(wav()), { loop: true, muted: true });
+            context.createMediaElementSource(sound).connect(context.destination);
+            """)
+        try await page.play("window.sound")
+        #expect(await waitUntil { try await page.run("return context.state") as? String == "running" })
+
+        await NowPlaying.hush(page.webView)
+        #expect(await waitUntil { try await page.run("return sound.paused && context.state === 'suspended'") as? Bool == true })
+    }
+
+    /// YouTube keeps a muted preview beside its player: the preview never speaks for the page.
+    @Test func keepsThePlayingVideoOverAMutedPreview() async throws {
+        let page = try await PlayingPage("""
+            <script>\(Self.wav)</script>
+            <video id="player" loop playsinline></video>
+            <video id="preview" muted loop playsinline></video>
+            <script>for (const video of document.querySelectorAll('video')) video.src = wav();</script>
+            """)
+        defer { page.close() }
+        try await page.play("document.querySelector('#player')")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.isAudible == true })
+
+        let count = page.messages.count
+        try await page.play("document.querySelector('#preview')")
+        try await page.run("document.querySelector('#preview').pause()")
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(page.messages[count...].allSatisfy { $0?.isPaused == false && $0?.isAudible == true })
+        #expect(page.last?.isPaused == false && page.last?.isAudible == true)
     }
 
     private func waitUntil(_ seconds: Double = 5, _ condition: () async throws -> Bool) async -> Bool {

@@ -70,8 +70,43 @@ enum TitleCleaner {
         return words(trimmed).isDisjoint(with: source) ? nil : trimmed
     }
 
+    /// The model sometimes answers all lowercase; the title is the source of truth for proper nouns
+    /// ("nasa" -> "NASA") and for a deliberate lowercase start ("iPhone"). Otherwise the label
+    /// gets a capital first letter.
+    static func capitalized(_ label: String, like title: String) -> String {
+        let titleWords = wordRuns(title).map(String.init)
+        // "The" opening a title that also writes "the" is not a proper noun.
+        let lowercase = Set(titleWords.filter { $0 == $0.lowercased() })
+        let properNouns = Dictionary(
+            titleWords
+                .filter { $0.contains(where: \.isUppercase) && !lowercase.contains($0.lowercased()) }
+                .map { ($0.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var result = ""
+        var rest = label.startIndex
+        for word in wordRuns(label) {
+            result += label[rest..<word.startIndex]
+            result += properNouns[word.lowercased()] ?? String(word)
+            rest = word.endIndex
+        }
+        result += label[rest...]
+
+        guard let first = result.first, first.isLowercase else { return result }
+        if let firstWord = wordRuns(result).first, firstWord.contains(where: \.isUppercase), titleWords.contains(String(firstWord)) {
+            return result
+        }
+        let locale = language(of: title).map { Locale(identifier: $0.minimalIdentifier) } ?? .current
+        return String(first).capitalized(with: locale) + result.dropFirst()
+    }
+
     private static func words(_ text: String) -> Set<String> {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-        return Set(folded.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
+        return Set(wordRuns(folded).map(String.init).filter { $0.count >= 3 })
+    }
+
+    /// Maximal runs of letters and digits, as slices of `text` so their indices point into it.
+    private static func wordRuns(_ text: String) -> [Substring] {
+        text.split { !$0.isLetter && !$0.isNumber }
     }
 }

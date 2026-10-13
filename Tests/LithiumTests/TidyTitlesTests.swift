@@ -33,6 +33,22 @@ struct TitleCleanerTests {
         #expect(TitleCleaner.acceptable(String(repeating: "word ", count: 12), original: "word", host: "example.com") == nil)
     }
 
+    @Test(arguments: [
+        ("fiche révision droit du travail", "fiche révision droit du travail pour le partiel de juin", "Fiche révision droit du travail"),
+        ("iPhone 17 review", "Apple iPhone 17 review: the best iPhone yet", "iPhone 17 review"),
+        ("pull request #223 lithium", "Add tidy titles pull request #223 to Lithium", "Pull request #223 Lithium"),
+        ("minecraft dungeons ii", "Minecraft Dungeons II - Official Trailer and release date", "Minecraft Dungeons II"),
+        ("école de commerce", "école de commerce à Paris : classement 2026", "École de commerce"),
+        ("2026 tax guide", "2026 tax guide for freelancers in France", "2026 tax guide"),
+        ("🎉 party ideas", "🎉 party ideas for a birthday at home", "🎉 party ideas"),
+        ("nasa moon mission", "NASA announces a new moon mission for 2027", "NASA moon mission"),
+        ("guide to the galaxy", "The hitchhiker's guide to the galaxy", "Guide to the galaxy"),
+        ("google agenda", "Google Agenda - planning de la semaine", "Google Agenda"),
+    ])
+    func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
+        #expect(TitleCleaner.capitalized(label, like: title) == expected)
+    }
+
     @Test func detectsTheTitleLanguage() {
         #expect(TitleCleaner.language(of: "Actualités et infos en France et dans le monde")?.languageCode == .french)
         #expect(TitleCleaner.language(of: "Home of the WebKit project, the browser engine used by Safari")?.languageCode == .english)
@@ -101,7 +117,8 @@ struct TidyTitlesTabsTests {
         titles.shortener = { cleaned, _ in
             model.asked.append(cleaned)
             while !model.answers { try? await Task.sleep(for: .milliseconds(20)) }
-            return .title("Swift concurrency")
+            // The model can answer all lowercase; the title's capitals come back.
+            return .title("swift concurrency")
         }
         // Answers whatever happens, so the stand-in never outlives the test.
         defer { model.answers = true }

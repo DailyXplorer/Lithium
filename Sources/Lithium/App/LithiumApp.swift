@@ -6,6 +6,7 @@ struct LithiumApp: App {
     /// SwiftUI may build the App value more than once; the browser must exist exactly once.
     @MainActor static let sharedBrowser: Browser = {
         Theme.registerFonts()
+        Keychain.atLaunch()
         return Browser()
     }()
 

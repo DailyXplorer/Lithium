@@ -17,7 +17,7 @@ enum ExternalApps {
         || runsTests
         || !Bundle.main.bundlePath.hasSuffix(".app")
 
-    static let runsTests: Bool = {
+    nonisolated static let runsTests: Bool = {
         if NSClassFromString("XCTestCase") != nil { return true }
         let name = ProcessInfo.processInfo.processName.lowercased()
         if name.contains("xctest") || name.contains("swiftpm-testing-helper") || name.hasSuffix("packagetests") { return true }
@@ -27,7 +27,7 @@ enum ExternalApps {
     }()
 
     /// Whole names only: every AppKit app loads the system's RecapPerformanceTesting.framework.
-    static func isTestImage(_ path: String) -> Bool {
+    nonisolated static func isTestImage(_ path: String) -> Bool {
         let components = path.split(separator: "/")
         return components.contains { $0 == "XCTest.framework" || $0 == "Testing.framework" || $0.hasSuffix(".xctest") }
             || components.last?.hasPrefix("lib_Testing") == true

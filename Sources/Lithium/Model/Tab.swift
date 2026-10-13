@@ -316,8 +316,13 @@ final class Tab: NSObject, Identifiable {
         privateStore == nil ? browser?.spaceStore(for: spaceID) : nil
     }
 
-    init(browser: Browser, configuration: WKWebViewConfiguration?, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID) {
+    /// `Keychain.isAllowed`, given to tests as either answer.
+    nonisolated let keychainAllowed: Bool
+
+    init(browser: Browser, configuration: WKWebViewConfiguration?, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID,
+         keychainAllowed: Bool = Keychain.isAllowed) {
         self.browser = browser
+        self.keychainAllowed = keychainAllowed
         self.configuration = configuration
         self.privateStore = privateStore
         spaceID = space
@@ -1671,6 +1676,25 @@ extension Tab: WKUIDelegate {
         decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void
     ) {
         Task { decisionHandler(await askPermission([.location], origin: origin) ? .grant : .deny) }
+    }
+
+    /// Private WebKit (`WKUIDelegatePrivate`), called only on a delegate that responds to it: the
+    /// key that wraps the CryptoKeys a site stores. Without it WebKit reads its own login Keychain
+    /// item. Only builds that may not use the Keychain answer (`answers`); called anyway, the
+    /// installed app hands no key rather than one its stored CryptoKeys weren't wrapped with.
+    @objc(_webCryptoMasterKeyForWebView:completionHandler:)
+    func webCryptoMasterKey(_ webView: WKWebView, completionHandler: @escaping @MainActor (Data?) -> Void) {
+        completionHandler(keychainAllowed ? nil : Keychain.webCryptoKey)
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        Self.answers(selector, keychainAllowed: keychainAllowed) && super.responds(to: selector)
+    }
+
+    /// The installed app leaves the key to WebKit, which keeps using its own item as it always has:
+    /// a new key would leave every CryptoKey sites already stored unreadable.
+    nonisolated static func answers(_ selector: Selector?, keychainAllowed: Bool) -> Bool {
+        selector != #selector(webCryptoMasterKey(_:completionHandler:)) || !keychainAllowed
     }
 
     private func askPermission(_ kinds: [PermissionKind], origin: WKSecurityOrigin) async -> Bool {

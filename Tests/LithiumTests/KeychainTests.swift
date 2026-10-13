@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import Testing
+import WebKit
 @testable import Lithium
 
 /// Every Keychain here is a fake: nothing reaches the user's login Keychain.
@@ -54,11 +55,15 @@ import Testing
         #expect(Tab.answers(other, keychainAllowed: false))
     }
 
-    /// Other builds get a key of WebKit's size that stays the same for the launch.
-    @Test func otherBuildsHandWebKitALaunchKey() {
-        #expect(Keychain.launchWebCryptoKey.count == 16)
-        #expect(Keychain.launchWebCryptoKey == Keychain.launchWebCryptoKey)
-        #expect(Keychain.launchWebCryptoKey != Data(count: 16))
+    /// A throwaway profile gets a key of WebKit's size that stays the same for the launch; a debug
+    /// build on the owner's profile gets none, so it can't wrap CryptoKeys the installed app reads.
+    @Test func onlyThrowawayProfilesGetALaunchKey() {
+        #expect(Keychain.webCryptoKey(throwawayProfile: false) == nil)
+        let key = Keychain.webCryptoKey(throwawayProfile: true)
+        #expect(key?.count == 16)
+        #expect(key != Data(count: 16))
+        #expect(Keychain.webCryptoKey?.count == 16, "a test run")
+        #expect(Keychain.webCryptoKey == Keychain.webCryptoKey)
     }
 
     /// The app replaced on disk under it (an update): its Keychain items trust the new code.
@@ -74,17 +79,53 @@ import Testing
         #expect(fake.calls == [])
     }
 
-    /// The only test that runs `atLaunch`: before that, the Keychain stays shut. It leaves every
-    /// other Keychain user in the process (WebKit, extensions' hosts) as it was.
+    /// The only test that runs `atLaunch`: before that, the Keychain stays shut. A build that may
+    /// not use the Keychain (this one) also turns prompts off for WebKit and URLSession; the
+    /// installed app leaves them as they were.
     @MainActor @Test func theKeychainIsShutUntilTheLaunchedExecutableIsKept() {
+        defer { SecKeychainSetUserInteractionAllowed(true) }
         #expect(Keychain.launchedExecutable == nil)
         #expect(!Keychain.Store.login.runsCodeOnDisk(), "nothing kept at launch")
         Keychain.atLaunch()
         #expect(Keychain.launchedExecutable == Keychain.executableOnDisk(Bundle.main.executablePath))
         #expect(Keychain.Store.login.runsCodeOnDisk(), "the test process is the code on disk")
-        var interaction: DarwinBoolean = false
+        var interaction: DarwinBoolean = true
         #expect(SecKeychainGetUserInteractionAllowed(&interaction) == errSecSuccess)
-        #expect(interaction.boolValue, "prompts stay on process-wide")
+        #expect(interaction.boolValue == Keychain.isAllowed, "prompts off process-wide")
+    }
+
+    /// The real SecItem calls, on a keychain file of the test's own instead of the login one: the
+    /// no-prompt flag on every call doesn't make macOS refuse the add, read or replace.
+    @Test func aRealKeychainTakesTheNoPromptCalls() throws {
+        let path = FileManager.default.temporaryDirectory.appending(path: "keychain-\(UUID().uuidString).keychain-db").path
+        var created: SecKeychain?
+        try #require(SecKeychainCreate(path, 4, "test", false, nil, &created) == errSecSuccess)
+        nonisolated(unsafe) let file = try #require(created)
+        defer { SecKeychainDelete(file) }
+        let store = Keychain.Store(
+            copy: { query in
+                var query = query
+                query[kSecMatchSearchList as String] = [file]
+                var found: CFTypeRef?
+                let status = SecItemCopyMatching(query as CFDictionary, &found)
+                return (status, found as? Data)
+            },
+            add: { attributes in
+                var attributes = attributes
+                attributes[kSecUseKeychain as String] = file
+                return SecItemAdd(attributes as CFDictionary, nil)
+            },
+            delete: { query in
+                var query = query
+                query[kSecMatchSearchList as String] = [file]
+                return SecItemDelete(query as CFDictionary)
+            },
+            runsCodeOnDisk: { true })
+        let made = Keychain(service: "test", account: "key", label: "Lithium test key", size: 32, store: store).secret(creating: true)
+        #expect(made?.count == 32, "added")
+        #expect(Keychain(service: "test", account: "key", label: "Lithium test key", size: 32, store: store).secret(creating: false) == made, "read")
+        let resized = Keychain(service: "test", account: "key", label: "Lithium test key", size: 16, store: store).secret(creating: true)
+        #expect(resized?.count == 16, "replaced")
     }
 
     /// An update writes a new executable in the old one's place.
@@ -156,6 +197,37 @@ import Testing
         let made = fake.keychain().secret(creating: true)
         #expect(made?.count == 32)
         #expect(fake.calls == ["copy", "add", "delete", "add"])
+    }
+}
+
+/// The delegate WebKit asks, on a real tab of either kind of build.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@MainActor struct WebCryptoKeyTabTests {
+    private static let selector = NSSelectorFromString("_webCryptoMasterKeyForWebView:completionHandler:")
+
+    private final class Delivered {
+        var keys: [Data?] = []
+    }
+
+    private func key(from tab: Tab) -> [Data?] {
+        let delivered = Delivered()
+        tab.webCryptoMasterKey(WKWebView()) { delivered.keys.append($0) }
+        return delivered.keys
+    }
+
+    /// The installed app's tab doesn't answer, and called anyway hands no key, never a new one.
+    @Test func theInstalledAppsTabLeavesTheKeyToWebKit() {
+        let tab = Tab(browser: Browser(), configuration: nil, keychainAllowed: true)
+        #expect(!tab.responds(to: Self.selector))
+        #expect(tab.responds(to: NSSelectorFromString("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:")))
+        #expect(key(from: tab) == [nil])
+    }
+
+    @Test func anotherBuildsTabHandsWebKitTheLaunchKey() {
+        let tab = Tab(browser: Browser(), configuration: nil, keychainAllowed: false)
+        #expect(tab.responds(to: Self.selector))
+        #expect(Keychain.webCryptoKey != nil)
+        #expect(key(from: tab) == [Keychain.webCryptoKey])
     }
 }
 

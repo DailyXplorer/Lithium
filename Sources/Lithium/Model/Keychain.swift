@@ -58,9 +58,11 @@ final class Keychain: @unchecked Sendable {
         return "\(file) \(modified.timeIntervalSince1970)"
     }
 
-    /// The build judged as launched, before an update can replace it on disk.
+    /// The build judged as launched, before an update can replace it on disk. Builds that may not
+    /// use the Keychain also refuse every prompt in the process: WebKit and URLSession still look
+    /// there (HTTP sign-ins, client certificates), and an answer would rewrite the owner's items.
     @MainActor static func atLaunch() {
-        _ = isAllowed
+        if !isAllowed { SecKeychainSetUserInteractionAllowed(false) }
         keepLaunchedExecutable()
     }
 
@@ -72,9 +74,15 @@ final class Keychain: @unchecked Sendable {
                                          label: "Lithium sign-in cookies", size: 32)
 
     /// What builds that may not use the Keychain hand WebKit (`Tab.webCryptoMasterKey`) to wrap the
-    /// CryptoKeys sites store, instead of WebKit's own login Keychain item. Theirs are throwaway
-    /// profiles: a key for the launch is enough.
-    static let launchWebCryptoKey = randomBytes(16)
+    /// CryptoKeys sites store, instead of WebKit's own login Keychain item. A test run or a fixed
+    /// home is a throwaway profile: a key for the launch is enough. Any other (a debug build on the
+    /// owner's profile) gets none, so it can't store CryptoKeys the installed app couldn't read.
+    static let webCryptoKey = webCryptoKey(throwawayProfile: ExternalApps.runsTests
+                                           || ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil)
+
+    static func webCryptoKey(throwawayProfile: Bool) -> Data? {
+        throwawayProfile ? randomBytes(16) : nil
+    }
 
     /// SecItem calls, so tests never reach the user's Keychain.
     struct Store: Sendable {
@@ -137,6 +145,8 @@ final class Keychain: @unchecked Sendable {
         var added = item
         added[kSecValueData as String] = secret
         added[kSecAttrLabel as String] = label
+        // A locked Keychain refuses rather than asks to be unlocked.
+        added[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         var status = store.add(added)
         // One this build can't read (made by another build, access refused, damaged) would
         // otherwise stop every save. Replaced: what it opened is about to be rewritten.

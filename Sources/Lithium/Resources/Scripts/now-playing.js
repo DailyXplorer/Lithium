@@ -20,6 +20,8 @@
   // Drawn small here, so the app never fetches what the page names.
   let art = { src: null, data: null };
   let active = null;
+  // The media last active, still once dropped: WebKit may then hear Web Audio beside it.
+  let last = null;
   let reported = false;
   let restored = false;
   let timer = 0;
@@ -129,6 +131,7 @@
 
   const changed = (before, media) => {
     active = media;
+    last = media ?? before;
     if (position && active !== before) {
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
@@ -194,7 +197,7 @@
       // WebKit calls it itself for a media key, AirPods or Control Center: played again, no longer held.
       const page = handlers[action];
       if (action === 'play' && page) {
-        return setActionHandler.call(this, action, function () { hold(false); return page.apply(this, arguments); });
+        return setActionHandler.call(this, action, function () { playAgain(); return page.apply(this, arguments); });
       }
       return setActionHandler.apply(this, arguments);
     };
@@ -243,12 +246,12 @@
   const release = (event) => { if (event.isTrusted) hold(false); };
   // Each context the page tried to resume while held, with its own resume: it won't ask again.
   const refused = new Map();
+  // Kept through a second hold: a context still suspended won't ask again.
   const hold = (on) => {
     held = on;
-    if (on) refused.clear();
     for (const type of ['pointerdown', 'keydown']) (on ? listen : unlisten)(type, release, true);
   };
-  // Played again from the app: the page's refused resumes go through. A click leaves them to the page.
+  // Played again (the app, a media key): the page's refused resumes go through. A click leaves them to the page.
   const playAgain = () => {
     hold(false);
     for (const [context, resume] of refused) resume.call(context).catch(() => {});
@@ -303,9 +306,9 @@
         // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
-          // Heard while its media is paused or muted: the sound comes from elsewhere (Web Audio). Media
-          // taken out may still be what WebKit hears.
-          if (command === 'heard' && active && !(isPlaying(active) && isAudible(active))) hadMedia = false;
+          // Heard while its media is paused, muted or emptied: the sound comes from elsewhere (Web Audio).
+          // Media taken out may still be what WebKit hears.
+          if (command === 'heard' && last && !isGone(last) && !(isPlaying(active) && isAudible(active))) hadMedia = false;
           anchor();
           schedule();
           break;

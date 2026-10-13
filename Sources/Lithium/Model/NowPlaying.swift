@@ -81,6 +81,11 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var info: WKFrameInfo? = nil
         /// An iframe, perhaps an ad's: its word alone takes no player.
         var isSubframe = false
+
+        /// The frame a message came from: the page itself is reached without its `WKFrameInfo`.
+        static func from(_ info: WKFrameInfo, id: String) -> Frame {
+            Frame(id: id, info: info.isMainFrame ? nil : info, isSubframe: !info.isMainFrame)
+        }
     }
 
     static let name = "lithiumNowPlaying"
@@ -161,8 +166,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         guard let body = message.body as? [String: Any], let id = body["frame"] as? String,
               let tab = (message.webView as? PageWebView)?.tab,
               browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
-        let isMain = message.frameInfo.isMainFrame
-        receive(message: body, from: tab, frame: Frame(id: id, info: isMain ? nil : message.frameInfo, isSubframe: !isMain))
+        receive(message: body, from: tab, frame: .from(message.frameInfo, id: id))
     }
 
     /// A frame's word: what it plays, or that it made Web Audio.
@@ -308,6 +312,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         tell(tab, command, frame?.info)
         // Played again, the iframes held with it (`hush`) may resume their Web Audio too.
         if command == "play" {
+            // Played in an iframe, the page held with it resumes too.
+            if frame?.isSubframe == true { tell(tab, "release", nil) }
             for info in (audioFrames[ObjectIdentifier(tab)] ?? [:]).values { tell(tab, "release", info) }
         }
     }

@@ -139,6 +139,8 @@ private struct PinGrid: View {
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isTargeted = false
+    /// Each tile's frame in the grid, to find the slot a drop lands on.
+    @State private var tileFrames: [Pin.ID: CGRect] = [:]
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
@@ -158,7 +160,8 @@ private struct PinGrid: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(Array(browser.spacePins.enumerated()), id: \.element.id) { index, pin in
-                        PinTile(pin: pin, index: index)
+                        PinTile(pin: pin)
+                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.space)) }) { tileFrames[pin.id] = $0 }
                     }
                 }
             }
@@ -168,10 +171,19 @@ private struct PinGrid: View {
                 .fill(isTargeted ? palette.tile : .clear)
                 .padding(-4)
         )
-        // Space around the tiles: a tab is pinned at the end, a favorite moves to the end.
-        .dropDestination(for: String.self) { items, _ in
-            browser.dropOnFavorites(items, at: nil)
+        .coordinateSpace(.named(Self.space))
+        // One drop target for the whole grid: a drop target on each tile swallows its right-click, so the
+        // tile's context menu never opens. On a tile, a favorite moves into its slot and a tab is pinned
+        // there; on the space around the tiles, at the end.
+        .dropDestination(for: String.self) { items, location in
+            browser.dropOnFavorites(items, at: slot(at: location))
         } isTargeted: { isTargeted = $0 }
+    }
+
+    private static let space = "PinGrid"
+
+    private func slot(at location: CGPoint) -> Int? {
+        browser.spacePins.firstIndex { tileFrames[$0.id]?.contains(location) == true }
     }
 }
 
@@ -198,11 +210,9 @@ private extension Browser {
 
 private struct PinTile: View {
     let pin: Pin
-    let index: Int
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isHovered = false
-    @State private var isTargeted = false
 
     var body: some View {
         let live = browser.liveTab(for: pin)
@@ -213,17 +223,10 @@ private struct PinTile: View {
             .overlay {
                 BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: live?.unread.shown)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
-            }
             .contentShape(Rectangle())
             .onTapGesture { browser.activate(pin) }
             .tabHoverTarget(.pin(pin.id), isHovered: $isHovered)
             .draggable(pinDragPrefix + pin.id.uuidString)
-            .dropDestination(for: String.self) { items, _ in
-                browser.dropOnFavorites(items, at: index)
-            } isTargeted: { isTargeted = $0 }
             .contextMenu {
                 if let live {
                     Button("Duplicate Tab") { browser.duplicate(live) }

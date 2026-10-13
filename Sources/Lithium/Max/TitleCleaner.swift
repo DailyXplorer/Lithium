@@ -70,8 +70,44 @@ enum TitleCleaner {
         return words(trimmed).isDisjoint(with: source) ? nil : trimmed
     }
 
+    /// The model sometimes answers all lowercase; the title is the source of truth for proper nouns
+    /// ("nasa" -> "NASA") and for a deliberate lowercase start ("iPhone"). Otherwise the label
+    /// gets a capital first letter.
+    static func capitalized(_ label: String, like title: String) -> String {
+        let titleWords = wordRuns(title).map(String.init)
+        var names: [String: String] = [:]
+        // An all-caps word longer than an acronym ("NASA") is shouting, not how the name is written.
+        for word in titleWords where word.first?.isUppercase == true && !(word.count > 5 && word == word.uppercased()) {
+            names[key(word)] = names[key(word)] ?? word
+        }
+        var result = ""
+        var rest = label.startIndex
+        for word in wordRuns(label) {
+            result += label[rest..<word.startIndex] + (names[key(word)] ?? String(word))
+            rest = word.endIndex
+        }
+        result += label[rest...]
+
+        guard let first = result.first, first.isLowercase else { return result }
+        if let firstWord = wordRuns(result).first, firstWord.contains(where: \.isUppercase), titleWords.contains(String(firstWord)) {
+            return result
+        }
+        let locale = language(of: title).map { Locale(identifier: $0.minimalIdentifier) } ?? .current
+        return String(first).capitalized(with: locale) + result.dropFirst()
+    }
+
+    /// Lowercase without a locale, except that "İstanbul" gives "istanbul" rather than a dotted "i̇".
+    private static func key(_ word: some StringProtocol) -> String {
+        word.lowercased().replacing("i\u{307}", with: "i")
+    }
+
     private static func words(_ text: String) -> Set<String> {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-        return Set(folded.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 3 })
+        return Set(wordRuns(folded).map(String.init).filter { $0.count >= 3 })
+    }
+
+    /// Maximal runs of letters and digits, as slices of `text` so their indices point into it.
+    private static func wordRuns(_ text: String) -> [Substring] {
+        text.split { !$0.isLetter && !$0.isNumber }
     }
 }

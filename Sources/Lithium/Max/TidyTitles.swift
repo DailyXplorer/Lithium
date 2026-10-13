@@ -120,7 +120,10 @@ final class TidyTitles {
             let tabs = pending.removeValue(forKey: key) ?? []
             switch outcome {
             case .title(let candidate):
-                let accepted = TitleCleaner.acceptable(candidate, original: original, host: host) ?? cleaned
+                // Only the model's label: the rules keep the page's own words, whose lowercase start
+                // (r/swift, owner/repo, a file name) is the site's choice.
+                let accepted = TitleCleaner.acceptable(candidate, original: original, host: host)
+                    .map { TitleCleaner.capitalized($0, like: original) } ?? cleaned
                 remember(accepted, for: key)
                 for waiting in tabs { waiting.tab?.setTidyTitle(accepted, from: waiting.original) }
                 // Tabs off screen showing the same title didn't ask: the cache answers them.

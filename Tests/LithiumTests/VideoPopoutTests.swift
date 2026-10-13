@@ -169,6 +169,75 @@ struct VideoPopoutTests {
         #expect(VideoPopout.playback(from: ["width": 1280.0, "height": 720.0])?.aspectRatio == 1280.0 / 720.0)
     }
 
+    /// A page shrunk to the player overflows it both ways, and its scroll bars were drawn over the
+    /// video. Styled scroll bars take room whatever the system setting, like "Show scroll bars: Always".
+    /// In the player the page fits it exactly; put back, it is where it was scrolled to.
+    @Test func noScrollBarsInThePlayer() async throws {
+        let (webView, window) = try await playingPage(Self.overflowingPage)
+        defer { window.orderOut(nil) }
+        webView.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
+        _ = try await webView.callAsyncJavaScript("scrollTo(40, 500)", contentWorld: .page)
+        let room = """
+            const root = document.documentElement;
+            return [innerWidth - root.clientWidth, innerHeight - root.clientHeight, scrollX, scrollY].join(' ');
+            """
+        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls both ways")
+
+        _ = try await VideoPopout.run("show", in: webView)
+        let overflow = "const root = document.documentElement; return [root.scrollWidth - root.clientWidth, root.scrollHeight - root.clientHeight].join(' ')"
+        let videoBox = "const r = document.querySelector('video').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(' ')"
+        // The player as it opens, resized tall (as for a vertical video), then wide.
+        for (width, height) in [(320, 180), (180, 320), (480, 120)] {
+            webView.frame.size = NSSize(width: CGFloat(width), height: CGFloat(height))
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 0 0", "no scroll bars in the \(width)×\(height) player")
+            #expect(try await webView.callAsyncJavaScript(overflow, contentWorld: .page) as? String == "0 0", "the page fits the \(width)×\(height) player")
+            #expect(try await webView.callAsyncJavaScript(videoBox, contentWorld: .page) as? String == "0 0 \(width) \(height)", "the video fits the \(width)×\(height) player")
+            let snapshot = try #require(await snapshot(of: webView))
+            // Read in pixels: on a 2× screen the snapshot has twice as many as the view has points.
+            let scale = CGFloat(snapshot.pixelsWide) / CGFloat(width)
+            for point in [(width - 8, height / 2), (width / 2, height - 8), (width - 8, height - 8)] {
+                let color = snapshot.colorAt(x: Int(CGFloat(point.0) * scale), y: Int(CGFloat(point.1) * scale))
+                #expect(isVideo(color), "not the video at \(point) in the \(width)×\(height) player")
+            }
+            // The video's frame, not just its black background: the centre is inside the frame at every size.
+            let centre = snapshot.colorAt(x: Int(CGFloat(width / 2) * scale), y: Int(CGFloat(height / 2) * scale))
+            #expect(isRed(centre), "the video plays in the \(width)×\(height) player")
+        }
+
+        webView.frame.size = NSSize(width: 320, height: 180)
+        _ = try await VideoPopout.run("hide", in: webView)
+        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls as before")
+    }
+
+    /// Put back, a page that scrolls smoothly is where it was at once, not animated there. A page
+    /// that moved on to other content while the video was out (autoplay of the next one) stays at its top.
+    @Test func putBackScrollsOnlyTheSamePageAndAtOnce() async throws {
+        let (webView, window) = try await playingPage(Self.overflowingPage.replacingOccurrences(of: "<style>", with: "<style>html { scroll-behavior: smooth }"))
+        defer { window.orderOut(nil) }
+        webView.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
+        _ = try await webView.callAsyncJavaScript("scrollTo({ left: 40, top: 500, behavior: 'instant' })", contentWorld: .page)
+        let scroll = "return [scrollX, scrollY].join(' ')"
+
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await VideoPopout.run("hide", in: webView)
+        #expect(try await webView.callAsyncJavaScript(scroll, contentWorld: .page) as? String == "40 500", "the page is back where it was at once")
+
+        _ = try await VideoPopout.run("show", in: webView)
+        _ = try await webView.callAsyncJavaScript("history.pushState(null, '', '?next')", contentWorld: .page)
+        _ = try await VideoPopout.run("hide", in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await webView.callAsyncJavaScript(scroll, contentWorld: .page) as? String == "0 0", "the next page stays at its top")
+    }
+
+    private static let overflowingPage = """
+        <!doctype html>
+        <style>::-webkit-scrollbar { width: 16px; height: 16px; background: rgb(0, 255, 0); }</style>
+        <body style="margin: 0; width: 3000px; height: 3000px; background: rgb(0, 0, 255)">
+          <video src="red.mp4" loop playsinline style="width: 640px; height: 360px"></video>
+        </body>
+        """
+
     /// A muted video, or none playing, stays with its tab.
     @Test func onlyAVideoPlayingWithSoundPopsOut() async throws {
         let (webView, window) = try await playingPage()
@@ -179,13 +248,13 @@ struct VideoPopoutTests {
         #expect(try await VideoPopout.run("playing", in: webView) as? Bool == false)
     }
 
-    private func playingPage() async throws -> (WKWebView, NSWindow) {
+    private func playingPage(_ page: String = Self.page) async throws -> (WKWebView, NSWindow) {
         let video = try #require(Bundle.module.url(forResource: "Fixtures/red", withExtension: "mp4"))
         let folder = FileManager.default.temporaryDirectory.appending(path: "popout-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: video, to: folder.appending(path: "red.mp4"))
         let file = folder.appending(path: "page.html")
-        try Self.page.write(to: file, atomically: true, encoding: .utf8)
+        try page.write(to: file, atomically: true, encoding: .utf8)
 
         let configuration = WKWebViewConfiguration()
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -236,5 +305,11 @@ struct VideoPopoutTests {
     private func isRed(_ color: NSColor?) -> Bool {
         guard let color = color?.usingColorSpace(.sRGB) else { return false }
         return color.redComponent > 0.7 && color.greenComponent < 0.3 && color.blueComponent < 0.3
+    }
+
+    /// The red video or its black bars: neither the blue page nor its green scroll bars.
+    private func isVideo(_ color: NSColor?) -> Bool {
+        guard let color = color?.usingColorSpace(.sRGB) else { return false }
+        return color.greenComponent < 0.3 && color.blueComponent < 0.3
     }
 }

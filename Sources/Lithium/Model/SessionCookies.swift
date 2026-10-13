@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Security
 import WebKit
 
 /// Session cookies (no expiry), which WebKit keeps only in memory, so sign-ins come back with the
@@ -14,8 +13,8 @@ enum SessionCookies {
         URL.applicationSupportDirectory.appending(path: "Lithium/session-cookies")
     }
 
-    /// Tests keep theirs in memory: they never touch the user's Keychain.
-    static var key: FileKey = ExternalApps.runsTests ? .memory() : .keychain
+    /// Builds that may not use the user's Keychain (`Keychain.isAllowed`) keep theirs in memory.
+    static var key: FileKey = Keychain.isAllowed ? .keychain : .memory()
 
     /// A site's session ends long before: an older file is from a session left long ago.
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
@@ -137,32 +136,9 @@ enum SessionCookies {
             return FileKey { _ in key }
         }
 
-        /// A generic password in the login Keychain, made on first use. One that can't be read
-        /// counts as none.
+        /// A generic password in the login Keychain, made on first use.
         static let keychain = FileKey { creating in
-            let item: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: "app.lithium.browser.session-cookies",
-                kSecAttrAccount: "file-key",
-            ]
-            var query = item
-            query[kSecReturnData] = true
-            var found: CFTypeRef?
-            if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data, data.count == 32 {
-                return SymmetricKey(data: data)
-            }
-            guard creating else { return nil }
-            let key = SymmetricKey(size: .bits256)
-            var added = item
-            added[kSecValueData] = key.withUnsafeBytes { Data($0) }
-            added[kSecAttrLabel] = "Lithium sign-in cookies"
-            var status = SecItemAdd(added as CFDictionary, nil)
-            // One this build can't read (signed differently, access refused, damaged) would otherwise
-            // stop every save. Replaced: the file it opened is about to be rewritten.
-            if status == errSecDuplicateItem, SecItemDelete(item as CFDictionary) == errSecSuccess {
-                status = SecItemAdd(added as CFDictionary, nil)
-            }
-            return status == errSecSuccess ? key : nil
+            Keychain.sessionCookies.secret(creating: creating).map { SymmetricKey(data: $0) }
         }
     }
 }

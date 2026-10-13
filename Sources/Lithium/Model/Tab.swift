@@ -1673,6 +1673,17 @@ extension Tab: WKUIDelegate {
         Task { decisionHandler(await askPermission([.location], origin: origin) ? .grant : .deny) }
     }
 
+    /// Private WebKit (`WKUIDelegatePrivate`), called only on a delegate that has it: the key that
+    /// wraps the CryptoKeys a site stores. Without it WebKit reads its own login Keychain item.
+    @objc(_webCryptoMasterKeyForWebView:completionHandler:)
+    func webCryptoMasterKey(_ webView: WKWebView, completionHandler: @escaping @MainActor (Data?) -> Void) {
+        let allowed = Keychain.isAllowed
+        Task {
+            // Off the main thread: the first one this launch reads the Keychain.
+            completionHandler(await Task.detached { Keychain.webCryptoKey(allowed: allowed) }.value)
+        }
+    }
+
     private func askPermission(_ kinds: [PermissionKind], origin: WKSecurityOrigin) async -> Bool {
         guard let browser, !origin.host.isEmpty else { return false }
         return await browser.permissions.request(kinds, host: origin.host, tabID: id, privateSession: privateSession, space: siteSpace)

@@ -64,6 +64,11 @@ struct TitleCleanerTests {
         ("hava durumu istanbul", "Hava durumu: İstanbul yağmuru ve rüzgar tahmini bugün", "Hava durumu İstanbul"),
         ("guide for a family", "Vitamin A foods: a guide for a family", "Guide for a family"),
         ("rag llm nlp", "AI ML GPT LLM RAG MCP NLP OCR API", "RAG LLM NLP"),
+        ("apple pie", "Apple Pie Recipes: how to make apple pie at home", "Apple Pie"),
+        ("apple vision pro review", "Apple Vision Pro review: is apple vision pro worth it?", "Apple Vision Pro review"),
+        ("best things in paris", "Visit Paris: the best things to see in paris", "Best things in Paris"),
+        ("go to bed or not", "GO TO BED OR NOT TO BE AT ALL", "Go to bed or not"),
+        ("i am a big fan", "I AM A BIG FAN OF MY DOG AND CAT", "I am a big fan"),
     ])
     func capitalizesTheModelsLabel(label: String, title: String, expected: String) {
         #expect(TitleCleaner.capitalized(label, like: title) == expected)
@@ -114,7 +119,8 @@ func modelShortensRealTitles() async throws {
         case .title(let candidate):
             let accepted = TitleCleaner.acceptable(candidate, original: original, host: host)
             print("model:", "\(elapsed) ms", "|", candidate, "| accepted:", accepted ?? "rejected")
-            #expect(candidate.first?.isLowercase != true)
+            // What the tab shows: the accepted label after the post-process, not the raw answer.
+            if let accepted { #expect(TitleCleaner.capitalized(accepted, like: original).first?.isLowercase != true) }
             #expect(accepted?.contains("://") != true)
         case .declined:
             print("model:", "\(elapsed) ms", "| declined")

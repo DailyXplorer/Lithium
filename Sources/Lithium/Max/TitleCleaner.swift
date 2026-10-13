@@ -97,10 +97,12 @@ enum TitleCleaner {
                 properNouns[key(word)] = properNouns[key(word)] ?? word
             }
         }
-        // A word the title also writes lowercase after the same word stays as the label writes it:
-        // "a" after "for" in "Vitamin A foods: a guide for a family".
+        // A small word the title also writes lowercase after the same word stays as the label writes
+        // it: "a" after "for" in "Vitamin A foods: a guide for a family". A name doesn't: "in paris"
+        // in "Visit Paris: things to see in paris" still gives "Paris".
         let lowercasePairs = Set(parts.flatMap { words in
-            zip(words, words.dropFirst()).filter { !$1.contains(where: \.isUppercase) }.map { key($0) + " " + key($1) }
+            zip(words, words.dropFirst()).filter { !$1.contains(where: \.isUppercase) && openingWords.contains(key($1)) }
+                .map { key($0) + " " + key($1) }
         })
         var result = ""
         var rest = label.startIndex
@@ -122,11 +124,15 @@ enum TitleCleaner {
         return String(first).capitalized(with: locale) + result.dropFirst()
     }
 
-    /// More than half the words of four letters or more in caps. With no such word, never:
-    /// "AI ML GPT RAG" is a list of acronyms, not shouting.
+    /// More than half the words of four letters or more in caps. With no such word, every word in
+    /// caps and one of them a small word like "TO": "GO TO BED" is shouting, "AI ML GPT RAG" a list
+    /// of acronyms.
     private static func mostlyCaps(_ words: [String]) -> Bool {
-        let longWords = words.filter { $0.first?.isLetter == true && $0.count >= 4 }
-        guard !longWords.isEmpty else { return false }
+        let letterWords = words.filter { $0.first?.isLetter == true }
+        let longWords = letterWords.filter { $0.count >= 4 }
+        guard !longWords.isEmpty else {
+            return letterWords.allSatisfy { $0 == $0.uppercased() } && letterWords.contains { openingWords.contains($0.lowercased()) }
+        }
         return longWords.filter { $0 == $0.uppercased() }.count * 2 > longWords.count
     }
 

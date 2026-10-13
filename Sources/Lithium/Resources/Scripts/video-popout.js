@@ -45,6 +45,13 @@ const css = `
     object-fit: contain !important; background: #000 !important;
   }
   video[${mark}]::backdrop { background: #000; }
+  /* The page, shrunk to the player, overflows it: its scroll bars are drawn over the top layer.
+     The body is pinned to the player and clips the rest, so nothing overflows in either axis. */
+  html { overflow: hidden !important; }
+  body {
+    position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important;
+    min-width: 0 !important; min-height: 0 !important; overflow: hidden !important;
+  }
 `;
 
 const show = () => {
@@ -54,6 +61,9 @@ const show = () => {
   store.video = video;
   video.setAttribute(mark, '');
   store.style ??= Object.assign(document.createElement('style'), { textContent: css });
+  // A page that fits the player can't stay scrolled: `hide` scrolls it back, unless the page
+  // has moved on to other content meanwhile (autoplay of the next video).
+  if (!store.style.isConnected) store.scroll = { url: location.href, left: scrollX, top: scrollY };
   (document.head || document.documentElement).append(store.style);
   raise(video);
   keepRaised(video);
@@ -114,7 +124,12 @@ const hide = () => {
   store.video = null;
   cancelAnimationFrame(store.frame);
   store.frame = 0;
-  store.style?.remove();
+  if (store.style?.isConnected) {
+    store.style.remove();
+    // Instant even on a page that scrolls smoothly: the page is put back as it was, not animated.
+    const { url, left, top } = store.scroll;
+    if (url === location.href) scrollTo({ left, top, behavior: 'instant' });
+  }
   if (!video) return;
   if (video.matches(':popover-open')) video.hidePopover();
   if (store.addedPopover) video.removeAttribute('popover');

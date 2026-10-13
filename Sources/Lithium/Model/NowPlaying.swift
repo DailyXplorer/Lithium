@@ -162,7 +162,11 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
               let tab = (message.webView as? PageWebView)?.tab,
               browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
         let isMain = message.frameInfo.isMainFrame
-        let frame = Frame(id: id, info: isMain ? nil : message.frameInfo, isSubframe: !isMain)
+        receive(message: body, from: tab, frame: Frame(id: id, info: isMain ? nil : message.frameInfo, isSubframe: !isMain))
+    }
+
+    /// A frame's word: what it plays, or that it made Web Audio.
+    func receive(message body: [String: Any], from tab: Tab, frame: Frame) {
         if body["audio"] != nil { return receiveAudio(from: tab, frame: frame) }
         receive(Media(message: body["media"] ?? NSNull(), at: Date()), from: tab, frame: frame)
     }
@@ -205,7 +209,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             reported = media
             self.media = settled(media)
         } else if holds {
-            discard(tab)
+            discard(tab, pageGone: false)
         } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
             // Turned down only for want of WebKit's ear.
             unheard[key] = (media, frame)
@@ -233,7 +237,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     /// An iframe of the tab made Web Audio.
-    func receiveAudio(from tab: Tab, frame: Frame) {
+    private func receiveAudio(from tab: Tab, frame: Frame) {
         if let info = frame.info { audioFrames[ObjectIdentifier(tab), default: [:]][frame.id] = info }
     }
 
@@ -244,11 +248,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         return Array(frames.values)
     }
 
-    /// The tab closed, fell asleep, went to another page, or was muted.
-    func discard(_ tab: Tab) {
+    /// The tab closed, fell asleep, went to another page, or was muted. Its iframes' Web Audio is kept
+    /// while its page stays (`pageGone` false): each says so only once.
+    func discard(_ tab: Tab, pageGone: Bool = true) {
         if tab === unpaused { unpaused = nil }
         unheard[ObjectIdentifier(tab)] = nil
-        audioFrames[ObjectIdentifier(tab)] = nil
+        if pageGone { audioFrames[ObjectIdentifier(tab)] = nil }
         guard tab === self.tab else { return }
         self.tab = nil
         unpaused = nil
@@ -299,7 +304,12 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     private func send(_ command: String) {
-        if let tab { tell(tab, command, frame?.info) }
+        guard let tab else { return }
+        tell(tab, command, frame?.info)
+        // Played again, the iframes held with it (`hush`) may resume their Web Audio too.
+        if command == "play" {
+            for info in (audioFrames[ObjectIdentifier(tab)] ?? [:]).values { tell(tab, "release", info) }
+        }
     }
 
     /// The page pauses with its own pause key first, then WebKit pauses all its media and suspends its
@@ -311,7 +321,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         await webView.pauseAllMediaPlayback()
     }
 
-    /// "play", "pause", "hush", "previous" or "next", answered by the script of the frame that plays;
+    /// "play", "pause", "hush", "release", "previous" or "next", answered by the script of the frame that plays;
     /// "heard" or "silent", what WebKit hears of the page.
     static func run(_ command: String, in webView: WKWebView, frame: WKFrameInfo? = nil) async {
         _ = try? await webView.callAsyncJavaScript(

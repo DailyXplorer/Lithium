@@ -1212,6 +1212,21 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { page.last?.isPaused == false && page.last?.isAudible == true })
     }
 
+    /// A page whose own media lost its source, then heard through Web Audio: it plays, with no
+    /// length, which only its media had.
+    @Test func reportsWebAudioAfterAnEmptiedElement() async throws {
+        let page = try await PlayingPage("<script>\(Self.wav)</script>")
+        defer { page.close() }
+        try await page.play("document.body.appendChild(Object.assign(window.sound = new Audio(wav()), { loop: true }))")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.duration != nil })
+        try await page.run("sound.removeAttribute('src'); sound.load()")
+        #expect(await waitUntil { try await page.run("return sound.paused") as? Bool == true })
+        try await Task.sleep(for: .milliseconds(300))
+
+        await NowPlaying.run("heard", in: page.webView)
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.duration == nil })
+    }
+
     /// WebKit tells only the page what it hears, so an iframe's Web Audio never reports: it says it
     /// has some, and another tab's sound holds it too. Silent.
     @Test func holdsTheWebAudioOfAnIframeWithNoMedia() async throws {
@@ -1219,8 +1234,9 @@ struct NowPlayingPageTests {
             <iframe srcdoc="<script>
               window.context = new AudioContext();
               const silence = context.createConstantSource();
-              silence.offset.value = 0;
-              silence.connect(context.destination);
+              const mute = context.createGain();
+              silence.offset.value = mute.gain.value = 0;
+              silence.connect(mute).connect(context.destination);
               silence.start();
               context.onstatechange = () => { if (context.state === 'suspended') context.resume(); };
             </script>"></iframe>
@@ -1241,7 +1257,7 @@ struct NowPlayingPageTests {
         player.hush = { _, frames in hushed = frames }
         player.isHeard = { _ in true }
         let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
-        player.receiveAudio(from: first, frame: NowPlaying.Frame(id: "audio", info: audio, isSubframe: true))
+        player.receive(message: ["audio": true], from: first, frame: NowPlaying.Frame(id: "audio", info: audio, isSubframe: true))
         player.receive(playing, from: first, frame: NowPlaying.Frame(id: "played", info: audio, isSubframe: true))
         player.receive(playing, from: second)
         #expect(hushed.count == 2 && hushed.allSatisfy { !$0.isMainFrame }, "the frame that played and the one with Web Audio")
@@ -1249,6 +1265,73 @@ struct NowPlayingPageTests {
         await NowPlaying.hush(page.webView, frames: hushed)
         try await Task.sleep(for: .milliseconds(500))
         #expect(try await state() == "suspended")
+    }
+
+    /// An iframe with running Web Audio, silent, and no media.
+    private static let iframeSynth = """
+        <iframe srcdoc="<script>
+          window.context = new AudioContext();
+          const silence = context.createConstantSource();
+          const mute = context.createGain();
+          silence.offset.value = mute.gain.value = 0;
+          silence.connect(mute).connect(context.destination);
+          silence.start();
+        </script>"></iframe>
+        """
+
+    /// An iframe says it has Web Audio only once: its tab muted then unmuted, or its page's media
+    /// gone, it is still held when another tab plays.
+    @Test func keepsAnIframesWebAudioThroughAMute() async throws {
+        let page = try await PlayingPage(Self.iframeSynth)
+        defer { page.close() }
+        #expect(await waitUntil { page.audioFrame != nil })
+        let audio = try #require(page.audioFrame)
+
+        let browser = Browser()
+        let (first, second) = (browser.newTab(), browser.newTab())
+        defer { [first, second].forEach(browser.close) }
+        let player = browser.nowPlaying
+        var hushed: [WKFrameInfo] = []
+        player.hush = { _, frames in hushed = frames }
+        player.isHeard = { _ in true }
+        let playing = NowPlaying.Media(message: ["paused": false, "audible": true], at: Date())
+        player.receive(message: ["audio": true], from: first, frame: NowPlaying.Frame(id: "audio", info: audio, isSubframe: true))
+        player.receive(playing, from: first)
+        player.receive(nil, from: first)
+        first.isMuted = true
+        first.isMuted = false
+        player.receive(playing, from: first)
+        player.receive(playing, from: second)
+        #expect(hushed.count == 1)
+    }
+
+    /// Played again from the app, a tab lets the iframes held with it resume their Web Audio. Silent.
+    @Test func releasesAnIframesWebAudioOnPlay() async throws {
+        let page = try await PlayingPage(Self.iframeSynth)
+        defer { page.close() }
+        let context = "document.querySelector('iframe').contentWindow.context"
+        let state = { () async throws -> String? in try await page.run("return \(context)?.state") as? String }
+        #expect(await waitUntil { try await state() == "running" })
+        let audio = try #require(page.audioFrame)
+        await NowPlaying.hush(page.webView, frames: [audio])
+        #expect(await waitUntil { try await state() == "suspended" })
+
+        let browser = Browser()
+        let tab = browser.newTab()
+        defer { browser.close(tab) }
+        let player = browser.nowPlaying
+        var told: [(command: String, frame: WKFrameInfo?)] = []
+        player.tell = { _, command, frame in told.append((command, frame)) }
+        player.isHeard = { _ in true }
+        player.receive(message: ["audio": true], from: tab, frame: NowPlaying.Frame(id: "audio", info: audio, isSubframe: true))
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": true, "audible": true], at: Date()), from: tab)
+        player.togglePlay()
+        #expect(told.map(\.command) == ["play", "release"])
+
+        for (command, frame) in told { await NowPlaying.run(command, in: page.webView, frame: frame) }
+        try await page.run("\(context).resume()")
+        #expect(await waitUntil { try await state() == "running" })
     }
 
     /// A media key, AirPods or Control Center call the page's play handler without the app: played
@@ -1259,8 +1342,9 @@ struct NowPlayingPageTests {
             <script>
             window.context = new AudioContext();
             const silence = context.createConstantSource();
-            silence.offset.value = 0;
-            silence.connect(context.destination);
+            const mute = context.createGain();
+            silence.offset.value = mute.gain.value = 0;
+            silence.connect(mute).connect(context.destination);
             silence.start();
             navigator.mediaSession.setActionHandler('play', () => context.resume());
             </script>
@@ -1287,8 +1371,9 @@ struct NowPlayingPageTests {
             <script>
             window.context = new AudioContext();
             const silence = context.createConstantSource();
-            silence.offset.value = 0;
-            silence.connect(context.destination);
+            const mute = context.createGain();
+            silence.offset.value = mute.gain.value = 0;
+            silence.connect(mute).connect(context.destination);
             silence.start();
             addEventListener('click', () => context.resume());
             </script>

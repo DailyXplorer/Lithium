@@ -281,6 +281,8 @@
         case 'play': hold(false); if (!call('play')) active?.play().catch(() => {}); break;
         case 'pause': if (!call('pause')) active?.pause(); break;
         case 'hush': hold(true); if (!call('pause')) active?.pause(); break;
+        // Its tab played again from the app: an iframe held with it, which is not the one that plays.
+        case 'release': hold(false); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
         // WebKit started or stopped hearing the page.

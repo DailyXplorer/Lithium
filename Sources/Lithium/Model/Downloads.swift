@@ -144,7 +144,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
     @ObservationIgnored private var partials: [ObjectIdentifier: URL] = [:]
     /// Asks where to save; nil when the user cancels. Tests replace it, so no panel shows.
     @ObservationIgnored var chooseDestination: @MainActor (URL, NSWindow?) async -> URL? = Downloads.savePanel(suggesting:in:)
-    /// Names downloads whose file name says nothing, when turned on in Max.
+    /// Gives downloads a clear name, when turned on in Max.
     @ObservationIgnored let tidy = TidyDownloads()
 
     var active: [DownloadItem] { items.filter { $0.state == .downloading } }
@@ -200,6 +200,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         guard tidy.applies(to: suggestedFilename) else {
             return place(data, item, as: suggestedFilename, from: source)
         }
+        // Loaded when the reader opened the PDF; this only helps if a download since used it up.
+        tidy.prepare()
         Task {
             let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: source, file: source))
             place(data, item, as: tidied ?? suggestedFilename, from: source, renamedFrom: tidied.map { _ in suggestedFilename })
@@ -269,7 +271,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         let id = ObjectIdentifier(download)
         var filename = suggestedFilename
         var original: String?
-        if byDownload[id]?.asksWhere == false, tidy.applies(to: suggestedFilename) {
+        if tidy.applies(to: suggestedFilename, asksWhere: byDownload[id]?.asksWhere != false) {
             let webView = download.webView
             // The page shown, not one still loading: a link that turned into this download.
             let source = DownloadSource(filename: suggestedFilename, title: webView?.title, page: webView?.backForwardList.currentItem?.url, file: response.url)

@@ -114,6 +114,9 @@ final class PDFReader: NSObject {
         self.document = document
         isLocked = document.isLocked
         if !isLocked { show(document) }
+        // Loads the model while the PDF is read, not when it is saved: the load would eat the
+        // naming budget. Nothing when Tidy downloads is off.
+        Downloads.shared.tidy.prepare()
         return true
     }
 

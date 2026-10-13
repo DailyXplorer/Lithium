@@ -84,9 +84,24 @@ enum DownloadNames {
               let name = sanitized(accepted), !isGeneric(name) else { return nil }
         let original = ((source.filename.removingPercentEncoding ?? source.filename) as NSString).deletingPathExtension
         guard folded(name) != folded(original) else { return nil }
-        // A vague name's numbers are counters ("IMG_2041"): only a clear name's must survive.
-        guard isGeneric(original) || codes(in: original).isSubset(of: codes(in: name)) else { return nil }
+        // A vague name's numbers are counters ("IMG_2041"), but not its dates ("scan-2026-10-12").
+        let (dated, years) = yearsOfDates(in: original)
+        guard (isGeneric(original) ? years : codes(in: dated)).isSubset(of: codes(in: name)) else { return nil }
         return name
+    }
+
+    /// "2025-06-12", "12.06.2025" or "2026-10", not "2026-28": a year, then a month and maybe a
+    /// day, or the reverse.
+    private static let numericDate = try! NSRegularExpression(pattern: #"(?<!\d)(?:((?:19|20)\d\d)[-_.](?:0?[1-9]|1[0-2])(?:[-_.](?:0?[1-9]|[12]\d|3[01]))?|(?:(?:0?[1-9]|[12]\d|3[01])[-_.](?:0?[1-9]|1[0-2])|(?:0?[1-9]|1[0-2])[-_.](?:0?[1-9]|[12]\d|3[01]))[-_.]((?:19|20)\d\d))(?!\d)"#)
+
+    /// `text` with its numeric dates cut to their years, and those years: a date the model writes
+    /// out ("12 June 2025") keeps only its year in digits.
+    private static func yearsOfDates(in text: String) -> (text: String, years: Set<String>) {
+        let all = NSRange(text.startIndex..., in: text)
+        let years = numericDate.matches(in: text, range: all).compactMap { match in
+            [1, 2].lazy.compactMap { Range(match.range(at: $0), in: text) }.first.map { String(text[$0]) }
+        }
+        return (numericDate.stringByReplacingMatches(in: text, range: all, withTemplate: " $1$2 "), Set(years))
     }
 
     /// Case and separators aside: "quarterly_report" and "Quarterly report" say the same.
@@ -98,13 +113,17 @@ enum DownloadNames {
     /// random tokens a server adds ("iqhqpvt6ri5vna2zlwwgggaqwa", "3f9a2c7e").
     private static func codes(in text: String) -> Set<String> {
         let words = text.lowercased().split { !$0.isLetter && !$0.isNumber }
-        return Set(words.compactMap { word in
-            guard word.contains(where: \.isNumber) else { return nil }
-            let hasLetter = word.contains(where: \.isLetter)
-            if hasLetter, word.count >= 12 || (word.count >= 6 && word.allSatisfy(\.isHexDigit)) { return nil }
-            // "07" and "7" are the same day.
-            let number = word.drop { $0 == "0" }
-            return hasLetter || number.isEmpty ? String(word) : String(number)
+        return Set(words.flatMap { word -> [String] in
+            // A token's letters and digits take turns; a code's come in a run or two
+            // ("invoice48213", "FAC2026100045", "dec2026").
+            let turns = zip(word, word.dropFirst()).filter { $0.isNumber != $1.isNumber }.count
+            if word.count >= 6, turns >= 3 { return [] }
+            // Its numbers, as a clear name may write them: "invoice48213" as "invoice 48213",
+            // "07" as "7".
+            return word.split { !$0.isNumber }.map { run in
+                let number = run.drop { $0 == "0" }
+                return number.isEmpty ? "0" : String(number)
+            }
         })
     }
 

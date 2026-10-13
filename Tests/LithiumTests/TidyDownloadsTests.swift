@@ -89,6 +89,32 @@ struct DownloadNamesTests {
         // A vague name's numbers are a camera's counter: they may go.
         #expect(answer("Account photo", for: "IMG_2041.jpg") == "Account photo")
     }
+
+    /// A code glued to a word is no hash, however long; a token whose letters and digits take
+    /// turns is one, however short.
+    @Test func tellsCodesFromRandomTokens() {
+        func answer(_ answer: String, for filename: String) -> String? {
+            DownloadNames.acceptable(answer, for: DownloadSource(filename: filename, title: "Invoice history · Power Co", page: URL(string: "https://power.example/account/bills")))
+        }
+        #expect(answer("Electricity invoice", for: "invoice48213.pdf") == nil)
+        #expect(answer("Electricity invoice 48213", for: "invoice48213.pdf") == "Electricity invoice 48213")
+        #expect(answer("Electricity invoice", for: "Invoice FAC2026100045.pdf") == nil)
+        #expect(answer("Electricity invoice FAC2026100045", for: "Invoice FAC2026100045.pdf") == "Electricity invoice FAC2026100045")
+        #expect(answer("Electricity invoice", for: "invoice-decade2026.pdf") == nil)
+        #expect(answer("Electricity invoice", for: "invoice-k3j9xq2mlp.pdf") == "Electricity invoice")
+    }
+
+    /// A numeric date may be written out, but its year stays, in a vague name too.
+    @Test func datesKeepTheirYear() {
+        func answer(_ answer: String, for filename: String) -> String? {
+            DownloadNames.acceptable(answer, for: DownloadSource(filename: filename, title: "Sales · Shop", page: URL(string: "https://shop.example/sales")))
+        }
+        #expect(answer("Sales invoice 12 June 2025", for: "invoice-2025-06-12.pdf") == "Sales invoice 12 June 2025")
+        #expect(answer("Sales invoice 12 June 2025", for: "invoice-12.06.2025.pdf") == "Sales invoice 12 June 2025")
+        #expect(answer("Sales invoice June", for: "invoice-2025-06-12.pdf") == nil)
+        #expect(answer("Sales export", for: "export-2026-10-12.csv") == nil)
+        #expect(answer("Sales export 12 October 2026", for: "export-2026-10-12.csv") == "Sales export 12 October 2026")
+    }
 }
 
 @MainActor
@@ -191,8 +217,7 @@ struct LiveModelFileNamesTests {
             let start = ContinuousClock.now
             let named = await tidy.name(for: source)
             let took = ContinuousClock.now - start
-            let answer = await ModelFileNames().name(for: source)
-            print("LIVE", source.filename, "->", named ?? "(kept)", "| model said:", answer ?? "nothing", "|", took)
+            print("LIVE", source.filename, "->", named ?? "(kept)", "|", took)
             #expect(named?.contains("://") != true)
             #expect(took < TidyDownloads.budget + .milliseconds(800))
         }
@@ -232,6 +257,23 @@ struct TidyDownloadFilesTests {
         #expect(!FileManager.default.fileExists(atPath: renamed.path))
         #expect(try Data(contentsOf: restored) == bytes)
         #expect(item.originalFilename == nil && !item.canUseOriginalName)
+    }
+
+    /// A clear name the site gave is renamed too, and shows what it was.
+    @Test func savedClearNameTakesTheModelsName() async throws {
+        let tidy = Downloads.shared.tidy
+        tidy.isEnabled = true
+        let token = UUID().uuidString.prefix(6)
+        tidy.namer = { _ in "Electricity invoice 48213 \(token)" }
+        defer { tidy.isEnabled = false; tidy.namer = nil }
+
+        Downloads.shared.save(Data("%PDF-1.4".utf8), suggestedFilename: "invoice_48213.pdf", from: URL(string: "https://power.example/bills/invoice_48213.pdf"), title: "Your bills \(token) · Power Co")
+        let item = try #require(Downloads.shared.items.first)
+        #expect(await waitUntil(5) { item.state == .finished })
+        let renamed = try #require(item.destination)
+        defer { try? FileManager.default.removeItem(at: renamed) }
+        #expect(renamed.lastPathComponent == "Electricity invoice 48213 \(token).pdf")
+        #expect(item.originalFilename == "invoice_48213.pdf")
     }
 
     /// A file the user moved or renamed since is theirs: undo leaves it alone.

@@ -200,6 +200,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         guard tidy.applies(to: suggestedFilename) else {
             return place(data, item, as: suggestedFilename, from: source)
         }
+        // The last download's naming used up the loaded model: load it again within the budget.
+        tidy.prepare()
         Task {
             let tidied = await tidy.name(for: DownloadSource(filename: suggestedFilename, title: title, page: source, file: source))
             place(data, item, as: tidied ?? suggestedFilename, from: source, renamedFrom: tidied.map { _ in suggestedFilename })

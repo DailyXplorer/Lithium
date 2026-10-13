@@ -193,7 +193,7 @@ private struct FavoritesDrop: DropDelegate {
     @Binding var targetedSlot: Int?
 
     private func slot(at location: CGPoint) -> Int? {
-        favoriteSlot(at: location, order: browser.spacePins.map(\.id), frames: frames)
+        browser.favoritesDropSlot(at: location, frames: frames)
     }
 
     func dropEntered(info: DropInfo) { isTargeted = true }
@@ -230,7 +230,12 @@ func favoriteSlot(at location: CGPoint, order: [Pin.ID], frames: [Pin.ID: CGRect
 /// A favorite drags as `pin:<id>` and a tab as its bare id, both UUID strings: the prefix tells them apart.
 private let pinDragPrefix = "pin:"
 
-private extension Browser {
+extension Browser {
+    /// The slot of the current space's grid under `location`: `pins` also holds other spaces' favorites.
+    func favoritesDropSlot(at location: CGPoint, frames: [Pin.ID: CGRect]) -> Int? {
+        favoriteSlot(at: location, order: spacePins.map(\.id), frames: frames)
+    }
+
     /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
     func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
         endTabDrag()

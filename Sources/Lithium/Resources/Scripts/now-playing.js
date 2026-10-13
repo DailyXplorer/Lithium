@@ -20,6 +20,8 @@
   // Drawn small here, so the app never fetches what the page names.
   let art = { src: null, data: null };
   let active = null;
+  // The media last active, still once dropped: WebKit may then hear Web Audio beside it.
+  let last = null;
   let reported = false;
   let restored = false;
   let timer = 0;
@@ -29,7 +31,8 @@
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
-  const isRunning = () => active ? isPlaying(active) : !hadMedia && sound === 'heard';
+  // Without `hadMedia`, the page's sound is not its media's, though Play still plays them.
+  const isRunning = () => hadMedia ? isPlaying(active) : sound === 'heard';
 
   const positionNow = () => position.time + (position.running ? (performance.now() - position.at) / 1000 * position.rate : 0);
   const anchor = () => {
@@ -38,18 +41,19 @@
 
   const report = () => {
     timer = 0;
-    if (!active && (hadMedia || !sound)) {
+    const media = hadMedia ? active : null;
+    if (!media && (hadMedia || !sound)) {
       if (reported) send(null);
       reported = false;
       restored = false;
       return;
     }
     const metadata = session?.metadata;
-    const paused = active ? active.paused || active.ended : sound === 'silent';
+    const paused = media ? media.paused || media.ended : sound === 'silent';
     // A page that sets the position knows it better than its media element (a streamed
     // element's time and duration may span several tracks).
-    const time = position ? positionNow() : active?.currentTime ?? 0;
-    const duration = position ? position.duration : active?.duration;
+    const time = position ? positionNow() : media?.currentTime ?? 0;
+    const duration = position ? position.duration : media?.duration;
     // The page can replace what drawing the picture uses: without it, the player still shows the media.
     let picture = null;
     try { picture = draw(artwork(metadata?.artwork)); } catch {}
@@ -59,10 +63,10 @@
       artwork: picture,
       paused,
       // Muted while it plays, it keeps its own card but takes no player from another tab.
-      audible: active ? isAudible(active) : true,
+      audible: media ? isAudible(media) : true,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
-      rate: active?.playbackRate || 1,
+      rate: media?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
       restored,
@@ -127,7 +131,7 @@
 
   const changed = (before, media) => {
     active = media;
-    if (media) hadMedia = true;
+    last = media ?? before;
     if (position && active !== before) {
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
@@ -149,7 +153,10 @@
     if (media.isConnected) attached.add(media);
     let next = active;
     if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
-    else if (isPlaying(media) && isAudible(media)) next = media;
+    else if (isPlaying(media) && isAudible(media)) {
+      next = media;
+      hadMedia = true;
+    }
     if (media !== next && next === active) return;
     changed(active, next);
   };
@@ -177,6 +184,8 @@
   };
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function () {
+    // Held (`hold`), played on its own it would take the sound back from the tab that took it.
+    if (held) return Promise.reject(new DOMException('Paused for another tab', 'NotAllowedError'));
     watch(this);
     return play.apply(this, arguments);
   };
@@ -187,6 +196,11 @@
     proto.setActionHandler = function (action, handler) {
       handlers[action] = typeof handler === 'function' ? handler : null;
       schedule();
+      // WebKit calls it itself for a media key, AirPods or Control Center: played again, no longer held.
+      const page = handlers[action];
+      if (action === 'play' && page) {
+        return setActionHandler.call(this, action, function () { playAgain(); return page.apply(this, arguments); });
+      }
       return setActionHandler.apply(this, arguments);
     };
     const setPositionState = proto.setPositionState;
@@ -226,6 +240,56 @@
     schedule();
   });
 
+  // Paused for another tab's sound: WebKit then suspends the page's Web Audio, which a player may
+  // resume on its own, unaware why it stopped. Kept suspended until the page is played again.
+  let held = false;
+  const listen = addEventListener.bind(globalThis);
+  const unlisten = removeEventListener.bind(globalThis);
+  // The tab's other frames held with it are freed too (`free`): a page's button may drive its iframe's player.
+  const release = (event) => {
+    if (!event.isTrusted) return;
+    hold(false);
+    post({ frame, released: true });
+  };
+  // Each context the page tried to resume while held, with its own resume: it won't ask again.
+  const refused = new Map();
+  // Kept through a second hold: a context still suspended won't ask again.
+  const hold = (on) => {
+    held = on;
+    for (const type of ['pointerdown', 'keydown']) (on ? listen : unlisten)(type, release, true);
+  };
+  // Played again (the app, a media key): the page's refused resumes go through. A click leaves them to the page.
+  const playAgain = () => {
+    hold(false);
+    for (const [context, resume] of refused) resume.call(context).catch(() => {});
+    refused.clear();
+  };
+  for (const proto of new Set([globalThis.AudioContext?.prototype, globalThis.webkitAudioContext?.prototype])) {
+    const resume = proto?.resume;
+    if (resume) {
+      proto.resume = function () {
+        if (!held) return resume.apply(this, arguments);
+        refused.set(this, resume);
+        return Promise.resolve();
+      };
+    }
+  }
+  // WebKit tells only the page what it hears, so an iframe's Web Audio is never reported: the app
+  // is told of it once, to hold it too. Any sound it makes goes to its destination.
+  const audio = globalThis.BaseAudioContext?.prototype;
+  const destination = globalThis !== globalThis.top && audio && Object.getOwnPropertyDescriptor(audio, 'destination');
+  if (destination?.get) {
+    let told = false;
+    Object.defineProperty(audio, 'destination', {
+      ...destination,
+      get() {
+        if (!told) post({ frame, audio: true });
+        told = true;
+        return destination.get.call(this);
+      },
+    });
+  }
+
   const call = (action) => {
     const handler = handlers[action];
     if (!handler) return false;
@@ -239,13 +303,21 @@
     value: (command) => {
       switch (command) {
         // Asked of the page first: a pause it hasn't made yet would otherwise win over the play.
-        case 'play': if (!call('play')) active?.play().catch(() => {}); break;
+        case 'play': playAgain(); if (!call('play')) active?.play().catch(() => {}); break;
         case 'pause': if (!call('pause')) active?.pause(); break;
+        case 'hush': hold(true); if (!call('pause')) active?.pause(); break;
+        // Its tab played again from the app: an iframe held with it, which is not the one that plays.
+        case 'release': playAgain(); break;
+        // Clicked in another frame of its tab: may play again, its Web Audio still left to the page.
+        case 'free': hold(false); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
         // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
+          // Heard while its media is paused, muted or emptied: the sound comes from elsewhere (Web Audio).
+          // Media taken out may still be what WebKit hears.
+          if (command === 'heard' && last && !isGone(last) && !(isPlaying(active) && isAudible(active))) hadMedia = false;
           anchor();
           schedule();
           break;

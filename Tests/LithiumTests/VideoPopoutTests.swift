@@ -169,6 +169,39 @@ struct VideoPopoutTests {
         #expect(VideoPopout.playback(from: ["width": 1280.0, "height": 720.0])?.aspectRatio == 1280.0 / 720.0)
     }
 
+    /// A page shrunk to the player overflows it both ways, and its scroll bars were drawn over the
+    /// video. Styled scroll bars take room whatever the system setting, like "Show scroll bars: Always".
+    @Test func noScrollBarsInThePlayer() async throws {
+        let (webView, window) = try await playingPage(Self.overflowingPage)
+        defer { window.orderOut(nil) }
+        webView.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
+        _ = try await webView.callAsyncJavaScript("scrollTo(40, 500)", contentWorld: .page)
+        let room = """
+            const root = document.documentElement;
+            return [innerWidth - root.clientWidth, innerHeight - root.clientHeight, scrollX, scrollY].join(' ');
+            """
+        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls both ways")
+
+        _ = try await VideoPopout.run("show", in: webView)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 40 500", "no scroll bars in the player")
+        let snapshot = try #require(await snapshot(of: webView))
+        for point in [(312, 90), (160, 172), (312, 172)] {
+            #expect(isRed(snapshot.colorAt(x: point.0, y: point.1)), "not the video at \(point)")
+        }
+
+        _ = try await VideoPopout.run("hide", in: webView)
+        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls as before")
+    }
+
+    private static let overflowingPage = """
+        <!doctype html>
+        <style>::-webkit-scrollbar { width: 16px; height: 16px; background: rgb(0, 255, 0); }</style>
+        <body style="margin: 0; width: 3000px; height: 3000px; background: rgb(0, 0, 255)">
+          <video src="red.mp4" loop playsinline style="width: 640px; height: 360px"></video>
+        </body>
+        """
+
     /// A muted video, or none playing, stays with its tab.
     @Test func onlyAVideoPlayingWithSoundPopsOut() async throws {
         let (webView, window) = try await playingPage()
@@ -179,13 +212,13 @@ struct VideoPopoutTests {
         #expect(try await VideoPopout.run("playing", in: webView) as? Bool == false)
     }
 
-    private func playingPage() async throws -> (WKWebView, NSWindow) {
+    private func playingPage(_ page: String = Self.page) async throws -> (WKWebView, NSWindow) {
         let video = try #require(Bundle.module.url(forResource: "Fixtures/red", withExtension: "mp4"))
         let folder = FileManager.default.temporaryDirectory.appending(path: "popout-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: video, to: folder.appending(path: "red.mp4"))
         let file = folder.appending(path: "page.html")
-        try Self.page.write(to: file, atomically: true, encoding: .utf8)
+        try page.write(to: file, atomically: true, encoding: .utf8)
 
         let configuration = WKWebViewConfiguration()
         configuration.mediaTypesRequiringUserActionForPlayback = []

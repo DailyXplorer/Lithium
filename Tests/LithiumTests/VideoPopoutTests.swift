@@ -171,6 +171,7 @@ struct VideoPopoutTests {
 
     /// A page shrunk to the player overflows it both ways, and its scroll bars were drawn over the
     /// video. Styled scroll bars take room whatever the system setting, like "Show scroll bars: Always".
+    /// In the player the page fits it exactly; put back, it is where it was scrolled to.
     @Test func noScrollBarsInThePlayer() async throws {
         let (webView, window) = try await playingPage(Self.overflowingPage)
         defer { window.orderOut(nil) }
@@ -183,12 +184,14 @@ struct VideoPopoutTests {
         #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls both ways")
 
         _ = try await VideoPopout.run("show", in: webView)
+        let overflow = "const root = document.documentElement; return [root.scrollWidth - root.clientWidth, root.scrollHeight - root.clientHeight].join(' ')"
         let videoBox = "const r = document.querySelector('video').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(' ')"
         // The player as it opens, resized tall (as for a vertical video), then wide.
         for (width, height) in [(320, 180), (180, 320), (480, 120)] {
             webView.frame.size = NSSize(width: CGFloat(width), height: CGFloat(height))
             try await Task.sleep(for: .milliseconds(300))
-            #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 40 500", "no scroll bars in the \(width)×\(height) player")
+            #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 0 0", "no scroll bars in the \(width)×\(height) player")
+            #expect(try await webView.callAsyncJavaScript(overflow, contentWorld: .page) as? String == "0 0", "the page fits the \(width)×\(height) player")
             #expect(try await webView.callAsyncJavaScript(videoBox, contentWorld: .page) as? String == "0 0 \(width) \(height)", "the video fits the \(width)×\(height) player")
             let snapshot = try #require(await snapshot(of: webView))
             // Read in pixels: on a 2× screen the snapshot has twice as many as the view has points.

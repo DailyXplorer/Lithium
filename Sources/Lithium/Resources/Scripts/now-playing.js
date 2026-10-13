@@ -29,7 +29,8 @@
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
-  const isRunning = () => active ? isPlaying(active) : !hadMedia && sound === 'heard';
+  // Without `hadMedia`, the page's sound is not its media's, though Play still plays them.
+  const isRunning = () => hadMedia ? isPlaying(active) : sound === 'heard';
 
   const positionNow = () => position.time + (position.running ? (performance.now() - position.at) / 1000 * position.rate : 0);
   const anchor = () => {
@@ -38,18 +39,19 @@
 
   const report = () => {
     timer = 0;
-    if (!active && (hadMedia || !sound)) {
+    const media = hadMedia ? active : null;
+    if (!media && (hadMedia || !sound)) {
       if (reported) send(null);
       reported = false;
       restored = false;
       return;
     }
     const metadata = session?.metadata;
-    const paused = active ? active.paused || active.ended : sound === 'silent';
+    const paused = media ? media.paused || media.ended : sound === 'silent';
     // A page that sets the position knows it better than its media element (a streamed
     // element's time and duration may span several tracks).
-    const time = position ? positionNow() : active?.currentTime ?? 0;
-    const duration = position ? position.duration : active?.duration;
+    const time = position ? positionNow() : media?.currentTime ?? 0;
+    const duration = position ? position.duration : media?.duration;
     // The page can replace what drawing the picture uses: without it, the player still shows the media.
     let picture = null;
     try { picture = draw(artwork(metadata?.artwork)); } catch {}
@@ -59,10 +61,10 @@
       artwork: picture,
       paused,
       // Muted while it plays, it keeps its own card but takes no player from another tab.
-      audible: active ? isAudible(active) : true,
+      audible: media ? isAudible(media) : true,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
-      rate: active?.playbackRate || 1,
+      rate: media?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
       restored,
@@ -127,7 +129,6 @@
 
   const changed = (before, media) => {
     active = media;
-    if (media) hadMedia = true;
     if (position && active !== before) {
       position = position.media && position.media !== active ? null : { ...position, media: active };
     }
@@ -149,7 +150,10 @@
     if (media.isConnected) attached.add(media);
     let next = active;
     if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
-    else if (isPlaying(media) && isAudible(media)) next = media;
+    else if (isPlaying(media) && isAudible(media)) {
+      next = media;
+      hadMedia = true;
+    }
     if (media !== next && next === active) return;
     changed(active, next);
   };
@@ -187,6 +191,11 @@
     proto.setActionHandler = function (action, handler) {
       handlers[action] = typeof handler === 'function' ? handler : null;
       schedule();
+      // WebKit calls it itself for a media key, AirPods or Control Center: played again, no longer held.
+      const page = handlers[action];
+      if (action === 'play' && page) {
+        return setActionHandler.call(this, action, function () { hold(false); return page.apply(this, arguments); });
+      }
       return setActionHandler.apply(this, arguments);
     };
     const setPositionState = proto.setPositionState;
@@ -240,6 +249,21 @@
     const resume = proto?.resume;
     if (resume) proto.resume = function () { return held ? Promise.resolve() : resume.apply(this, arguments); };
   }
+  // WebKit tells only the page what it hears, so an iframe's Web Audio is never reported: the app
+  // is told of it once, to hold it too. Any sound it makes goes to its destination.
+  const audio = globalThis.BaseAudioContext?.prototype;
+  const destination = globalThis !== globalThis.top && audio && Object.getOwnPropertyDescriptor(audio, 'destination');
+  if (destination?.get) {
+    let told = false;
+    Object.defineProperty(audio, 'destination', {
+      ...destination,
+      get() {
+        if (!told) post({ frame, audio: true });
+        told = true;
+        return destination.get.call(this);
+      },
+    });
+  }
 
   const call = (action) => {
     const handler = handlers[action];
@@ -262,11 +286,9 @@
         // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
-          // Heard while none of its media plays: the sound comes from elsewhere (Web Audio).
-          if (command === 'heard' && !isPlaying(active)) {
-            hadMedia = false;
-            if (active) changed(active, null);
-          }
+          // Heard while its media is paused or muted: the sound comes from elsewhere (Web Audio). Media
+          // taken out may still be what WebKit hears.
+          if (command === 'heard' && active && !(isPlaying(active) && isAudible(active))) hadMedia = false;
           anchor();
           schedule();
           break;

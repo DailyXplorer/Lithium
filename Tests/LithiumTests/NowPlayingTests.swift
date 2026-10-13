@@ -298,6 +298,51 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === video && paused.isEmpty, "of known length")
     }
 
+    /// Two 2.3 s pings 1 s apart from one page (a burst of messages): the second, still heard at the
+    /// first one's check, takes no player and pauses nothing.
+    @Test func pausesNothingForTwoPingsInARow() async throws {
+        let browser = Browser()
+        let (video, chat) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        var started = Date()
+        player.isHeard = { $0 === video || Date() < started.addingTimeInterval(2.3) }
+        let sound = { (message: [String: Any]) in
+            NowPlaying.Media(message: message.merging(["paused": false, "audible": true]) { $1 }, at: Date())
+        }
+
+        player.receive(sound(["duration": 600]), from: video)
+        player.receive(sound(["duration": 2.3]), from: chat)
+        try await Task.sleep(for: .seconds(1))
+        started = Date()
+        player.receive(sound(["duration": 2.3]), from: chat)
+        await player.proving?.value
+        #expect(player.tab === video && paused.isEmpty)
+    }
+
+    /// A ping from another frame of the same tab leaves the wait of the music already playing there:
+    /// the music claims, and the player shows it.
+    @Test func keepsEachFramesWait() async throws {
+        let browser = Browser()
+        let (video, page) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        player.isHeard = { _ in true }
+        let (main, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
+
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date()), from: video)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Music"], at: Date()), from: page, frame: main)
+        let music = player.proving
+        try await Task.sleep(for: .milliseconds(500))
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 2.3], at: Date()), from: page, frame: embed)
+        await music?.value
+        #expect(player.tab === page && player.media?.title == "Music" && paused == [video])
+    }
+
     /// A known short clip (4 s) still heard at the check claims then, like any other sound that lasts.
     @Test func claimsAShortClipStillHeardAtTheCheck() async {
         let browser = Browser()
@@ -1777,11 +1822,11 @@ struct NowPlayingPageTests {
         #expect(page.last?.isPaused == false && page.last?.isAudible == true)
     }
 
-    /// A chat in a background tab pings (WhatsApp's 2.3 s `new Audio`): the song plays on and keeps the
-    /// player. A song the chat plays afterwards still pauses it.
+    /// A chat in a background tab pings (WhatsApp's 2.3 s `new Audio`, then a 1 s one): the song plays on
+    /// and keeps the player. A song the chat plays afterwards still pauses it.
     @Test func playsOnThroughANotificationSound() async throws {
         let music = try await PlayingPage("<script>\(Self.wav)</script><audio></audio><script>document.querySelector('audio').src = wav(30)</script>")
-        let chat = try await PlayingPage("<script>\(Self.wav)\nwindow.ping = new Audio(wav(2.3)); window.song = new Audio(wav(30));</script>")
+        let chat = try await PlayingPage("<script>\(Self.wav)\nwindow.ping = new Audio(wav(2.3)); window.beep = new Audio(wav(1)); window.song = new Audio(wav(30));</script>")
         defer { music.close(); chat.close() }
         let browser = Browser()
         let (musicTab, chatTab) = (browser.newTab(), browser.newTab())
@@ -1802,6 +1847,13 @@ struct NowPlayingPageTests {
         #expect(await waitUntil { chat.messages.contains { $0?.duration.map { $0 > 2 } == true } && chat.last?.isPaused == true }, "the ping played to its end")
         await player.proving?.value
         #expect(player.tab === musicTab && player.media?.isPaused == false)
+        #expect(try await isMusicPlaying())
+
+        let count = chat.messages.count
+        try await chat.play("beep")
+        #expect(await waitUntil { chat.messages[count...].contains { $0?.duration.map { $0 < 2 } == true } && chat.last?.isPaused == true }, "the 1 s ping played to its end")
+        await player.proving?.value
+        #expect(player.tab === musicTab && player.media?.isPaused == false, "a 1 s ping")
         #expect(try await isMusicPlaying())
 
         try await chat.play("song")

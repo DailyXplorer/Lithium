@@ -124,9 +124,9 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// An iframe's last word from before WebKit heard its tab, one per tab: WebKit often hears a
     /// sound only after the first report, which would otherwise be lost.
     @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
-    /// A sound not known to last, one per tab, with when it started: a ping or music, told apart by
-    /// whether WebKit still hears it `sustain` seconds later.
-    @ObservationIgnored private var unproven: [ObjectIdentifier: (media: Media, frame: Frame, since: Date)] = [:]
+    /// A sound not known to last, one per frame of each tab, with when it was last reported playing: a
+    /// ping or music, told apart by whether WebKit still hears it `sustain` seconds later.
+    @ObservationIgnored private var unproven: [ObjectIdentifier: [String: (media: Media, frame: Frame, since: Date)]] = [:]
     /// The last wait for such a sound; awaited in tests.
     @ObservationIgnored private(set) var proving: Task<Void, Never>?
 
@@ -194,12 +194,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// plays; the page itself is taken at its word. One sound at a time: the tab heard before is
     /// paused once WebKit hears the new one, unless it is in a call or muted. Only a sound that lasts
     /// claims: one longer than `brief` or a live stream at once, any other (a chat's ping, Web Audio,
-    /// media still loading) once it has `lasted`, still heard `sustain` seconds after it started.
+    /// media still loading) once it has `lasted`, still heard `sustain` seconds after its frame last
+    /// reported it.
     func receive(_ media: Media?, from tab: Tab, frame: Frame = Frame(id: ""), lasted: Bool = false) {
         let holds = tab === self.tab && frame.id == self.frame?.id
         let key = ObjectIdentifier(tab)
         if unheard[key]?.frame.id == frame.id { unheard[key] = nil }
-        let since = unproven[key]?.frame.id == frame.id ? unproven.removeValue(forKey: key)?.since : nil
+        // A frame's next word starts its wait over: it may be another ping, still heard at the old check.
+        unproven[key]?[frame.id] = nil
         // An iframe's word needs WebKit's ear, back from the back-forward cache too.
         let isTrusted = !frame.isSubframe || isHeard(tab) != false
         let lasts = { (media: Media) in lasted || media.isLive || media.duration.map { $0 > Self.brief } == true }
@@ -239,22 +241,22 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         } else if holds {
             discard(tab, pageGone: false)
         } else if let media, !media.isPaused, media.isAudible, !tab.isMuted, !lasts(media) {
-            prove(media, from: tab, frame: frame, since: since)
+            prove(media, from: tab, frame: frame)
         } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
             // Turned down only for want of WebKit's ear.
             unheard[key] = (media, frame)
         }
     }
 
-    /// One check, `sustain` seconds after the sound started: it claims if WebKit still hears its tab and
-    /// the page hasn't reported it paused since. Web Audio that plays on sends no other report.
-    private func prove(_ media: Media, from tab: Tab, frame: Frame, since: Date?) {
-        let key = ObjectIdentifier(tab)
-        unproven[key] = (media, frame, since ?? Date())
-        guard since == nil, let since = unproven[key]?.since else { return }
+    /// One check, `sustain` seconds after the frame last reported the sound playing: it claims if WebKit
+    /// still hears its tab and the frame has said nothing since. Web Audio that plays on sends no other report.
+    private func prove(_ media: Media, from tab: Tab, frame: Frame) {
+        let key = ObjectIdentifier(tab), since = Date()
+        unproven[key, default: [:]][frame.id] = (media, frame, since)
         proving = Task { [weak tab] in
             try? await Task.sleep(for: .seconds(Self.sustain))
-            guard let tab, unproven[key]?.since == since, let waiting = unproven.removeValue(forKey: key),
+            guard let tab, unproven[key]?[frame.id]?.since == since,
+                  let waiting = unproven[key]?.removeValue(forKey: frame.id),
                   isHeard(tab) == true, browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
             receive(waiting.media, from: tab, frame: waiting.frame, lasted: true)
         }

@@ -78,12 +78,12 @@ enum TitleCleaner {
         var names: [String: String] = [:]
         // An all-caps word longer than an acronym ("NASA") is shouting, not how the name is written.
         for word in titleWords where word.first?.isUppercase == true && !(word.count > 5 && word == word.uppercased()) {
-            names[word.lowercased()] = names[word.lowercased()] ?? word
+            names[key(word)] = names[key(word)] ?? word
         }
         var result = ""
         var rest = label.startIndex
         for word in wordRuns(label) {
-            result += label[rest..<word.startIndex] + (names[word.lowercased()] ?? String(word))
+            result += label[rest..<word.startIndex] + (names[key(word)] ?? String(word))
             rest = word.endIndex
         }
         result += label[rest...]
@@ -94,6 +94,11 @@ enum TitleCleaner {
         }
         let locale = language(of: title).map { Locale(identifier: $0.minimalIdentifier) } ?? .current
         return String(first).capitalized(with: locale) + result.dropFirst()
+    }
+
+    /// Lowercase without a locale, except that "İstanbul" gives "istanbul" rather than a dotted "i̇".
+    private static func key(_ word: some StringProtocol) -> String {
+        word.lowercased().replacing("i\u{307}", with: "i")
     }
 
     private static func words(_ text: String) -> Set<String> {

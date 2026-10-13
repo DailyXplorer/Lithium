@@ -44,6 +44,8 @@ struct TitleCleanerTests {
         ("privacy policy", "PRIVACY POLICY AND TERMS OF USE", "Privacy policy"),
         ("iPhone 17 review", "Apple iPhone 17 review: the best iPhone yet", "iPhone 17 review"),
         ("eBay selling guide", "How to sell on eBay: a beginner's guide", "eBay selling guide"),
+        ("hava durumu istanbul", "Hava durumu: İstanbul yağmuru ve rüzgar tahmini bugün", "Hava durumu İstanbul"),
+        ("istanbul gezi rehberi", "istanbul gezi rehberi: gezilecek yerler ve yapılacak şeyler listesi", "İstanbul gezi rehberi"),
         ("école de commerce", "Classement des écoles de commerce 2026", "École de commerce"),
         ("2026 tax guide", "2026 tax guide for freelancers in France", "2026 tax guide"),
         ("🎉 party ideas", "🎉 party ideas for a birthday at home", "🎉 party ideas"),
@@ -88,7 +90,8 @@ func modelShortensRealTitles() async throws {
             if let accepted {
                 let shown = TitleCleaner.capitalized(accepted, like: original)
                 let words = { (text: String) in text.split { !$0.isLetter && !$0.isNumber } }
-                #expect(shown.first?.isUppercase == true || words(original).contains(words(shown).first ?? ""), "\(shown)")
+                let head = words(shown).first ?? ""
+                #expect(shown.first?.isUppercase == true || (head.contains(where: \.isUppercase) && words(original).contains(head)), "\(shown)")
             }
             #expect(accepted?.contains("://") != true)
         case .declined:

@@ -1151,7 +1151,6 @@ struct NowPlayingPageTests {
         try await Task.sleep(for: .milliseconds(500))
         #expect(try await state() == "suspended")
         await NowPlaying.run("play", in: page.webView)
-        try await page.run("context.resume()")
         #expect(await waitUntil { try await state() == "running" }, "played again")
     }
 
@@ -1267,7 +1266,7 @@ struct NowPlayingPageTests {
         #expect(try await state() == "suspended")
     }
 
-    /// An iframe with running Web Audio, silent, and no media.
+    /// An iframe with running Web Audio, silent, and no media, which resumes whenever it is suspended.
     private static let iframeSynth = """
         <iframe srcdoc="<script>
           window.context = new AudioContext();
@@ -1276,6 +1275,7 @@ struct NowPlayingPageTests {
           silence.offset.value = mute.gain.value = 0;
           silence.connect(mute).connect(context.destination);
           silence.start();
+          context.onstatechange = () => { if (context.state === 'suspended') context.resume(); };
         </script>"></iframe>
         """
 
@@ -1305,7 +1305,7 @@ struct NowPlayingPageTests {
         #expect(hushed.count == 1)
     }
 
-    /// Played again from the app, a tab lets the iframes held with it resume their Web Audio. Silent.
+    /// Played again from the app, a tab resumes the Web Audio its iframes asked for while held. Silent.
     @Test func releasesAnIframesWebAudioOnPlay() async throws {
         let page = try await PlayingPage(Self.iframeSynth)
         defer { page.close() }
@@ -1315,6 +1315,8 @@ struct NowPlayingPageTests {
         let audio = try #require(page.audioFrame)
         await NowPlaying.hush(page.webView, frames: [audio])
         #expect(await waitUntil { try await state() == "suspended" })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await state() == "suspended", "held against its own resume")
 
         let browser = Browser()
         let tab = browser.newTab()
@@ -1330,7 +1332,6 @@ struct NowPlayingPageTests {
         #expect(told.map(\.command) == ["play", "release"])
 
         for (command, frame) in told { await NowPlaying.run(command, in: page.webView, frame: frame) }
-        try await page.run("\(context).resume()")
         #expect(await waitUntil { try await state() == "running" })
     }
 

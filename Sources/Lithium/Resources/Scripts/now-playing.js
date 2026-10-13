@@ -241,13 +241,28 @@
   const listen = addEventListener.bind(globalThis);
   const unlisten = removeEventListener.bind(globalThis);
   const release = (event) => { if (event.isTrusted) hold(false); };
+  // Each context the page tried to resume while held, with its own resume: it won't ask again.
+  const refused = new Map();
   const hold = (on) => {
     held = on;
+    if (on) refused.clear();
     for (const type of ['pointerdown', 'keydown']) (on ? listen : unlisten)(type, release, true);
+  };
+  // Played again from the app: the page's refused resumes go through. A click leaves them to the page.
+  const playAgain = () => {
+    hold(false);
+    for (const [context, resume] of refused) resume.call(context).catch(() => {});
+    refused.clear();
   };
   for (const proto of new Set([globalThis.AudioContext?.prototype, globalThis.webkitAudioContext?.prototype])) {
     const resume = proto?.resume;
-    if (resume) proto.resume = function () { return held ? Promise.resolve() : resume.apply(this, arguments); };
+    if (resume) {
+      proto.resume = function () {
+        if (!held) return resume.apply(this, arguments);
+        refused.set(this, resume);
+        return Promise.resolve();
+      };
+    }
   }
   // WebKit tells only the page what it hears, so an iframe's Web Audio is never reported: the app
   // is told of it once, to hold it too. Any sound it makes goes to its destination.
@@ -278,11 +293,11 @@
     value: (command) => {
       switch (command) {
         // Asked of the page first: a pause it hasn't made yet would otherwise win over the play.
-        case 'play': hold(false); if (!call('play')) active?.play().catch(() => {}); break;
+        case 'play': playAgain(); if (!call('play')) active?.play().catch(() => {}); break;
         case 'pause': if (!call('pause')) active?.pause(); break;
         case 'hush': hold(true); if (!call('pause')) active?.pause(); break;
         // Its tab played again from the app: an iframe held with it, which is not the one that plays.
-        case 'release': hold(false); break;
+        case 'release': playAgain(); break;
         case 'previous': if (!call('previoustrack')) youTubeButton('prev')?.click(); break;
         case 'next': if (!call('nexttrack')) youTubeButton('next')?.click(); break;
         // WebKit started or stopped hearing the page.

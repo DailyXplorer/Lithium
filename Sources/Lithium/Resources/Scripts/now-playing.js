@@ -28,6 +28,12 @@
   // 'heard' or 'silent', as the app tells it, for a page whose sound comes from no media element.
   let sound = null;
   let hadMedia = false;
+  // Which sound a report is about, so the app tells a second ping from the first one played on: each
+  // media element its own, Web Audio a new one each time WebKit starts hearing the page.
+  let sources = 0;
+  const ids = new WeakMap();
+  const source = (media) => { if (!ids.has(media)) ids.set(media, ++sources); return ids.get(media); };
+  let heard = 0;
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
@@ -66,6 +72,8 @@
       audible: media ? isAudible(media) : true,
       time: Number.isFinite(time) ? time : 0,
       duration: Number.isFinite(duration) && duration > 0 ? duration : null,
+      live: duration === Infinity,
+      source: media ? source(media) : heard,
       rate: media?.playbackRate || 1,
       previous: !!handlers.previoustrack || !!youTubeButton('prev'),
       next: !!handlers.nexttrack || !!youTubeButton('next'),
@@ -151,6 +159,8 @@
   const onMedia = (event) => {
     const media = event.target;
     if (media.isConnected) attached.add(media);
+    // Rewound or given another file, it plays another sound (a second ping); a loop plays on the same.
+    if (event.type === 'seeked' && !media.loop || event.type === 'emptied') ids.delete(media);
     let next = active;
     if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
     else if (isPlaying(media) && isAudible(media)) {
@@ -315,6 +325,7 @@
         // WebKit started or stopped hearing the page.
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
+          if (command === 'heard') heard = ++sources;
           // Heard while its media is paused, muted or emptied: the sound comes from elsewhere (Web Audio).
           // Media taken out may still be what WebKit hears.
           if (command === 'heard' && last && !isGone(last) && !(isPlaying(active) && isAudible(active))) hadMedia = false;

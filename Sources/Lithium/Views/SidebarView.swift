@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SidebarHeader: View {
     var body: some View {
@@ -139,6 +140,10 @@ private struct PinGrid: View {
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isTargeted = false
+    /// Each tile's frame in the grid, to find the slot a drop lands on.
+    @State private var tileFrames: [Pin.ID: CGRect] = [:]
+    /// The slot under a drag, outlined so the user sees which favorite a drop replaces.
+    @State private var targetedSlot: Int?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
@@ -158,7 +163,8 @@ private struct PinGrid: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(Array(browser.spacePins.enumerated()), id: \.element.id) { index, pin in
-                        PinTile(pin: pin, index: index)
+                        PinTile(pin: pin, isTargeted: index == targetedSlot)
+                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.space)) }) { tileFrames[pin.id] = $0 }
                     }
                 }
             }
@@ -168,19 +174,75 @@ private struct PinGrid: View {
                 .fill(isTargeted ? palette.tile : .clear)
                 .padding(-4)
         )
-        // Space around the tiles: a tab is pinned at the end, a favorite moves to the end.
-        .dropDestination(for: String.self) { items, _ in
-            browser.dropOnFavorites(items, at: nil)
-        } isTargeted: { isTargeted = $0 }
+        .coordinateSpace(.named(Self.space))
+        // One drop target for the whole grid: a drop target on each tile swallows its right-click, so the
+        // tile's context menu never opens. On a tile, a favorite moves into its slot and a tab is pinned
+        // there; on the space around the tiles, at the end.
+        .onDrop(of: [.text], delegate: FavoritesDrop(browser: browser, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
     }
+
+    private static let space = "PinGrid"
+}
+
+/// A delegate rather than `.dropDestination`, whose hover reports only a Bool: following the pointer
+/// tells which tile to outline.
+private struct FavoritesDrop: DropDelegate {
+    let browser: Browser
+    let frames: [Pin.ID: CGRect]
+    @Binding var isTargeted: Bool
+    @Binding var targetedSlot: Int?
+
+    private func slot(at location: CGPoint) -> Int? {
+        browser.favoritesDropSlot(at: location, frames: frames)
+    }
+
+    func dropEntered(info: DropInfo) { isTargeted = true }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        targetedSlot = slot(at: info.location)
+        return nil
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+        targetedSlot = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let location = info.location
+        dropExited(info: info)
+        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        let browser = browser, frames = frames
+        _ = provider.loadTransferable(type: String.self) { result in
+            let items = (try? result.get()).map { [$0] } ?? []
+            Task { @MainActor in _ = browser.dropOnFavorites(items, at: location, frames: frames) }
+        }
+        return true
+    }
+}
+
+/// The slot whose tile holds `location`, in `order`; `nil` (the end of the grid) between or around tiles.
+/// `frames` and `location` must share a coordinate space.
+func favoriteSlot(at location: CGPoint, order: [Pin.ID], frames: [Pin.ID: CGRect]) -> Int? {
+    order.firstIndex { frames[$0]?.contains(location) == true }
 }
 
 /// A favorite drags as `pin:<id>` and a tab as its bare id, both UUID strings: the prefix tells them apart.
 private let pinDragPrefix = "pin:"
 
-private extension Browser {
+extension Browser {
+    /// The slot of the current space's grid under `location`: `pins` also holds other spaces' favorites.
+    func favoritesDropSlot(at location: CGPoint, frames: [Pin.ID: CGRect]) -> Int? {
+        favoriteSlot(at: location, order: spacePins.map(\.id), frames: frames)
+    }
+
+    /// A drop at `location`: on a tile, into its slot; around the tiles, at the end of the grid.
+    func dropOnFavorites(_ items: [String], at location: CGPoint, frames: [Pin.ID: CGRect]) -> Bool {
+        dropOnFavorites(items, at: favoritesDropSlot(at: location, frames: frames))
+    }
+
     /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
-    func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
+    private func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
         endTabDrag()
         guard let item = items.first else { return false }
         withAnimation(.snappy(duration: 0.2)) {
@@ -198,11 +260,10 @@ private extension Browser {
 
 private struct PinTile: View {
     let pin: Pin
-    let index: Int
+    let isTargeted: Bool
     @Environment(Browser.self) private var browser
     @Environment(\.sidebarPalette) private var palette
     @State private var isHovered = false
-    @State private var isTargeted = false
 
     var body: some View {
         let live = browser.liveTab(for: pin)
@@ -221,9 +282,6 @@ private struct PinTile: View {
             .onTapGesture { browser.activate(pin) }
             .tabHoverTarget(.pin(pin.id), isHovered: $isHovered)
             .draggable(pinDragPrefix + pin.id.uuidString)
-            .dropDestination(for: String.self) { items, _ in
-                browser.dropOnFavorites(items, at: index)
-            } isTargeted: { isTargeted = $0 }
             .contextMenu {
                 if let live {
                     Button("Duplicate Tab") { browser.duplicate(live) }

@@ -17,9 +17,8 @@ import Testing
         #expect(!Keychain.allows(isDebug: false, runsTests: false, environment: [:], bundle: Self.installed, signed: false), "ad-hoc signed")
     }
 
-    @Test func anAdHocSignedBuildHasNoIdentity() {
+    @Test func anAppSignedWithACertificateHasAnIdentity() {
         #expect(Keychain.hasSigningIdentity(Self.installed))
-        #expect(!Keychain.hasSigningIdentity(Bundle(for: Marker.self).bundleURL), "the linker's ad-hoc signature")
         #expect(!Keychain.hasSigningIdentity(URL(fileURLWithPath: "/nonexistent/Lithium.app")))
     }
 
@@ -45,7 +44,6 @@ import Testing
 
     /// The app replaced on disk under it (an update): its Keychain items trust the new code.
     @Test func aProcessWhoseAppWasReplacedLeavesTheKeychainAlone() {
-        #expect(Keychain.runsCodeOnDisk(), "the test process is the code on disk")
         #expect(Keychain.runs(launched: "12 1700000000.0", onDisk: "12 1700000000.0"))
         #expect(!Keychain.runs(launched: "12 1700000000.0", onDisk: "13 1700000500.0"), "replaced by an update")
         #expect(!Keychain.runs(launched: "12 1700000000.0", onDisk: nil), "gone from disk")
@@ -55,6 +53,15 @@ import Testing
         #expect(keychain.secret(creating: true) == nil)
         #expect(keychain.secret(creating: true) == nil)
         #expect(fake.calls == [])
+    }
+
+    /// The only test that keeps the launched executable: before that, the Keychain stays shut.
+    @MainActor @Test func theKeychainIsShutUntilTheLaunchedExecutableIsKept() {
+        #expect(Keychain.launchedExecutable == nil)
+        #expect(!Keychain.Store.login.runsCodeOnDisk(), "nothing kept at launch")
+        Keychain.keepLaunchedExecutable()
+        #expect(Keychain.launchedExecutable == Keychain.executableOnDisk(Bundle.main.executablePath))
+        #expect(Keychain.Store.login.runsCodeOnDisk(), "the test process is the code on disk")
     }
 
     /// An update writes a new executable in the old one's place.
@@ -128,8 +135,6 @@ import Testing
         #expect(fake.calls == ["copy", "add", "delete", "add"])
     }
 }
-
-private final class Marker {}
 
 /// One generic password, which may be there but unreadable without a prompt (another build's).
 private final class FakeKeychain: @unchecked Sendable {

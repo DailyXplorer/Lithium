@@ -2,10 +2,9 @@ import Foundation
 import Security
 
 /// One secret Lithium keeps in the login Keychain, read at most once a launch and never with a
-/// prompt. No explicit `kSecAttrAccess`: the default trusts the creating app, and the item's
-/// partition list most likely names the build (its cdhash) when the app has no team ID, which no
-/// access set here can widen (unverified). One this build can't read without asking is replaced
-/// instead or, if macOS won't let it go, left alone for the launch.
+/// prompt. No explicit `kSecAttrAccess`, so an update may lose access to the items (not verified
+/// on macOS either way). One this build can't read without asking is replaced instead or, if
+/// macOS won't let it go, left alone for the launch.
 final class Keychain: @unchecked Sendable {
     /// Only the installed app, signed with its own identity, uses the user's Keychain. Any other
     /// build (debug, ad-hoc signed, a test run, a throwaway home) would read the same items as
@@ -46,7 +45,9 @@ final class Keychain: @unchecked Sendable {
         launched != nil && onDisk == launched
     }
 
-    static let launchedExecutable = executableOnDisk(Bundle.main.executablePath)
+    /// The executable as launched, kept by `atLaunch`. Nil before, so the Keychain stays shut.
+    /// Written once on the main thread before any Keychain call.
+    nonisolated(unsafe) private(set) static var launchedExecutable: String?
 
     /// A new file (another inode) or a rewritten one once an update replaced the app.
     static func executableOnDisk(_ path: String?) -> String? {
@@ -61,7 +62,12 @@ final class Keychain: @unchecked Sendable {
     /// And the build judged as launched, before an update can replace it on disk.
     @MainActor static func atLaunch() {
         SecKeychainSetUserInteractionAllowed(false)
-        _ = (isAllowed, launchedExecutable)
+        _ = isAllowed
+        keepLaunchedExecutable()
+    }
+
+    @MainActor static func keepLaunchedExecutable(_ path: String? = Bundle.main.executablePath) {
+        launchedExecutable = executableOnDisk(path)
     }
 
     static let sessionCookies = Keychain(service: "app.lithium.browser.session-cookies", account: "file-key",

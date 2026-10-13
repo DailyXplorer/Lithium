@@ -183,13 +183,23 @@ struct VideoPopoutTests {
         #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls both ways")
 
         _ = try await VideoPopout.run("show", in: webView)
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 40 500", "no scroll bars in the player")
-        let snapshot = try #require(await snapshot(of: webView))
-        for point in [(312, 90), (160, 172), (312, 172)] {
-            #expect(isRed(snapshot.colorAt(x: point.0, y: point.1)), "not the video at \(point)")
+        let videoBox = "const r = document.querySelector('video').getBoundingClientRect(); return [r.x, r.y, r.width, r.height].join(' ')"
+        // The player as it opens, resized tall (as for a vertical video), then wide.
+        for (width, height) in [(320, 180), (180, 320), (480, 120)] {
+            webView.frame.size = NSSize(width: width, height: height)
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "0 0 40 500", "no scroll bars in the \(width)×\(height) player")
+            #expect(try await webView.callAsyncJavaScript(videoBox, contentWorld: .page) as? String == "0 0 \(width) \(height)", "the video fits the \(width)×\(height) player")
+            let snapshot = try #require(await snapshot(of: webView))
+            // Read in pixels: on a 2× screen the snapshot has twice as many as the view has points.
+            let scale = CGFloat(snapshot.pixelsWide) / CGFloat(width)
+            for point in [(width - 8, height / 2), (width / 2, height - 8), (width - 8, height - 8)] {
+                let color = snapshot.colorAt(x: Int(CGFloat(point.0) * scale), y: Int(CGFloat(point.1) * scale))
+                #expect(isVideo(color), "not the video at \(point) in the \(width)×\(height) player")
+            }
         }
 
+        webView.frame.size = NSSize(width: 320, height: 180)
         _ = try await VideoPopout.run("hide", in: webView)
         #expect(try await webView.callAsyncJavaScript(room, contentWorld: .page) as? String == "16 16 40 500", "the page scrolls as before")
     }
@@ -269,5 +279,11 @@ struct VideoPopoutTests {
     private func isRed(_ color: NSColor?) -> Bool {
         guard let color = color?.usingColorSpace(.sRGB) else { return false }
         return color.redComponent > 0.7 && color.greenComponent < 0.3 && color.blueComponent < 0.3
+    }
+
+    /// The red video or its black bars: neither the blue page nor its green scroll bars.
+    private func isVideo(_ color: NSColor?) -> Bool {
+        guard let color = color?.usingColorSpace(.sRGB) else { return false }
+        return color.greenComponent < 0.3 && color.blueComponent < 0.3
     }
 }

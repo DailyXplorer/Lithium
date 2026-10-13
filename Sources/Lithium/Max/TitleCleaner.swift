@@ -94,14 +94,22 @@ enum TitleCleaner {
                 && !(titleCase && word.first?.isUppercase == true && !word.dropFirst().contains(where: \.isUppercase))
                 // "The" opening the title or a part of it ("Review: The best…") is not a proper noun.
                 && !(index == 0 && openingWords.contains(word.lowercased())) {
-                properNouns[word.lowercased()] = properNouns[word.lowercased()] ?? word
+                properNouns[key(word)] = properNouns[key(word)] ?? word
             }
         }
+        // A word the title also writes lowercase after the same word stays as the label writes it:
+        // "a" after "for" in "Vitamin A foods: a guide for a family".
+        let lowercasePairs = Set(parts.flatMap { words in
+            zip(words, words.dropFirst()).filter { !$1.contains(where: \.isUppercase) }.map { key($0) + " " + key($1) }
+        })
         var result = ""
         var rest = label.startIndex
+        var previous = ""
         for word in wordRuns(label) {
             result += label[rest..<word.startIndex]
-            result += properNouns[word.lowercased()] ?? String(word)
+            let lowered = key(word)
+            result += lowercasePairs.contains(previous + " " + lowered) ? String(word) : properNouns[lowered] ?? String(word)
+            previous = lowered
             rest = word.endIndex
         }
         result += label[rest...]
@@ -114,13 +122,17 @@ enum TitleCleaner {
         return String(first).capitalized(with: locale) + result.dropFirst()
     }
 
-    /// More than half the words of four letters or more in caps. With no such word, all words in
-    /// caps: "AI vs ML vs GPT" is a list of acronyms, not shouting.
+    /// More than half the words of four letters or more in caps. With no such word, never:
+    /// "AI ML GPT RAG" is a list of acronyms, not shouting.
     private static func mostlyCaps(_ words: [String]) -> Bool {
-        let letterWords = words.filter { $0.first?.isLetter == true }
-        let longWords = letterWords.filter { $0.count >= 4 }
-        guard !longWords.isEmpty else { return !letterWords.isEmpty && letterWords.allSatisfy { $0 == $0.uppercased() } }
+        let longWords = words.filter { $0.first?.isLetter == true && $0.count >= 4 }
+        guard !longWords.isEmpty else { return false }
         return longWords.filter { $0 == $0.uppercased() }.count * 2 > longWords.count
+    }
+
+    /// Lowercase without a locale, except that "İstanbul" gives "istanbul" rather than a dotted "i̇".
+    private static func key(_ word: some StringProtocol) -> String {
+        word.lowercased().replacing("i\u{307}", with: "i")
     }
 
     private static func words(_ text: String) -> Set<String> {

@@ -243,7 +243,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             reported = media
             self.media = settled(media)
         } else if holds {
+            // The other frames' sounds still wait.
+            let waiting = unproven[key]
             discard(tab, pageGone: false)
+            unproven[key] = waiting
         } else if let media, !media.isPaused, media.isAudible, !tab.isMuted, !lasts(media) {
             if let waited, waited.media.source == media.source {
                 // The same sound again (its position, metadata or volume): its check stays.
@@ -277,6 +280,8 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     func hearingChanged(_ tab: Tab) {
         guard browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
         guard isHeard(tab) == true else {
+            // Over before its check: none of the tab's sounds may claim for one heard later.
+            unproven[ObjectIdentifier(tab)] = nil
             if tab === self.tab, frame?.isSubframe == false { tell(tab, "silent", nil) }
             return
         }

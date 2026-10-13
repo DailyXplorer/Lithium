@@ -462,6 +462,45 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === video && paused.isEmpty, "reported paused")
     }
 
+    /// A blip WebKit stopped hearing leaves no wait: an iframe's music heard after it claims, not the blip.
+    @Test func dropsTheWaitsOfATabGoneSilent() async throws {
+        let browser = Browser()
+        let (video, page) = (browser.newTab(), browser.newTab())
+        browser.select(video)
+        let player = browser.nowPlaying
+        var paused: [Tab] = []
+        player.hush = { tab, _ in paused.append(tab) }
+        var heard = true
+        player.isHeard = { $0 === video || heard }
+        let (main, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
+
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date()), from: video)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Blip"], at: Date()), from: page, frame: main)
+        heard = false
+        player.hearingChanged(page)
+        try await Task.sleep(for: .milliseconds(500))
+        heard = true
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Music"], at: Date()), from: page, frame: embed)
+        await player.proving?.value
+        #expect(player.tab === page && player.media?.title == "Music" && paused == [video])
+    }
+
+    /// The page's word that it plays nothing leaves its iframes' sounds waiting.
+    @Test func keepsTheIframesWaitWhenThePageStops() async {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.isHeard = { _ in true }
+        let embed = NowPlaying.Frame(id: "embed", isSubframe: true)
+
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "duration": 600], at: Date()), from: tab)
+        player.receive(NowPlaying.Media(message: ["paused": false, "audible": true, "title": "Clip"], at: Date()), from: tab, frame: embed)
+        player.receive(nil, from: tab)
+        #expect(player.tab == nil)
+        await player.proving?.value
+        #expect(player.tab === tab && player.media?.title == "Clip")
+    }
+
     /// A sound waiting to claim is dropped with its tab.
     @Test func dropsTheWaitWhenItsTabCloses() async {
         let browser = Browser()
@@ -1454,6 +1493,29 @@ struct NowPlayingPageTests {
         await NowPlaying.run("heard", in: page.webView)
         #expect(await waitUntil { page.last?.isPaused == false })
         #expect(page.last?.source.map { ![first, second, heard].contains($0) } == true, "heard again: another sound")
+    }
+
+    /// A ping played again on its own element, rewound or given another file, is another sound with
+    /// its own check; a looping one plays on as the same.
+    @Test func namesARestartedSoundAnew() async throws {
+        let page = try await PlayingPage("<script>\(Self.wav)</script>")
+        defer { page.close() }
+        try await page.play("window.ping = new Audio(wav(2.3))")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let first = try #require(page.last?.source)
+        try await page.run("ping.currentTime = 0")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.source != first }, "rewound")
+        let rewound = try #require(page.last?.source)
+        try await page.play("(ping.src = wav(2.3), ping)")
+        #expect(await waitUntil { page.last?.isPaused == false && page.last?.source.map { ![first, rewound].contains($0) } == true }, "another file")
+        try await page.run("ping.pause()")
+        #expect(await waitUntil { page.last?.isPaused == true })
+
+        try await page.play("window.loop = Object.assign(new Audio(wav(0.5)), { loop: true })")
+        #expect(await waitUntil { page.last?.isPaused == false })
+        let looping = try #require(page.last?.source)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(page.last?.isPaused == false && page.last?.source == looping, "looped twice")
     }
 
     /// A page that muted the media it plays, then heard through Web Audio: it plays, and is heard.

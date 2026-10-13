@@ -81,11 +81,6 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         var info: WKFrameInfo? = nil
         /// An iframe, perhaps an ad's: its word alone takes no player.
         var isSubframe = false
-
-        /// The frame a message came from: the page itself is reached without its `WKFrameInfo`.
-        static func from(_ info: WKFrameInfo, id: String) -> Frame {
-            Frame(id: id, info: info.isMainFrame ? nil : info, isSubframe: !info.isMainFrame)
-        }
     }
 
     static let name = "lithiumNowPlaying"
@@ -163,14 +158,17 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let body = message.body as? [String: Any], let id = body["frame"] as? String,
-              let tab = (message.webView as? PageWebView)?.tab,
-              browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
-        receive(message: body, from: tab, frame: .from(message.frameInfo, id: id))
+        guard let tab = (message.webView as? PageWebView)?.tab else { return }
+        receive(message.body, from: tab, frameInfo: message.frameInfo)
     }
 
-    /// A frame's word: what it plays, or that it made Web Audio.
-    func receive(message body: [String: Any], from tab: Tab, frame: Frame) {
+    /// A frame's word: what it plays, or that it made Web Audio. The page itself is reached without
+    /// its `WKFrameInfo`.
+    func receive(_ body: Any, from tab: Tab, frameInfo: WKFrameInfo) {
+        guard let body = body as? [String: Any], let id = body["frame"] as? String,
+              browser?.tabs.contains(tab) == true, !tab.isAsleep else { return }
+        let isMain = frameInfo.isMainFrame
+        let frame = Frame(id: id, info: isMain ? nil : frameInfo, isSubframe: !isMain)
         if body["audio"] != nil { return receiveAudio(from: tab, frame: frame) }
         receive(Media(message: body["media"] ?? NSNull(), at: Date()), from: tab, frame: frame)
     }

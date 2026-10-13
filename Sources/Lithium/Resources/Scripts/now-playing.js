@@ -184,6 +184,8 @@
   };
   const play = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function () {
+    // Held (`hold`), played on its own it would take the sound back from the tab that took it.
+    if (held) return Promise.reject(new DOMException('Paused for another tab', 'NotAllowedError'));
     watch(this);
     return play.apply(this, arguments);
   };

@@ -1573,12 +1573,6 @@ extension Tab: WKNavigationDelegate {
         guard let browser else { return }
         guard browser.isOnScreen(self) else {
             sleep(configuration: browser.makeConfiguration(for: url))
-            // A favorite wakes again a moment later, or its badge would stay as it was; not after
-            // a crash within the last minute, so a page that keeps crashing can't loop.
-            if pinID != nil, lastCrashReload.map({ Date().timeIntervalSince($0) > 60 }) ?? true {
-                lastCrashReload = Date()
-                browser.wakeSleepingFavorites()
-            }
             return
         }
         if let last = lastCrashReload, Date().timeIntervalSince(last) < 10 {

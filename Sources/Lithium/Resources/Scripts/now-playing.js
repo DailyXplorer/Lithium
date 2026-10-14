@@ -15,17 +15,17 @@
   const cancel = clearTimeout.bind(globalThis);
   const session = navigator.mediaSession;
   const handlers = {};
-  // Set by the page for the media then active: another media has its own.
+  // Set by the page for the media then active, and kept for it: another media has its own.
   let position = null;
   // Drawn small here, so the app never fetches what the page names.
   let art = { src: null, data: null };
   let active = null;
-  // The media last active, still once dropped: WebKit may then hear Web Audio beside it.
-  let last = null;
+  // Each media seen playing, the first started first.
+  const playing = new Set();
   let reported = false;
   let restored = false;
   let timer = 0;
-  // 'heard' or 'silent', as the app tells it, for a page whose sound comes from no media element.
+  // 'heard' or 'silent', as the app tells it, for a frame that never played a media element.
   let sound = null;
   let hadMedia = false;
   // Which sound a report is about, so the app tells a second ping from the first one played on: each
@@ -37,17 +37,16 @@
 
   const isAudible = (media) => !media.muted && media.volume > 0;
   const isPlaying = (media) => !!media && !media.paused && !media.ended;
-  // Without `hadMedia`, the page's sound is not its media's, though Play still plays them.
-  const isRunning = () => hadMedia ? isPlaying(active) : sound === 'heard';
+  const isRunning = (media) => media ? isPlaying(media) : sound === 'heard';
 
   const positionNow = () => position.time + (position.running ? (performance.now() - position.at) / 1000 * position.rate : 0);
   const anchor = () => {
-    if (position) position = { ...position, time: positionNow(), at: performance.now(), running: isRunning() };
+    if (position) position = { ...position, time: positionNow(), at: performance.now(), running: isRunning(position.media) };
   };
 
   const report = () => {
     timer = 0;
-    const media = hadMedia ? active : null;
+    const media = active;
     if (!media && (hadMedia || !sound)) {
       if (reported) send(null);
       reported = false;
@@ -55,11 +54,12 @@
       return;
     }
     const metadata = session?.metadata;
-    const paused = media ? media.paused || media.ended : sound === 'silent';
+    const paused = !isRunning(media);
     // A page that sets the position knows it better than its media element (a streamed
     // element's time and duration may span several tracks).
-    const time = position ? positionNow() : media?.currentTime ?? 0;
-    const duration = position ? position.duration : media?.duration;
+    const own = position?.media === media;
+    const time = own ? positionNow() : media?.currentTime ?? 0;
+    const duration = own ? position.duration : media?.duration;
     // The page can replace what drawing the picture uses: without it, the player still shows the media.
     let picture = null;
     try { picture = draw(artwork(metadata?.artwork)); } catch {}
@@ -134,15 +134,20 @@
   const isGone = (media) => attached.has(media) && !media.isConnected && media.paused;
   // Sees a media removed already paused, which fires no event.
   const removals = new MutationObserver(() => {
-    if (active && isGone(active)) changed(active, null);
+    if (isGone(active)) follow(active, null);
   });
 
-  const changed = (before, media) => {
-    active = media;
-    last = media ?? before;
-    if (position && active !== before) {
-      position = position.media && position.media !== active ? null : { ...position, media: active };
-    }
+  // Follows the media heard playing: the one followed while it plays, else the last started. With
+  // none, the one followed stays, paused or muted.
+  const follow = (before, media) => {
+    for (const each of playing) if (!isPlaying(each)) playing.delete(each);
+    const audible = [...playing].filter(isAudible);
+    const kept = isGone(active) ? null : active;
+    active = audible.includes(kept) ? kept : audible.at(-1) ?? kept;
+    if (position && !position.media) position = { ...position, media: active };
+    anchor();
+    if (media !== active && active === before) return;
+    hadMedia ||= !!active;
     if (active !== before) {
       removals.disconnect();
       if (active && attached.has(active)) {
@@ -151,7 +156,6 @@
         removals.observe(active.getRootNode(), { childList: true, subtree: true });
       }
     }
-    anchor();
     schedule();
   };
 
@@ -161,14 +165,10 @@
     if (media.isConnected) attached.add(media);
     // Rewound or given another file, it plays another sound (a second ping); a loop plays on the same.
     if (event.type === 'seeked' && !media.loop || event.type === 'emptied') ids.delete(media);
-    let next = active;
-    if (media === active && (event.type === 'emptied' && !media.currentSrc || isGone(media))) next = null;
-    else if (isPlaying(media) && isAudible(media)) {
-      next = media;
-      hadMedia = true;
-    }
-    if (media !== next && next === active) return;
-    changed(active, next);
+    if (isPlaying(media)) playing.add(media);
+    const before = active;
+    if (media === active && event.type === 'emptied' && !media.currentSrc) active = null;
+    follow(before, media);
   };
   const watch = (media) => {
     if (!(media instanceof HTMLMediaElement) || watched.has(media)) return;
@@ -218,7 +218,7 @@
     proto.setPositionState = function (state) {
       const result = setPositionState.apply(this, arguments);
       position = state && Number.isFinite(state.position)
-        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isRunning(), media: active }
+        ? { time: state.position, duration: state.duration, rate: state.playbackRate || 1, at: performance.now(), running: isRunning(active), media: active }
         : null;
       schedule();
       return result;
@@ -326,9 +326,6 @@
         case 'heard': case 'silent':
           if (sound || command === 'heard') sound = command;
           if (command === 'heard') heard = ++sources;
-          // Heard while its media is paused, muted or emptied: the sound comes from elsewhere (Web Audio).
-          // Media taken out may still be what WebKit hears.
-          if (command === 'heard' && last && !isGone(last) && !(isPlaying(active) && isAudible(active))) hadMedia = false;
           anchor();
           schedule();
           break;

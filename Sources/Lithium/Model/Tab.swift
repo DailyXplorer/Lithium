@@ -1120,8 +1120,22 @@ final class Tab: NSObject, Identifiable {
             \(blocked == nil ? "<div><h1>Can’t open this page</h1><p>\(message)</p></div>" : "")
             """
         isStartingErrorPage = true
-        errorNavigation = webView.loadHTMLString(html, baseURL: url)
+        // `loadHTMLString` gets no history entry: the page before would be the current one, Back
+        // would skip it. WebKit's alternate page (Safari's) takes the failed address's place in the
+        // history, and Back, Forward and Reload to it try that address again. It returns no
+        // navigation; `didStartProvisionalNavigation` takes the one WebKit reports, if any.
+        guard let url, webView.responds(to: Self.loadAlternateHTML) else {
+            errorNavigation = webView.loadHTMLString(html, baseURL: url)
+            return
+        }
+        errorNavigation = nil
+        typealias Load = @convention(c) (AnyObject, Selector, NSString, NSURL, NSURL) -> Void
+        let load = unsafeBitCast(webView.method(for: Self.loadAlternateHTML), to: Load.self)
+        load(webView, Self.loadAlternateHTML, html as NSString, url as NSURL, url as NSURL)
     }
+
+    /// Private WebKit (`WKWebViewPrivate`), as Safari's error pages use.
+    private static let loadAlternateHTML = Selector(("_loadAlternateHTMLString:baseURL:forUnreachableURL:"))
 
     /// The lists are read only now, on the page's way out, and never for a page that loads.
     private func showBlockedPage(_ url: URL) {
@@ -1360,6 +1374,8 @@ extension Tab: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // The alternate error page's load, should a WebKit name it after all.
+        if isStartingErrorPage, errorNavigation == nil { errorNavigation = navigation }
         if navigation !== errorNavigation {
             failedURL = nil
             endBlockedPage()

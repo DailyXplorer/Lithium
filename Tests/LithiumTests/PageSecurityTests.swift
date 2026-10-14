@@ -9,6 +9,16 @@ import WebKit
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct PageSecurityTests {
+    /// Without it App Transport Security stops every `http://` page before it loads, even one whose
+    /// server sends it on to https. The app's own connections (filter lists, updates) stay held to
+    /// it. Read from the file `build-app.sh` copies: a test's `Bundle.main` is the test runner's.
+    @Test func webContentMayLoadOverPlainHTTP() throws {
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Support/Info.plist").standardized
+        let plist = try #require(NSDictionary(contentsOf: file) as? [String: Any])
+        let ats = try #require(plist["NSAppTransportSecurity"] as? [String: Bool])
+        #expect(ats == ["NSAllowsArbitraryLoadsInWebContent": true])
+    }
+
     /// A script's `click()` on a `mailto:` link hands nothing to another app, and asks nothing.
     @Test func aScriptsClickOpensNoOtherApp() async throws {
         let (listener, base) = try await LocalHTTP.serve([

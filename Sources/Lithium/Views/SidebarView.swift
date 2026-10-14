@@ -117,8 +117,9 @@ struct SidebarView: View {
         }
     }
 
+    /// In the sidebar of the window that holds the playing tab.
     private var playingTab: Tab? {
-        browser.nowPlaying.shownTab(besides: window.videoPopout.tab)
+        browser.nowPlaying.shownTab(besides: window.videoPopout.tab).flatMap { $0.windowID == window.id ? $0 : nil }
     }
 
     private func askToDelete(_ folder: TabFolder) {

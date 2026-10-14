@@ -150,6 +150,22 @@ struct SpaceSignInTests {
         #expect(await signedIn(link))
     }
 
+    /// A second window showing the space shares its store: the site sees the sign-in's cookie on
+    /// the second window's request too.
+    @Test func aSecondWindowSharesTheSpaceSignIn() async throws {
+        let site = try await SignInSite.start()
+        defer { site.stop() }
+        let (browser, work, favorite) = try await signedInFavorite(on: site)
+        defer { reset(browser) }
+
+        let second = browser.openWindow(space: work.id)
+        let tab = browser.newTab(url: site.home, in: second)
+        #expect(second.selectedTab === tab)
+        #expect(tab.spaceID == work.id)
+        #expect(tab.webView.configuration.websiteDataStore === favorite.webView.configuration.websiteDataStore)
+        #expect(await signedIn(tab))
+    }
+
     /// Back from an extension's page, which keeps a store of its own, the tab gets a new web view
     /// with the space's store (`needsNewWebView`). No extension is installed: an unknown one's page
     /// takes the same branches.
@@ -225,6 +241,7 @@ struct SpaceSignInTests {
 
     /// Closes everything and deletes the space's store, so the next test starts signed out.
     private func reset(_ browser: Browser) {
+        for window in browser.windows.dropFirst().reversed() { browser.windowWillClose(window) }
         browser.tabs.forEach { browser.close($0, remembering: false) }
         browser.pins.forEach(browser.unpin)
         for space in browser.spaces.reversed() { browser.deleteSpace(space.id) }

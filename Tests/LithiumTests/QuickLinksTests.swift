@@ -268,7 +268,7 @@ struct QuickLinksTests {
         #expect(browser.commandTab !== tab)
     }
 
-    /// Move to Main Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
+    /// Move to Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
     /// window under the page's alert or file picker: the page stays where its sheet is.
     @Test func linkWithASheetUpStaysInItsWindow() throws {
         let (browser, windows) = makeBrowser(enabled: true)

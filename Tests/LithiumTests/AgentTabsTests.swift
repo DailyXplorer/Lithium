@@ -246,9 +246,11 @@ struct AgentTabsTests {
             let first = await client.call("tabs_list")
             let tabs = first["tabs"]?.list ?? []
             #expect(tabs.count == browser.navigationOrder.count)
-            #expect(first["window"]?["id"] == "w1")
+            #expect(first["windows"]?.list?.map { $0["id"] } == ["w1"])
+            #expect(first["windows"]?.list?.first?["key"] == true)
             let entry = try #require(tabs.first { $0["url"]?.string == base.appending(path: "one").absoluteString })
             #expect(entry["title"] == "One")
+            #expect(entry["window"] == "w1")
             #expect(entry["selected"] == true)
             #expect(entry["agentTouched"] == false)
             #expect(entry["agentGroup"] == false)
@@ -256,6 +258,25 @@ struct AgentTabsTests {
             #expect(Set(ids).count == ids.count)
             #expect(ids.allSatisfy { $0.hasPrefix("t") })
             #expect((await client.call("tabs_list"))["tabs"]?.list?.compactMap { $0["tab"]?.string } == ids)
+        }
+    }
+
+    /// With two windows, `tabs_list` names both and says which one each tab is in.
+    @Test func tabsListNamesEachTabsWindow() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let mine = browser.newTab(url: base.appending(path: "one"))
+            let second = browser.openWindow()
+            defer { browser.windowWillClose(second) }
+            let theirs = browser.newTab(url: base.appending(path: "two"), in: second)
+            #expect(await waitUntil(30) { !mine.isLoading && !theirs.isLoading })
+
+            let listed = await client.call("tabs_list")
+            #expect(listed["windows"]?.list?.map { $0["id"] } == ["w1", "w2"])
+            let tabs = listed["tabs"]?.list ?? []
+            #expect(tabs.first { $0["tab"]?.string == client.hub.id(for: mine) }?["window"] == "w1")
+            #expect(tabs.first { $0["tab"]?.string == client.hub.id(for: theirs) }?["window"] == "w2")
+            #expect(tabs.filter { $0["selected"] == true }.count == 2, "each window has its selected tab")
         }
     }
 

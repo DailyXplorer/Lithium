@@ -606,7 +606,7 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
-    /// Without selecting it: a restored favorite wakes this way at launch.
+    /// Without selecting it.
     func wakeIfAsleep() {
         guard isAsleep, let url else { return }
         load(url, history: sleepingState)

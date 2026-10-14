@@ -446,6 +446,11 @@ final class Browser {
     private func openInternal(_ url: URL) {
         if let existing = tabs.first(where: { $0.url?.host() == url.host() && Internal.isInternal($0.url) }) {
             if url.fragment() != nil, existing.url != url { navigate(existing, .open(url)) }
+            // Already in front, the page gets no visibilitychange to refresh on, though what it
+            // lists may have changed meanwhile in a tab never selected (an agent's, a background link).
+            if existing === selectedTab {
+                existing.loadedWebView?.evaluateJavaScript("window.shownAgain?.()", in: nil, in: .page)
+            }
             select(existing)
         } else {
             newTab(url: url)

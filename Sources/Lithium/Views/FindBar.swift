@@ -1,13 +1,14 @@
 import SwiftUI
 
+/// Over `tab`'s page, driving `find`: its window's, or the links' one.
 struct FindBar: View {
+    let find: FindInPage
     let tab: Tab
     @Environment(Browser.self) private var browser
     @State private var text = ""
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        let find = browser.find
         HStack(spacing: 8) {
             Icon(.search, size: 15).opacity(0.5)
             TextField("Find in page", text: $text)
@@ -29,7 +30,7 @@ struct FindBar: View {
             FindButton(icon: .close, help: "Done (Esc)") {
                 let hadKeyboard = isFocused
                 find.hide()
-                browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard)
+                browser.returnKeyboardToPage(to: tab, fieldHadKeyboard: hadKeyboard)
             }
         }
         .font(Theme.font(13))
@@ -68,16 +69,16 @@ struct FindBar: View {
     }
 
     private func searchAgain() {
-        Task { await browser.find.update(query: text, in: tab.findTarget) }
+        Task { await find.update(query: text, in: tab.findTarget) }
     }
 
     private func step(forward: Bool) {
         // Text typed just now isn't searched yet: it is, rather than stepping through the last search.
-        if text != browser.find.query {
-            Task { await browser.find.update(query: text, in: tab.findTarget, forward: forward) }
+        if text != find.query {
+            Task { await find.update(query: text, in: tab.findTarget, forward: forward) }
             return
         }
-        Task { await browser.find.step(forward: forward, in: tab.findTarget) }
+        Task { await find.step(forward: forward, in: tab.findTarget) }
     }
 }
 

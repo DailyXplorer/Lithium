@@ -114,18 +114,19 @@ struct BrowserTests {
         #expect(!browser.find.isVisible)
     }
 
-    /// A bar over a link's window isn't the closing tab's: closing the selected tab leaves it open.
+    /// The links' bar isn't the closing tab's window's: closing the selected tab leaves it open.
     @Test func closingTheSelectedTabKeepsALinksFindBar() async throws {
         let browser = Browser()
         // Stands in for the link's tab: the bar only checks that it's over one.
         let kept = browser.newTab(url: URL(string: "about:blank")!)
         defer { browser.close(kept) }
         let closed = browser.newTab(url: URL(string: "about:blank")!)
-        browser.find.show(focusingField: false, inLink: kept)
-        defer { browser.find.hide() }
+        let find = browser.quickLinks.find
+        find.show(focusingField: false, inLink: kept)
+        defer { find.hide() }
 
         browser.close(closed)
-        #expect(browser.find.isVisible && browser.find.linkTab === kept)
+        #expect(find.isVisible && find.linkTab === kept)
     }
 
     /// A wide page clips sideways overflow; a split pane's width or zooming in leaves it scrollable,
@@ -423,7 +424,8 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(second) && second.webView.title == "Second" })
     }
 
-    /// The sidebar opens as the user left it, and a screenshot's passing flip is not remembered.
+    /// The sidebar opens as the user left it, saved with the session at quit; a screenshot's
+    /// passing flip is never what a new window opens with.
     @Test func sidebarVisibilitySurvivesRelaunch() {
         UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible)
         defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible) }
@@ -431,9 +433,11 @@ struct BrowserTests {
         #expect(first.isSidebarVisible == true)
 
         first.toggleSidebar()
+        first.saveNow()
         #expect(Browser().isSidebarVisible == false)
 
         first.isSidebarVisible = true
+        #expect(UserDefaults.standard.bool(forKey: Preference.sidebarVisible) == false)
         #expect(Browser().isSidebarVisible == false)
     }
 

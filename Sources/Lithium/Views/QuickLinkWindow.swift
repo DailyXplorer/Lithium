@@ -110,15 +110,13 @@ struct QuickLinkView: View {
     /// The page's title, for the Window menu and Mission Control.
     let onTitle: (String) -> Void
     @Environment(Browser.self) private var browser
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
             QuickLinkBar(url: tab.url, isSecure: tab.connection == .secure) {
                 browser.quickLinks.close(tab)
             } onMove: {
-                browser.quickLinks.moveToMainWindow(tab)
-                openWindow(id: "browser")
+                browser.quickLinks.moveToBrowserWindow(tab)
             }
             .overlay { LoadingBar(tab: tab) }
             .background(WindowDragArea())
@@ -137,14 +135,14 @@ struct QuickLinkView: View {
                 }
                 .overlay { BlockedPageLayer(tab: tab) }
                 .overlay(alignment: .topTrailing) {
-                    if browser.showsFindBar(over: tab) {
-                        FindBar(tab: tab)
+                    if browser.quickLinks.showsFindBar(over: tab) {
+                        FindBar(find: browser.quickLinks.find, tab: tab)
                             .padding(.top, tab.pdf == nil ? 10 : 50)
                             .padding(.horizontal, 10)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
+                .animation(.snappy(duration: 0.2), value: browser.quickLinks.find.isVisible)
         }
         .font(Theme.font(13))
         .background(Color(nsColor: .windowBackgroundColor))
@@ -176,7 +174,7 @@ struct QuickLinkBar: View {
             }
             .help(url?.absoluteString ?? "")
             Spacer(minLength: 8)
-            IconButton(icon: .returnToTab, help: "Move to main window (⌘O)", action: onMove)
+            IconButton(icon: .returnToTab, help: "Move to window (⌘O)", action: onMove)
         }
         .padding(.horizontal, 6)
         .frame(height: 38)

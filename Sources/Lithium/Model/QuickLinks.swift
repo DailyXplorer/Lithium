@@ -13,6 +13,8 @@ final class QuickLinks {
     private(set) var tabs: [Tab] = []
     /// The page whose window is in front: the menu's page commands act on it (`Browser.commandTab`).
     private(set) var keyTab: Tab?
+    /// One find bar for the links' windows, over the link in front; each browser window has its own.
+    let find = FindInPage()
 
     @ObservationIgnored weak var browser: Browser?
     /// Tests open no window.
@@ -26,10 +28,12 @@ final class QuickLinks {
 
     /// Also where a link's page opens a page of its own (a popup, with WebKit's `configuration`):
     /// in the main window it would land behind this one, unseen.
+    /// The page is the browser window in front's, in its space, which matters once it moves there.
     @discardableResult
     func open(_ url: URL? = nil, configuration: WKWebViewConfiguration? = nil, space: Space.ID? = nil) -> Tab? {
         guard let browser else { return nil }
-        let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url), space: space ?? browser.currentSpaceID)
+        let window = browser.commandWindow
+        let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url), space: space ?? window.currentSpaceID, window: window.id)
         if let url { tab.load(url) }
         tabs.append(tab)
         windows[tab.id] = showWindow(tab, browser)
@@ -40,14 +44,53 @@ final class QuickLinks {
         tabs.contains { $0 === tab }
     }
 
-    /// The same web view, so the page doesn't reload and keeps what was typed or played in it.
-    /// Not while a sheet is up (a page's alert, a file picker): closing the window under it would
-    /// leave the page waiting on an answer. False when it didn't move.
+    /// Into the browser window in front, shown again if it was closed, with the same web view, so
+    /// the page doesn't reload and keeps what was typed or played in it. Not while a sheet is up
+    /// (a page's alert, a file picker): closing the window under it would leave the page waiting
+    /// on an answer. False when it didn't move.
     @discardableResult
-    func moveToMainWindow(_ tab: Tab) -> Bool {
+    func moveToBrowserWindow(_ tab: Tab) -> Bool {
         guard windows[tab.id]?.attachedSheet == nil, let browser, remove(tab) else { return false }
-        browser.adopt(tab)
-        browser.window?.makeKeyAndOrderFront(nil)
+        browser.inBrowserWindow { window in
+            browser.adopt(tab, into: window)
+            window.nsWindow?.makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
+
+    func showsFindBar(over tab: Tab) -> Bool {
+        find.isVisible && find.linkTab === tab
+    }
+
+    var findBarIsInFront: Bool { keyTab.map(showsFindBar(over:)) ?? false }
+
+    func toggleFind() {
+        if findBarIsInFront {
+            find.hide()
+            browser?.returnKeyboardToPage(to: keyTab, fieldHadKeyboard: true)
+        } else if let keyTab {
+            find.show(inLink: keyTab)
+        }
+    }
+
+    func findStep(forward: Bool) async {
+        guard let keyTab else { return }
+        find.show(focusingField: false, inLink: keyTab)
+        await find.step(forward: forward, in: keyTab.findTarget)
+    }
+
+    func useSelectionForFind() async {
+        guard let keyTab else { return }
+        await find.useSelection(in: keyTab.findTarget, inLink: keyTab)
+    }
+
+    /// Escape in a link's window has only the find bar to close, and not while the page has the
+    /// keyboard: the Escape is the page's, and the bar stays open.
+    func closeFindBar() -> Bool {
+        guard findBarIsInFront, !(keyTab?.contentView.window?.firstResponder is WKWebView) else { return false }
+        let hadKeyboard = find.isFieldFocused
+        find.hide()
+        browser?.returnKeyboardToPage(to: keyTab, fieldHadKeyboard: hadKeyboard)
         return true
     }
 
@@ -78,8 +121,8 @@ final class QuickLinks {
         if keyTab === tab, !toSheet { keyTab = nil }
     }
 
-    /// The main window in front: no link's window is, even one that resigned to its sheet.
-    func mainWindowBecameKey() {
+    /// A browser window in front: no link's window is, even one that resigned to its sheet.
+    func browserWindowBecameKey() {
         keyTab = nil
     }
 
@@ -87,7 +130,7 @@ final class QuickLinks {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return false }
         tabs.remove(at: index)
         if keyTab === tab { keyTab = nil }
-        if browser?.find.linkTab === tab { browser?.find.hide() }
+        if find.linkTab === tab { find.hide() }
         windows.removeValue(forKey: tab.id)?.close()
         return true
     }

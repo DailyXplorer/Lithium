@@ -34,8 +34,9 @@ struct ZenModeTests {
         UserDefaults.standard.removeObject(forKey: Preference.sidebarReveal)
     }
 
-    /// Zen mode opens as the user left it, and leaves the sidebar's own setting alone; a passing
-    /// change (the screenshot's other look) isn't remembered.
+    /// Zen mode opens as the user left it, saved with the session at quit, and leaves the sidebar's
+    /// own setting alone; a passing change (the screenshot's other look) isn't what a new window
+    /// opens with.
     @Test func zenModeSurvivesRelaunchApartFromTheSidebar() {
         defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
         let first = Browser()
@@ -46,14 +47,17 @@ struct ZenModeTests {
         #expect(first.isZenMode)
         #expect(first.isSidebarVisible)
         #expect(!first.showsSidebar)
+        first.saveNow()
         #expect(Browser().isZenMode)
 
         first.isZenMode = false
+        #expect(UserDefaults.standard.bool(forKey: Preference.zenMode))
         #expect(Browser().isZenMode)
 
         first.isZenMode = true
         first.toggleZenMode()
         #expect(first.showsSidebar)
+        first.saveNow()
         #expect(Browser().isZenMode == false)
     }
 

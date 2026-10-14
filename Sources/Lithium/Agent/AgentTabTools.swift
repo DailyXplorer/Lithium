@@ -161,7 +161,7 @@ extension AgentHub {
     ) { _, _, hub in
         guard let browser = hub.browser else { return ["tabs": []] }
         var window: [String: JSONValue] = ["id": "w1"]
-        if let frame = (browser.selectedTab?.loadedWebView?.window ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain })?.frame {
+        if let frame = (browser.commandWindow.nsWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain })?.frame {
             window["width"] = .int(Int(frame.width))
             window["height"] = .int(Int(frame.height))
         }
@@ -171,7 +171,7 @@ extension AgentHub {
                 "tab": .string(hub.id(for: tab)),
                 "title": .string(tab.displayTitle),
                 "url": .string(tab.url?.absoluteString ?? ""),
-                "selected": .bool(tab.id == browser.selectedTabID),
+                "selected": .bool(tab.id == browser.window(of: tab).selectedTabID),
                 "favorite": .bool(tab.pinID != nil),
                 "asleep": .bool(tab.isAsleep),
                 "loading": .bool(tab.isLoading),

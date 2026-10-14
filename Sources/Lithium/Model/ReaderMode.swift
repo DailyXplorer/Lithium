@@ -118,8 +118,10 @@ extension Browser {
         ReaderMode.showsButton = shown
         tabs.forEach { $0.readerButtonChanged() }
         if shown {
-            selectedTab?.checkReader()
-            shownPartner?.checkReader()
+            for window in windows {
+                window.selectedTab?.checkReader()
+                window.shownPartner?.checkReader()
+            }
         }
     }
 }

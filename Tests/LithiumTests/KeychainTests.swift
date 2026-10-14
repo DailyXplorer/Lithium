@@ -214,14 +214,16 @@ import WebKit
 
     /// The installed app's tab doesn't answer, and called anyway hands no key, never a new one.
     @Test func theInstalledAppsTabLeavesTheKeyToWebKit() {
-        let tab = Tab(browser: Browser(), configuration: nil, keychainAllowed: true)
+        let browser = Browser()
+        let tab = Tab(browser: browser, configuration: nil, window: browser.windows[0].id, keychainAllowed: true)
         #expect(!tab.responds(to: Self.selector))
         #expect(tab.responds(to: NSSelectorFromString("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:")))
         #expect(key(from: tab) == [nil])
     }
 
     @Test func anotherBuildsTabHandsWebKitTheLaunchKey() {
-        let tab = Tab(browser: Browser(), configuration: nil, keychainAllowed: false)
+        let browser = Browser()
+        let tab = Tab(browser: browser, configuration: nil, window: browser.windows[0].id, keychainAllowed: false)
         #expect(tab.responds(to: Self.selector))
         #expect(key(from: tab) == [Keychain.webCryptoKey])
     }

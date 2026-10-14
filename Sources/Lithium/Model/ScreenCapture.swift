@@ -16,10 +16,11 @@ final class ScreenCapture {
     }
 
     private(set) var phase = Phase.idle
-    @ObservationIgnored private unowned let browser: Browser
+    /// The window captured, whose sidebar the shot toggles.
+    @ObservationIgnored private unowned let browserWindow: BrowserWindow
 
-    init(browser: Browser) {
-        self.browser = browser
+    init(window: BrowserWindow) {
+        browserWindow = window
     }
 
     var shot: Shot? {
@@ -71,14 +72,14 @@ final class ScreenCapture {
     /// Both looks, so the preview can switch the sidebar instantly; in Zen mode, the look with the
     /// sidebar is the window out of Zen mode.
     private func windowWithAndWithoutSidebar(_ window: NSWindow) async throws -> Shot.Content {
-        let original = (sidebar: browser.isSidebarVisible, zen: browser.isZenMode)
-        defer { (browser.isSidebarVisible, browser.isZenMode) = original }
-        let shown = browser.showsSidebar
+        let original = (sidebar: browserWindow.isSidebarVisible, zen: browserWindow.isZenMode)
+        defer { (browserWindow.isSidebarVisible, browserWindow.isZenMode) = original }
+        let shown = browserWindow.showsSidebar
         var images: [Bool: CGImage] = [:]
         for visible in [shown, !shown] {
             if visible != shown {
-                browser.isZenMode = false
-                browser.isSidebarVisible = visible
+                browserWindow.isZenMode = false
+                browserWindow.isSidebarVisible = visible
                 await Self.settle(window)
             }
             images[visible] = try await Self.snapshot(window)

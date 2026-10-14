@@ -124,7 +124,7 @@ struct QuickLinksTests {
         #expect(browser.commandTab === other)
         browser.quickLinks.windowBecameKey(tab)
 
-        browser.quickLinks.moveToMainWindow(tab)
+        browser.quickLinks.moveToBrowserWindow(tab)
         #expect(windows.opened.first?.window.closeCount == 1)
         #expect(browser.quickLinks.tabs.isEmpty)
         #expect(browser.quickLinks.keyTab == nil)
@@ -153,7 +153,7 @@ struct QuickLinksTests {
         #expect(tab.history != nil)
 
         await browser.clearHistory()
-        browser.quickLinks.moveToMainWindow(tab)
+        browser.quickLinks.moveToBrowserWindow(tab)
         browser.saveNow()
         let saved = try #require(SessionStore.load().tabs.first { $0.url == second })
         #expect(saved.history == nil)
@@ -289,14 +289,14 @@ struct QuickLinksTests {
         browser.quickLinks.windowResignedKey(tab, toSheet: true)
         window.pageSheet = NSWindow()
 
-        #expect(!browser.quickLinks.moveToMainWindow(tab))
+        #expect(!browser.quickLinks.moveToBrowserWindow(tab))
         #expect(window.closeCount == 0)
         #expect(browser.quickLinks.contains(tab))
         #expect(browser.quickLinks.keyTab === tab)
         #expect(!browser.regularTabs.contains { $0 === tab })
 
         window.pageSheet = nil
-        #expect(browser.quickLinks.moveToMainWindow(tab))
+        #expect(browser.quickLinks.moveToBrowserWindow(tab))
         #expect(window.closeCount == 1)
         #expect(browser.regularTabs.contains { $0 === tab })
     }
@@ -322,21 +322,22 @@ struct QuickLinksTests {
         #expect(browser.showsFindBar(over: tab))
         #expect(!browser.showsFindBar(over: other))
         // What the bar does as the user types.
-        await browser.find.update(query: "needle", in: tab.findTarget)
-        #expect(browser.find.matchCount == 3)
+        let find = browser.quickLinks.find
+        await find.update(query: "needle", in: tab.findTarget)
+        #expect(find.matchCount == 3)
         // The main window's page loading doesn't take the search over.
         other.load(URL(string: "data:text/html,needle again")!)
         #expect(await waitUntil(15) { other.url?.absoluteString.hasSuffix("again") == true && !other.isLoading })
         try await Task.sleep(for: .milliseconds(200))
-        #expect(browser.find.matchCount == 3)
+        #expect(find.matchCount == 3)
         await browser.findStep(forward: true)
-        #expect(browser.find.currentMatch == 2)
+        #expect(find.currentMatch == 2)
         let marked = try await tab.webView.callAsyncJavaScript("return CSS.highlights.has('lithium-find');", contentWorld: .defaultClient) as? Bool
         #expect(marked == true, "the link's page shows the match")
 
         #expect(browser.ownsEscape(in: window))
         #expect(browser.dismissOverlay())
-        #expect(!browser.find.isVisible)
+        #expect(!find.isVisible)
         #expect(!browser.ownsEscape(in: window), "nothing left to close there")
 
         browser.quickLinks.windowResignedKey(tab)
@@ -348,8 +349,8 @@ struct QuickLinksTests {
 
     /// The bar stays in the window it was opened in: a link's window coming to the front and
     /// going again leaves the main window's search where it was, and never shows the bar there
-    /// (which would search again and take the keyboard). ⌘F in the link's window moves it, and
-    /// Escape there closes only it, not a tab's name being edited in the main window.
+    /// (which would search again and take the keyboard). ⌘F in the link's window opens the links'
+    /// own bar, and Escape there closes only it, not a tab's name being edited in the main window.
     @Test func findBarStaysInTheWindowItWasOpenedIn() async throws {
         let page = "<title>Find</title><p>needle</p><p>needle</p><p>needle</p>"
         let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
@@ -383,17 +384,18 @@ struct QuickLinksTests {
         browser.renamingTabID = main.id
         defer { browser.renamingTabID = nil }
         browser.toggleFind()
-        #expect(browser.showsFindBar(over: link) && !browser.showsFindBar(over: main))
+        #expect(browser.showsFindBar(over: link) && browser.showsFindBar(over: main), "each window keeps its own bar")
         #expect(browser.ownsEscape(in: window))
         #expect(browser.dismissOverlay())
-        #expect(!browser.find.isVisible)
+        #expect(!browser.quickLinks.find.isVisible)
+        #expect(browser.showsFindBar(over: main))
         #expect(browser.renamingTabID == main.id, "the tab's name is still being edited")
 
         // A link's window closing takes its bar with it.
         browser.toggleFind()
         #expect(browser.showsFindBar(over: link))
         browser.quickLinks.close(link)
-        #expect(!browser.find.isVisible)
+        #expect(!browser.quickLinks.find.isVisible)
     }
 
     /// A page the link's page opens (a target=_blank link, a sign-in popup) gets a window of its

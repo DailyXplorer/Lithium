@@ -120,7 +120,7 @@ final class Tab: NSObject, Identifiable {
             if PageSummaries.page(of: oldValue) != PageSummaries.page(of: url) {
                 browser?.summaries.discard(self)
                 // Its popover too, which a hidden Zen bar's button can't close.
-                if let browser, browser.selectedTabID == id, browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
+                if let browser, browser.window(of: self).selectedTabID == id, browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
                 // The article was the old address's, even when the page moved on by itself (pushState).
                 // A load's address comes before its page: the reader stays until that page commits
                 // (`resetReader`), or the page left behind would show, and play, meanwhile.
@@ -311,6 +311,8 @@ final class Tab: NSObject, Identifiable {
 
     /// The space whose sidebar shows the tab (`Space`). Fixed: its pages' cookies live there.
     let spaceID: Space.ID
+    /// The window whose sidebar lists the tab. Only `Browser.adopt` changes it, for a link's page.
+    private(set) var windowID: BrowserWindow.ID
     /// Asked for as a web view is made, so tabs restored asleep make no store.
     private var spaceStore: WKWebsiteDataStore? {
         privateStore == nil ? browser?.spaceStore(for: spaceID) : nil
@@ -320,13 +322,19 @@ final class Tab: NSObject, Identifiable {
     nonisolated let keychainAllowed: Bool
 
     init(browser: Browser, configuration: WKWebViewConfiguration?, privateStore: WKWebsiteDataStore? = nil, space: Space.ID = Space.mainID,
-         keychainAllowed: Bool = Keychain.isAllowed) {
+         window: BrowserWindow.ID, keychainAllowed: Bool = Keychain.isAllowed) {
         self.browser = browser
         self.keychainAllowed = keychainAllowed
         self.configuration = configuration
         self.privateStore = privateStore
         spaceID = space
+        windowID = window
         super.init()
+    }
+
+    /// A link's page taken into a window (`Browser.adopt`).
+    func move(toWindow window: BrowserWindow.ID) {
+        windowID = window
     }
 
     /// A space keeping its data apart has its own permissions: its sign-ins are another identity's.
@@ -734,7 +742,7 @@ final class Tab: NSObject, Identifiable {
 
     func sleep(configuration: WKWebViewConfiguration) {
         guard !isAsleep else { return }
-        browser?.videoPopout.discard(self)
+        browser?.window(of: self).videoPopout.discard(self)
         browser?.nowPlaying.discard(self)
         browser?.agent?.pageGone(self)
         dialogOwner?.answerDialog(in: self)
@@ -1067,7 +1075,7 @@ final class Tab: NSObject, Identifiable {
         case .badge(let count): updateUnread { $0.setAppBadge(count) }
         case .clearBadge: updateUnread { $0.clearAppBadge() }
         case .notification:
-            guard browser?.selectedTabID != id || loadedWebView?.window?.isKeyWindow != true else { return }
+            guard browser?.isShown(self) != true || loadedWebView?.window?.isKeyWindow != true else { return }
             updateUnread { $0.notify() }
         case .icon(let url, let title):
             // The count that came with the icon holds its fetch back.
@@ -1412,8 +1420,7 @@ extension Tab: WKNavigationDelegate {
 
     /// The find bar's count and match belong to the page it searched.
     private func searchAgainIfFinding() {
-        guard let browser, browser.showsFindBar(over: self), !browser.find.query.isEmpty else { return }
-        let find = browser.find
+        guard let find = browser?.findBar(over: self), !find.query.isEmpty else { return }
         Task { await find.update(query: find.query, in: findTarget) }
     }
 
@@ -1627,7 +1634,7 @@ extension Tab: WKUIDelegate {
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
             if let agentSession {
-                let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore, space: spaceID)
+                let tab = browser.newAgentTab(session: agentSession, privateStore: privateStore, space: spaceID, window: windowID)
                 tab.load(url)
                 browser.agent?.didOpen(tab, from: self)
             } else if browser.quickLinks.contains(self) {
@@ -1640,7 +1647,7 @@ extension Tab: WKUIDelegate {
         browser.prepare(popup: configuration)
         // A private or separate-space tab's popup shares its store, so a sign-in's cookies reach its
         // opener. A link's own window opens its pages in windows of their own.
-        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore, space: spaceID) }
+        let popup = agentSession.map { browser.newAgentTab(session: $0, configuration: configuration, privateStore: privateStore, space: spaceID, window: windowID) }
             ?? (browser.quickLinks.contains(self) ? browser.quickLinks.open(configuration: configuration, space: spaceID) : nil)
             ?? browser.newTab(configuration: configuration, privateStore: privateStore, openedFrom: self)
         if agentSession != nil { browser.agent?.didOpen(popup, from: self) }
@@ -1803,7 +1810,7 @@ extension Tab: WKUIDelegate {
 
     /// A tab out of sight never sends a form again by itself.
     private func confirmResubmission(of url: URL, inFrame: Bool) async -> Bool {
-        guard browser?.selectedTabID == id, let window = webView.window else { return false }
+        guard browser?.isShown(self) == true, let window = webView.window else { return false }
         let alert = NSAlert()
         let site = url.host() ?? "this site"
         alert.messageText = "Send the form again?"
@@ -1879,7 +1886,7 @@ extension Tab: WKWebExtensionTab {
     }
 
     func isSelected(for context: WKWebExtensionContext) -> Bool {
-        browser?.selectedTabID == id
+        browser?.window(of: self).selectedTabID == id
     }
 
     func isLoadingComplete(for context: WKWebExtensionContext) -> Bool {

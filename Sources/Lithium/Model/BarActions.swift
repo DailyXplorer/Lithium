@@ -142,7 +142,7 @@ enum BarAction: Hashable, CaseIterable {
     }
 }
 
-extension Browser {
+extension BrowserWindow {
     /// Only what the menus would have enabled for `tab`; read as the user types, from state at hand.
     func barActions(for tab: Tab?) -> [BarAction] {
         var actions: [BarAction] = []
@@ -150,42 +150,44 @@ extension Browser {
         if hasPage { actions.append(.copyLink) }
         actions.append(.newPrivateTab)
         if hasPage { actions.append(.duplicateTab) }
-        if canReopenClosedTab { actions.append(.reopenClosedTab) }
+        if browser.canReopenClosedTab { actions.append(.reopenClosedTab) }
         // As the menus: a private tab is never pinned.
         if let tab, hasPage, !tab.isEphemeral { actions.append(tab.pinID == nil ? .pinTab : .unpinTab) }
         if let tab, tab.isInTabList {
-            if split(of: tab) != nil { actions.append(.exitSplitView) } else if splitPartner(for: tab) != nil { actions.append(.openSplitView) }
+            if browser.split(of: tab) != nil { actions.append(.exitSplitView) } else if splitPartner(for: tab) != nil { actions.append(.openSplitView) }
         }
         actions.append(isZenMode ? .exitZenMode : .enterZenMode)
         if let tab, tab.canTranslate { actions.append(tab.pageTranslation?.isActive == true ? .showOriginal : .translatePage) }
         if let scheme = tab?.url?.scheme?.lowercased(), ["http", "https"].contains(scheme) { actions.append(.clearSiteData) }
-        actions.append(energy.isOn ? .turnOffEnergySaving : .turnOnEnergySaving)
+        actions.append(browser.energy.isOn ? .turnOffEnergySaving : .turnOnEnergySaving)
         actions.append(.settings)
         return actions
     }
 
     func perform(_ action: BarAction, on tab: Tab?) {
         switch action {
-        case .copyLink: copyLink(of: tab)
+        case .copyLink: browser.copyLink(of: tab)
         case .newPrivateTab:
-            newTab(privateStore: .nonPersistent())
+            browser.newTab(privateStore: .nonPersistent(), in: self)
             requestAddressFocus()
-        case .duplicateTab: if let tab { duplicate(tab) }
-        case .reopenClosedTab: reopenClosedTab()
-        case .pinTab: if let tab { pin(tab) }
-        case .unpinTab: if let favorite = pins.first(where: { $0.id == tab?.pinID }) { unpin(favorite) }
-        case .openSplitView: if let tab { openInSplit(tab) }
-        case .exitSplitView: if let tab { exitSplit(of: tab) }
+        case .duplicateTab: if let tab { browser.duplicate(tab) }
+        case .reopenClosedTab: browser.reopenClosedTab(into: self)
+        case .pinTab: if let tab { browser.pin(tab) }
+        case .unpinTab: if let favorite = browser.pins.first(where: { $0.id == tab?.pinID }) { browser.unpin(favorite) }
+        case .openSplitView: if let tab { browser.openInSplit(tab) }
+        case .exitSplitView: if let tab { browser.exitSplit(of: tab) }
         case .enterZenMode, .exitZenMode:
             guard isZenMode == (action == .exitZenMode) else { return }
             withAnimation(.snappy(duration: 0.2)) { toggleZenMode() }
-        case .translatePage, .showOriginal: toggleTranslation(tab)
-        case .clearSiteData: clearSiteData(of: tab)
-        case .turnOnEnergySaving, .turnOffEnergySaving: turnEnergySaving(on: action == .turnOnEnergySaving)
-        case .settings: openSettings()
+        case .translatePage, .showOriginal: browser.toggleTranslation(tab)
+        case .clearSiteData: browser.clearSiteData(of: tab)
+        case .turnOnEnergySaving, .turnOffEnergySaving: browser.turnEnergySaving(on: action == .turnOnEnergySaving)
+        case .settings: browser.openSettings(in: self)
         }
     }
+}
 
+extension Browser {
     /// In the tab's own store (a private tab's stays its own), then a reload. Returned for tests to await.
     @discardableResult
     func clearSiteData(of tab: Tab?) -> Task<Void, Never>? {

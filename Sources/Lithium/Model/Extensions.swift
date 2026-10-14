@@ -504,7 +504,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
         guard let popover = action.popupPopover else { return }
         if let anchor = popupAnchor, Self.isOnScreen(anchor) {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
-        } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.selectedTab?.webView.window?.contentView]) {
+        } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.commandWindow.nsWindow?.contentView]) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
         } else {
             // WebKit counts a popup it asked for as open until closed, refusing `action.openPopup()`
@@ -679,7 +679,8 @@ extension Extensions: WKWebExtensionControllerDelegate {
     }
 }
 
-/// Lithium's window, as extensions see it (`chrome.windows`).
+/// Lithium's window, as extensions see it (`chrome.windows`): one, with every browser window's
+/// tabs, standing where the window in front is.
 @MainActor
 final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     private unowned let extensions: Extensions
@@ -689,7 +690,7 @@ final class ExtensionWindow: NSObject, WKWebExtensionWindow {
     }
 
     private var nsWindow: NSWindow? {
-        extensions.browser?.selectedTab?.webView.window ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain }
+        extensions.browser?.commandWindow.nsWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain }
     }
 
     func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] {

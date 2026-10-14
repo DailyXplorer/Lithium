@@ -48,32 +48,15 @@ extension Browser {
         folders.all.isEmpty ? [] : folders.all.filter { $0.space == space }
     }
 
-    var spaceFolders: [TabFolder] { folders(in: currentSpaceID) }
-
-    /// A collapsed folder still shows the selected tab (and its split), as Arc does.
-    var tabListRows: [TabListRow] {
-        let entries = tabListEntries
-        let shown = spaceFolders
-        guard !shown.isEmpty else { return entries.map(TabListRow.tab) }
-        let selected = selectedTabID
-        var rows: [TabListRow] = []
-        for folder in shown {
-            rows.append(.folder(folder))
-            rows += entries.filter { entry in
-                guard entry.tab.folderID == folder.id else { return false }
-                return !folder.isCollapsed || selected.map { entry.tab.id == $0 || entry.split?.contains($0) == true } == true
-            }.map(TabListRow.tab)
-        }
-        return rows + entries.filter { $0.tab.folderID == nil }.map(TabListRow.tab)
-    }
-
-    /// Made in `tab`'s space when given, with `tab` in it, its name field open.
+    /// Made in `tab`'s space when given, with `tab` in it, else in the space `window` shows; its
+    /// name field open there.
     @discardableResult
-    func newFolder(with tab: Tab? = nil) -> TabFolder {
-        let folder = TabFolder(id: UUID(), name: TabFolder.defaultName, spaceID: Space.saved(tab?.spaceID ?? currentSpaceID))
+    func newFolder(with tab: Tab? = nil, in window: BrowserWindow? = nil) -> TabFolder {
+        let window = tab.map(self.window(of:)) ?? window ?? commandWindow
+        let folder = TabFolder(id: UUID(), name: TabFolder.defaultName, spaceID: Space.saved(tab?.spaceID ?? window.currentSpaceID))
         folders.all.append(folder)
         if let tab { moveTab(tab, toFolder: folder.id) }
-        renamingTabID = nil
+        window.renamingTabID = nil
         folders.renamingID = folder.id
         return folder
     }
@@ -118,5 +101,26 @@ extension Browser {
             if !known.contains(folder.space) { folder.spaceID = nil }
             return folder
         }
+    }
+}
+
+extension BrowserWindow {
+    var spaceFolders: [TabFolder] { browser.folders(in: currentSpaceID) }
+
+    /// A collapsed folder still shows the selected tab (and its split), as Arc does.
+    var tabListRows: [TabListRow] {
+        let entries = tabListEntries
+        let shown = spaceFolders
+        guard !shown.isEmpty else { return entries.map(TabListRow.tab) }
+        let selected = selectedTabID
+        var rows: [TabListRow] = []
+        for folder in shown {
+            rows.append(.folder(folder))
+            rows += entries.filter { entry in
+                guard entry.tab.folderID == folder.id else { return false }
+                return !folder.isCollapsed || selected.map { entry.tab.id == $0 || entry.split?.contains($0) == true } == true
+            }.map(TabListRow.tab)
+        }
+        return rows + entries.filter { $0.tab.folderID == nil }.map(TabListRow.tab)
     }
 }

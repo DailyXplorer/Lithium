@@ -94,9 +94,8 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("t")
             Button("Open Location…") { browser.focusAddressFromMenu(newTab: false) }
                 .keyboardShortcut("l")
-            Button("Move to Main Window") {
-                guard let tab = browser.quickLinks.keyTab, browser.quickLinks.moveToMainWindow(tab) else { return }
-                openWindow(id: "browser")
+            Button("Move to Window") {
+                if let tab = browser.quickLinks.keyTab { browser.quickLinks.moveToBrowserWindow(tab) }
             }
             .keyboardShortcut("o")
             .disabled(browser.quickLinks.keyTab == nil)
@@ -129,10 +128,7 @@ struct BrowserCommands: Commands {
             Button("Find Previous") { Task { await browser.findStep(forward: false) } }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(browser.commandTab == nil)
-            Button("Use Selection for Find") {
-                guard let tab = browser.commandTab else { return }
-                Task { await browser.find.useSelection(in: tab.findTarget, inLink: browser.quickLinks.keyTab) }
-            }
+            Button("Use Selection for Find") { Task { await browser.useSelectionForFind() } }
             .keyboardShortcut("e")
             .disabled(browser.commandTab == nil)
         }

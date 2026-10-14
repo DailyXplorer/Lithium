@@ -53,9 +53,14 @@ done
 
 # Ad-hoc signatures pin the designated requirement to the cdhash, so every rebuild looks like
 # a new app to the keychain and WebKit's items (WebCrypto master key…) prompt for the password
-# again. A stable self-signed identity keeps the requirement identical across builds.
-identity="Lithium Local Code Signing"
-if ! security find-identity -p codesigning | grep -q "\"$identity\""; then
+# again. A self-signed identity keeps the requirement stable, but it has no team ID: the login
+# keychain's partition list then names each build by its cdhash, and "Always Allow" only holds
+# until the next build. A certificate with a team ID (a free "Apple Development" one from Xcode's
+# Accounts settings) makes the partition the team, the same for every build, so it is preferred.
+# LITHIUM_SIGN_IDENTITY picks one explicitly.
+team_identity=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
+identity="${LITHIUM_SIGN_IDENTITY:-${team_identity:-Lithium Local Code Signing}}"
+if [ "$identity" = "Lithium Local Code Signing" ] && ! security find-identity -p codesigning | grep -q "\"$identity\""; then
   certdir="$stage/cert"
   mkdir "$certdir"
   cat > "$certdir/cfg" <<EOF

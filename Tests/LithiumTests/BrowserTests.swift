@@ -816,8 +816,47 @@ struct BrowserTests {
         #expect(SessionStore.load().tabs.first { $0.url == url }?.title == "Fine")
     }
 
-    /// Lithium's error page gets no history entry of its own (`loadHTMLString`): Back from the
-    /// next page goes to the page before the error, and that page is the page, not the error.
+    /// As in Safari, the address that failed has its own history entry, the error page: Back from
+    /// it returns to the page before, Forward comes back and tries the address again, and Reload
+    /// tries it in place, without another entry.
+    @Test func failedAddressKeepsThePageBeforeOnBack() async throws {
+        let (listener, base) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<title>Home</title>"),
+        ])
+        defer { listener.cancel() }
+        let browser = Browser()
+        let tab = browser.newTab(url: base)
+        defer { browser.close(tab) }
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        let failing = try #require(URL(string: "http://127.0.0.1:1/"))
+        tab.load(failing)
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.isShowingError)
+        #expect(tab.url == failing)
+        #expect(tab.webView.backForwardList.backItem?.url == base)
+        #expect(tab.canGoBack)
+
+        let first = tab.loadError
+        tab.reload()
+        #expect(await waitUntil(10) { tab.loadError !== first && tab.isShowingError && tab.loadedWebView?.isLoading == false })
+        #expect(tab.webView.backForwardList.backList.map(\.url) == [base])
+        #expect(tab.webView.backForwardList.currentItem?.url == failing)
+
+        tab.goBack()
+        #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.url == base)
+        #expect(!tab.isShowingError)
+        #expect(tab.webView.backForwardList.forwardItem?.url == failing)
+
+        tab.goForward()
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.isShowingError)
+        #expect(tab.url == failing)
+        #expect(tab.webView.backForwardList.backItem?.url == base)
+    }
+
+    /// Back from the page after the error page tries the failed address again; Back from there
+    /// goes to the page before it, and that page is the page, not the error.
     @Test func pageBeforeTheErrorIsNotTheErrorOnBack() async throws {
         let (listener, base) = try await LocalHTTP.serve([
             "/": ("Content-Type: text/html", "<title>Home</title>"),
@@ -828,12 +867,17 @@ struct BrowserTests {
         let tab = browser.newTab(url: base)
         defer { browser.close(tab) }
         #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
-        tab.load(URL(string: "http://127.0.0.1:1/")!)
+        let failing = try #require(URL(string: "http://127.0.0.1:1/"))
+        tab.load(failing)
         #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
         #expect(tab.isShowingError)
 
         tab.load(base.appending(path: "next"))
         #expect(await waitUntil(10) { tab.title == "Next" && tab.loadedWebView?.isLoading == false })
+        tab.webView.goBack()
+        #expect(await waitUntil(10) { tab.title == "Can’t open this page" && tab.loadedWebView?.isLoading == false })
+        #expect(tab.url == failing)
+        #expect(tab.isShowingError)
         tab.webView.goBack()
         #expect(await waitUntil(10) { tab.title == "Home" && tab.loadedWebView?.isLoading == false })
         #expect(tab.url == base)

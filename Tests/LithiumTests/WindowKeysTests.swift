@@ -333,7 +333,9 @@ struct WindowKeysTests {
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(first))
+        // What `BrowserNSWindow` tells the model as it opens.
+        first.nsWindow = window
         window.orderFrontRegardless()
         #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil && tab.webView.window === window })
         try await Task.sleep(for: .milliseconds(300))

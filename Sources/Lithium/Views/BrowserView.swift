@@ -78,7 +78,7 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator(window: window, hidesLights: zen && !showsZenLights))
+        .background(WindowConfigurator(hidesLights: zen && !showsZenLights))
         .background { TranslationHost(translator: browser.translator) }
         .ignoresSafeArea()
         .overlay {
@@ -89,11 +89,7 @@ struct BrowserView: View {
         .sheet(item: Binding(get: { window.capture.shot }, set: { if $0 == nil { window.capture.finish() } })) { shot in
             CapturePreview(shot: shot).environment(browser).environment(window)
         }
-        .onOpenURL { browser.openFromOtherApp($0) }
-        .onAppear {
-            browser.windowsDidShow()
-            window.didAppear()
-        }
+        .onAppear { window.didAppear() }
     }
 }
 
@@ -469,27 +465,24 @@ struct WindowDragArea: View {
     }
 }
 
-/// Centers the traffic lights in Lithium's taller top bar, and tells the model its window.
+/// Centers the traffic lights in Lithium's taller top bar.
 private struct WindowConfigurator: NSViewRepresentable {
-    let window: BrowserWindow
     let hidesLights: Bool
 
-    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView(model: window) }
+    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView() }
 
     func updateNSView(_ view: TrafficLightsView, context: Context) {
         view.hidesLights = hidesLights
     }
 
     final class TrafficLightsView: NSView {
-        private weak var model: BrowserWindow?
         private var observers: [NSObjectProtocol] = []
         private var isFullScreen = false
         var hidesLights = false {
             didSet { if hidesLights != oldValue { showOrHideLights() } }
         }
 
-        init(model: BrowserWindow) {
-            self.model = model
+        init() {
             super.init(frame: .zero)
         }
 
@@ -500,11 +493,10 @@ private struct WindowConfigurator: NSViewRepresentable {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             guard let window else { return }
-            model?.nsWindow = window
             window.isMovableByWindowBackground = false
             let names: [Notification.Name] = [
                 NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.willEnterFullScreenNotification,
-                NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification,
+                NSWindow.didExitFullScreenNotification,
             ]
             observers = names.map { name in
                 NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -522,7 +514,6 @@ private struct WindowConfigurator: NSViewRepresentable {
                 isFullScreen = name == NSWindow.willEnterFullScreenNotification
                 showOrHideLights()
             }
-            if name == NSWindow.didBecomeKeyNotification, let model { model.browser.windowBecameKey(model) }
             layoutTrafficLights()
         }
 

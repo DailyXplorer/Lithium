@@ -19,7 +19,7 @@ final class Browser {
     /// or a popover taking the key from it leaves it, as the window is still the one in front.
     private(set) var keyWindow: BrowserWindow?
     /// Puts a window on screen. Tests open none.
-    @ObservationIgnored var showWindow: @MainActor (BrowserWindow, Browser) -> NSWindow? = { _, _ in nil }
+    @ObservationIgnored var showWindow: @MainActor (BrowserWindow, Browser) -> NSWindow? = Browser.openOnScreen
     /// Empty until the user makes a second space (`Space`), then the main one first.
     private(set) var spaces: [Space] = []
     @ObservationIgnored private(set) var spaceStores: [Space.ID: WKWebsiteDataStore] = [:]
@@ -442,7 +442,7 @@ final class Browser {
         windowsDidShow()
     }
 
-    /// Once a window is on screen: a monitor added before NSApplication finishes launching is dropped.
+    /// Once a window is on screen.
     func windowsDidShow() {
         installEventMonitors()
         // The date may have changed since the last session, as at a change of day.
@@ -470,6 +470,41 @@ final class Browser {
     private func show(_ window: BrowserWindow) {
         window.isHidden = false
         window.nsWindow = showWindow(window, self)
+    }
+
+    private static func openOnScreen(_ window: BrowserWindow, browser: Browser) -> NSWindow? {
+        ExternalApps.runsTests ? nil : BrowserNSWindow.open(window, browser: browser)
+    }
+
+    /// New Window, and the Dock clicked with no window showing: the last window closed shows again
+    /// with its tabs, else a new window opens on the start page, in the space of the window in front.
+    @discardableResult
+    func openWindow(space: Space.ID? = nil) -> BrowserWindow {
+        if let hidden = windows.first(where: \.isHidden) {
+            show(hidden)
+            return hidden
+        }
+        let window = BrowserWindow(browser: self, space: space ?? commandWindow.currentSpaceID)
+        windows.append(window)
+        show(window)
+        window.newTabFocusingAddress()
+        return window
+    }
+
+    /// Its tabs go into Reopen Closed Tab, bottom up so ⇧⌘T brings them back top down, each where
+    /// it was. The last window keeps its tabs, hidden, until New Window or the Dock shows it again.
+    func windowWillClose(_ window: BrowserWindow) {
+        window.nsWindow = nil
+        window.videoPopout.hide()
+        if keyWindow === window { keyWindow = nil }
+        if windows.count == 1 {
+            window.isHidden = true
+            return
+        }
+        // Off the tabs first, so the selection doesn't walk through (and wake) the tabs closing.
+        window.showStartPage(picked: false)
+        tabs.filter { $0.windowID == window.id }.reversed().forEach { close($0) }
+        windows.removeAll { $0 === window }
     }
 
     /// A favorite's notification that came while the window wasn't key put a dot on its tile; the

@@ -13,25 +13,43 @@ struct LithiumApp: App {
     private let browser = LithiumApp.sharedBrowser
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    /// The browser windows are `BrowserNSWindow`s the browser opens itself (`Browser.openWindow`):
+    /// the scene opens nothing and carries the menu.
     var body: some Scene {
-        Window("Lithium", id: "browser") {
-            BrowserView()
-                .environment(browser)
-                .environment(browser.windows[0])
-                .frame(minWidth: 760, minHeight: 480)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1280, height: 820)
-        .commands { BrowserCommands(browser: browser) }
-
+        Window("Lithium", id: "browser") { EmptyView() }
+            .defaultLaunchBehavior(.suppressed)
+            .restorationBehavior(.disabled)
+            .handlesExternalEvents(matching: [])
+            .commands { BrowserCommands(browser: browser) }
     }
 }
 
-/// The Dock menu, which SwiftUI has no scene API for, a question before quitting stops downloads,
-/// and the session's last save as the app quits.
+/// The windows at launch, the Dock menu and the links other apps send, which SwiftUI has no scene
+/// for, a question before quitting stops downloads, and the session's last save as the app quits.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var quitReplied = true
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        LithiumApp.sharedBrowser.showRestoredWindows()
+    }
+
+    /// The Dock icon clicked with no window on screen: a minimized one comes back, else the last
+    /// one closed shows again.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard !hasVisibleWindows else { return false }
+        let browser = LithiumApp.sharedBrowser
+        if let minimized = browser.windows.compactMap(\.nsWindow).first(where: \.isMiniaturized) {
+            minimized.deminiaturize(nil)
+        } else {
+            browser.openWindow()
+        }
+        return false
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        urls.forEach(LithiumApp.sharedBrowser.openFromOtherApp)
+    }
 
     /// The session cookies are read from WebKit's network process, asynchronously: the quit waits
     /// for them, but no more than two seconds, so a stuck process can't keep Lithium open.
@@ -62,13 +80,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LithiumApp.sharedBrowser.history.close()
     }
 
+    /// Built at each click on the Dock icon: Stop Agent shows only while an agent listens.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
-        guard LithiumApp.sharedBrowser.agent?.state == .listening else { return nil }
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Stop Agent", action: #selector(stopAgent), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+        menu.addItem(withTitle: "New Window", action: #selector(newWindow), keyEquivalent: "").target = self
+        if LithiumApp.sharedBrowser.agent?.state == .listening {
+            menu.addItem(withTitle: "Stop Agent", action: #selector(stopAgent), keyEquivalent: "").target = self
+        }
         return menu
+    }
+
+    @objc private func newWindow() {
+        LithiumApp.sharedBrowser.openWindow()
     }
 
     @objc private func stopAgent() {
@@ -92,6 +115,8 @@ struct BrowserCommands: Commands {
                 .disabled(browser.agent?.state != .listening)
         }
         CommandGroup(replacing: .newItem) {
+            Button("New Window") { browser.openWindow() }
+                .keyboardShortcut("n")
             Button("New Tab") { browser.inBrowserWindow { $0.focusAddressFromMenu(newTab: true) } }
                 .keyboardShortcut("t")
             Button("Open Location…") { browser.inBrowserWindow { $0.focusAddressFromMenu(newTab: false) } }

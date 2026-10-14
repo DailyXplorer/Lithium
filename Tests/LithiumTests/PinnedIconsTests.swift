@@ -581,10 +581,10 @@ struct PinnedIcons {
         #expect(favicons.cachedData(host: "timer.example") == red)
     }
 
-    /// Favorites restored asleep wake one by one once the window is up, unselected, so their
-    /// badge counts from launch; a favorite without a tab then fetches its icon, as at a new day.
+    /// Once the window is up, a favorite without a page fetches its icon, as at a new day; one
+    /// restored asleep stays asleep.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
-    func restoredFavoritesWakeAndFetchTheirIconsAtLaunch() async throws {
+    func favoritesFetchTheirIconsAtLaunch() async throws {
         let requests = Requests()
         let (server, base) = try await Self.serveIcons(page: "<!doctype html><title>(3) Chat</title>", requests: requests)
         defer { server.cancel() }
@@ -602,15 +602,12 @@ struct PinnedIcons {
             SessionStore.save(Session())
         }
         let browser = Browser(favicons: Self.favicons(), notifications: NotificationCenter())
-        browser.favoriteWakeDelay = .milliseconds(100)
         let tab = try #require(browser.tabs.first { $0.pinID == chat.id })
         #expect(tab.isAsleep && tab.loadedWebView == nil)
 
         browser.windowDidAppear()
-        await browser.launchFavorites?.value
-        #expect(!tab.isAsleep && browser.selectedTab !== tab)
-        #expect(await waitUntil(30) { tab.unread.shown == .count(3) })
         await browser.sleepingIconsRefresh?.value
+        #expect(tab.isAsleep && browser.selectedTab !== tab)
         #expect(requests["/blue.png"] == 1)
         #expect(browser.pins.first { $0.id == calendar.id }?.favicon == blue)
     }

@@ -56,19 +56,18 @@ struct SpaceSignInTests {
         #expect(await reloadsSignedIn(favorite, in: browser), "woken in the background")
     }
 
-    /// Memory pressure puts the favorite to sleep while hidden; back to normal, it wakes on its own.
+    /// Memory pressure puts the favorite to sleep while hidden; shown again, it wakes signed in.
     @Test func aFavoriteWokenAfterMemoryPressureIsSignedIn() async throws {
         let site = try await SignInSite.start()
         defer { site.stop() }
         let (browser, work, favorite) = try await signedInFavorite(on: site)
         defer { reset(browser) }
-        browser.favoriteWakeDelay = .milliseconds(10)
 
         browser.switchToSpace(Space.mainID)
         browser.relieveMemoryPressure(critical: true)
         #expect(favorite.isAsleep)
-        browser.memoryLevelChanged(to: .normal)
-        #expect(await poll(30) { !favorite.isAsleep })
+        browser.switchToSpace(work.id)
+        #expect(!favorite.isAsleep)
         #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
         #expect(await reloadsSignedIn(favorite, in: browser))
     }

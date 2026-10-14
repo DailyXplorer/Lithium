@@ -121,6 +121,32 @@ struct SplitViewTests {
         #expect(name(browser.selectedTab) == "b")
     }
 
+    /// Exit Split View from the pair's row: the focused side fills the page area again, in the window.
+    @Test func exitingTheSplitGivesTheFocusedSideTheWholePage() async throws {
+        let browser = browser(with: ["a", "b"])
+        let a = tab("a", in: browser), b = tab("b", in: browser)
+        browser.select(a)
+        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        func width(_ tab: Tab) -> CGFloat { tab.webView.window === window ? tab.webView.frame.width : 0 }
+        for _ in 0..<500 where width(a) < 1000 { try await Task.sleep(for: .milliseconds(10)) }
+        let whole = width(a)
+        try #require(whole > 1000)
+
+        browser.openInSplit(b)
+        for _ in 0..<500 where width(a) == 0 || width(a) >= whole || width(b) == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(width(a) > 0 && width(a) < whole && width(b) > 0)
+
+        browser.exitSplit(of: a)
+        for _ in 0..<100 where width(b) != whole { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(b.webView.window === window)
+        #expect(width(b) == whole)
+    }
+
     @Test func pinningASideEndsTheSplit() {
         let browser = browser(with: ["a", "b"])
         browser.select(tab("a", in: browser))

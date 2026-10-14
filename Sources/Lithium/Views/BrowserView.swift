@@ -185,22 +185,38 @@ struct ContentCard: View {
 struct PageContainer: NSViewRepresentable {
     let view: NSView
 
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> WebContainerView {
         WebContainerView()
     }
 
-    func updateNSView(_ container: NSView, context: Context) {
-        guard view.superview !== container else { return }
-        container.subviews.forEach { $0.removeFromSuperview() }
-        view.frame = container.bounds
-        view.autoresizingMask = [.width, .height]
-        container.addSubview(view)
+    func updateNSView(_ container: WebContainerView, context: Context) {
+        container.page = view
     }
 }
 
 /// Keys a page reacts to without calling preventDefault (YouTube's ← and → seek) come back
 /// from WebKit as unhandled; past this view they would reach the window, which beeps.
 final class WebContainerView: NSView {
+    /// Taken only once in a window. Exiting a split, SwiftUI makes the lone page's container,
+    /// then still updates the outgoing pane's: taken earlier, the page went back to that pane and
+    /// left the window with it.
+    var page: NSView? {
+        didSet { adoptPage() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        adoptPage()
+    }
+
+    private func adoptPage() {
+        guard let page, window != nil, page.superview !== self else { return }
+        subviews.forEach { $0.removeFromSuperview() }
+        page.frame = bounds
+        page.autoresizingMask = [.width, .height]
+        addSubview(page)
+    }
+
     override func keyDown(with event: NSEvent) {}
 }
 

@@ -14,15 +14,16 @@ struct ElementAddress: Hashable {
 @Observable
 final class AgentTab {
     @ObservationIgnored weak var tab: Tab?
-    /// An agent opened, navigated, selected or stopped it: it carries a badge until it closes.
+    /// An agent opened, navigated, selected or stopped it: `tabs_list` says so until it closes.
     var isTouched = false
     var isBusy = false
     /// What ends the running call early; cleared when that call ends.
     var interruption: AgentInterruption?
     /// Kept until a read finds none or the main frame shows another document.
     var challenge: AgentChallenge?
-    @ObservationIgnored var lastAction: Date?
-    @ObservationIgnored var holder: String?
+    /// Observed, with `holder`, for the badge (`AgentHub.isInUse`); cleared once the hold expires.
+    var lastAction: Date?
+    var holder: String?
     /// The page's alert, confirm or prompt; nil hands it to the user.
     var dialog: AgentDialog?
     @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?

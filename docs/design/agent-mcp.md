@@ -31,7 +31,7 @@ All new code lives in `Sources/Lithium/Agent/` plus four scripts in `Sources/Lit
 | `AgentEndpoint` | struct | The endpoint file: token generation, 0700 folder, 0600 file. |
 | `MCPSession` | struct | One connected client: session id, `clientInfo` (self-reported name and version), negotiated protocol version, counters. |
 | `AgentHub` | `@MainActor @Observable` final class, owned by `Browser` | State (off, listening, stopped), sessions, tool dispatch, per-tab queues, the stop switch. The UI observes it. |
-| `AgentTab` | `@MainActor @Observable` final class, one per tab an agent touched or whose frames said hello (`AgentHub.tabs`, dropped when the tab closes) | Badge (`isTouched`), last action, queue flag (`isBusy`) and `interruption`, the challenge met in it, frame registry, issued refs, last snapshot per session, pending dialog, grants, and its `TabCapture`. `AgentHub` keeps the short ids (`AgentTabIDs`), which outlive a closed tab. |
+| `AgentTab` | `@MainActor @Observable` final class, one per tab an agent touched or whose frames said hello (`AgentHub.tabs`, dropped when the tab closes) | `agentTouched` flag (`isTouched`), last action and holder (the badge's hold), queue flag (`isBusy`) and `interruption`, the challenge met in it, frame registry, issued refs, last snapshot per session, pending dialog, grants, and its `TabCapture`. `AgentHub` keeps the short ids (`AgentTabIDs`), which outlive a closed tab. |
 | `TabCapture` | `@MainActor @Observable` final class, in `NetworkCapture.swift`, one per tab an agent used (PR 6) | The tab's network log (1000 requests) and console (500 messages) as ring buffers, response bodies (2 MB per tab), and the requests in flight that `networkidle` watches. |
 | `ResourceLoadSpy` | `@MainActor` final class | The web view's resource load delegate: every load of every frame, with headers, status and errors, into the tab's `TabCapture`. |
 | `AgentRedaction` | pure functions | Headers, bodies and console text with secrets taken out (section 7.5), off the main thread for bodies. |
@@ -643,7 +643,7 @@ Typed text is kept for unguarded fields (it is what the agent wrote) and `[redac
 | DNS rebinding, web pages calling the server | 127.0.0.1 only, Host check, Origin refusal, no CORS, token. | None known. |
 | A page detecting the agent | Nothing is hidden (section 8). | Sites may block or degrade for agents. |
 | A page faking Lithium's UI ("Allow agent payment" drawn in the page) | Real prompts are outside web content and name the tab. | An agent may click the fake, which only does what that page does. |
-| An agent closing or navigating the user's tabs | Logged, reopenable (⇧⌘T), badge on touched tabs. | Unsaved work in a page can be lost, as with the user's own ⌘W. |
+| An agent closing or navigating the user's tabs | Logged, reopenable (⇧⌘T), badge while an agent holds the tab. | Unsaved work in a page can be lost, as with the user's own ⌘W. |
 | A runaway agent | Stop, rate limit, per-call timeouts, 4-session cap. | None beyond what the agent did before Stop. |
 
 ### 7.8 What Lithium guarantees, and what it does not
@@ -655,7 +655,7 @@ Lithium does not guarantee: that the payment heuristic catches every payment; th
 ## 8. Transparency
 
 - **Indicator.** A toolbar button appears while an agent is connected: filled, accent color with a pulse while it acts. With access on and no agent, the ⋯ menu's **Agents** item opens the same pop-over. It lists sessions with their self-reported names, the current action per tab, the last 10 log lines, **Stop Agent**, and **Open Log**.
-- **Tab badges.** A small robot glyph on the favicon of every tab an agent touched (opened, navigated, selected, stopped), until the tab closes or access is turned off. An accent ring while an action runs in it (PR 5). The hover card adds a line, "Opened by an agent" or "Used by an agent". It leaves out the client's self-reported name, which the indicator's panel already shows next to the session.
+- **Tab badges.** A small robot glyph on the favicon of every tab an agent holds now: a call runs in it, or its session is still connected and acted there in the last 10 minutes (`AgentHub.isInUse`, the hold that also hands the agent the page's dialogs). The idle sweep clears an expired hold within a minute. An accent ring while an action runs in it (PR 5). The hover card adds a line, "Opened by an agent" or "Used by an agent". It leaves out the client's self-reported name, which the indicator's panel already shows next to the session.
 - **In the page.** While an agent acts in the visible tab: the accent border, the caption, and the agent pointer dot (section 5.7).
 - **Log.** Section 7.6. Stop is reachable from the indicator, the Lithium menu (⌃⌘.), and the Dock menu.
 - **Agent tab group.** Tabs an agent opens sit in the sidebar's "Agent" group (section 2.5), so the user's own tab list never fills with them.

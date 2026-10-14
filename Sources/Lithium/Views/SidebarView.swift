@@ -311,7 +311,7 @@ private struct TabRow: View {
             }
             .frame(width: 16, height: 16)
             .overlay(alignment: .bottomTrailing) {
-                if browser.agent?.isTouched(tab) == true { AgentBadge(isActing: browser.agent?.isActing(in: tab) == true) }
+                if browser.agent?.isInUse(tab) == true { AgentBadge(isActing: browser.agent?.isActing(in: tab) == true) }
             }
             if browser.renamingTabID == tab.id {
                 TabNameField(tab: tab)

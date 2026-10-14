@@ -870,7 +870,7 @@ struct AgentTabsTests {
     @Test func theBadgeShowsRightAfterAnAgentActs() async throws {
         try await withBadgeHub { hub, session, tab, _ in
             #expect(!hub.isInUse(tab))
-            let redrawn = await redraws(hub, tab) { AgentHub.$callSession.withValue(session) { hub.touch(tab) } }
+            let redrawn = await redraws(hub, tab) { await AgentHub.$callSession.withValue(session) { hub.touch(tab) } }
             #expect(redrawn)
             #expect(hub.isInUse(tab))
         }
@@ -878,7 +878,7 @@ struct AgentTabsTests {
 
     @Test func theBadgeGoesWhenItsSessionEnds() async throws {
         try await withBadgeHub { hub, session, tab, _ in
-            AgentHub.$callSession.withValue(session) { hub.touch(tab) }
+            await AgentHub.$callSession.withValue(session) { hub.touch(tab) }
             #expect(hub.isInUse(tab))
             let redrawn = await redraws(hub, tab) { _ = await hub.handle(.endSession(session.id)) }
             #expect(redrawn)
@@ -889,7 +889,7 @@ struct AgentTabsTests {
 
     @Test func theBadgeGoesTenMinutesAfterTheLastActionWithTheSessionStillOpen() async throws {
         try await withBadgeHub { hub, session, tab, clock in
-            AgentHub.$callSession.withValue(session) { hub.touch(tab) }
+            await AgentHub.$callSession.withValue(session) { hub.touch(tab) }
             clock.now += AgentHub.holdTime - 1
             #expect(hub.isInUse(tab))
             let early = await redraws(hub, tab) { hub.releaseExpiredHolds(now: clock.now) }

@@ -17,19 +17,19 @@ struct StartPageTests {
         browser.newTab(url: URL(string: "about:blank")!)
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
         try await Task.sleep(for: .milliseconds(300))
 
-        browser.newTabFocusingAddress()
+        browser.commandWindow.newTabFocusingAddress()
         var editing = false
         for _ in 0..<50 where !editing {
             try await Task.sleep(for: .milliseconds(20))
             editing = (window.firstResponder as? NSTextView)?.delegate is URLTextField
         }
         #expect(editing)
-        #expect(browser.selectedTab == nil)
+        #expect(browser.commandWindow.selectedTab == nil)
         try await Task.sleep(for: .seconds(1))
         #expect((window.firstResponder as? NSTextView)?.delegate is URLTextField)
     }

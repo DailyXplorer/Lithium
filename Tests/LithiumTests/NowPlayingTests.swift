@@ -168,7 +168,7 @@ struct NowPlayingBrowserTests {
         let tab = browser.newTab()
         let player = browser.nowPlaying
         player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60], at: Date()), from: tab)
-        #expect(browser.selectedTab === tab && player.tab === tab)
+        #expect(browser.commandWindow.selectedTab === tab && player.tab === tab)
 
         tab.webViewWebContentProcessDidTerminate(tab.webView)
         #expect(player.tab == nil && player.media == nil, "the selected tab reloads, but its media are gone now")

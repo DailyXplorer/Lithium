@@ -78,10 +78,10 @@ struct ResourceUsageTests {
 struct ResourceUsageLiveTests {
     @Test func awakeTabHasAMeasurableProcess() async throws {
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         browser.newTab(url: URL(string: "data:text/html,<p>a")!)
         browser.newTab(url: URL(string: "data:text/html,<p>b")!)
-        let tabs = browser.regularTabs
+        let tabs = browser.commandWindow.regularTabs
         #expect(tabs.count == 2)
         for _ in 0..<100 where tabs.contains(where: { $0.webProcessIdentifier == nil }) {
             try await Task.sleep(for: .milliseconds(50))

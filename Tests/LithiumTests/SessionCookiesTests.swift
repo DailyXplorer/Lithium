@@ -141,7 +141,7 @@ struct SessionCookiesTests {
         let restored = try #require(again.tabs.first { $0.url == site.echo && $0.spaceID == Space.mainID })
         restored.markActive()
         #expect(restored.isAsleep, "waits for the cookies")
-        again.switchToSpace(work.id)
+        again.commandWindow.switchToSpace(work.id)
         again.openFromOtherApp(site.echo)
         #expect(!again.tabs.contains { $0.url == site.echo && $0.spaceID == work.id }, "waits for the cookies")
         #expect(await title(of: restored) == "main=1")

@@ -14,7 +14,7 @@ struct TabActionsTests {
     /// A browser whose tab list reads `names` top to bottom, and nothing else in it.
     private func browser(with names: [String]) -> Browser {
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         for name in names.reversed() { browser.newTab(url: page(name)) }
         return browser
     }
@@ -24,7 +24,7 @@ struct TabActionsTests {
     }
 
     private func names(_ browser: Browser) -> [String] {
-        browser.regularTabs.map(name)
+        browser.commandWindow.regularTabs.map(name)
     }
 
     private func name(_ tab: Tab?) -> String {
@@ -45,8 +45,8 @@ struct TabActionsTests {
 
         browser.reopenClosedTab()
         #expect(names(browser) == ["a", "b", "c", "d", "e"])
-        #expect(name(browser.selectedTab) == "c")
-        #expect(browser.selectedTab?.customTitle == "Mine")
+        #expect(name(browser.commandWindow.selectedTab) == "c")
+        #expect(browser.commandWindow.selectedTab?.customTitle == "Mine")
     }
 
     @Test func tabsClosedByCloseOtherTabsComeBackOneByOneInTheirPlaces() {
@@ -54,7 +54,7 @@ struct TabActionsTests {
         browser.select(tab("e", in: browser))
         browser.closeOtherTabs(than: tab("c", in: browser))
         #expect(names(browser) == ["c"])
-        #expect(name(browser.selectedTab) == "c")
+        #expect(name(browser.commandWindow.selectedTab) == "c")
 
         var steps: [[String]] = []
         while browser.canReopenClosedTab, names(browser).count < 5 {
@@ -73,7 +73,7 @@ struct TabActionsTests {
         browser.closeOtherTabs(than: tab("b", in: browser))
         #expect(names(browser) == ["b"])
         #expect(browser.tabs.contains(favorite))
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     @Test func closeTabsBelow() {
@@ -81,7 +81,7 @@ struct TabActionsTests {
         browser.select(tab("d", in: browser))
         browser.closeTabs(below: tab("b", in: browser))
         #expect(names(browser) == ["a", "b"])
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
         #expect(browser.tabs(below: tab("b", in: browser)).isEmpty)
 
         browser.reopenClosedTab()
@@ -94,7 +94,7 @@ struct TabActionsTests {
     }
 
     private func agentNames(_ browser: Browser) -> [String] {
-        browser.agentTabs.map(name)
+        browser.commandWindow.agentTabs.map(name)
     }
 
     @Test func closeOtherTabsStaysInTheTabsGroup() {
@@ -103,13 +103,13 @@ struct TabActionsTests {
         browser.closeOtherTabs(than: tab("y", in: browser))
         #expect(agentNames(browser) == ["y"])
         #expect(names(browser) == ["a", "b", "c"])
-        #expect(name(browser.selectedTab) == "y")
+        #expect(name(browser.commandWindow.selectedTab) == "y")
 
         addAgentTabs(["z"], to: browser)
         browser.closeOtherTabs(than: tab("b", in: browser))
         #expect(names(browser) == ["b"])
         #expect(agentNames(browser) == ["y", "z"])
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     @Test func closeTabsBelowStaysInTheTabsGroup() {
@@ -129,10 +129,10 @@ struct TabActionsTests {
         let browser = browser(with: ["a", "b"])
         addAgentTabs(["x", "y"], to: browser)
         browser.select(tab("x", in: browser))
-        browser.closeSelectedTab()
-        #expect(name(browser.selectedTab) == "y")
-        browser.closeSelectedTab()
-        #expect(name(browser.selectedTab) == "b")
+        browser.commandWindow.closeSelectedTab()
+        #expect(name(browser.commandWindow.selectedTab) == "y")
+        browser.commandWindow.closeSelectedTab()
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     /// The copy, the reopened tab and the favorite are the user's, next to the Agent group.
@@ -142,88 +142,88 @@ struct TabActionsTests {
         browser.duplicate(tab("x", in: browser))
         #expect(names(browser) == ["a", "b", "x"])
         #expect(agentNames(browser) == ["x", "y"])
-        #expect(browser.selectedTab?.openedByAgent == nil)
+        #expect(browser.commandWindow.selectedTab?.openedByAgent == nil)
 
         browser.close(tab("y", in: browser))
         browser.reopenClosedTab()
         #expect(names(browser) == ["a", "b", "x", "y"])
         #expect(agentNames(browser) == ["x"])
 
-        let x = browser.agentTabs[0]
+        let x = browser.commandWindow.agentTabs[0]
         browser.pin(x)
         defer { browser.pins.filter { $0.id == x.pinID }.forEach(browser.unpin) }
         #expect(x.openedByAgent == nil)
-        #expect(browser.agentTabs.isEmpty)
+        #expect(browser.commandWindow.agentTabs.isEmpty)
     }
 
     @Test func numberShortcutsReachTheAgentGroup() {
         let browser = browser(with: ["a", "b"])
         addAgentTabs(["x"], to: browser)
-        browser.selectItem(at: browser.pins.count + 2)
-        #expect(name(browser.selectedTab) == "x")
+        browser.commandWindow.selectItem(at: browser.pins.count + 2)
+        #expect(name(browser.commandWindow.selectedTab) == "x")
     }
 
     /// The peeked sidebar slides back when `tabPickToken` moves.
     @Test func onlyPickingAnotherTabCountsAsAPick() {
         let browser = browser(with: ["a", "b", "c", "d", "e"])
         browser.select(tab("a", in: browser))
-        var picks = browser.tabPickToken
+        var picks = browser.commandWindow.tabPickToken
 
         browser.select(tab("a", in: browser))
-        #expect(browser.tabPickToken == picks, "the tab already shown")
+        #expect(browser.commandWindow.tabPickToken == picks, "the tab already shown")
         browser.select(tab("b", in: browser))
-        #expect(browser.tabPickToken == picks + 1)
-        browser.selectAdjacentTab(1)
-        #expect(name(browser.selectedTab) == "c")
-        #expect(browser.tabPickToken == picks + 2)
-        picks = browser.tabPickToken
+        #expect(browser.commandWindow.tabPickToken == picks + 1)
+        browser.commandWindow.selectAdjacentTab(1)
+        #expect(name(browser.commandWindow.selectedTab) == "c")
+        #expect(browser.commandWindow.tabPickToken == picks + 2)
+        picks = browser.commandWindow.tabPickToken
 
         browser.close(tab("c", in: browser))
-        #expect(name(browser.selectedTab) == "d")
-        browser.closeSelectedTab()
+        #expect(name(browser.commandWindow.selectedTab) == "d")
+        browser.commandWindow.closeSelectedTab()
         browser.closeOtherTabs(than: tab("a", in: browser))
         #expect(names(browser) == ["a"])
-        browser.closeSelectedTab()
-        #expect(browser.selectedTab == nil, "the start page")
-        #expect(browser.tabPickToken == picks)
+        browser.commandWindow.closeSelectedTab()
+        #expect(browser.commandWindow.selectedTab == nil, "the start page")
+        #expect(browser.commandWindow.tabPickToken == picks)
     }
 
     @Test func leavingATabForTheStartPageCountsAsAPick() {
         let browser = browser(with: ["a"])
         browser.select(tab("a", in: browser))
-        var picks = browser.tabPickToken
+        var picks = browser.commandWindow.tabPickToken
 
-        browser.newTabFocusingAddress()
-        #expect(browser.selectedTab == nil)
-        #expect(browser.tabPickToken == picks + 1)
-        browser.newTabFocusingAddress()
-        #expect(browser.tabPickToken == picks + 1, "already on the start page")
+        browser.commandWindow.newTabFocusingAddress()
+        #expect(browser.commandWindow.selectedTab == nil)
+        #expect(browser.commandWindow.tabPickToken == picks + 1)
+        browser.commandWindow.newTabFocusingAddress()
+        #expect(browser.commandWindow.tabPickToken == picks + 1, "already on the start page")
 
         browser.select(tab("a", in: browser))
-        picks = browser.tabPickToken
-        browser.closeSelectedTab()
-        #expect(browser.selectedTab == nil, "the start page")
-        #expect(browser.tabPickToken == picks)
+        picks = browser.commandWindow.tabPickToken
+        browser.commandWindow.closeSelectedTab()
+        #expect(browser.commandWindow.selectedTab == nil, "the start page")
+        #expect(browser.commandWindow.tabPickToken == picks)
     }
 
     @Test func closingTabsBelowTheSelectionIsNotAPick() {
         let browser = browser(with: ["a", "b", "c"])
         browser.select(tab("c", in: browser))
-        let picks = browser.tabPickToken
+        let picks = browser.commandWindow.tabPickToken
         browser.closeTabs(below: tab("a", in: browser))
-        #expect(name(browser.selectedTab) == "a")
-        #expect(browser.tabPickToken == picks)
+        #expect(name(browser.commandWindow.selectedTab) == "a")
+        #expect(browser.commandWindow.tabPickToken == picks)
     }
 
     @Test func canReopenOnlyWhatWasClosed() {
         let browser = Browser()
         #expect(!browser.canReopenClosedTab)
         browser.newTab()
-        browser.closeSelectedTab()
+        browser.commandWindow.closeSelectedTab()
         #expect(!browser.canReopenClosedTab, "a start page has nothing to reopen")
 
         browser.newTab(url: page("a"))
-        browser.closeSelectedTab()
+        browser.commandWindow.closeSelectedTab()
         #expect(browser.canReopenClosedTab)
         browser.reopenClosedTab()
         #expect(!browser.canReopenClosedTab)
@@ -253,9 +253,9 @@ struct TabActionsTests {
         b.customTitle = "Mine"
         browser.duplicate(b)
         #expect(names(browser) == ["a", "b", "b", "c"])
-        let copy = try #require(browser.selectedTab)
+        let copy = try #require(browser.commandWindow.selectedTab)
         #expect(copy !== b)
-        #expect(browser.regularTabs[2] === copy)
+        #expect(browser.commandWindow.regularTabs[2] === copy)
         #expect(copy.customTitle == "Mine")
         #expect(copy.pinID == nil)
     }
@@ -268,7 +268,7 @@ struct TabActionsTests {
 
         browser.duplicate(favorite)
         #expect(names(browser) == ["favorite", "a", "b"])
-        #expect(browser.selectedTab?.pinID == nil)
+        #expect(browser.commandWindow.selectedTab?.pinID == nil)
         #expect(favorite.pinID != nil)
     }
 
@@ -277,7 +277,7 @@ struct TabActionsTests {
         let empty = browser.newTab()
         browser.duplicate(empty)
         #expect(browser.tabs.count(where: { $0.pinID == nil }) == 2)
-        #expect(browser.selectedTab === empty)
+        #expect(browser.commandWindow.selectedTab === empty)
     }
 
     @Test func reopenedTabHasItsHistory() async throws {
@@ -285,7 +285,7 @@ struct TabActionsTests {
         let tab = try await tabWithHistory(in: browser)
         browser.close(tab)
         browser.reopenClosedTab()
-        let reopened = try #require(browser.selectedTab)
+        let reopened = try #require(browser.commandWindow.selectedTab)
         try await expectHistory(of: reopened)
     }
 
@@ -296,7 +296,7 @@ struct TabActionsTests {
         tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
         browser.close(tab)
         browser.reopenClosedTab()
-        let reopened = try #require(browser.selectedTab)
+        let reopened = try #require(browser.commandWindow.selectedTab)
         try await expectHistory(of: reopened)
     }
 
@@ -304,7 +304,7 @@ struct TabActionsTests {
         let browser = browser(with: [])
         let tab = try await tabWithHistory(in: browser)
         browser.duplicate(tab)
-        let copy = try #require(browser.selectedTab)
+        let copy = try #require(browser.commandWindow.selectedTab)
         #expect(copy !== tab)
         try await expectHistory(of: copy)
     }

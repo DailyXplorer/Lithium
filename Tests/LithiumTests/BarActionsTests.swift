@@ -147,7 +147,7 @@ struct BarActionsTests {
     private func reset(_ browser: Browser) {
         browser.tabs.forEach { browser.close($0, remembering: false) }
         browser.pins.forEach(browser.unpin)
-        if browser.isZenMode { browser.toggleZenMode() }
+        if browser.commandWindow.isZenMode { browser.commandWindow.toggleZenMode() }
         UserDefaults.standard.removeObject(forKey: Preference.zenMode)
         UserDefaults.standard.removeObject(forKey: Preference.energySaving)
     }
@@ -164,26 +164,26 @@ struct BarActionsTests {
 
     /// Types `text` in the address bar while `tab` is shown, then presses Return.
     private func type(_ text: String, on tab: Tab?, in browser: Browser) {
-        browser.suggestions.editedTabID = tab?.id
-        browser.addressTextChanged(text)
-        browser.submitAddress(text, editing: tab?.id)
+        browser.commandWindow.suggestions.editedTabID = tab?.id
+        browser.commandWindow.addressTextChanged(text)
+        browser.commandWindow.submitAddress(text, editing: tab?.id)
     }
 
     /// Only what the menus would enable, and a toggle's current side.
     @Test func offersOnlyWhatCanRunNow() {
         let browser = browser(with: ["a", "b"])
         defer { reset(browser) }
-        #expect(browser.barActions(for: nil) == [.newPrivateTab, .enterZenMode, .turnOnEnergySaving, .settings])
+        #expect(browser.commandWindow.barActions(for: nil) == [.newPrivateTab, .enterZenMode, .turnOnEnergySaving, .settings])
 
         let a = tab("a", in: browser)
-        #expect(browser.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .enterZenMode, .turnOnEnergySaving, .settings],
+        #expect(browser.commandWindow.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .enterZenMode, .turnOnEnergySaving, .settings],
                 "a data: page has no site data to clear")
         browser.close(tab("b", in: browser))
-        #expect(browser.barActions(for: a).contains(.reopenClosedTab))
-        #expect(!browser.barActions(for: a).contains(.openSplitView), "alone in the list")
+        #expect(browser.commandWindow.barActions(for: a).contains(.reopenClosedTab))
+        #expect(!browser.commandWindow.barActions(for: a).contains(.openSplitView), "alone in the list")
 
         let secret = browser.newTab(url: page("secret"), privateStore: .nonPersistent())
-        #expect(!browser.barActions(for: secret).contains(.pinTab), "a private tab is never pinned")
+        #expect(!browser.commandWindow.barActions(for: secret).contains(.pinTab), "a private tab is never pinned")
     }
 
     /// Return on a name typed whole runs the action on the tab shown; a name only started still searches.
@@ -194,13 +194,13 @@ struct BarActionsTests {
         browser.select(a)
 
         type("duplicate tab", on: a, in: browser)
-        #expect(browser.regularTabs.map(name) == ["a", "a", "b"])
-        #expect(browser.selectedTab !== a)
-        browser.close(browser.selectedTab!)
+        #expect(browser.commandWindow.regularTabs.map(name) == ["a", "a", "b"])
+        #expect(browser.commandWindow.selectedTab !== a)
+        browser.close(browser.commandWindow.selectedTab!)
 
         type("pin tab", on: a, in: browser)
         #expect(browser.pins.map(\.url) == [page("a")])
-        #expect(browser.barActions(for: a).contains(.unpinTab))
+        #expect(browser.commandWindow.barActions(for: a).contains(.unpinTab))
         type("unpin tab", on: a, in: browser)
         #expect(browser.pins.isEmpty)
 
@@ -211,21 +211,21 @@ struct BarActionsTests {
         #expect(browser.split(of: a) == nil)
 
         browser.close(tab("b", in: browser))
-        type("reopen closed tab", on: browser.selectedTab, in: browser)
-        #expect(browser.regularTabs.map(name).sorted() == ["a", "b"])
-        #expect(name(browser.selectedTab) == "b")
+        type("reopen closed tab", on: browser.commandWindow.selectedTab, in: browser)
+        #expect(browser.commandWindow.regularTabs.map(name).sorted() == ["a", "b"])
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     /// A new private tab starts empty, shown, with the address bar asked for focus.
     @Test func newPrivateTabFocusesTheAddressBar() {
         let browser = browser(with: ["a"])
         defer { reset(browser) }
-        let token = browser.addressFocusToken
+        let token = browser.commandWindow.addressFocusToken
         type("new private tab", on: tab("a", in: browser), in: browser)
-        let made = browser.selectedTab
+        let made = browser.commandWindow.selectedTab
         #expect(made?.isEphemeral == true)
         #expect(made?.url == nil)
-        #expect(browser.addressFocusToken != token)
+        #expect(browser.commandWindow.addressFocusToken != token)
     }
 
     /// Zen mode and Settings, from the bar.
@@ -233,13 +233,13 @@ struct BarActionsTests {
         let browser = browser(with: ["a"])
         defer { reset(browser) }
         type("zen mode", on: tab("a", in: browser), in: browser)
-        #expect(browser.isZenMode)
-        #expect(browser.barActions(for: nil).contains(.exitZenMode))
+        #expect(browser.commandWindow.isZenMode)
+        #expect(browser.commandWindow.barActions(for: nil).contains(.exitZenMode))
         type("exit zen mode", on: tab("a", in: browser), in: browser)
-        #expect(!browser.isZenMode)
+        #expect(!browser.commandWindow.isZenMode)
 
         type("settings", on: tab("a", in: browser), in: browser)
-        #expect(browser.selectedTab?.url?.absoluteString.hasPrefix(Internal.settingsURL.absoluteString) == true)
+        #expect(browser.commandWindow.selectedTab?.url?.absoluteString.hasPrefix(Internal.settingsURL.absoluteString) == true)
     }
 
     /// With no toolbar indicator, the bar turns energy saving on and off: on is Always, so it holds
@@ -250,8 +250,8 @@ struct BarActionsTests {
         #expect(browser.energy.mode == .onBattery && !browser.energy.isOn)
         type("turn on energy saving", on: tab("a", in: browser), in: browser)
         #expect(browser.energy.mode == .always && browser.energy.isOn)
-        #expect(browser.barActions(for: nil).contains(.turnOffEnergySaving))
-        #expect(!browser.barActions(for: nil).contains(.turnOnEnergySaving))
+        #expect(browser.commandWindow.barActions(for: nil).contains(.turnOffEnergySaving))
+        #expect(!browser.commandWindow.barActions(for: nil).contains(.turnOnEnergySaving))
 
         browser.energy.isOnLimitedPower = { true }
         type("turn off energy saving", on: tab("a", in: browser), in: browser)
@@ -265,15 +265,15 @@ struct BarActionsTests {
         let browser = browser(with: [])
         defer { reset(browser) }
         browser.openSettings(section: "advanced")
-        let webView = try #require(browser.selectedTab?.webView)
+        let webView = try #require(browser.commandWindow.selectedTab?.webView)
         let shown = { () async -> String? in
             (try? await webView.callAsyncJavaScript("return document.querySelector('#energy-saving button.on')?.dataset.value", contentWorld: .page)) as? String
         }
         #expect(await poll(30) { await shown() == "onBattery" })
         // Through the bar's Return, typed over Settings itself, so its wiring is what's checked.
-        type("turn on energy saving", on: browser.selectedTab, in: browser)
+        type("turn on energy saving", on: browser.commandWindow.selectedTab, in: browser)
         #expect(await poll(10) { await shown() == "always" })
-        type("turn off energy saving", on: browser.selectedTab, in: browser)
+        type("turn off energy saving", on: browser.commandWindow.selectedTab, in: browser)
         #expect(await poll(10) { await shown() == "off" })
     }
 
@@ -286,7 +286,7 @@ struct BarActionsTests {
         defer { reset(browser) }
         let tab = browser.newTab(url: url, privateStore: .nonPersistent())
         #expect(await poll(10) { tab.url?.host() == "127.0.0.1" })
-        #expect(browser.barActions(for: tab).contains(.clearSiteData))
+        #expect(browser.commandWindow.barActions(for: tab).contains(.clearSiteData))
         let cookie = try #require(HTTPCookie(properties: [.domain: "127.0.0.1", .path: "/", .name: "cart", .value: "1"]))
         await tab.dataStore.httpCookieStore.setCookie(cookie)
         let mine = WKWebsiteDataStore.default().httpCookieStore

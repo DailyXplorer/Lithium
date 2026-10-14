@@ -101,6 +101,7 @@ struct TabHoverLayer: View {
     let anchors: TabHoverAnchors.Value
     @Environment(TabHover.self) private var hover
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         GeometryReader { proxy in
@@ -116,8 +117,8 @@ struct TabHoverLayer: View {
         }
         .allowsHitTesting(false)
         .animation(.easeOut(duration: 0.12), value: hover.shown == nil)
-        .onChange(of: browser.selectedTabID) { hover.dismiss() }
-        .onChange(of: browser.renamingTabID) { hover.dismiss() }
+        .onChange(of: window.selectedTabID) { hover.dismiss() }
+        .onChange(of: window.renamingTabID) { hover.dismiss() }
     }
 }
 

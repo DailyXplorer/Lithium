@@ -14,11 +14,11 @@ struct PageLayersTests {
     /// the pointer moved, with the sidebar hidden.
     @Test(arguments: [true, false]) func nothingAboveThePageCastsAShadow(sidebarVisible: Bool) async throws {
         let browser = Browser()
-        browser.isSidebarVisible = sidebarVisible
+        browser.commandWindow.isSidebarVisible = sidebarVisible
         let webView = browser.newTab(url: URL(string: "about:blank")!).webView
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
         try await Task.sleep(for: .milliseconds(500))

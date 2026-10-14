@@ -141,7 +141,7 @@ struct AgentParityTests {
             let id = try await open(client, base.appending(path: "set"), ephemeral: true)
             let tab = try #require(client.tab(id))
             browser.duplicate(tab)
-            let copy = try #require(browser.selectedTab)
+            let copy = try #require(browser.commandWindow.selectedTab)
             #expect(copy !== tab)
             #expect(copy.privateStore === tab.privateStore)
             #expect(copy.isInTabList, "the user's copy goes to the tab list, still private")

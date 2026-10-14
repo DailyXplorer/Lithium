@@ -232,7 +232,7 @@ struct PageTranslatorTests {
         #expect(tab.pageTranslation?.source.languageCode == "fr")
         #expect(tab.pageTranslation?.target.languageCode == "en")
         #expect(tab.pageTranslation?.status == .offered)
-        #expect(browser.barActions(for: tab).contains(.translatePage))
+        #expect(browser.commandWindow.barActions(for: tab).contains(.translatePage))
         // Offered from the one-shot check alone: no handler, script or observer yet.
         #expect(await page("return typeof webkit.messageHandlers.lithiumPageTranslate + ' ' + typeof window.__lithiumPageTranslation", in: tab, world: .defaultClient)
                 == "undefined undefined")
@@ -258,7 +258,7 @@ struct PageTranslatorTests {
         #expect(await text("far", in: tab) == "Ce paragraphe attend tout en bas de la page.")
         _ = await page("scrollTo(0, document.body.scrollHeight); return ''", in: tab)
         #expect(await waitUntil(5) { await text("far", in: tab) == "EN(Ce paragraphe attend tout en bas de la page.)" })
-        #expect(browser.barActions(for: tab).contains(.showOriginal))
+        #expect(browser.commandWindow.barActions(for: tab).contains(.showOriginal))
 
         browser.translator.showOriginal(tab)
         #expect(tab.pageTranslation?.status == .offered)

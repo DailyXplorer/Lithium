@@ -62,8 +62,8 @@ struct PinReorderTests {
         let browser = browserWithPins()
         move("e", to: 0, in: browser)
         #expect(PinStore.load().map(\.id) == browser.pins.map(\.id))
-        browser.selectItem(at: 0)
-        #expect(browser.selectedTab?.url?.absoluteString == "data:text/html,e")
+        browser.commandWindow.selectItem(at: 0)
+        #expect(browser.commandWindow.selectedTab?.url?.absoluteString == "data:text/html,e")
     }
 
     @Test func pinsATabAtASlot() {
@@ -90,22 +90,22 @@ struct PinReorderTests {
         for name in ["x", "y", "z"] {
             browser.pin(browser.newTab(url: URL(string: "data:text/html,\(name)")!))
         }
-        let grid = browser.spacePins
+        let grid = browser.commandWindow.spacePins
         let frames = Dictionary(uniqueKeysWithValues: grid.enumerated().map { index, pin in
             (pin.id, CGRect(x: CGFloat(index) * 48, y: 0, width: 40, height: 48))
         })
         let onY = CGPoint(x: 68, y: 24), onX = CGPoint(x: 20, y: 24), betweenTiles = CGPoint(x: 44, y: 24)
-        #expect(browser.favoritesDropSlot(at: onY, frames: frames) == 1)
+        #expect(browser.commandWindow.favoritesDropSlot(at: onY, frames: frames) == 1)
 
-        _ = browser.dropOnFavorites(["pin:\(grid[2].id.uuidString)"], at: onY, frames: frames)
+        _ = browser.commandWindow.dropOnFavorites(["pin:\(grid[2].id.uuidString)"], at: onY, frames: frames)
         #expect(order(browser) == ["a", "b", "c", "d", "e", "x", "z", "y"])
 
         let tab = browser.newTab(url: URL(string: "data:text/html,new")!)
-        _ = browser.dropOnFavorites([tab.id.uuidString], at: onX, frames: frames)
+        _ = browser.commandWindow.dropOnFavorites([tab.id.uuidString], at: onX, frames: frames)
         #expect(order(browser) == ["a", "b", "c", "d", "e", "new", "x", "z", "y"])
 
         // Off the tiles, a favorite goes to the end of the grid, not to the front.
-        _ = browser.dropOnFavorites(["pin:\(grid[0].id.uuidString)"], at: betweenTiles, frames: frames)
+        _ = browser.commandWindow.dropOnFavorites(["pin:\(grid[0].id.uuidString)"], at: betweenTiles, frames: frames)
         #expect(order(browser) == ["a", "b", "c", "d", "e", "new", "z", "y", "x"])
     }
 

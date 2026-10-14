@@ -19,17 +19,17 @@ struct SpaceSignInTests {
         let (browser, work, favorite) = try await signedInFavorite(on: site)
         defer { reset(browser) }
 
-        browser.switchToSpace(Space.mainID)
-        browser.switchToSpace(work.id)
-        #expect(browser.selectedTab === favorite)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(work.id)
+        #expect(browser.commandWindow.selectedTab === favorite)
         #expect(await reloadsSignedIn(favorite, in: browser), "reloaded")
         let commits = favorite.commits
         browser.navigate(favorite, .open(site.home))
         #expect(await signedIn(favorite, after: commits), "sent to the site again")
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.activate(try #require(browser.pins.first))
-        #expect(browser.currentSpaceID == work.id)
-        #expect(browser.selectedTab === favorite)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
+        #expect(browser.commandWindow.selectedTab === favorite)
         #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
         #expect(await reloadsSignedIn(favorite, in: browser), "picked from another space")
     }
@@ -42,14 +42,14 @@ struct SpaceSignInTests {
         let (browser, work, favorite) = try await signedInFavorite(on: site)
         defer { reset(browser) }
 
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         favorite.sleep(configuration: browser.makeConfiguration(for: favorite.url))
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(work.id)
         #expect(!favorite.isAsleep)
         #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
         #expect(await reloadsSignedIn(favorite, in: browser), "woken on being shown")
 
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         favorite.sleep(configuration: browser.makeConfiguration(for: favorite.url))
         favorite.wakeIfAsleep()
         #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
@@ -63,10 +63,10 @@ struct SpaceSignInTests {
         let (browser, work, favorite) = try await signedInFavorite(on: site)
         defer { reset(browser) }
 
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.relieveMemoryPressure(critical: true)
         #expect(favorite.isAsleep)
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(work.id)
         #expect(!favorite.isAsleep)
         #expect(favorite.webView.configuration.websiteDataStore.identifier == work.id)
         #expect(await reloadsSignedIn(favorite, in: browser))
@@ -78,7 +78,7 @@ struct SpaceSignInTests {
         let site = try await SignInSite.start()
         defer { site.stop() }
         let (browser, work, _) = try await signedInFavorite(on: site)
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.saveNow()
         browser.tabs.forEach { browser.close($0, remembering: false) }
 
@@ -87,9 +87,9 @@ struct SpaceSignInTests {
         defer { reset(browser) }
         let restored = try #require(again.tabs.first { $0.pinID != nil })
         #expect(restored.isAsleep)
-        again.switchToSpace(work.id)
+        again.commandWindow.switchToSpace(work.id)
         again.activate(try #require(again.pins.first))
-        #expect(again.selectedTab === restored)
+        #expect(again.commandWindow.selectedTab === restored)
         #expect(!restored.isAsleep)
         #expect(restored.webView.configuration.websiteDataStore.identifier == work.id)
         #expect(await reloadsSignedIn(restored, in: again))
@@ -103,9 +103,9 @@ struct SpaceSignInTests {
         defer { reset(browser) }
 
         browser.close(favorite)
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.activate(try #require(browser.pins.first))
-        let reopened = try #require(browser.selectedTab)
+        let reopened = try #require(browser.commandWindow.selectedTab)
         #expect(reopened !== favorite)
         #expect(reopened.spaceID == work.id)
         #expect(reopened.webView.configuration.websiteDataStore.identifier == work.id)
@@ -126,8 +126,8 @@ struct SpaceSignInTests {
         #expect(popup.spaceID == work.id)
         #expect(popup.webView.configuration.websiteDataStore.identifier == work.id)
 
-        browser.switchToSpace(Space.mainID)
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(work.id)
         let commits = opener.commits
         browser.navigate(opener, .open(site.home))
         #expect(await signedIn(opener, after: commits))
@@ -141,8 +141,8 @@ struct SpaceSignInTests {
         defer { reset(browser) }
         browser.quickLinks.showWindow = { _, _ in nil }
 
-        browser.switchToSpace(Space.mainID)
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(work.id)
         let link = try #require(browser.quickLinks.open(site.home))
         defer { browser.quickLinks.close(link) }
         #expect(link.spaceID == work.id)
@@ -159,8 +159,8 @@ struct SpaceSignInTests {
         let (browser, work, favorite) = try await signedInFavorite(on: site)
         defer { reset(browser) }
 
-        browser.switchToSpace(Space.mainID)
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(work.id)
         let page = try #require(URL(string: "\(Extensions.scheme)://lithium-test/page.html"))
         browser.navigate(favorite, .open(page))
         let extensionPage = favorite.webView
@@ -190,7 +190,7 @@ struct SpaceSignInTests {
         browser.addSpace(shared)
         let sharedTab = browser.newTab(url: site.home)
         #expect(sharedTab.spaceID == shared.id)
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         let mainTab = browser.newTab(url: site.home)
         #expect(mainTab.spaceID == Space.mainID)
         for (tab, name) in [(sharedTab, "shared space"), (mainTab, "main space")] {

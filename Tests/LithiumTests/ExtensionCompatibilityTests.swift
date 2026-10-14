@@ -333,7 +333,7 @@ struct ExtensionCompatibilityTests {
         defer { [a, b, p, pageTab].forEach(browser.close) }
         #expect(await active() == [try #require(place(a))], "a private tab shown leaves the last normal tab active")
         browser.select(a)
-        browser.newTabFocusingAddress()
+        browser.commandWindow.newTabFocusingAddress()
         #expect(await active() == [try #require(place(a))], "so does the start page")
         browser.close(a)
         #expect(await active() == [], "a closed tab isn't left active")

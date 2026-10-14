@@ -181,7 +181,7 @@ struct AgentTabsTests {
         try await withAgent { client, base in
             let browser = client.browser
             let mine = browser.newTab(url: base.appending(path: "one"))
-            let selected = browser.selectedTabID
+            let selected = browser.commandWindow.selectedTabID
             #expect(selected == mine.id)
 
             let opened = await client.call("tab_open", ["url": .string(base.appending(path: "two").absoluteString), "wait": "load"])
@@ -191,9 +191,9 @@ struct AgentTabsTests {
             #expect(opened["status"] == 200)
             #expect(opened["url"] == .string(base.appending(path: "two").absoluteString))
             let tab = try #require(client.tab(opened["tab"]?.string ?? ""))
-            #expect(browser.selectedTabID == selected)
-            #expect(browser.agentTabs.map(\.id) == [tab.id])
-            #expect(!browser.regularTabs.contains { $0 === tab })
+            #expect(browser.commandWindow.selectedTabID == selected)
+            #expect(browser.commandWindow.agentTabs.map(\.id) == [tab.id])
+            #expect(!browser.commandWindow.regularTabs.contains { $0 === tab })
             #expect(browser.navigationOrder.last === tab)
             #expect(tab.openedByAgent == "s1")
             #expect(client.hub.isTouched(tab))
@@ -201,8 +201,8 @@ struct AgentTabsTests {
             #expect(tab.loadedWebView?.window == nil)
 
             browser.keep(tab)
-            #expect(browser.agentTabs.isEmpty)
-            #expect(browser.regularTabs.contains { $0 === tab })
+            #expect(browser.commandWindow.agentTabs.isEmpty)
+            #expect(browser.commandWindow.regularTabs.contains { $0 === tab })
         }
     }
 
@@ -214,28 +214,28 @@ struct AgentTabsTests {
         // Opened after the agent's tabs, so they come after them in `tabs`.
         let older = browser.newTab(selecting: false)
         _ = browser.newTab(selecting: false)
-        var expected = browser.regularTabs.map(\.id)
+        var expected = browser.commandWindow.regularTabs.map(\.id)
         let place = try #require(expected.firstIndex(of: older.id))
 
-        #expect(!browser.dropTab([first.id.uuidString], on: .agentGroup))
-        #expect(browser.agentTabs.map(\.id) == [first.id, second.id])
+        #expect(!browser.commandWindow.dropTab([first.id.uuidString], on: .agentGroup))
+        #expect(browser.commandWindow.agentTabs.map(\.id) == [first.id, second.id])
         #expect(first.openedByAgent == "s1")
 
-        #expect(browser.dropTab([first.id.uuidString], on: .tabList(place)))
+        #expect(browser.commandWindow.dropTab([first.id.uuidString], on: .tabList(place)))
         expected.insert(first.id, at: place)
-        #expect(browser.regularTabs.map(\.id) == expected)
-        #expect(browser.agentTabs.map(\.id) == [second.id])
+        #expect(browser.commandWindow.regularTabs.map(\.id) == expected)
+        #expect(browser.commandWindow.agentTabs.map(\.id) == [second.id])
 
         // Move to Tab List: at its end, below the tabs the user opened after it.
         browser.keep(second)
         expected.append(second.id)
-        #expect(browser.regularTabs.map(\.id) == expected)
-        #expect(browser.agentTabs.isEmpty)
+        #expect(browser.commandWindow.regularTabs.map(\.id) == expected)
+        #expect(browser.commandWindow.agentTabs.isEmpty)
 
         // The user's own tabs and favorites dropped on the list change nothing.
-        #expect(!browser.dropTab([older.id.uuidString], on: .tabList(0)))
-        #expect(!browser.dropTab(["pin:" + UUID().uuidString], on: .tabList(0)))
-        #expect(browser.regularTabs.map(\.id) == expected)
+        #expect(!browser.commandWindow.dropTab([older.id.uuidString], on: .tabList(0)))
+        #expect(!browser.commandWindow.dropTab(["pin:" + UUID().uuidString], on: .tabList(0)))
+        #expect(browser.commandWindow.regularTabs.map(\.id) == expected)
     }
 
     @Test func tabsListNamesEveryTabWithIDsThatStay() async throws {
@@ -318,13 +318,13 @@ struct AgentTabsTests {
             let id = try #require(opened["tab"]?.string)
             let tab = try #require(client.tab(id))
             tab.sleep(configuration: client.browser.makeConfiguration())
-            let picks = client.browser.tabPickToken
+            let picks = client.browser.commandWindow.tabPickToken
             let selected = await client.call("tab_select", ["tab": .string(id)])
             #expect(!selected.isError)
-            #expect(client.browser.selectedTabID == tab.id)
+            #expect(client.browser.commandWindow.selectedTabID == tab.id)
             #expect(!tab.isAsleep)
             // Not the user's pick: their address-bar typing goes on, and stays out of the page.
-            #expect(client.browser.tabPickToken == picks)
+            #expect(client.browser.commandWindow.tabPickToken == picks)
         }
     }
 
@@ -337,8 +337,8 @@ struct AgentTabsTests {
             #expect(client.tab(id) == nil)
             #expect(client.browser.canReopenClosedTab)
             client.browser.reopenClosedTab()
-            #expect(client.browser.selectedTab?.url == base.appending(path: "three"))
-            #expect(client.browser.selectedTab?.openedByAgent == nil)
+            #expect(client.browser.commandWindow.selectedTab?.url == base.appending(path: "three"))
+            #expect(client.browser.commandWindow.selectedTab?.openedByAgent == nil)
         }
     }
 
@@ -454,7 +454,7 @@ struct AgentTabsTests {
                 #expect((await client.call("go_forward", ["tab": id]))["title"] == "One")
             }
 
-            let selected = browser.selectedTabID
+            let selected = browser.commandWindow.selectedTabID
             let asleep = browser.newTab(selecting: false)
             asleep.restore(url: file, title: "Notes")
             let id: JSONValue = .string(client.hub.id(for: asleep))
@@ -463,7 +463,7 @@ struct AgentTabsTests {
             #expect((await client.call("reload", ["tab": id])).code == "denied_by_user")
             #expect((await client.call("go_back", ["tab": id])).code == "denied_by_user")
             #expect(asleep.isAsleep)
-            #expect(browser.selectedTabID == selected)
+            #expect(browser.commandWindow.selectedTabID == selected)
             // Sent elsewhere, it goes straight there without showing the file on the way.
             let two = base.appending(path: "two")
             let navigated = await client.call("navigate", ["tab": id, "url": .string(two.absoluteString)])
@@ -559,7 +559,7 @@ struct AgentTabsTests {
                 let result = await client.call("navigate", ["tab": .string(id), "url": .string(url)])
                 #expect(result.code == "blocked_page", "\(url): \(result.code ?? "allowed")")
             }
-            let groupSize = browser.agentTabs.count
+            let groupSize = browser.commandWindow.agentTabs.count
             #expect((await client.call("tab_open", ["url": "lithium://history"])).code == "blocked_page")
             let denying = denyEveryConfirmation(client.hub)
             defer { denying.cancel() }
@@ -567,11 +567,11 @@ struct AgentTabsTests {
             #expect(file.code == "denied_by_user")
             #expect(file.message.contains("notes.html"))
             #expect((await client.call("navigate", ["tab": .string(id), "url": "file:///tmp/notes.html"])).code == "denied_by_user")
-            #expect(browser.agentTabs.count == groupSize)
+            #expect(browser.commandWindow.agentTabs.count == groupSize)
             #expect(client.tab(id)?.url == base.appending(path: "one"))
 
             browser.openSettings()
-            let settings = try #require(browser.selectedTab)
+            let settings = try #require(browser.commandWindow.selectedTab)
             let settingsID = client.hub.id(for: settings)
             #expect((await client.call("navigate", ["tab": .string(settingsID), "url": .string(base.absoluteString)])).code == "blocked_page")
             #expect((await client.call("reload", ["tab": .string(settingsID)])).code == "blocked_page")
@@ -697,7 +697,7 @@ struct AgentTabsTests {
             #expect(failed.code == "navigation_failed", "\(failed.content)")
             let id = try #require(failed["tab"]?.string)
             let tab = try #require(client.tab(id))
-            #expect(client.browser.agentTabs.contains { $0 === tab })
+            #expect(client.browser.commandWindow.agentTabs.contains { $0 === tab })
             #expect(tab.loadError != nil)
             #expect(client.hub.recentLog.last?.tab == id)
             #expect(client.hub.recentLog.last?.error == "navigation_failed")
@@ -1006,7 +1006,7 @@ struct AgentTabsTests {
             #expect(exported == log)
 
             client.browser.openAgentLog()
-            let page = try #require(client.browser.selectedTab)
+            let page = try #require(client.browser.commandWindow.selectedTab)
             #expect(page.url == Internal.agentsURL)
             let world = WKContentWorld.page
             let entries = { try? await page.webView.evaluateJavaScript("document.querySelectorAll('.entry').length", in: nil, contentWorld: world) as? Int }
@@ -1045,8 +1045,8 @@ struct AgentTabsTests {
             let relaunched = Browser()
             let restored = try #require(relaunched.tabs.first { $0.url == url })
             #expect(restored.openedByAgent == nil)
-            #expect(relaunched.regularTabs.contains { $0 === restored })
-            #expect(relaunched.agentTabs.isEmpty)
+            #expect(relaunched.commandWindow.regularTabs.contains { $0 === restored })
+            #expect(relaunched.commandWindow.agentTabs.isEmpty)
         }
     }
 
@@ -1069,7 +1069,7 @@ struct AgentTabsTests {
         defer { listener.cancel() }
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         await browser.privacy.waitUntilReady()
         await browser.extensions.waitUntilLoaded()
         await browser.setAgentAccess(true)
@@ -1089,7 +1089,7 @@ struct AgentTabsTests {
                 .background(Color(hex: hex))
                 .foregroundStyle(palette.ink)
                 .font(Theme.font(13))
-                .environment(browser)
+                .environment(browser).environment(browser.windows[0])
                 .environment(TabHover())
                 .environment(\.sidebarPalette, palette)
                 .environment(\.colorScheme, isDark ? .dark : .light)

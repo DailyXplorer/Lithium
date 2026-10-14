@@ -17,6 +17,7 @@ struct LithiumApp: App {
         Window("Lithium", id: "browser") {
             BrowserView()
                 .environment(browser)
+                .environment(browser.windows[0])
                 .frame(minWidth: 760, minHeight: 480)
         }
         .windowStyle(.hiddenTitleBar)
@@ -75,13 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// The menu reads `browser`: the page commands act on `commandTab`, the tab-list ones on
+/// `commandWindow`, the browser window in front.
 struct BrowserCommands: Commands {
     let browser: Browser
-    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.openSettings() } }
+            Button("Settings…") { browser.inBrowserWindow { browser.openSettings(in: $0) } }
                 .keyboardShortcut(",")
         }
         CommandGroup(after: .appSettings) {
@@ -90,9 +92,9 @@ struct BrowserCommands: Commands {
                 .disabled(browser.agent?.state != .listening)
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") { browser.focusAddressFromMenu(newTab: true) }
+            Button("New Tab") { browser.inBrowserWindow { $0.focusAddressFromMenu(newTab: true) } }
                 .keyboardShortcut("t")
-            Button("Open Location…") { browser.focusAddressFromMenu(newTab: false) }
+            Button("Open Location…") { browser.inBrowserWindow { $0.focusAddressFromMenu(newTab: false) } }
                 .keyboardShortcut("l")
             Button("Move to Window") {
                 if let tab = browser.quickLinks.keyTab { browser.quickLinks.moveToBrowserWindow(tab) }
@@ -103,7 +105,7 @@ struct BrowserCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") { browser.closeTabOrWindow() }
                 .keyboardShortcut("w")
-            Button("Reopen Closed Tab") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.reopenClosedTab() } }
+            Button("Reopen Closed Tab") { browser.inBrowserWindow { browser.reopenClosedTab(into: $0) } }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(!browser.canReopenClosedTab)
         }
@@ -133,14 +135,16 @@ struct BrowserCommands: Commands {
             .disabled(browser.commandTab == nil)
         }
         CommandGroup(before: .sidebar) {
-            Button(browser.showsSidebar ? "Hide Sidebar" : "Show Sidebar") {
-                withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
+            Button(browser.commandWindow.showsSidebar ? "Hide Sidebar" : "Show Sidebar") {
+                withAnimation(.snappy(duration: 0.2)) { browser.commandWindow.toggleSidebar() }
             }
             .keyboardShortcut("b")
-            Button(browser.isZenMode ? "Exit Zen Mode" : "Enter Zen Mode") {
-                withAnimation(.snappy(duration: 0.2)) { browser.toggleZenMode() }
+            .disabled(!browser.canChangeTabs)
+            Button(browser.commandWindow.isZenMode ? "Exit Zen Mode" : "Enter Zen Mode") {
+                withAnimation(.snappy(duration: 0.2)) { browser.commandWindow.toggleZenMode() }
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
+            .disabled(!browser.canChangeTabs)
             Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")
                 .disabled(browser.commandTab == nil)
@@ -150,22 +154,23 @@ struct BrowserCommands: Commands {
             Button(browser.commandTab?.pageTranslation?.isActive == true ? "Show Original" : "Translate Page") { browser.toggleTranslation(browser.commandTab) }
                 .disabled(browser.commandTab?.canTranslate != true)
             Divider()
-            // The popover is the main window's toolbar's: a link's window has none.
+            // The popover is a browser window's toolbar's: a link's window has none.
             Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
-                if let tab = browser.selectedTab { browser.summaries.togglePanel(for: tab) }
+                if let tab = browser.commandWindow.selectedTab { browser.summaries.togglePanel(for: tab) }
             }
             .keyboardShortcut("s", modifiers: [.command, .shift])
-            .disabled(!browser.summaries.isEnabled || browser.quickLinks.keyTab != nil || PageSummaries.page(of: browser.selectedTab?.url) == nil)
+            .disabled(!browser.summaries.isEnabled || !browser.canChangeTabs || PageSummaries.page(of: browser.commandWindow.selectedTab?.url) == nil)
             Button(protectionsEnabled ? "Turn Off Protections for This Site" : "Turn On Protections for This Site") {
                 browser.setProtections(!protectionsEnabled, for: browser.commandTab)
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(browser.commandTab?.url?.scheme?.hasPrefix("http") != true)
-            Button(browser.videoPopout.tab == nil ? "Pop Out Video" : "Put Video Back") {
-                if browser.videoPopout.tab == nil { browser.videoPopout.showSelected() } else { browser.videoPopout.returnToTab() }
+            Button(browser.commandWindow.videoPopout.tab == nil ? "Pop Out Video" : "Put Video Back") {
+                let popout = browser.commandWindow.videoPopout
+                if popout.tab == nil { popout.showSelected() } else { popout.returnToTab() }
             }
             .keyboardShortcut("p", modifiers: [.command, .option])
-            .disabled(browser.videoPopout.tab == nil && !browser.videoPopout.canShowSelected)
+            .disabled(browser.commandWindow.videoPopout.tab == nil && !browser.commandWindow.videoPopout.canShowSelected)
             Divider()
             // ⌘= zooms in too (`Browser.isZoomInWithoutShift`).
             Button("Zoom In") { browser.zoomSelectedTab(by: PageZoom.step) }
@@ -191,7 +196,7 @@ struct BrowserCommands: Commands {
             Divider()
         }
         CommandMenu("History") {
-            Button("Show All History") { browser.inMainWindow(open: { openWindow(id: "browser") }) { browser.openHistory() } }
+            Button("Show All History") { browser.inBrowserWindow { browser.openHistory(in: $0) } }
                 .keyboardShortcut("y")
             Divider()
             Button("Back") { browser.navigate(browser.commandTab, .back) }
@@ -203,28 +208,29 @@ struct BrowserCommands: Commands {
         }
         CommandMenu("Tabs") {
             // Not while a link's window is in front (`Browser.canChangeTabs`): its page gets the keys.
-            Button("Next Tab") { browser.selectAdjacentTab(1) }
+            let window = browser.commandWindow
+            Button("Next Tab") { window.selectAdjacentTab(1) }
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 .disabled(!browser.canChangeTabs)
-            Button("Previous Tab") { browser.selectAdjacentTab(-1) }
+            Button("Previous Tab") { window.selectAdjacentTab(-1) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
                 .disabled(!browser.canChangeTabs)
-            Button("Next Recent Tab") { browser.cycleRecentTabs(backward: false) }
+            Button("Next Recent Tab") { window.cycleRecentTabs(backward: false) }
                 .keyboardShortcut(.tab, modifiers: .control)
                 .disabled(!browser.canChangeTabs)
-            Button("Previous Recent Tab") { browser.cycleRecentTabs(backward: true) }
+            Button("Previous Recent Tab") { window.cycleRecentTabs(backward: true) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
                 .disabled(!browser.canChangeTabs)
             Divider()
-            Button("Pin or Unpin Tab") { browser.togglePinForSelectedTab() }
+            Button("Pin or Unpin Tab") { window.togglePinForSelectedTab() }
                 .keyboardShortcut("d")
-                .disabled(browser.selectedTab?.url == nil || browser.selectedTab?.isEphemeral == true || !browser.canChangeTabs)
+                .disabled(window.selectedTab?.url == nil || window.selectedTab?.isEphemeral == true || !browser.canChangeTabs)
             Button("Copy Link") { browser.copyLink(of: browser.commandTab) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(browser.commandTab?.url == nil)
-            Button("Duplicate Tab") { if let tab = browser.selectedTab { browser.duplicate(tab) } }
+            Button("Duplicate Tab") { if let tab = window.selectedTab { browser.duplicate(tab) } }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-                .disabled(browser.selectedTab?.url == nil || !browser.canChangeTabs)
+                .disabled(window.selectedTab?.url == nil || !browser.canChangeTabs)
             if Tab.canMute {
                 Button(browser.commandTab?.isMuted == true ? "Unmute Tab" : "Mute Tab") {
                     browser.commandTab?.isMuted.toggle()
@@ -232,11 +238,11 @@ struct BrowserCommands: Commands {
                 .disabled(browser.commandTab == nil)
             }
             Divider()
-            Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
+            Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder(in: window) } }
                 .keyboardShortcut("n", modifiers: [.command, .option])
                 .disabled(!browser.canChangeTabs)
             // A favorite's page stays in the grid: only the tab list has folders.
-            if let tab = browser.selectedTab, tab.pinID == nil, browser.canChangeTabs {
+            if let tab = window.selectedTab, tab.pinID == nil, browser.canChangeTabs {
                 MoveToFolderMenu(browser: browser, tab: tab, title: "Move Tab to Folder", showsShortcut: true)
             } else {
                 Menu("Move Tab to Folder") {}
@@ -244,7 +250,7 @@ struct BrowserCommands: Commands {
             }
             Divider()
             ForEach(1..<10) { number in
-                Button("Go to Item \(number)") { browser.selectItem(at: number - 1) }
+                Button("Go to Item \(number)") { window.selectItem(at: number - 1) }
                     .keyboardShortcut(KeyEquivalent(Character("\(number)")))
                     .disabled(!browser.canChangeTabs)
             }
@@ -252,7 +258,7 @@ struct BrowserCommands: Commands {
                 Divider()
                 // One digit each: `Character` traps on "10" (`restoreSpaces` keeps `Space.limit`).
                 ForEach(Array(browser.spaces.prefix(Space.limit).enumerated()), id: \.element.id) { index, space in
-                    Button("Go to \(space.name)") { withAnimation(.snappy(duration: 0.25)) { browser.switchToSpace(at: index) } }
+                    Button("Go to \(space.name)") { withAnimation(.snappy(duration: 0.25)) { window.switchToSpace(at: index) } }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .control)
                         .disabled(!browser.canChangeTabs)
                 }

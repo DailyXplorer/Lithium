@@ -52,7 +52,7 @@ struct PageSecurityTests {
         let tabs = browser.tabs.count
         #expect(await waitUntil(30) { tab.webView.title == "Next" })
         #expect(browser.tabs.count == tabs)
-        #expect(browser.selectedTabID == tab.id)
+        #expect(browser.commandWindow.selectedTabID == tab.id)
     }
 
     /// A tab out of sight never puts up an app-modal alert: its dialog waits for the tab to be

@@ -592,6 +592,8 @@ final class Browser {
         return window.showsFindBar(over: tab) ? window.find : nil
     }
 
+    func showsFindBar(over tab: Tab) -> Bool { findBar(over: tab) != nil }
+
     /// The page the menu's page commands (Reload, Back, Print…) act on.
     var commandTab: Tab? { quickLinks.keyTab ?? commandWindow.selectedTab }
     /// The Tabs menu's selection and tab-list commands act on the browser window in front

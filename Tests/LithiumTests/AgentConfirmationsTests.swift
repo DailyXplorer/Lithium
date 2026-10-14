@@ -105,10 +105,10 @@ struct AgentConfirmationsTests {
             #expect(client.hub.confirmations.grants.isEmpty)
 
             // Unanswered, a tab_open leaves no tab.
-            let group = browser.agentTabs.count
+            let group = browser.commandWindow.agentTabs.count
             let late = await client.call("tab_open", ["url": .string(file.absoluteString), "timeoutMs": 300])
             #expect(late.code == "confirmation_timeout", "\(late.content)")
-            #expect(browser.agentTabs.count == group)
+            #expect(browser.commandWindow.agentTabs.count == group)
             #expect(client.hub.confirmations.pending.isEmpty)
 
             let entries = await client.hub.log.entries(limit: 50).filter { $0["event"] == "confirmation" }

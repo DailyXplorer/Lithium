@@ -4,6 +4,7 @@ import SwiftUI
 /// The foot of the sidebar: a button per space once there are two, then New Space.
 struct SpaceBar: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @State private var editing: Space.ID?
     @State private var isCreating = false
     @State private var deleting: Space?
@@ -12,8 +13,8 @@ struct SpaceBar: View {
         HStack(spacing: 2) {
             if browser.hasSpaces {
                 ForEach(Array(browser.spaces.enumerated()), id: \.element.id) { index, space in
-                    SpaceButton(space: space, number: index + 1, isCurrent: space.id == browser.currentSpaceID) {
-                        withAnimation(.snappy(duration: 0.25)) { browser.switchToSpace(space.id) }
+                    SpaceButton(space: space, number: index + 1, isCurrent: space.id == window.currentSpaceID) {
+                        withAnimation(.snappy(duration: 0.25)) { window.switchToSpace(space.id) }
                     }
                     .contextMenu {
                         Button("Edit Space…") { editing = space.id }
@@ -28,12 +29,12 @@ struct SpaceBar: View {
             }
             Spacer(minLength: 0)
             IconButton(icon: .folder, help: "New folder (⌥⌘N)") {
-                withAnimation(.snappy(duration: 0.2)) { browser.newFolder() }
+                withAnimation(.snappy(duration: 0.2)) { browser.newFolder(in: window) }
             }
             IconButton(icon: .plus, help: "New space", isEnabled: browser.canAddSpace) { isCreating = true }
                 .popover(isPresented: $isCreating, arrowEdge: .top) {
                     SpaceEditor(space: browser.newSpaceDraft(), isNew: true) { space in
-                        withAnimation(.snappy(duration: 0.25)) { browser.addSpace(space) }
+                        withAnimation(.snappy(duration: 0.25)) { browser.addSpace(space, in: window) }
                     } close: { isCreating = false }
                 }
         }

@@ -5,17 +5,25 @@ struct ExtensionsButton: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
     @State private var isPresented = false
+    @State private var anchor = WeakView()
 
     var body: some View {
         let extensions = browser.extensions
         if !extensions.contexts.isEmpty {
             IconButton(icon: .puzzle, help: "Extensions") { isPresented.toggle() }
-                .background(PopupAnchor { extensions.popupAnchor = $0 })
+                .background(PopupAnchor { view in
+                    anchor.view = view
+                    extensions.popupAnchor = view
+                })
                 .popover(isPresented: $isPresented, arrowEdge: .bottom) {
                     ExtensionsList(tab: tab) { id in
                         isPresented = false
-                        // The extension's own popover opens once this one has closed.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { extensions.performAction(id: id, in: tab) }
+                        // The extension's own popover opens once this one has closed, under the
+                        // button clicked: each window has one.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            extensions.popupAnchor = anchor.view
+                            extensions.performAction(id: id, in: tab)
+                        }
                     }
                 }
         }
@@ -95,6 +103,10 @@ private struct ExtensionRow: View {
         .onHover { isHovered = $0 }
         .help(name)
     }
+}
+
+private final class WeakView {
+    weak var view: NSView?
 }
 
 /// The AppKit view behind the button, which extension popovers point at.

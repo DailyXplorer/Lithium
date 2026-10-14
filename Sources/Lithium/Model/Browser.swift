@@ -460,11 +460,15 @@ final class Browser {
         if window.isHidden {
             show(window)
         } else if let nsWindow = window.nsWindow, nsWindow.isMiniaturized || !canChangeTabs {
-            // Ordering front alone leaves a minimized window in the Dock.
-            if nsWindow.isMiniaturized { nsWindow.deminiaturize(nil) }
-            nsWindow.makeKeyAndOrderFront(nil)
+            bringForward(nsWindow)
         }
         command(window)
+    }
+
+    /// Ordering front alone leaves a minimized window in the Dock.
+    private func bringForward(_ nsWindow: NSWindow) {
+        if nsWindow.isMiniaturized { nsWindow.deminiaturize(nil) }
+        nsWindow.makeKeyAndOrderFront(nil)
     }
 
     private func show(_ window: BrowserWindow) {
@@ -508,11 +512,12 @@ final class Browser {
     }
 
     /// A favorite's notification that came while the window wasn't key put a dot on its tile; the
-    /// user is now looking at that page.
+    /// user is now looking at that page. Extensions' active tab is the one in front.
     func windowBecameKey(_ window: BrowserWindow) {
         keyWindow = window
         quickLinks.browserWindowBecameKey()
         window.selectedTab?.didOpen()
+        extensions.didSelect(window.selectedTab)
     }
 
     /// Installed once the window exists: a monitor added before NSApplication finishes launching is dropped.
@@ -809,11 +814,13 @@ final class Browser {
         }
     }
 
-    /// Shows `tab` in its window, brought forward when another is in front.
+    /// Shows `tab` in its window. A tab the user picked brings its window forward; an agent's or
+    /// an extension's choice leaves the window in front, and the keys, where they are.
     func select(_ tab: Tab, picked: Bool = true) {
         let window = window(of: tab)
         window.select(tab, picked: picked)
-        if window !== commandWindow { window.nsWindow?.makeKeyAndOrderFront(nil) }
+        guard picked, let nsWindow = window.nsWindow, window !== commandWindow || nsWindow.isMiniaturized else { return }
+        bringForward(nsWindow)
     }
 
     /// The selection falls back on the tab's group, never on a favorite. A tab the user went to

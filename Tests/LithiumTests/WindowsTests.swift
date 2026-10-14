@@ -50,6 +50,8 @@ struct WindowsTests {
         #expect(second.selectedTab === c)
         #expect(browser.isShown(a) && browser.isShown(c) && !browser.isShown(b))
         #expect(browser.navigationOrder.map(\.url) == [page("a"), page("c"), page("b")], "window after window")
+        #expect(!first.dropForSplit(c.id.uuidString, on: .second), "another window's tab doesn't pair, so the drop isn't taken")
+        #expect(browser.splits.pairs.isEmpty)
 
         second.selectAdjacentTab(1)
         #expect(second.selectedTab === b)
@@ -139,6 +141,51 @@ struct WindowsTests {
         #expect(again.windows[1].regularTabs.map(\.url) == [page("b")])
     }
 
+    /// An agent's `tab_select` or an extension's activate shows the tab in its window but leaves
+    /// the window in front, and the keys, where they are. The user's pick brings the window
+    /// forward, out of the Dock if minimized.
+    @Test func onlyTheUsersPickBringsAnotherWindowForward() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        let b = browser.newTab(url: page("b"), in: second)
+        let c = browser.newTab(url: page("c"), in: second)
+        let nsWindow = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        second.nsWindow = nsWindow
+        browser.windowBecameKey(first)
+
+        browser.select(b, picked: false)
+        #expect(second.selectedTab === b)
+        #expect(nsWindow.frontings == 0)
+        #expect(browser.commandWindow === first)
+
+        nsWindow.minimized = true
+        browser.select(c)
+        #expect(second.selectedTab === c)
+        #expect(nsWindow.frontings == 1)
+        #expect(!nsWindow.minimized, "out of the Dock")
+    }
+
+    /// Extensions see one window: its active tab is the selected tab of the window in front, and a
+    /// selection in a window behind waits until that window comes forward.
+    @Test func extensionsActiveTabIsTheWindowInFronts() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        browser.windowBecameKey(first)
+        let b = browser.newTab(url: page("b"), in: second)
+        #expect(browser.extensions.activeTab === a, "a tab opened behind isn't the active one")
+
+        browser.windowBecameKey(second)
+        #expect(browser.extensions.activeTab === b)
+        browser.windowBecameKey(first)
+        #expect(browser.extensions.activeTab === a)
+    }
+
     /// A session written before windows were saved comes back as one window.
     @Test func anOldSessionOpensInOneWindow() {
         SessionStore.save(Session(tabs: [.init(url: page("old"), title: "Old", customTitle: nil, pinID: nil)], selectedIndex: 0))
@@ -169,4 +216,20 @@ struct WindowsTests {
     }
 
     private func page(_ name: String) -> URL { URL(string: "data:text/html,\(name)")! }
+}
+
+/// Counts the requests to come forward, minimizes only on paper, and stays off screen.
+private final class FrontingWindow: NSWindow {
+    private(set) var frontings = 0
+    var minimized = false
+
+    override var isMiniaturized: Bool { minimized }
+
+    override func deminiaturize(_ sender: Any?) {
+        minimized = false
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        frontings += 1
+    }
 }

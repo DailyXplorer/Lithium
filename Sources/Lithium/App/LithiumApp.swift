@@ -14,12 +14,14 @@ struct LithiumApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     /// The browser windows are `BrowserNSWindow`s the browser opens itself (`Browser.openWindow`):
-    /// the scene opens nothing and carries the menu.
+    /// the scene opens nothing and carries the menu. Its own commands, a Window menu item that
+    /// would open it empty, are removed before the browser's are added.
     var body: some Scene {
         Window("Lithium", id: "browser") { EmptyView() }
             .defaultLaunchBehavior(.suppressed)
             .restorationBehavior(.disabled)
             .handlesExternalEvents(matching: [])
+            .commandsRemoved()
             .commands { BrowserCommands(browser: browser) }
     }
 }

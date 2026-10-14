@@ -73,9 +73,10 @@ extension Browser {
     }
 
     /// The split `partner` leaves lends the new one its orientation and divider. Both sides are
-    /// one window's: a pair is one row of its sidebar.
-    func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) {
-        guard tab.windowID == partner.windowID else { return }
+    /// one window's: a pair is one row of its sidebar. False when they aren't.
+    @discardableResult
+    func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) -> Bool {
+        guard tab.windowID == partner.windowID else { return false }
         let window = window(of: partner)
         window.shownPartner?.markActive()
         var split = split(of: partner) ?? TabSplit(first: partner.id, second: tab.id)
@@ -85,6 +86,7 @@ extension Browser {
         if tab.folderID != partner.folderID { tab.folderID = partner.folderID }
         splits.pairs.append(split)
         window.select(tab)
+        return true
     }
 
     /// The side shown until now counts as used as it leaves the screen, like in `select`.
@@ -221,7 +223,6 @@ extension BrowserWindow {
         defer { browser.splits.draggedTabID = nil }
         guard let tab = browser.tabs.first(where: { $0.id.uuidString == item }), let selected = selectedTab,
               selected !== tab, tab.isInTabList, selected.isInTabList else { return false }
-        browser.pair(tab, with: selected, on: side)
-        return true
+        return browser.pair(tab, with: selected, on: side)
     }
 }

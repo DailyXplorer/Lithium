@@ -442,9 +442,10 @@ final class Extensions: NSObject {
     }
 
     /// WebKit can't be told there is no active tab: the start page and a private tab leave the
-    /// last normal tab active.
+    /// last normal tab active. Extensions see one window, so the active tab is the one in front:
+    /// a selection in a window behind waits for that window to come forward.
     func didSelect(_ tab: Tab?) {
-        guard let tab, !tab.isEphemeral, tab !== activeTab else { return }
+        guard let tab, !tab.isEphemeral, tab !== activeTab, let browser, browser.window(of: tab) === browser.commandWindow else { return }
         let previous = activeTab
         activeTab = tab
         controller.didActivateTab(tab, previousActiveTab: previous)

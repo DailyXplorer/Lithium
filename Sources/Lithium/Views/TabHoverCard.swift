@@ -159,7 +159,7 @@ private struct LiveTabHoverCard: View {
 
     private func agentNote(for tab: Tab) -> String? {
         if tab.openedByAgent != nil { return "Opened by an agent" }
-        return browser.agent?.isTouched(tab) == true ? "Used by an agent" : nil
+        return browser.agent?.isInUse(tab) == true ? "Used by an agent" : nil
     }
 
     private static func host(of url: URL?) -> String {

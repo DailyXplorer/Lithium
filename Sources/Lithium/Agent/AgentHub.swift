@@ -249,6 +249,7 @@ final class AgentHub {
                     try? await Task.sleep(for: .seconds(60))
                     guard let self else { return }
                     self.dropIdleSessions(now: self.now())
+                    self.releaseExpiredHolds(now: self.now())
                 }
             }
             // The listener may have died between `.ready` and here, while the hub was not yet listening.
@@ -680,14 +681,28 @@ final class AgentHub {
         if let session = Self.callSession { state.holder = session.id }
     }
 
+    static let holdTime: TimeInterval = 10 * 60
+
     func holds(_ tab: Tab) -> Bool {
         guard let last = tabs[tab.id]?.lastAction else { return false }
-        return now().timeIntervalSince(last) < 10 * 60
+        return now().timeIntervalSince(last) < Self.holdTime
     }
 
     func isHeldBySession(_ tab: Tab) -> Bool {
         guard let holder = tabs[tab.id]?.holder, sessions.contains(where: { $0.id == holder }) else { return false }
         return isBusy(tab) || holds(tab)
+    }
+
+    /// What the tab's badge and hover card show: an agent holds the tab now.
+    func isInUse(_ tab: Tab) -> Bool {
+        isBusy(tab) || isHeldBySession(tab)
+    }
+
+    /// Time alone changes nothing a view observes, so the idle sweep clears expired holds.
+    func releaseExpiredHolds(now: Date) {
+        for state in tabs.values {
+            if let last = state.lastAction, now.timeIntervalSince(last) >= Self.holdTime { state.lastAction = nil }
+        }
     }
 
     /// Hooked from `Browser.close`: the id is retired, so later calls get `tab_closed`.

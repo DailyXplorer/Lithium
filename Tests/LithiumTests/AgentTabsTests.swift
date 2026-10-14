@@ -824,6 +824,105 @@ struct AgentTabsTests {
         }
     }
 
+    // MARK: Badge
+
+    @MainActor private final class Clock {
+        var now = Date()
+    }
+
+    /// Set synchronously on this actor by the change itself.
+    private final class Flag: @unchecked Sendable { var value = false }
+
+    /// A hub on its own clock, with one session, over a browser without agent access, and a tab
+    /// whose frames already said hello (so acting in it adds no entry to `tabs`).
+    private func withBadgeHub(_ body: (AgentHub, MCPSession, Lithium.Tab, Clock) async throws -> Void) async throws {
+        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        let browser = Browser()
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-\(UUID().uuidString)")
+        let suite = "agent-tests-\(UUID().uuidString)"
+        defer {
+            browser.tabs.forEach(browser.close)
+            try? FileManager.default.removeItem(at: folder)
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+        }
+        let clock = Clock()
+        let hub = AgentHub(browser: browser, folder: folder, defaults: try #require(UserDefaults(suiteName: suite)), now: { clock.now })
+        await hub.start()
+        defer { hub.shutdown() }
+        try #require(hub.state == .listening)
+        let reply = await hub.handle(.message(["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [
+            "protocolVersion": "2025-06-18", "capabilities": [:], "clientInfo": ["name": "test-agent", "version": "1"],
+        ]], session: nil, protocolVersion: nil))
+        let session = try #require(hub.sessions.first { $0.id == reply.sessionID })
+        let tab = browser.newTab(selecting: false)
+        _ = try #require(hub.agentTab(for: tab))
+        try await body(hub, session, tab, clock)
+    }
+
+    /// Whether a view showing the badge would draw again.
+    private func redraws(_ hub: AgentHub, _ tab: Lithium.Tab, _ change: () async throws -> Void) async rethrows -> Bool {
+        let changed = Flag()
+        withObservationTracking { _ = hub.isInUse(tab) } onChange: { changed.value = true }
+        try await change()
+        return changed.value
+    }
+
+    @Test func theBadgeShowsRightAfterAnAgentActs() async throws {
+        try await withBadgeHub { hub, session, tab, _ in
+            #expect(!hub.isInUse(tab))
+            let redrawn = await redraws(hub, tab) { await AgentHub.$callSession.withValue(session) { hub.touch(tab) } }
+            #expect(redrawn)
+            #expect(hub.isInUse(tab))
+        }
+    }
+
+    @Test func theBadgeGoesWhenItsSessionEnds() async throws {
+        try await withBadgeHub { hub, session, tab, _ in
+            await AgentHub.$callSession.withValue(session) { hub.touch(tab) }
+            #expect(hub.isInUse(tab))
+            let redrawn = await redraws(hub, tab) { _ = await hub.handle(.endSession(session.id)) }
+            #expect(redrawn)
+            #expect(!hub.isInUse(tab))
+            #expect(hub.isTouched(tab), "tabs_list still says an agent touched it")
+        }
+    }
+
+    @Test func theBadgeGoesTenMinutesAfterTheLastActionWithTheSessionStillOpen() async throws {
+        try await withBadgeHub { hub, session, tab, clock in
+            await AgentHub.$callSession.withValue(session) { hub.touch(tab) }
+            clock.now += AgentHub.holdTime - 1
+            #expect(hub.isInUse(tab))
+            let early = await redraws(hub, tab) { hub.releaseExpiredHolds(now: clock.now) }
+            #expect(!early, "a live hold stays")
+
+            clock.now += 2
+            #expect(!hub.isInUse(tab))
+            let redrawn = await redraws(hub, tab) { hub.releaseExpiredHolds(now: clock.now) }
+            #expect(redrawn)
+            #expect(!hub.isInUse(tab))
+            #expect(hub.sessions.map(\.id) == [session.id])
+        }
+    }
+
+    @Test func theBadgeShowsWhileACallRuns() async throws {
+        try await withBadgeHub { hub, session, tab, clock in
+            let named = NamedTab(tab: tab, id: hub.id(for: tab))
+            try await hub.exclusive(named, until: .now + .seconds(5), timeout: .seconds(5)) {
+                #expect(hub.isInUse(tab), "without a session holding it")
+            }
+            #expect(!hub.isInUse(tab))
+
+            try await AgentHub.$callSession.withValue(session) {
+                try await hub.exclusive(named, until: .now + .seconds(5), timeout: .seconds(5)) {
+                    hub.touch(tab)
+                    clock.now += AgentHub.holdTime + 60
+                    #expect(hub.isInUse(tab), "a call longer than the hold")
+                }
+            }
+            #expect(!hub.isInUse(tab))
+        }
+    }
+
     @Test func stopDoesntWaitItsTurnAndEndsTheCallInFlight() async throws {
         let hanging = try await HangingHTTP()
         defer { hanging.stop() }

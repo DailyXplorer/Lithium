@@ -213,8 +213,9 @@ struct QuickLinksTests {
 
     /// `inBrowserWindow`, which Settings, History and Reopen Closed Tab run in: from a link's
     /// window it brings the browser window forward, out of the Dock if minimized (even with no
-    /// link in front), where they open or select their tab; from the browser window, it leaves it
-    /// as it is. The menu items themselves can't be read headless.
+    /// link in front), where they open or select their tab, and shows the last window again if
+    /// closed; from the browser window, it leaves it as it is. The menu items themselves can't be
+    /// read headless.
     @Test func browserWindowCommandsBringItForward() throws {
         let (browser, _) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
@@ -248,6 +249,19 @@ struct QuickLinksTests {
         #expect(ran == Array(repeating: first.id, count: 4))
         #expect(main.deminiaturizeCount == 2)
         #expect(main.frontCount == 3)
+
+        var shown = 0
+        browser.showWindow = { _, _ in shown += 1; return main }
+        browser.windowWillClose(first)
+        #expect(first.isHidden && first.nsWindow == nil)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(shown == 1, "a closed last window shows again")
+        #expect(!first.isHidden && first.nsWindow === main)
+        #expect(ran == Array(repeating: first.id, count: 5))
+        #expect(main.frontCount == 3)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(shown == 1, "on screen now: brought forward, not shown again")
+        #expect(main.frontCount == 4)
     }
 
     /// A page's alert or file picker on a link's window takes the key as a sheet: the link stays the

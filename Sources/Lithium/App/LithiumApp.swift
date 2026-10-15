@@ -13,15 +13,12 @@ struct LithiumApp: App {
     private let browser = LithiumApp.sharedBrowser
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    /// The browser windows are `BrowserNSWindow`s the browser opens itself (`Browser.openWindow`):
-    /// the scene opens nothing and carries the menu. Its own commands, a Window menu item that
-    /// would open it empty, are removed before the browser's are added.
+    /// The browser windows are `BrowserNSWindow`s the browser opens itself (`Browser.openWindow`),
+    /// so the one scene only carries the menu. A Settings scene opens no window at launch, leaves
+    /// nothing for a saved window state to restore into, and keeps SwiftUI's standard menus; its
+    /// own Settings item is the one `BrowserCommands` replaces.
     var body: some Scene {
-        Window("Lithium", id: "browser") { EmptyView() }
-            .defaultLaunchBehavior(.suppressed)
-            .restorationBehavior(.disabled)
-            .handlesExternalEvents(matching: [])
-            .commandsRemoved()
+        Settings { EmptyView() }
             .commands { BrowserCommands(browser: browser) }
     }
 }

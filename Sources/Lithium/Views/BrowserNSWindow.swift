@@ -21,7 +21,10 @@ final class BrowserNSWindow: NSWindow, NSWindowDelegate {
         return nsWindow
     }
 
+    /// AppKit hands the keyboard to a window's first field as it orders front; a hosting view not
+    /// yet laid out has no fields, so without the layout the keys went to the window itself.
     static func show(_ nsWindow: NSWindow) {
+        nsWindow.contentView?.layoutSubtreeIfNeeded()
         nsWindow.makeKeyAndOrderFront(nil)
     }
 

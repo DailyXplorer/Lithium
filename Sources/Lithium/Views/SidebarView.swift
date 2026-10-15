@@ -131,7 +131,7 @@ struct SidebarView: View {
     }
 
     private func deleteFolder(_ folder: TabFolder, closingTabs: Bool) {
-        withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs) }
+        withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs, in: window) }
     }
 
     private func dropTab(_ items: [String], on target: Browser.TabDropTarget) -> Bool {

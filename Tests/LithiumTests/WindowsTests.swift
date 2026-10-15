@@ -103,17 +103,24 @@ struct WindowsTests {
         #expect(browser.windows.count == 1)
     }
 
-    /// ⌘W in a window on its start page closes the window, as in Safari and Chrome: one of two
-    /// puts its tabs into Reopen Closed Tab and goes, the last one hides.
+    /// ⌘W in a window with no tab left closes the window, as in Safari and Chrome: one of two
+    /// goes, the last one hides. On the start page with tabs still in the window, it does nothing.
     @Test func commandWInAWindowWithNoTabClosesIt() {
         let browser = makeBrowser()
         defer { reset(browser) }
         browser.showWindow = { window, browser in ClosableWindow(window, browser: browser) }
         let first = browser.windows[0]
         first.nsWindow = ClosableWindow(first, browser: browser)
-        browser.newTab(url: page("a"))
+        let a = browser.newTab(url: page("a"))
         let second = browser.openWindow()
         browser.newTab(url: page("b"), in: second)
+
+        first.newTabFocusingAddress()
+        browser.closeTabOrWindow(keyWindow: first.nsWindow)
+        #expect(browser.windows.map(\.id) == [first.id, second.id], "the start page over a tab keeps its window")
+        #expect(!first.isHidden)
+        #expect(first.regularTabs.map(\.id) == [a.id])
+        first.select(a)
 
         browser.closeTabOrWindow(keyWindow: second.nsWindow)
         #expect(second.selectedTab == nil)
@@ -128,6 +135,27 @@ struct WindowsTests {
         browser.closeTabOrWindow(keyWindow: first.nsWindow)
         #expect(first.isHidden)
         #expect(browser.windows.count == 1)
+    }
+
+    /// Close Tabs on deleting a folder closes only the tabs the acting window showed in it; another
+    /// window's stay, out of the folder, where it was.
+    @Test func deletingAFolderClosesOnlyTheActingWindowsTabs() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        let b1 = browser.newTab(url: page("b1"), in: second)
+        let b2 = browser.newTab(url: page("b2"), in: second)
+        let folder = browser.newFolder(with: a)
+        browser.moveTab(b1, toFolder: folder.id)
+
+        browser.deleteFolder(folder.id, closingTabs: true, in: first)
+        #expect(browser.folders.all.isEmpty)
+        #expect(first.regularTabs.isEmpty)
+        #expect(second.regularTabs.map(\.id) == [b1.id, b2.id])
+        #expect(b1.folderID == nil)
+        #expect(second.selectedTab === b2)
     }
 
     /// A tab an agent or a page opens for a window that closed while it awaited goes into the

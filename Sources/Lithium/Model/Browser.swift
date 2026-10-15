@@ -760,28 +760,27 @@ final class Browser {
         place(moving, inFolder: folder, before: anchor)
     }
 
-    /// Its tabs close, or stay at the top of the tabs outside folders, where the folder was, in
-    /// each window that lists some.
-    func deleteFolder(_ id: TabFolder.ID, closingTabs: Bool) {
+    /// Its tabs in `acting` close, or stay at the top of the tabs outside folders, where the folder
+    /// was. Other windows' tabs in it always stay that way: the user saw and chose for one window.
+    func deleteFolder(_ id: TabFolder.ID, closingTabs: Bool, in acting: BrowserWindow) {
         let members = tabs.filter { $0.folderID == id && $0.isInTabList }
         if closingTabs {
-            for window in windows {
-                guard let selected = window.selectedTab, members.contains(where: { $0 === selected }) else { continue }
+            let closing = members.filter { $0.windowID == acting.id }
+            if let selected = acting.selectedTab, closing.contains(where: { $0 === selected }) {
                 // Off the folder first, so the selection doesn't walk through (and wake) its tabs.
-                let list = tabList(in: selected.spaceID, window: window.id)
+                let list = tabList(in: selected.spaceID, window: acting.id)
                 let first = list.firstIndex { $0.folderID == id } ?? 0
                 let next = list[first...].first { $0.folderID != id } ?? list[..<first].last
-                if let next { window.select(next, picked: false) } else { window.showStartPage(picked: false) }
+                if let next { acting.select(next, picked: false) } else { acting.showStartPage(picked: false) }
             }
             // In list order: with the folder gone, each reopens at the top of the list, so the
             // last closed coming back first puts them back in their order.
-            members.forEach(close)
-        } else {
-            for window in windows {
-                let listed = members.filter { $0.windowID == window.id }
-                guard !listed.isEmpty else { continue }
-                place(listed, inFolder: nil, before: tabList(in: listed[0].spaceID, window: window.id, folder: nil).first)
-            }
+            closing.forEach(close)
+        }
+        for window in windows where !(closingTabs && window === acting) {
+            let listed = members.filter { $0.windowID == window.id }
+            guard !listed.isEmpty else { continue }
+            place(listed, inFolder: nil, before: tabList(in: listed[0].spaceID, window: window.id, folder: nil).first)
         }
         removeFolder(id)
     }
@@ -892,15 +891,17 @@ final class Browser {
 
     /// ⌘W closes the selected tab of the browser window that is key, or whose page holds the key
     /// window: a full-screen video is in WebKit's own window, which counts as the tab's. A browser
-    /// window on its start page closes, as in Safari and Chrome, and so does another window in front.
+    /// window with no tab at all closes, as in Safari and Chrome; one on its start page with tabs
+    /// elsewhere in it stays, since closing it would take them all. Another window in front closes.
     func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
         guard let keyWindow else { return }
         let holdsPage = { (window: BrowserWindow) in
             window.selectedTab?.loadedWebView.map { keyWindow === $0.window || $0.fullscreenState != .notInFullscreen } == true
         }
-        if let window = window(for: keyWindow) ?? windows.first(where: holdsPage), window.selectedTab != nil {
+        guard let window = window(for: keyWindow) ?? windows.first(where: holdsPage) else { return keyWindow.performClose(nil) }
+        if window.selectedTab != nil {
             window.closeSelectedTab()
-        } else {
+        } else if !tabs.contains(where: { $0.windowID == window.id }) {
             keyWindow.performClose(nil)
         }
     }

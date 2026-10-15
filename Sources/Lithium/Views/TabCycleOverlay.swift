@@ -3,9 +3,10 @@ import SwiftUI
 /// The tabs Control-Tab goes through, most recently shown first, while Control is held.
 struct TabCycleLayer: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let recent = browser.recentTabs
+        let recent = window.recentTabs
         if !recent.cycle.isEmpty {
             TabCycleOverlay(
                 rows: recent.cycle.map { TabCycleOverlay.Row(id: $0.id, icon: $0.favicon, host: $0.url?.host() ?? "", title: $0.displayTitle) },

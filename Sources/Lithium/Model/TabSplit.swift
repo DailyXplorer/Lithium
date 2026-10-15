@@ -27,7 +27,7 @@ struct TabSplit: Equatable {
     }
 }
 
-/// The window's splits, and the tab dragged from the sidebar, which shows the page's drop zones.
+/// Every window's splits, and the tab dragged from a sidebar, which shows the page's drop zones.
 @MainActor
 @Observable
 final class TabSplits {
@@ -60,87 +60,38 @@ extension Browser {
         return splits.pairs.first { $0.contains(tab.id) }
     }
 
-    var shownPartner: Tab? {
-        guard let selected = selectedTab, let id = split(of: selected)?.partner(of: selected.id) else { return nil }
-        return tabs.first { $0.id == id }
-    }
-
     /// A link in its own window counts too.
     func isOnScreen(_ tab: Tab) -> Bool {
-        tab.id == selectedTabID || shownPartner === tab || quickLinks.contains(tab)
-    }
-
-    /// The prompt over the page: the focused tab's, else the other side's in split view, whose page
-    /// would otherwise wait unseen until clicked.
-    var shownPermissionRequest: PermissionRequest? {
-        shown(permissions.pending, tabID: \.tabID)
-    }
-
-    var shownAppLinkRequest: AppLinkRequest? {
-        shown(appLinks.pending, tabID: \.tabID)
-    }
-
-    private func shown<Request>(_ pending: [Request], tabID: KeyPath<Request, Tab.ID>) -> Request? {
-        guard !pending.isEmpty else { return nil }
-        return pending.first { $0[keyPath: tabID] == selectedTabID }
-            ?? shownPartner.flatMap { partner in pending.first { $0[keyPath: tabID] == partner.id } }
-    }
-
-    /// The pair shows once, where its first tab in the list is.
-    var tabListEntries: [TabListEntry] {
-        let list = regularTabs
-        guard !splits.pairs.isEmpty || !folders.all.isEmpty else { return list.enumerated().map { TabListEntry(index: $0, tab: $1, split: nil) } }
-        var seen: Set<Tab.ID> = []
-        // Where the tab's folder (or the tabs outside folders) starts: the list keeps each together.
-        var start = 0
-        return list.enumerated().compactMap { offset, tab in
-            if offset > 0, tab.folderID != list[offset - 1].folderID { start = offset }
-            let split = split(of: tab)
-            if let split, seen.contains(split.first) || seen.contains(split.second) { return nil }
-            seen.insert(tab.id)
-            return TabListEntry(index: offset - start, tab: tab, split: split)
-        }
-    }
-
-    /// Who a tab opened in split view goes beside: the selected tab, else its neighbour in the list.
-    func splitPartner(for tab: Tab) -> Tab? {
-        guard tab.isInTabList else { return nil }
-        if let selected = selectedTab, selected !== tab, selected.isInTabList { return selected }
-        let list = regularTabs
-        guard let index = list.firstIndex(where: { $0 === tab }) else { return nil }
-        return index + 1 < list.count ? list[index + 1] : index > 0 ? list[index - 1] : nil
+        isShown(tab) || quickLinks.contains(tab)
     }
 
     /// Opens on the side the partner leaves free.
     func openInSplit(_ tab: Tab) {
-        guard let partner = splitPartner(for: tab) else { return }
+        guard let partner = window(of: tab).splitPartner(for: tab) else { return }
         let side: TabSplit.Side = split(of: partner)?.side(of: partner.id) == .second ? .first : .second
         pair(tab, with: partner, on: side)
     }
 
-    func dropForSplit(_ item: String, on side: TabSplit.Side) -> Bool {
-        defer { splits.draggedTabID = nil }
-        guard let tab = tabs.first(where: { $0.id.uuidString == item }), let selected = selectedTab,
-              selected !== tab, tab.isInTabList, selected.isInTabList else { return false }
-        pair(tab, with: selected, on: side)
-        return true
-    }
-
-    /// The split `partner` leaves lends the new one its orientation and divider.
-    private func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) {
-        shownPartner?.markActive()
+    /// The split `partner` leaves lends the new one its orientation and divider. Both sides are
+    /// one window's: a pair is one row of its sidebar. False when they aren't.
+    @discardableResult
+    func pair(_ tab: Tab, with partner: Tab, on side: TabSplit.Side) -> Bool {
+        guard tab.windowID == partner.windowID else { return false }
+        let window = window(of: partner)
+        window.shownPartner?.markActive()
         var split = split(of: partner) ?? TabSplit(first: partner.id, second: tab.id)
         splits.pairs.removeAll { $0.contains(tab.id) || $0.contains(partner.id) }
         (split.first, split.second) = side == .first ? (tab.id, partner.id) : (partner.id, tab.id)
         // A pair is one row, so in one place: the partner's folder, or outside folders with it.
         if tab.folderID != partner.folderID { tab.folderID = partner.folderID }
         splits.pairs.append(split)
-        select(tab)
+        window.select(tab)
+        return true
     }
 
     /// The side shown until now counts as used as it leaves the screen, like in `select`.
     func exitSplit(of tab: Tab) {
-        shownPartner?.markActive()
+        window(of: tab).shownPartner?.markActive()
         splits.pairs.removeAll { $0.contains(tab.id) }
     }
 
@@ -193,12 +144,13 @@ extension Browser {
     /// peeked sidebar away under a right-click's menu). A popped-out video's web view is the player's.
     func noteClick(_ event: NSEvent) {
         endTabDrag()
-        guard let partner = shownPartner, partner !== videoPopout.tab, !NativeInput.isAgents(event),
-              let view = partner.loadedWebView, view.window === event.window,
-              let content = view.window?.contentView,
+        guard let clicked = event.window, !NativeInput.isAgents(event),
+              let window = windows.first(where: { $0.shownPartner?.loadedWebView?.window === clicked }),
+              let partner = window.shownPartner, partner !== window.videoPopout.tab, let view = partner.loadedWebView,
+              let content = clicked.contentView,
               let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) else { return }
         let inPDF = sequence(first: hit, next: \.superview).contains { ($0 as? SplitPDFReader.Host)?.tabID == partner.id }
-        if hit.isDescendant(of: view) || inPDF { select(partner) }
+        if hit.isDescendant(of: view) || inPDF { window.select(partner) }
     }
 
     func savedSplits(at places: [Tab.ID: Int]) -> [Session.Split]? {
@@ -212,10 +164,65 @@ extension Browser {
     func restoreSplits(_ saved: [Session.Split]?, tabs restored: [Int: Tab]) {
         for split in saved ?? [] {
             guard let first = restored[split.first], let second = restored[split.second], first !== second,
-                  first.isInTabList, second.isInTabList,
+                  first.isInTabList, second.isInTabList, first.windowID == second.windowID,
                   !splits.pairs.contains(where: { $0.contains(first.id) || $0.contains(second.id) }) else { continue }
             let fraction = min(max(split.fraction, TabSplit.fractions.lowerBound), TabSplit.fractions.upperBound)
             splits.pairs.append(TabSplit(first: first.id, second: second.id, isStacked: split.isStacked, fraction: fraction))
         }
+    }
+}
+
+extension BrowserWindow {
+    var shownPartner: Tab? {
+        guard let selected = selectedTab, let id = browser.split(of: selected)?.partner(of: selected.id) else { return nil }
+        return browser.tabs.first { $0.id == id }
+    }
+
+    /// The prompt over the page: the focused tab's, else the other side's in split view, whose page
+    /// would otherwise wait unseen until clicked.
+    var shownPermissionRequest: PermissionRequest? {
+        shown(browser.permissions.pending, tabID: \.tabID)
+    }
+
+    var shownAppLinkRequest: AppLinkRequest? {
+        shown(browser.appLinks.pending, tabID: \.tabID)
+    }
+
+    private func shown<Request>(_ pending: [Request], tabID: KeyPath<Request, Tab.ID>) -> Request? {
+        guard !pending.isEmpty else { return nil }
+        return pending.first { $0[keyPath: tabID] == selectedTabID }
+            ?? shownPartner.flatMap { partner in pending.first { $0[keyPath: tabID] == partner.id } }
+    }
+
+    /// The pair shows once, where its first tab in the list is.
+    var tabListEntries: [TabListEntry] {
+        let list = regularTabs
+        guard !browser.splits.pairs.isEmpty || !browser.folders.all.isEmpty else { return list.enumerated().map { TabListEntry(index: $0, tab: $1, split: nil) } }
+        var seen: Set<Tab.ID> = []
+        // Where the tab's folder (or the tabs outside folders) starts: the list keeps each together.
+        var start = 0
+        return list.enumerated().compactMap { offset, tab in
+            if offset > 0, tab.folderID != list[offset - 1].folderID { start = offset }
+            let split = browser.split(of: tab)
+            if let split, seen.contains(split.first) || seen.contains(split.second) { return nil }
+            seen.insert(tab.id)
+            return TabListEntry(index: offset - start, tab: tab, split: split)
+        }
+    }
+
+    /// Who a tab opened in split view goes beside: the selected tab, else its neighbour in the list.
+    func splitPartner(for tab: Tab) -> Tab? {
+        guard tab.isInTabList else { return nil }
+        if let selected = selectedTab, selected !== tab, selected.isInTabList { return selected }
+        let list = regularTabs
+        guard let index = list.firstIndex(where: { $0 === tab }) else { return nil }
+        return index + 1 < list.count ? list[index + 1] : index > 0 ? list[index - 1] : nil
+    }
+
+    func dropForSplit(_ item: String, on side: TabSplit.Side) -> Bool {
+        defer { browser.splits.draggedTabID = nil }
+        guard let tab = browser.tabs.first(where: { $0.id.uuidString == item }), let selected = selectedTab,
+              selected !== tab, tab.isInTabList, selected.isInTabList else { return false }
+        return browser.pair(tab, with: selected, on: side)
     }
 }

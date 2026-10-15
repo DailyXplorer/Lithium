@@ -10,21 +10,22 @@ enum Layout {
 
 struct BrowserView: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(Preference.sidebarStyle) private var style = SidebarStyle.solid
     @AppStorage(Preference.sidebarColor) private var settingsColorHex = Theme.defaultSidebarHex
     @State private var tabHover = TabHover()
     @State private var showsZenLights = false
 
-    private var colorHex: String { browser.currentSpace.color ?? settingsColorHex }
+    private var colorHex: String { window.currentSpace.color ?? settingsColorHex }
 
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)
-        let zen = browser.isZenMode
+        let zen = window.isZenMode
         VStack(spacing: 0) {
             if !zen {
                 HStack(spacing: 0) {
-                    if browser.showsSidebar {
+                    if window.showsSidebar {
                         SidebarHeader().frame(width: Layout.sidebarWidth)
                     } else {
                         Color.clear.frame(width: Layout.trafficLightsWidth)
@@ -37,18 +38,18 @@ struct BrowserView: View {
             }
 
             HStack(spacing: 0) {
-                if browser.showsSidebar {
+                if window.showsSidebar {
                     SidebarView()
                         .frame(width: Layout.sidebarWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 ContentCard()
-                    .padding(.leading, browser.showsSidebar ? 0 : Layout.margin)
+                    .padding(.leading, window.showsSidebar ? 0 : Layout.margin)
                     .padding(.top, zen ? Layout.margin : 0)
                     .padding([.trailing, .bottom], Layout.margin)
             }
             .overlay(alignment: .leading) {
-                if !browser.showsSidebar {
+                if !window.showsSidebar {
                     SidebarPeek(style: style, colorHex: colorHex, isZen: zen)
                 }
             }
@@ -62,7 +63,7 @@ struct BrowserView: View {
         }
         .overlayPreferenceValue(AddressBarBounds.self) { anchor in
             GeometryReader { proxy in
-                if let anchor, !browser.suggestions.items.isEmpty {
+                if let anchor, !window.suggestions.items.isEmpty {
                     let bar = proxy[anchor]
                     SuggestionList()
                         .frame(width: max(bar.width, 420))
@@ -77,27 +78,27 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator(browser: browser, hidesLights: zen && !showsZenLights))
+        .background(WindowConfigurator(hidesLights: zen && !showsZenLights))
         .background { TranslationHost(translator: browser.translator) }
         .ignoresSafeArea()
         .overlay {
-            if browser.capture.isSelecting {
+            if window.capture.isSelecting {
                 CaptureSelectionOverlay().ignoresSafeArea()
             }
         }
-        .sheet(item: Binding(get: { browser.capture.shot }, set: { if $0 == nil { browser.capture.finish() } })) { shot in
-            CapturePreview(shot: shot).environment(browser)
+        .sheet(item: Binding(get: { window.capture.shot }, set: { if $0 == nil { window.capture.finish() } })) { shot in
+            CapturePreview(shot: shot).environment(browser).environment(window)
         }
-        .onOpenURL { browser.openFromOtherApp($0) }
-        .onAppear { browser.windowDidAppear() }
+        .onAppear { window.didAppear() }
     }
 }
 
 struct ContentCard: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let tab = browser.selectedTab
+        let tab = window.selectedTab
         VStack(spacing: 0) {
             if let confirmations = browser.agent?.confirmations, let confirmation = confirmations.front(selected: tab?.id) {
                 AgentConfirmationBanner(
@@ -109,11 +110,11 @@ struct ContentCard: View {
                 .id(confirmation.id)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if let request = browser.shownPermissionRequest {
+            if let request = window.shownPermissionRequest {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
-            if let request = browser.shownAppLinkRequest {
+            if let request = window.shownAppLinkRequest {
                 AppLinkPrompt(request: request)
                     .id(request.id)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -121,8 +122,8 @@ struct ContentCard: View {
             Group {
                 if let tab, let split = browser.split(of: tab) {
                     SplitPages(split: split)
-                } else if let tab, browser.videoPopout.tab === tab {
-                    PoppedOutPlaceholder(popout: browser.videoPopout)
+                } else if let tab, window.videoPopout.tab === tab {
+                    PoppedOutPlaceholder(popout: window.videoPopout)
                 } else if let tab {
                     PageContainer(view: tab.webView)
                         .overlay {
@@ -144,12 +145,12 @@ struct ContentCard: View {
             // the player (or the page, on the way back) has just taken.
             .overlay {
                 VideoPopoutLayer()
-                    .animation(.snappy(duration: 0.25), value: browser.videoPopout.tab?.id)
+                    .animation(.snappy(duration: 0.25), value: window.videoPopout.tab?.id)
             }
             .overlay(alignment: .topTrailing) {
                 // In split view, `SplitPane` shows it over the focused page.
-                if let tab, browser.showsFindBar(over: tab), browser.split(of: tab) == nil {
-                    FindBar(tab: tab)
+                if let tab, window.showsFindBar(over: tab), browser.split(of: tab) == nil {
+                    FindBar(find: window.find, tab: tab)
                         .padding(.top, tab.pdf == nil ? 10 : 50)
                         .padding(.horizontal, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -161,14 +162,14 @@ struct ContentCard: View {
         // the first click only focuses the page. The next run-loop turn has the new page in place.
         .onChange(of: tab?.id) {
             DispatchQueue.main.async {
-                guard let tab = browser.selectedTab, browser.videoPopout.tab !== tab else { return }
+                guard let tab = window.selectedTab, window.videoPopout.tab !== tab else { return }
                 focusPage(tab.contentView)
             }
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.appLinks.pending)
         .animation(.snappy(duration: 0.2), value: browser.agent?.confirmations.pending)
-        .animation(.snappy(duration: 0.2), value: browser.find.isVisible)
+        .animation(.snappy(duration: 0.2), value: window.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(card)
@@ -227,6 +228,7 @@ private struct SidebarPeek: View {
     let colorHex: String
     let isZen: Bool
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
     @State private var zone = PeekZone.outside
     @State private var isShown = false
@@ -253,9 +255,9 @@ private struct SidebarPeek: View {
             }
         }
         .onChange(of: zone) { update() }
-        .onChange(of: browser.isRenaming) { update() }
-        .onChange(of: browser.tabPickToken) {
-            guard !browser.isRenaming else { return }
+        .onChange(of: window.isRenaming) { update() }
+        .onChange(of: window.tabPickToken) {
+            guard !window.isRenaming else { return }
             pending?.cancel()
             setShown(false)
         }
@@ -266,7 +268,7 @@ private struct SidebarPeek: View {
     /// selects its tab first, which hides the panel, so renaming brings it back and keeps it.
     private func update() {
         pending?.cancel()
-        let renaming = browser.isRenaming
+        let renaming = window.isRenaming
         let wanted = renaming || (isShown ? zone != .outside : zone == .edge)
         guard wanted != isShown else { return }
         if renaming {
@@ -276,7 +278,7 @@ private struct SidebarPeek: View {
         let delay = wanted ? reveal.openDelay : reveal.closeDelay
         pending = Task {
             try? await Task.sleep(for: delay)
-            while !wanted, !Task.isCancelled, browser.holdsPeek { try? await Task.sleep(for: delay) }
+            while !wanted, !Task.isCancelled, window.holdsPeek { try? await Task.sleep(for: delay) }
             if !Task.isCancelled { setShown(wanted) }
         }
     }
@@ -293,6 +295,7 @@ private struct ZenTopBarPeek: View {
     let colorHex: String
     @Binding var showsLights: Bool
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
     @State private var zone = PeekZone.outside
     @State private var isShown = false
@@ -313,23 +316,23 @@ private struct ZenTopBarPeek: View {
                         // On the next turn the field is in the window and sees the request.
                         DispatchQueue.main.async {
                             focusOnAppear = false
-                            browser.requestAddressFocus()
+                            window.requestAddressFocus()
                         }
                     }
             }
         }
         .onChange(of: zone) { update() }
-        .onChange(of: browser.addressFocusToken) {
+        .onChange(of: window.addressFocusToken) {
             guard !isShown else { return }
             focusOnAppear = true
             update()
         }
-        .onChange(of: browser.isEditingAddress) { _, editing in
+        .onChange(of: window.isEditingAddress) { _, editing in
             // Return or Escape leaves the keyboard on the window, where keys beep; the bar is going.
-            if !editing { browser.returnKeyboardToPage(fieldHadKeyboard: false) }
+            if !editing { window.returnKeyboardToPage(fieldHadKeyboard: false) }
             update()
         }
-        .onChange(of: browser.summaries.isPanelPresented) { update() }
+        .onChange(of: window.isSummaryPresented) { update() }
         .onDisappear {
             pending?.cancel()
             showsLights = false
@@ -340,7 +343,7 @@ private struct ZenTopBarPeek: View {
         pending?.cancel()
         showsLights = isShown || zone == .corner
         // ⇧⌘S too: the summary's popover hangs from the bar's button.
-        let typing = focusOnAppear || browser.isEditingAddress || browser.summaries.isPanelPresented
+        let typing = focusOnAppear || window.isEditingAddress || window.isSummaryPresented
         let wanted = typing || (isShown ? zone != .outside : zone == .edge)
         guard wanted != isShown else { return }
         if typing {
@@ -351,7 +354,7 @@ private struct ZenTopBarPeek: View {
         pending = Task {
             try? await Task.sleep(for: delay)
             // A popover of the bar's (site information, downloads) would go with it.
-            while !wanted, !Task.isCancelled, browser.holdsPeek { try? await Task.sleep(for: delay) }
+            while !wanted, !Task.isCancelled, window.holdsPeek { try? await Task.sleep(for: delay) }
             if !Task.isCancelled { setShown(wanted) }
         }
     }
@@ -478,27 +481,24 @@ struct WindowDragArea: View {
     }
 }
 
-/// Centers the traffic lights in Lithium's taller top bar, and tells the browser its window.
+/// Centers the traffic lights in Lithium's taller top bar.
 private struct WindowConfigurator: NSViewRepresentable {
-    let browser: Browser
     let hidesLights: Bool
 
-    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView(browser: browser) }
+    func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView() }
 
     func updateNSView(_ view: TrafficLightsView, context: Context) {
         view.hidesLights = hidesLights
     }
 
     final class TrafficLightsView: NSView {
-        private weak var browser: Browser?
         private var observers: [NSObjectProtocol] = []
         private var isFullScreen = false
         var hidesLights = false {
             didSet { if hidesLights != oldValue { showOrHideLights() } }
         }
 
-        init(browser: Browser) {
-            self.browser = browser
+        init() {
             super.init(frame: .zero)
         }
 
@@ -509,11 +509,10 @@ private struct WindowConfigurator: NSViewRepresentable {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             guard let window else { return }
-            browser?.window = window
             window.isMovableByWindowBackground = false
             let names: [Notification.Name] = [
                 NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.willEnterFullScreenNotification,
-                NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification,
+                NSWindow.didExitFullScreenNotification,
             ]
             observers = names.map { name in
                 NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -531,7 +530,6 @@ private struct WindowConfigurator: NSViewRepresentable {
                 isFullScreen = name == NSWindow.willEnterFullScreenNotification
                 showOrHideLights()
             }
-            if name == NSWindow.didBecomeKeyNotification { browser?.windowDidBecomeKey() }
             layoutTrafficLights()
         }
 

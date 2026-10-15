@@ -156,22 +156,28 @@ extension AgentHub {
 
     static let tabsList = AgentTool(
         name: "tabs_list",
-        description: "List the window and every open tab, the user’s and the agent’s, with their ids.",
+        description: "List the windows and every open tab, the user’s and the agent’s, with their ids.",
         inputSchema: schema([:])
     ) { _, _, hub in
         guard let browser = hub.browser else { return ["tabs": []] }
-        var window: [String: JSONValue] = ["id": "w1"]
-        if let frame = (browser.selectedTab?.loadedWebView?.window ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain })?.frame {
-            window["width"] = .int(Int(frame.width))
-            window["height"] = .int(Int(frame.height))
+        // Named w1, w2… in the order opened; the ids hold only until a window closes.
+        let windowIDs = Dictionary(browser.windows.enumerated().map { ($1.id, "w\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
+        let windows: [JSONValue] = browser.windows.map { window in
+            var fields: [String: JSONValue] = ["id": .string(windowIDs[window.id] ?? ""), "key": .bool(window === browser.commandWindow)]
+            if let frame = (window.nsWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain })?.frame {
+                fields["width"] = .int(Int(frame.width))
+                fields["height"] = .int(Int(frame.height))
+            }
+            return .object(fields)
         }
         let open = Set(browser.tabs.map { ObjectIdentifier($0) })
         let tabs: [JSONValue] = browser.navigationOrder.map { tab in
             var fields: [String: JSONValue] = [
                 "tab": .string(hub.id(for: tab)),
+                "window": .string(windowIDs[tab.windowID] ?? ""),
                 "title": .string(tab.displayTitle),
                 "url": .string(tab.url?.absoluteString ?? ""),
-                "selected": .bool(tab.id == browser.selectedTabID),
+                "selected": .bool(tab.id == browser.window(of: tab).selectedTabID),
                 "favorite": .bool(tab.pinID != nil),
                 "asleep": .bool(tab.isAsleep),
                 "loading": .bool(tab.isLoading),
@@ -183,7 +189,7 @@ extension AgentHub {
             if let opener = tab.opener, open.contains(ObjectIdentifier(opener)) { fields["openedBy"] = .string(hub.id(for: opener)) }
             return .object(fields)
         }
-        return ["window": .object(window), "tabs": .array(tabs)]
+        return ["windows": .array(windows), "tabs": .array(tabs)]
     }
 
     // MARK: Opening, closing, selecting

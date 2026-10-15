@@ -3,10 +3,11 @@ import UniformTypeIdentifiers
 
 struct CaptureButton: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         IconButton(icon: .screenshot, help: "Capture the window or an area") {
-            browser.capture.begin()
+            window.capture.begin()
         }
     }
 }
@@ -14,6 +15,7 @@ struct CaptureButton: View {
 /// Covers the window while picking what to capture: a click takes the whole window, a drag an area.
 struct CaptureSelectionOverlay: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @State private var origin: CGPoint?
     @State private var corner: CGPoint?
     @State private var escapeMonitor: Any?
@@ -63,7 +65,7 @@ struct CaptureSelectionOverlay: View {
         .onAppear {
             escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 guard event.keyCode == 53 else { return event }
-                browser.capture.finish()
+                window.capture.finish()
                 return nil
             }
         }
@@ -75,7 +77,7 @@ struct CaptureSelectionOverlay: View {
     private var hint: some View {
         HStack(spacing: 12) {
             Text("Click to capture the window, or drag to capture an area")
-            Button("Cancel") { browser.capture.finish() }
+            Button("Cancel") { window.capture.finish() }
                 .buttonStyle(.plain)
                 .font(Theme.font(13, .medium))
                 .padding(.horizontal, 10)
@@ -101,8 +103,8 @@ struct CaptureSelectionOverlay: View {
     }
 
     private func capture(_ area: CGRect?) {
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
-        Task { await browser.capture.capture(area, of: window) }
+        guard let nsWindow = window.nsWindow else { return }
+        Task { await window.capture.capture(area, of: nsWindow) }
     }
 }
 
@@ -261,6 +263,7 @@ private struct CaptureBadge: View {
 struct CapturePreview: View {
     let shot: Shot
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.captureBackdrop) private var backdrop = CaptureBackdrop.wallpaper
     @AppStorage(Preference.captureBadge) private var showsBadge = true
     @AppStorage(Preference.captureSidebar) private var showsSidebar = false
@@ -343,7 +346,7 @@ struct CapturePreview: View {
                     .fixedSize()
                     .disabled(style.backdrop == .none)
                 HStack(spacing: 8) {
-                    Button { browser.capture.finish() } label: { Icon(.close, size: 15) }
+                    Button { window.capture.finish() } label: { Icon(.close, size: 15) }
                         .keyboardShortcut(.cancelAction)
                         .help("Cancel")
                         .accessibilityLabel("Cancel")
@@ -624,7 +627,7 @@ struct CapturePreview: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setData(png, forType: .png)
-        browser.capture.finish()
+        window.capture.finish()
     }
 
     private func save() {
@@ -637,7 +640,7 @@ struct CapturePreview: View {
         do {
             // The panel may have agreed to replace a file: it stays whole if the write fails.
             try png.write(to: url, options: .atomic)
-            browser.capture.finish()
+            window.capture.finish()
         } catch {
             NSAlert(error: error).runModal()
         }

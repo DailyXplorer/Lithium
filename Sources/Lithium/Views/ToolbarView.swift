@@ -2,11 +2,12 @@ import SwiftUI
 
 struct ToolbarView: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let tab = browser.selectedTab
+        let tab = window.selectedTab
         HStack(spacing: 2) {
-            if !browser.showsSidebar {
+            if !window.showsSidebar {
                 SidebarToggle()
             }
             IconButton(icon: .back, help: "Back (⌘[)", isEnabled: tab?.canGoBack == true) {
@@ -43,6 +44,7 @@ struct ToolbarView: View {
 private struct AddressBar: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.sidebarPalette) private var palette
     @State private var isEditing = false
     @State private var showsZoom = false
@@ -58,11 +60,11 @@ private struct AddressBar: View {
             }
             AddressField(
                 url: tab?.url,
-                focusToken: browser.addressFocusToken,
-                pickToken: browser.tabPickToken,
+                focusToken: window.addressFocusToken,
+                pickToken: window.tabPickToken,
                 isEditing: $isEditing,
                 onDarkBackground: palette.isDark,
-                browser: browser
+                window: window
             )
             if !isEditing, let tab, TranslateButton.isShown(for: tab) {
                 TranslateButton(tab: tab)
@@ -225,6 +227,7 @@ struct PageMenuItems: View {
     let tab: Tab?
     @Binding var panel: PageMenuPanel?
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         Button("Copy Link") {
@@ -238,23 +241,23 @@ struct PageMenuItems: View {
         Button("Site Protections…") { panel = .protections }
             .disabled(tab?.url?.scheme?.hasPrefix("http") != true)
         Button(tab?.pinID == nil ? "Pin Tab" : "Unpin Tab") {
-            browser.togglePinForSelectedTab()
+            window.togglePinForSelectedTab()
         }
         .disabled(tab?.url == nil || tab?.isEphemeral == true)
         Button(tab?.pageTranslation?.isActive == true ? "Show Original" : "Translate Page") { browser.toggleTranslation(tab) }
             .disabled(tab?.canTranslate != true)
-        Button("Pop Out Video") { browser.videoPopout.showSelected() }
-            .disabled(!browser.videoPopout.canShowSelected)
+        Button("Pop Out Video") { window.videoPopout.showSelected() }
+            .disabled(!window.videoPopout.canShowSelected)
         // Checked while it is on, whatever the setting: the toolbar shows no indicator for it.
         Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.turnEnergySaving(on: $0) }))
         Divider()
-        Button("Show All History") { browser.openHistory() }
-        Button("Extensions") { browser.openSettings(section: "extensions") }
+        Button("Show All History") { browser.openHistory(in: window) }
+        Button("Extensions") { browser.openSettings(section: "extensions", in: window) }
         Button("Agents") {
-            if browser.agent == nil { browser.openSettings(section: "agents") } else { panel = .agents }
+            if browser.agent == nil { browser.openSettings(section: "agents", in: window) } else { panel = .agents }
         }
         Divider()
-        Button("Settings…") { browser.openSettings() }
+        Button("Settings…") { browser.openSettings(in: window) }
     }
 }
 
@@ -265,7 +268,7 @@ private struct AddressField: NSViewRepresentable {
     let pickToken: Int
     @Binding var isEditing: Bool
     let onDarkBackground: Bool
-    let browser: Browser
+    let window: BrowserWindow
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -281,13 +284,13 @@ private struct AddressField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.onFocusChange = { editing in
             let coordinator = context.coordinator
-            let browser = coordinator.parent.browser
+            let window = coordinator.parent.window
             if editing {
-                browser.suggestions.editedTabID = browser.selectedTabID
-                browser.suggestions.editingBegan()
+                window.suggestions.editedTabID = window.selectedTabID
+                window.suggestions.editingBegan()
             }
             coordinator.parent.isEditing = editing
-            browser.isEditingAddress = editing
+            window.isEditingAddress = editing
         }
         context.coordinator.focusToken = focusToken
         context.coordinator.pickToken = pickToken
@@ -300,10 +303,10 @@ private struct AddressField: NSViewRepresentable {
         // before a focus request of the same change (⌘T), which wins.
         if context.coordinator.pickToken != pickToken {
             context.coordinator.pickToken = pickToken
-            DispatchQueue.main.async { [browser] in
+            DispatchQueue.main.async { [window] in
                 guard field.isEditing else { return }
                 field.window?.makeFirstResponder(nil)
-                browser.returnKeyboardToPage(fieldHadKeyboard: true)
+                window.returnKeyboardToPage(fieldHadKeyboard: true)
             }
         }
         field.textColor = onDarkBackground && !isEditing ? .white : .labelColor
@@ -327,14 +330,14 @@ private struct AddressField: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard let field = control as? URLTextField else { return false }
-            let suggestions = parent.browser.suggestions
+            let suggestions = parent.window.suggestions
             switch selector {
             case #selector(NSResponder.insertNewline(_:)):
                 // Submit before resigning: ending the edit clears the suggestions being read.
-                parent.browser.submitAddress(field.stringValue, editing: suggestions.editedTabID)
+                parent.window.submitAddress(field.stringValue, editing: suggestions.editedTabID)
                 field.window?.makeFirstResponder(nil)
                 // Left on the window, keys beep and the page can't scroll until clicked.
-                parent.browser.returnKeyboardToPage(fieldHadKeyboard: true)
+                parent.window.returnKeyboardToPage(fieldHadKeyboard: true)
                 return true
             case #selector(NSResponder.moveDown(_:)) where !suggestions.items.isEmpty:
                 suggestions.move(by: 1)
@@ -344,7 +347,7 @@ private struct AddressField: NSViewRepresentable {
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 field.window?.makeFirstResponder(nil)
-                parent.browser.returnKeyboardToPage(fieldHadKeyboard: true)
+                parent.window.returnKeyboardToPage(fieldHadKeyboard: true)
                 return true
             default:
                 return false
@@ -353,7 +356,7 @@ private struct AddressField: NSViewRepresentable {
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? URLTextField else { return }
-            parent.browser.addressTextChanged(field.stringValue)
+            parent.window.addressTextChanged(field.stringValue)
         }
 
         func controlTextDidEndEditing(_ notification: Notification) {
@@ -361,7 +364,7 @@ private struct AddressField: NSViewRepresentable {
             field.showSummary()
             field.onFocusChange?(false)
             // A click on a suggestion ends editing first; keep the list until that click lands.
-            let suggestions = parent.browser.suggestions
+            let suggestions = parent.window.suggestions
             if NSEvent.pressedMouseButtons == 0 {
                 suggestions.clear()
             } else {

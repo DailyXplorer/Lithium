@@ -28,7 +28,7 @@ struct QuickLinksTests {
         let url = URL(string: "http://127.0.0.1:1/")!
         browser.openFromOtherApp(url)
         defer { browser.tabs.forEach(browser.close) }
-        #expect(browser.selectedTab?.url == url)
+        #expect(browser.commandWindow.selectedTab?.url == url)
         #expect(browser.quickLinks.tabs.isEmpty)
         #expect(windows.opened.isEmpty)
 
@@ -44,14 +44,14 @@ struct QuickLinksTests {
         let (browser, windows) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
         let before = browser.tabs.map(\.id)
-        let selected = browser.selectedTabID
+        let selected = browser.commandWindow.selectedTabID
 
         browser.openFromOtherApp(base)
         let tab = try #require(browser.quickLinks.tabs.first)
         defer { browser.quickLinks.close(tab) }
         #expect(windows.opened.map(\.tab) == [tab])
         #expect(browser.tabs.map(\.id) == before)
-        #expect(browser.selectedTabID == selected)
+        #expect(browser.commandWindow.selectedTabID == selected)
         #expect(await waitUntil(15) { tab.title == "Quick" && !tab.isLoading })
 
         browser.saveNow()
@@ -124,12 +124,12 @@ struct QuickLinksTests {
         #expect(browser.commandTab === other)
         browser.quickLinks.windowBecameKey(tab)
 
-        browser.quickLinks.moveToMainWindow(tab)
+        browser.quickLinks.moveToBrowserWindow(tab)
         #expect(windows.opened.first?.window.closeCount == 1)
         #expect(browser.quickLinks.tabs.isEmpty)
         #expect(browser.quickLinks.keyTab == nil)
-        #expect(browser.regularTabs.first === tab)
-        #expect(browser.selectedTab === tab)
+        #expect(browser.commandWindow.regularTabs.first === tab)
+        #expect(browser.commandWindow.selectedTab === tab)
         #expect(browser.commandTab === tab)
         #expect(tab.webView === webView)
         #expect(!tab.isLoading)
@@ -153,7 +153,7 @@ struct QuickLinksTests {
         #expect(tab.history != nil)
 
         await browser.clearHistory()
-        browser.quickLinks.moveToMainWindow(tab)
+        browser.quickLinks.moveToBrowserWindow(tab)
         browser.saveNow()
         let saved = try #require(SessionStore.load().tabs.first { $0.url == second })
         #expect(saved.history == nil)
@@ -173,7 +173,7 @@ struct QuickLinksTests {
         let tab = try #require(browser.quickLinks.open(base))
         defer { browser.quickLinks.close(tab) }
         browser.quickLinks.windowBecameKey(tab)
-        #expect(browser.selectedTab == nil)
+        #expect(browser.commandWindow.selectedTab == nil)
         // The menu's page commands, Force Paste among them, stay enabled from this.
         #expect(browser.commandTab === tab)
         #expect(browser.canShowWebInspector)
@@ -183,11 +183,11 @@ struct QuickLinksTests {
 
         let main = browser.newTab(url: URL(string: "data:text/html,main")!)
         defer { browser.tabs.forEach(browser.close) }
-        #expect(browser.selectedTab === main)
+        #expect(browser.commandWindow.selectedTab === main)
         #expect(browser.commandTab === tab)
-        #expect(!browser.videoPopout.canShowSelected)
+        #expect(!browser.commandWindow.videoPopout.canShowSelected)
         browser.quickLinks.windowResignedKey(tab)
-        #expect(browser.videoPopout.canShowSelected)
+        #expect(browser.commandWindow.videoPopout.canShowSelected)
     }
 
     /// With a link's window in front, the guard of the Tabs menu's commands (Next Tab, ⌃⇥, ⌘1–9,
@@ -211,52 +211,57 @@ struct QuickLinksTests {
         #expect(browser.canChangeTabs, "a closed link's window gives them back")
     }
 
-    /// `inMainWindow`, which Settings, History and Reopen Closed Tab run in: from a link's window it
-    /// brings the main window forward, out of the Dock if minimized (even with no link in front),
-    /// where they open or select their tab, and opens it again if closed; from the main window, it
-    /// leaves it as it is. The menu items themselves can't be read headless.
-    @Test func mainWindowCommandsBringItForward() throws {
+    /// `inBrowserWindow`, which Settings, History and Reopen Closed Tab run in: from a link's
+    /// window it brings the browser window forward, out of the Dock if minimized (even with no
+    /// link in front), where they open or select their tab, and shows the last window again if
+    /// closed; from the browser window, it leaves it as it is. The menu items themselves can't be
+    /// read headless.
+    @Test func browserWindowCommandsBringItForward() throws {
         let (browser, _) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
         let main = RecordingWindow(contentRect: NSRect(x: -5000, y: 0, width: 400, height: 300), styleMask: .borderless, backing: .buffered, defer: true)
         main.isReleasedWhenClosed = false
         main.isShown = true
-        browser.window = main
-        var ran = 0, opened = 0
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(ran == 1)
+        let first = browser.windows[0]
+        first.nsWindow = main
+        var ran: [BrowserWindow.ID] = []
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(ran == [first.id])
         #expect(main.frontCount == 0)
 
         main.isInDock = true
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(ran == 2)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(ran.count == 2)
         #expect(main.deminiaturizeCount == 1, "minimized with no link in front")
         #expect(main.frontCount == 1)
 
         let tab = try #require(browser.quickLinks.open())
         defer { browser.quickLinks.close(tab) }
         browser.quickLinks.windowBecameKey(tab)
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(ran == 3)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(ran.count == 3)
         #expect(main.frontCount == 2)
         #expect(main.deminiaturizeCount == 1)
 
         main.isInDock = true
         browser.quickLinks.windowBecameKey(tab)
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(ran == 4)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(ran == Array(repeating: first.id, count: 4))
         #expect(main.deminiaturizeCount == 2)
         #expect(main.frontCount == 3)
-        #expect(opened == 0)
 
-        main.isShown = false
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(opened == 1, "a closed main window opens again")
+        var shown = 0
+        browser.showWindow = { _, _ in shown += 1; return main }
+        browser.windowWillClose(first)
+        #expect(first.isHidden && first.nsWindow == nil)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(shown == 1, "a closed last window shows again")
+        #expect(!first.isHidden && first.nsWindow === main)
+        #expect(ran == Array(repeating: first.id, count: 5))
         #expect(main.frontCount == 3)
-        browser.window = nil
-        browser.inMainWindow(open: { opened += 1 }) { ran += 1 }
-        #expect(opened == 2)
-        #expect(ran == 6)
+        browser.inBrowserWindow { ran.append($0.id) }
+        #expect(shown == 1, "on screen now: brought forward, not shown again")
+        #expect(main.frontCount == 4)
     }
 
     /// A page's alert or file picker on a link's window takes the key as a sheet: the link stays the
@@ -272,12 +277,12 @@ struct QuickLinksTests {
         #expect(!browser.canChangeTabs)
         #expect(browser.commandTab === tab)
 
-        browser.windowDidBecomeKey()
+        browser.windowBecameKey(browser.windows[0])
         #expect(browser.canChangeTabs)
         #expect(browser.commandTab !== tab)
     }
 
-    /// Move to Main Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
+    /// Move to Window (⌘O) stays enabled while a link's sheet is up, but moving would close the
     /// window under the page's alert or file picker: the page stays where its sheet is.
     @Test func linkWithASheetUpStaysInItsWindow() throws {
         let (browser, windows) = makeBrowser(enabled: true)
@@ -289,16 +294,16 @@ struct QuickLinksTests {
         browser.quickLinks.windowResignedKey(tab, toSheet: true)
         window.pageSheet = NSWindow()
 
-        #expect(!browser.quickLinks.moveToMainWindow(tab))
+        #expect(!browser.quickLinks.moveToBrowserWindow(tab))
         #expect(window.closeCount == 0)
         #expect(browser.quickLinks.contains(tab))
         #expect(browser.quickLinks.keyTab === tab)
-        #expect(!browser.regularTabs.contains { $0 === tab })
+        #expect(!browser.commandWindow.regularTabs.contains { $0 === tab })
 
         window.pageSheet = nil
-        #expect(browser.quickLinks.moveToMainWindow(tab))
+        #expect(browser.quickLinks.moveToBrowserWindow(tab))
         #expect(window.closeCount == 1)
-        #expect(browser.regularTabs.contains { $0 === tab })
+        #expect(browser.commandWindow.regularTabs.contains { $0 === tab })
     }
 
     /// Find follows the window in front: in a link's window, ⌘F shows the bar over its page, ⌘G
@@ -322,34 +327,35 @@ struct QuickLinksTests {
         #expect(browser.showsFindBar(over: tab))
         #expect(!browser.showsFindBar(over: other))
         // What the bar does as the user types.
-        await browser.find.update(query: "needle", in: tab.findTarget)
-        #expect(browser.find.matchCount == 3)
+        let find = browser.quickLinks.find
+        await find.update(query: "needle", in: tab.findTarget)
+        #expect(find.matchCount == 3)
         // The main window's page loading doesn't take the search over.
         other.load(URL(string: "data:text/html,needle again")!)
         #expect(await waitUntil(15) { other.url?.absoluteString.hasSuffix("again") == true && !other.isLoading })
         try await Task.sleep(for: .milliseconds(200))
-        #expect(browser.find.matchCount == 3)
+        #expect(find.matchCount == 3)
         await browser.findStep(forward: true)
-        #expect(browser.find.currentMatch == 2)
+        #expect(find.currentMatch == 2)
         let marked = try await tab.webView.callAsyncJavaScript("return CSS.highlights.has('lithium-find');", contentWorld: .defaultClient) as? Bool
         #expect(marked == true, "the link's page shows the match")
 
         #expect(browser.ownsEscape(in: window))
         #expect(browser.dismissOverlay())
-        #expect(!browser.find.isVisible)
+        #expect(!find.isVisible)
         #expect(!browser.ownsEscape(in: window), "nothing left to close there")
 
         browser.quickLinks.windowResignedKey(tab)
         browser.toggleFind()
         #expect(browser.showsFindBar(over: other))
         #expect(!browser.showsFindBar(over: tab))
-        browser.find.hide()
+        browser.commandWindow.find.hide()
     }
 
     /// The bar stays in the window it was opened in: a link's window coming to the front and
     /// going again leaves the main window's search where it was, and never shows the bar there
-    /// (which would search again and take the keyboard). ⌘F in the link's window moves it, and
-    /// Escape there closes only it, not a tab's name being edited in the main window.
+    /// (which would search again and take the keyboard). ⌘F in the link's window opens the links'
+    /// own bar, and Escape there closes only it, not a tab's name being edited in the main window.
     @Test func findBarStaysInTheWindowItWasOpenedIn() async throws {
         let page = "<title>Find</title><p>needle</p><p>needle</p><p>needle</p>"
         let (listener, base) = try await LocalHTTP.serve(["/": ("Content-Type: text/html", page)])
@@ -362,10 +368,10 @@ struct QuickLinksTests {
         main.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
 
         browser.toggleFind()
-        await browser.find.update(query: "needle", in: main.findTarget)
+        await browser.commandWindow.find.update(query: "needle", in: main.findTarget)
         await browser.findStep(forward: true)
-        #expect(browser.find.currentMatch == 2 && browser.find.matchCount == 3)
-        let focusToken = browser.find.focusToken
+        #expect(browser.commandWindow.find.currentMatch == 2 && browser.commandWindow.find.matchCount == 3)
+        let focusToken = browser.commandWindow.find.focusToken
 
         let link = try #require(browser.quickLinks.open(base))
         defer { browser.quickLinks.close(link) }
@@ -376,24 +382,25 @@ struct QuickLinksTests {
         #expect(!browser.findBarIsInFront && !browser.ownsEscape(in: window))
         browser.quickLinks.windowResignedKey(link)
         #expect(browser.showsFindBar(over: main))
-        #expect(browser.find.currentMatch == 2 && browser.find.matchCount == 3)
-        #expect(browser.find.focusToken == focusToken, "the field didn't ask for the keyboard again")
+        #expect(browser.commandWindow.find.currentMatch == 2 && browser.commandWindow.find.matchCount == 3)
+        #expect(browser.commandWindow.find.focusToken == focusToken, "the field didn't ask for the keyboard again")
 
         browser.quickLinks.windowBecameKey(link)
-        browser.renamingTabID = main.id
-        defer { browser.renamingTabID = nil }
+        browser.commandWindow.renamingTabID = main.id
+        defer { browser.commandWindow.renamingTabID = nil }
         browser.toggleFind()
-        #expect(browser.showsFindBar(over: link) && !browser.showsFindBar(over: main))
+        #expect(browser.showsFindBar(over: link) && browser.showsFindBar(over: main), "each window keeps its own bar")
         #expect(browser.ownsEscape(in: window))
         #expect(browser.dismissOverlay())
-        #expect(!browser.find.isVisible)
-        #expect(browser.renamingTabID == main.id, "the tab's name is still being edited")
+        #expect(!browser.quickLinks.find.isVisible)
+        #expect(browser.showsFindBar(over: main))
+        #expect(browser.commandWindow.renamingTabID == main.id, "the tab's name is still being edited")
 
         // A link's window closing takes its bar with it.
         browser.toggleFind()
         #expect(browser.showsFindBar(over: link))
         browser.quickLinks.close(link)
-        #expect(!browser.find.isVisible)
+        #expect(!browser.quickLinks.find.isVisible)
     }
 
     /// A page the link's page opens (a target=_blank link, a sign-in popup) gets a window of its
@@ -410,7 +417,7 @@ struct QuickLinksTests {
         let (browser, windows) = makeBrowser(enabled: true)
         defer { UserDefaults.standard.removeObject(forKey: Preference.quickLinks) }
         let before = browser.tabs.map(\.id)
-        let selected = browser.selectedTabID
+        let selected = browser.commandWindow.selectedTabID
 
         let tab = try #require(browser.quickLinks.open(base))
         defer { browser.quickLinks.tabs.forEach(browser.quickLinks.close) }
@@ -423,7 +430,7 @@ struct QuickLinksTests {
         let opened = browser.quickLinks.tabs.filter { $0 !== tab }
         #expect(windows.opened.map(\.tab) == browser.quickLinks.tabs)
         #expect(browser.tabs.map(\.id) == before)
-        #expect(browser.selectedTabID == selected)
+        #expect(browser.commandWindow.selectedTabID == selected)
         #expect(await waitUntil(15) { opened.allSatisfy { $0.title == "Next" } })
         #expect(opened.allSatisfy { $0.scriptOpener === tab })
         #expect(opened.last?.opener === tab)

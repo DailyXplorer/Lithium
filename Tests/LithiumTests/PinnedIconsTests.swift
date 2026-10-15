@@ -605,9 +605,9 @@ struct PinnedIcons {
         let tab = try #require(browser.tabs.first { $0.pinID == chat.id })
         #expect(tab.isAsleep && tab.loadedWebView == nil)
 
-        browser.windowDidAppear()
+        browser.showRestoredWindows()
         await browser.sleepingIconsRefresh?.value
-        #expect(tab.isAsleep && browser.selectedTab !== tab)
+        #expect(tab.isAsleep && browser.commandWindow.selectedTab !== tab)
         #expect(requests["/blue.png"] == 1)
         #expect(browser.pins.first { $0.id == calendar.id }?.favicon == blue)
     }

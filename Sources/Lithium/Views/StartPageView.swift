@@ -3,6 +3,7 @@ import SwiftUI
 /// Shown when no tab is selected. Typing goes to the address bar; a click on the page hands the keyboard back.
 struct StartPageView: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.startBackground) private var kind = StartBackground.lithium
     @AppStorage(Preference.startColor) private var colorHex = StartBackground.defaultColor
     @AppStorage(Preference.startGradientFrom) private var fromHex = StartBackground.defaultGradient.0
@@ -12,7 +13,7 @@ struct StartPageView: View {
     var body: some View {
         background
             .contentShape(Rectangle())
-            .onTapGesture { browser.requestAddressFocus() }
+            .onTapGesture { window.requestAddressFocus() }
     }
 
     @ViewBuilder private var background: some View {

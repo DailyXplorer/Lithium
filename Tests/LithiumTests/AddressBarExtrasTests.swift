@@ -104,7 +104,7 @@ struct ZoomPillTests {
     @Test func pillShowsOnlyAwayFromActualSize() throws {
         let browser = Browser()
         browser.newTab(url: URL(string: "data:text/html,zoom")!)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(tab.zoom == 1)
         #expect(!ZoomPill.isShown(for: tab, isPresented: false))
 

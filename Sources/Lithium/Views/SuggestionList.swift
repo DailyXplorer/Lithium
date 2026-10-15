@@ -9,16 +9,17 @@ struct AddressBarBounds: PreferenceKey {
 
 struct SuggestionList: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let suggestions = browser.suggestions
+        let suggestions = window.suggestions
         VStack(spacing: 2) {
             ForEach(Array(suggestions.items.enumerated()), id: \.element.id) { index, suggestion in
                 SuggestionRow(suggestion: suggestion, isSelected: index == suggestions.selectedIndex)
                     .contentShape(Rectangle())
                     // Every move, not only on entering: a row may come up under a still pointer.
                     .onContinuousHover { if case .active = $0 { suggestions.hover(suggestion) } }
-                    .onTapGesture { browser.accept(suggestion) }
+                    .onTapGesture { window.accept(suggestion) }
             }
         }
         .padding(6)

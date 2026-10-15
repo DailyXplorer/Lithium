@@ -26,7 +26,7 @@ struct TabCommandsTests {
     }
 
     private func names(_ browser: Browser) -> [String] {
-        browser.regularTabs.map(name)
+        browser.commandWindow.regularTabs.map(name)
     }
 
     private func name(_ tab: Lithium.Tab?) -> String {
@@ -41,39 +41,39 @@ struct TabCommandsTests {
         let browser = browser(with: ["a", "b", "c", "d"])
         for name in ["b", "c", "d"] { browser.select(tab(name, in: browser)) }
 
-        browser.cycleRecentTabs(backward: false, holdingControl: true)
-        #expect(name(browser.recentTabs.target) == "c")
-        browser.cycleRecentTabs(backward: false, holdingControl: true)
-        #expect(name(browser.recentTabs.target) == "b")
-        #expect(browser.recentTabs.cycle.map(name) == ["d", "c", "b", "a"])
-        #expect(name(browser.selectedTab) == "d", "nothing switches while Control is held")
+        browser.commandWindow.cycleRecentTabs(backward: false, holdingControl: true)
+        #expect(name(browser.commandWindow.recentTabs.target) == "c")
+        browser.commandWindow.cycleRecentTabs(backward: false, holdingControl: true)
+        #expect(name(browser.commandWindow.recentTabs.target) == "b")
+        #expect(browser.commandWindow.recentTabs.cycle.map(name) == ["d", "c", "b", "a"])
+        #expect(name(browser.commandWindow.selectedTab) == "d", "nothing switches while Control is held")
 
-        browser.endTabCycle(commit: true)
-        #expect(name(browser.selectedTab) == "b")
-        #expect(browser.recentTabs.cycle.isEmpty)
+        browser.commandWindow.endTabCycle(commit: true)
+        #expect(name(browser.commandWindow.selectedTab) == "b")
+        #expect(browser.commandWindow.recentTabs.cycle.isEmpty)
 
-        browser.cycleRecentTabs(backward: false, holdingControl: false)
-        #expect(name(browser.selectedTab) == "d", "a single press goes back to the tab shown before")
+        browser.commandWindow.cycleRecentTabs(backward: false, holdingControl: false)
+        #expect(name(browser.commandWindow.selectedTab) == "d", "a single press goes back to the tab shown before")
 
-        browser.cycleRecentTabs(backward: true, holdingControl: true)
-        #expect(name(browser.recentTabs.target) == "a", "back goes to the tab shown longest ago")
-        browser.cycleRecentTabs(backward: true, holdingControl: true)
-        #expect(name(browser.recentTabs.target) == "c")
+        browser.commandWindow.cycleRecentTabs(backward: true, holdingControl: true)
+        #expect(name(browser.commandWindow.recentTabs.target) == "a", "back goes to the tab shown longest ago")
+        browser.commandWindow.cycleRecentTabs(backward: true, holdingControl: true)
+        #expect(name(browser.commandWindow.recentTabs.target) == "c")
         #expect(browser.dismissOverlay(), "Escape ends the cycle")
-        #expect(name(browser.selectedTab) == "d")
-        #expect(browser.recentTabs.target == nil)
+        #expect(name(browser.commandWindow.selectedTab) == "d")
+        #expect(browser.commandWindow.recentTabs.target == nil)
 
-        browser.selectAdjacentTab(-1)
-        #expect(name(browser.selectedTab) == "c", "⌘⌥← still walks the list in its order")
+        browser.commandWindow.selectAdjacentTab(-1)
+        #expect(name(browser.commandWindow.selectedTab) == "c", "⌘⌥← still walks the list in its order")
     }
 
     @Test func controlTabSkipsATabClosedMidCycle() {
         let browser = browser(with: ["a", "b"])
-        browser.cycleRecentTabs(backward: false, holdingControl: true)
-        #expect(name(browser.recentTabs.target) == "b")
+        browser.commandWindow.cycleRecentTabs(backward: false, holdingControl: true)
+        #expect(name(browser.commandWindow.recentTabs.target) == "b")
         browser.close(tab("b", in: browser))
-        browser.endTabCycle(commit: true)
-        #expect(name(browser.selectedTab) == "a")
+        browser.commandWindow.endTabCycle(commit: true)
+        #expect(name(browser.commandWindow.selectedTab) == "a")
     }
 
     @Test func closingATabOpenedFromTheShownOneGoesBackToItsOpener() {
@@ -82,18 +82,18 @@ struct TabCommandsTests {
         browser.select(b)
 
         browser.close(browser.newTab(url: page("link"), openedFrom: b))
-        #expect(name(browser.selectedTab) == "b", "a link opened in front")
+        #expect(name(browser.commandWindow.selectedTab) == "b", "a link opened in front")
 
         let background = browser.newTab(url: page("command-click"), selecting: false, openedFrom: b)
         browser.select(background)
         browser.close(background)
-        #expect(name(browser.selectedTab) == "b", "a ⌘-click, then straight to it")
+        #expect(name(browser.commandWindow.selectedTab) == "b", "a ⌘-click, then straight to it")
 
         let visited = browser.newTab(url: page("visited"), openedFrom: b)
         browser.select(tab("c", in: browser))
         browser.select(visited)
         browser.close(visited)
-        #expect(name(browser.selectedTab) == "a", "after another tab was shown, the neighbour")
+        #expect(name(browser.commandWindow.selectedTab) == "a", "after another tab was shown, the neighbour")
 
         browser.select(b)
         let later = browser.newTab(url: page("later"), selecting: false, openedFrom: b)
@@ -101,13 +101,13 @@ struct TabCommandsTests {
         browser.select(b)
         browser.select(later)
         browser.close(later)
-        #expect(name(browser.selectedTab) == "a", "opened, then another tab shown before it")
+        #expect(name(browser.commandWindow.selectedTab) == "a", "opened, then another tab shown before it")
 
         browser.select(b)
         let orphan = browser.newTab(url: page("orphan"), openedFrom: b)
         browser.close(b)
         browser.close(orphan)
-        #expect(name(browser.selectedTab) == "a", "its opener closed, the neighbour")
+        #expect(name(browser.commandWindow.selectedTab) == "a", "its opener closed, the neighbour")
     }
 
     @Test func sleepOtherTabsSparesTheShownOneFavoritesAndAgentTabs() async throws {
@@ -149,11 +149,11 @@ struct TabCommandsTests {
     @Test func losingFocusEndsTheCycleWhereItWas() {
         let browser = browser(with: ["a", "b", "c"])
         for notification in [(NSApplication.didResignActiveNotification, NSApp as Any), (NSWindow.didResignKeyNotification, NSWindow() as Any)] {
-            browser.cycleRecentTabs(backward: false, holdingControl: true)
-            #expect(name(browser.recentTabs.target) == "b")
+            browser.commandWindow.cycleRecentTabs(backward: false, holdingControl: true)
+            #expect(name(browser.commandWindow.recentTabs.target) == "b")
             NotificationCenter.default.post(name: notification.0, object: notification.1)
-            #expect(browser.recentTabs.target == nil, "\(notification.0.rawValue)")
-            #expect(name(browser.selectedTab) == "a")
+            #expect(browser.commandWindow.recentTabs.target == nil, "\(notification.0.rawValue)")
+            #expect(name(browser.commandWindow.selectedTab) == "a")
         }
     }
 
@@ -168,7 +168,7 @@ struct TabCommandsTests {
         browser.select(tab("b", in: browser))
         browser.closeTabs(above: tab("d", in: browser))
         #expect(names(browser) == ["d", "e"])
-        #expect(name(browser.selectedTab) == "d")
+        #expect(name(browser.commandWindow.selectedTab) == "d")
         #expect(browser.tabs(above: tab("d", in: browser)).isEmpty)
 
         browser.reopenClosedTab()
@@ -181,7 +181,7 @@ struct TabCommandsTests {
         let browser = browser(with: ["a", "b"])
         for name in ["x", "y", "z"] { browser.newAgentTab(session: "s1").load(page(name)) }
         browser.closeTabs(above: tab("y", in: browser))
-        #expect(browser.agentTabs.map(name) == ["y", "z"])
+        #expect(browser.commandWindow.agentTabs.map(name) == ["y", "z"])
         #expect(names(browser) == ["a", "b"])
     }
 

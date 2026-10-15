@@ -70,7 +70,7 @@ struct HistoryPageTests {
     @Test(.timeLimit(.minutes(1))) func showingHistoryAgainListsANewVisit() async throws {
         let browser = Browser()
         browser.openHistory()
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         defer { browser.close(tab) }
         let marker = "history-refresh-\(UUID().uuidString)"
         let url = try #require(URL(string: "https://example.com/?\(marker)"))
@@ -93,7 +93,7 @@ struct HistoryPageTests {
 
         browser.history.record(url, title: "")
         browser.openHistory()
-        #expect(browser.selectedTab === tab)
+        #expect(browser.commandWindow.selectedTab === tab)
         #expect(await listed() == true)
     }
 }

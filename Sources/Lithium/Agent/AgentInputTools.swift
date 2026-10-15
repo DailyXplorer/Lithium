@@ -718,8 +718,8 @@ extension AgentHub {
     func userBusy(in tab: Tab) -> String? {
         guard let webView = tab.loadedWebView, let window = webView.userWindow else { return nil }
         if (webView as? PageWebView)?.isUserPressing == true { return "pressing in \(id(for: tab))’s page" }
-        guard tab.id == browser?.selectedTabID else { return nil }
-        if browser?.renamingTabID != nil { return "renaming a tab in Lithium" }
+        guard let browser, browser.isShown(tab) else { return nil }
+        if browser.window(of: tab).renamingTabID != nil { return "renaming a tab in Lithium" }
         if let editor = window.firstResponder as? NSTextView, !editor.isDescendant(of: webView) { return "typing in Lithium’s address bar or another field of its own" }
         return nil
     }
@@ -1186,9 +1186,9 @@ extension AgentHub {
         }
     }
 
-    /// Background pages are laid out at the size of the page area the user sees.
+    /// Background pages are laid out at the size of the page area the user sees, in the window in front.
     var pageAreaSize: CGSize {
-        browser?.selectedTab?.loadedWebView.flatMap { $0.userWindow == nil ? nil : $0.bounds.size } ?? CGSize(width: 1280, height: 800)
+        browser?.commandWindow.selectedTab?.loadedWebView.flatMap { $0.userWindow == nil ? nil : $0.bounds.size } ?? CGSize(width: 1280, height: 800)
     }
 }
 

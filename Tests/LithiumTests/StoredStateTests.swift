@@ -48,6 +48,37 @@ struct StoredStateTests {
         #expect(try keptAside(file).isEmpty)
     }
 
+    /// A session written before windows were saved: one window, its tabs and selection as they were.
+    @Test func aSessionWithoutWindowsIsRead() throws {
+        let file = try folder().appending(path: "session.json")
+        try Data(#"{"tabs": [{"url": "https://example.com/", "title": "Example"}], "selectedIndex": 0}"#.utf8).write(to: file)
+        let session = SessionStore.load(from: file)
+        #expect(session.tabs.map(\.title) == ["Example"])
+        #expect(session.tabs.map(\.windowID) == [nil])
+        #expect(session.selectedIndex == 0)
+        #expect(session.windows == nil)
+    }
+
+    /// Two windows and their tabs come back as written, each tab in its window.
+    @Test func aSessionWithTwoWindowsRoundTrips() throws {
+        let second = UUID()
+        let session = Session(
+            tabs: [
+                .init(url: URL(string: "https://a.example/")!, title: "A", customTitle: nil, pinID: nil),
+                .init(url: URL(string: "https://b.example/")!, title: "B", customTitle: nil, pinID: nil, windowID: second),
+            ],
+            selectedIndex: 0,
+            windows: [
+                .init(id: UUID(), frame: "0 0 1280 820 0 0 1440 877 ", selectedIndex: 0, isZenMode: true),
+                .init(id: second, selectedIndex: 1, spaceID: UUID(), isSidebarVisible: false),
+            ]
+        )
+        let decoded = try JSONDecoder().decode(Session.self, from: JSONEncoder().encode(session))
+        #expect(decoded == session)
+        #expect(decoded.windows?.map(\.id) == session.windows?.map(\.id))
+        #expect(decoded.tabs.map(\.windowID) == [nil, second])
+    }
+
     @Test(arguments: ["", #"[{"id": "6E2B"#])
     func unreadableFavoritesAreKeptAside(_ contents: String) throws {
         let file = try folder().appending(path: "pins.json")

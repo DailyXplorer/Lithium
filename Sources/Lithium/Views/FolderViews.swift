@@ -5,15 +5,16 @@ struct FolderHeader: View {
     /// Asks before a folder with tabs goes (`SidebarView`).
     let delete: () -> Void
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.sidebarPalette) private var palette
     @State private var isTargeted = false
 
     var body: some View {
-        let count = browser.tabList(in: folder.space, folder: folder.id).count
+        let count = browser.tabList(in: folder.space, window: window.id, folder: folder.id).count
         SidebarRow(isSelected: false, action: toggle) {
             Icon(.folder, size: 14)
                 .frame(width: 16)
-            if browser.folders.renamingID == folder.id {
+            if window.renamingFolderID == folder.id {
                 FolderNameField(folder: folder)
             } else {
                 Text(folder.name)
@@ -36,7 +37,7 @@ struct FolderHeader: View {
         }
         .simultaneousGesture(TapGesture(count: 2).onEnded { startRenaming() })
         .dropDestination(for: String.self) { items, _ in
-            withAnimation(.snappy(duration: 0.2)) { browser.dropTab(items, on: .folder(folder.id, nil)) }
+            withAnimation(.snappy(duration: 0.2)) { window.dropTab(items, on: .folder(folder.id, nil)) }
         } isTargeted: { isTargeted = $0 }
         .contextMenu {
             Button(folder.isCollapsed ? "Expand Folder" : "Collapse Folder", action: toggle)
@@ -53,8 +54,7 @@ struct FolderHeader: View {
     }
 
     private func startRenaming() {
-        browser.renamingTabID = nil
-        browser.folders.renamingID = folder.id
+        window.renamingFolderID = folder.id
     }
 }
 
@@ -62,6 +62,7 @@ struct FolderHeader: View {
 private struct FolderNameField: View {
     let folder: TabFolder
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @State private var name = ""
     @FocusState private var isFocused: Bool
 
@@ -75,18 +76,18 @@ private struct FolderNameField: View {
                 claimFocus($isFocused)
             }
             .onChange(of: isFocused) { _, focused in
-                if !focused, browser.folders.renamingID == folder.id { commit() }
+                if !focused, window.renamingFolderID == folder.id { commit() }
             }
             // Gone with the sidebar (⌘B), the rename would otherwise hold Escape and the peek.
             .onDisappear {
-                if browser.folders.renamingID == folder.id, !browser.showsSidebar { commit() }
+                if window.renamingFolderID == folder.id, !window.showsSidebar { commit() }
             }
     }
 
     private func commit() {
         browser.renameFolder(folder.id, to: name)
         let hadKeyboard = isFocused
-        DispatchQueue.main.async { [browser] in browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
+        DispatchQueue.main.async { [window] in window.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
     }
 }
 

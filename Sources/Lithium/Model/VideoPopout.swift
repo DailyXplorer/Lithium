@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import WebKit
 
-/// A tab's video, kept playing in a small player over the window: the tab's own web view moves
-/// into the player, and `video-popout.js` makes its video fill it.
+/// A tab's video, kept playing in a small player over its window: the tab's own web view moves
+/// into the player, and `video-popout.js` makes its video fill it. One player per window.
 @MainActor
 @Observable
 final class VideoPopout {
@@ -19,7 +19,8 @@ final class VideoPopout {
     private(set) var tab: Tab?
     private(set) var playback: Playback?
 
-    @ObservationIgnored weak var browser: Browser?
+    @ObservationIgnored weak var window: BrowserWindow?
+    private var browser: Browser? { window?.browser }
     /// Only the newest request shows the player: the user may have switched tabs while the page answered.
     @ObservationIgnored private var request = 0
     /// The page acts on a request even when its answer comes too late, so a late answer puts the video back.
@@ -53,16 +54,16 @@ final class VideoPopout {
     }
 
     func showSelected() {
-        guard browser?.quickLinks.keyTab == nil, let tab = browser?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
+        guard browser?.quickLinks.keyTab == nil, let tab = window?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
         request += 1
         let current = request
         Task { await show(tab, request: current) }
     }
 
-    /// Not while a link's window is in front: the menu would pop out the main window's video,
+    /// Not while a link's window is in front: the menu would pop out a browser window's video,
     /// and the player takes only `Browser.tabs`, which a link's page isn't in.
     var canShowSelected: Bool {
-        guard browser?.quickLinks.keyTab == nil, let tab = browser?.selectedTab else { return false }
+        guard browser?.quickLinks.keyTab == nil, let tab = window?.selectedTab else { return false }
         return tab !== self.tab && !tab.isAsleep && tab.pdf == nil && tab.url != nil
     }
 
@@ -107,7 +108,7 @@ final class VideoPopout {
 
     func returnToTab() {
         guard let tab else { return }
-        if browser?.selectedTab === tab { hide() } else { browser?.select(tab) }
+        if window?.selectedTab === tab { hide() } else { window?.select(tab) }
     }
 
     private func isOutOfSight(_ tab: Tab) -> Bool {

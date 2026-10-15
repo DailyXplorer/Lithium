@@ -215,8 +215,10 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
             tab.languageChecked = false
         }
         if offers {
-            browser.selectedTab.map(check)
-            browser.shownPartner.map(check)
+            for window in browser.windows {
+                window.selectedTab.map(check)
+                window.shownPartner.map(check)
+            }
         }
     }
 

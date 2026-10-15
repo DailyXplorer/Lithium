@@ -78,7 +78,8 @@ struct CapturePreviewTests {
             context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
             context.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
             let shot = Shot(content: .area(context.makeImage()!), scale: 2, wallpaper: nil)
-            host = NSHostingView(rootView: AnyView(CapturePreview(shot: shot).environment(Browser())))
+            let browser = Browser()
+            host = NSHostingView(rootView: AnyView(CapturePreview(shot: shot).environment(browser).environment(browser.windows[0])))
             window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 920, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
             window.contentView = host
             window.orderFrontRegardless()

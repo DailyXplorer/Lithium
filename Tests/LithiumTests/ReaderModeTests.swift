@@ -767,7 +767,7 @@ struct ReaderTabTests {
         let (article, other) = try pages()
         let browser = Browser()
         browser.newTab(url: article)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(10) { tab.isReaderAvailable })
         #expect(!tab.isReading)
 
@@ -800,7 +800,7 @@ struct ReaderTabTests {
         defer { listener.cancel() }
         let browser = Browser()
         browser.newTab(url: article)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(10) { tab.isReaderAvailable })
         #expect(await tab.toggleReader())
         let commits = tab.commits
@@ -831,7 +831,7 @@ struct ReaderTabTests {
             """).write(to: article, atomically: true, encoding: .utf8)
         let browser = Browser()
         browser.newTab(url: article)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(10) { tab.isReaderAvailable })
         // Media plays only in a page in a window: one far off screen, which WebKit mustn't take for hidden.
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -876,7 +876,7 @@ struct ReaderTabTests {
         let (article, _) = try pages()
         let browser = Browser()
         browser.newTab(url: article)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(10) { tab.isReaderAvailable })
         let commits = tab.commits
         _ = try await tab.webView.evaluateJavaScript("""
@@ -902,7 +902,7 @@ struct ReaderTabTests {
         browser.setReaderButton(false)
         defer { browser.setReaderButton(true) }
         browser.newTab(url: article)
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(10) { tab.commits > 0 && !tab.isLoading })
         try await Task.sleep(for: .milliseconds(300))
         #expect(!tab.isReaderAvailable)

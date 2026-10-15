@@ -110,7 +110,6 @@ struct SpaceSwipe {
 
 extension Browser {
     var allSpaces: [Space] { spaces.isEmpty ? [.main] : spaces }
-    var currentSpace: Space { allSpaces.first { $0.id == currentSpaceID } ?? .main }
     /// More than one space: the sidebar shows the switcher and watches for swipes.
     var hasSpaces: Bool { spaces.count > 1 }
     var canAddSpace: Bool { allSpaces.count < Space.limit }
@@ -119,30 +118,29 @@ extension Browser {
         id != Space.mainID && spaces.contains { $0.id == id && $0.separatesData }
     }
 
-    var spacePins: [Pin] { pins(in: currentSpaceID) }
-
     func pins(in space: Space.ID) -> [Pin] {
         spaces.isEmpty ? pins : pins.filter { $0.space == space }
     }
 
-    func tabList(in space: Space.ID) -> [Tab] {
+    /// The space's tabs in `window`'s sidebar: its folders' first, then the tabs outside folders.
+    func tabList(in space: Space.ID, window: BrowserWindow.ID) -> [Tab] {
         let spaceFolders = folders(in: space)
-        guard !spaceFolders.isEmpty else { return tabs.filter { $0.isInTabList && $0.spaceID == space } }
-        return spaceFolders.flatMap { tabList(in: space, folder: $0.id) } + tabList(in: space, folder: nil)
+        guard !spaceFolders.isEmpty else { return tabs.filter { $0.isInTabList && $0.spaceID == space && $0.windowID == window } }
+        return spaceFolders.flatMap { tabList(in: space, window: window, folder: $0.id) } + tabList(in: space, window: window, folder: nil)
     }
 
     /// With a nil folder, the tabs outside folders.
-    func tabList(in space: Space.ID, folder: TabFolder.ID?) -> [Tab] {
-        tabs.filter { $0.isInTabList && $0.spaceID == space && $0.folderID == folder }
+    func tabList(in space: Space.ID, window: BrowserWindow.ID, folder: TabFolder.ID?) -> [Tab] {
+        tabs.filter { $0.isInTabList && $0.spaceID == space && $0.windowID == window && $0.folderID == folder }
     }
 
-    func agentGroup(in space: Space.ID) -> [Tab] {
-        tabs.filter { $0.isInAgentGroup && $0.spaceID == space }
+    func agentGroup(in space: Space.ID, window: BrowserWindow.ID) -> [Tab] {
+        tabs.filter { $0.isInAgentGroup && $0.spaceID == space && $0.windowID == window }
     }
 
-    /// The space's live favorites, its tab list and its Agent group, as its sidebar reads.
-    func navigationOrder(in space: Space.ID) -> [Tab] {
-        pins(in: space).compactMap(liveTab(for:)) + tabList(in: space) + agentGroup(in: space)
+    /// The space's live favorites, its tab list and its Agent group, as the window's sidebar reads.
+    func navigationOrder(in space: Space.ID, window: BrowserWindow.ID) -> [Tab] {
+        pins(in: space).compactMap(liveTab(for:)).filter { $0.windowID == window } + tabList(in: space, window: window) + agentGroup(in: space, window: window)
     }
 
     func newSpaceDraft() -> Space {
@@ -157,14 +155,20 @@ extension Browser {
         )
     }
 
+}
+
+extension BrowserWindow {
+    var currentSpace: Space { browser.allSpaces.first { $0.id == currentSpaceID } ?? .main }
+    var spacePins: [Pin] { browser.pins(in: currentSpaceID) }
+
     /// ⌃1…⌃9.
     func switchToSpace(at index: Int) {
-        guard hasSpaces, spaces.indices.contains(index) else { return }
-        switchToSpace(spaces[index].id)
+        guard browser.hasSpaces, browser.spaces.indices.contains(index) else { return }
+        switchToSpace(browser.spaces[index].id)
     }
 
     func switchSpace(by offset: Int) {
-        guard hasSpaces, let index = spaces.firstIndex(where: { $0.id == currentSpaceID }) else { return }
-        switchToSpace(at: min(max(index + offset, 0), spaces.count - 1))
+        guard browser.hasSpaces, let index = browser.spaces.firstIndex(where: { $0.id == currentSpaceID }) else { return }
+        switchToSpace(at: min(max(index + offset, 0), browser.spaces.count - 1))
     }
 }

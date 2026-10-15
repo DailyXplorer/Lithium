@@ -74,7 +74,7 @@ struct EnergySavingTests {
     /// about. Nothing pauses with energy saving off.
     @Test func pausesOnlySilentBackgroundMedia() {
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         defer {
             UserDefaults.standard.removeObject(forKey: Preference.energySaving)
             browser.tabs.forEach(browser.close)
@@ -90,7 +90,7 @@ struct EnergySavingTests {
         let shown = browser.newTab(url: page("shown"))
         browser.openInSplit(partner)
         browser.select(shown)
-        #expect(browser.shownPartner === partner)
+        #expect(browser.commandWindow.shownPartner === partner)
         muted.isMuted = true
 
         // Favorites' pages from an earlier session aren't part of this.

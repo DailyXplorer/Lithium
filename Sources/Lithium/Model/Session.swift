@@ -15,9 +15,23 @@ struct Session: Codable, Equatable {
         /// Its back and forward pages (`WKWebView.interactionState`), only at quit: WebKit serializes
         /// a loaded tab's on the main thread, and every save would rewrite a sleeping tab's.
         var history: Data? = nil
+        /// Nil for the first window, as `spaceID` is nil for the main space.
+        var windowID: UUID? = nil
+    }
+
+    /// One browser window: an older build reads the tabs and ignores it.
+    struct Window: Codable, Equatable {
+        var id: UUID
+        /// `NSWindow.frameDescriptor`; nil for a window never shown.
+        var frame: String? = nil
+        var selectedIndex: Int? = nil
+        var spaceID: Space.ID? = nil
+        var isSidebarVisible: Bool? = nil
+        var isZenMode: Bool? = nil
     }
 
     var tabs: [Tab] = []
+    /// The first window's, as `spaceID` is, so an older build still reads the file.
     var selectedIndex: Int?
     var splits: [Split]?
     /// Nil until the user makes a second space, then the main one first.
@@ -25,6 +39,8 @@ struct Session: Codable, Equatable {
     var spaceID: Space.ID? = nil
     /// Nil until the user makes a folder, so files written without folders stay as they were.
     var folders: [TabFolder]? = nil
+    /// Every window, the first one first; nil in files written before windows were saved.
+    var windows: [Window]? = nil
 
     /// As saved before quitting.
     var withoutHistory: Session {

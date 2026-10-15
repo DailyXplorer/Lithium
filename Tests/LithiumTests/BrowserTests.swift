@@ -31,8 +31,9 @@ struct BrowserTests {
         let url = URL(string: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")!
         SessionStore.save(Session(tabs: [.init(url: url, title: "YouTube", customTitle: nil, pinID: nil)], selectedIndex: 0))
         let browser = Browser()
-        let tab = try #require(browser.selectedTab)
-        browser.windowDidAppear()
+        let tab = try #require(browser.commandWindow.selectedTab)
+        browser.showRestoredWindows()
+        browser.windows[0].didAppear()
         let controller = tab.webView.configuration.userContentController
         // Farbling goes in with the engine's script, once the tab's protections are set; the
         // now-playing script, there from the start, says nothing about them.
@@ -85,13 +86,13 @@ struct BrowserTests {
         #expect(await waitUntil(30) { tab.title == "App" && !tab.isLoading })
         // The size a window gives it: unsized, the page lays nothing out and has no text to find.
         tab.webView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
-        browser.find.show(focusingField: false)
-        defer { browser.find.hide() }
-        await browser.find.update(query: "needle", in: tab.findTarget)
-        #expect(browser.find.matchCount == 3)
+        browser.commandWindow.find.show(focusingField: false)
+        defer { browser.commandWindow.find.hide() }
+        await browser.commandWindow.find.update(query: "needle", in: tab.findTarget)
+        #expect(browser.commandWindow.find.matchCount == 3)
 
         _ = try await tab.webView.callAsyncJavaScript("document.body.innerHTML = '<p>needle</p>'; history.pushState(null, '', '/next');", contentWorld: .page)
-        #expect(await waitUntil(10) { browser.find.matchCount == 1 && browser.find.currentMatch == 1 })
+        #expect(await waitUntil(10) { browser.commandWindow.find.matchCount == 1 && browser.commandWindow.find.currentMatch == 1 })
     }
 
     /// Closing the tab the find bar is over closes the bar, as selecting another tab does: left
@@ -103,29 +104,30 @@ struct BrowserTests {
         let other = browser.newTab(url: URL(string: "about:blank")!)
         defer { browser.close(other) }
         let closed = browser.newTab(url: URL(string: "about:blank")!)
-        browser.find.show(focusingField: false)
-        defer { browser.find.hide() }
+        browser.commandWindow.find.show(focusingField: false)
+        defer { browser.commandWindow.find.hide() }
 
         // A tab closing behind the selected one leaves the bar where it is.
         browser.close(other)
-        #expect(browser.selectedTab === closed && browser.find.isVisible)
+        #expect(browser.commandWindow.selectedTab === closed && browser.commandWindow.find.isVisible)
         browser.close(closed)
-        #expect(browser.selectedTab != nil && browser.selectedTab !== closed)
-        #expect(!browser.find.isVisible)
+        #expect(browser.commandWindow.selectedTab != nil && browser.commandWindow.selectedTab !== closed)
+        #expect(!browser.commandWindow.find.isVisible)
     }
 
-    /// A bar over a link's window isn't the closing tab's: closing the selected tab leaves it open.
+    /// The links' bar isn't the closing tab's window's: closing the selected tab leaves it open.
     @Test func closingTheSelectedTabKeepsALinksFindBar() async throws {
         let browser = Browser()
         // Stands in for the link's tab: the bar only checks that it's over one.
         let kept = browser.newTab(url: URL(string: "about:blank")!)
         defer { browser.close(kept) }
         let closed = browser.newTab(url: URL(string: "about:blank")!)
-        browser.find.show(focusingField: false, inLink: kept)
-        defer { browser.find.hide() }
+        let find = browser.quickLinks.find
+        find.show(focusingField: false, inLink: kept)
+        defer { find.hide() }
 
         browser.close(closed)
-        #expect(browser.find.isVisible && browser.find.linkTab === kept)
+        #expect(find.isVisible && find.linkTab === kept)
     }
 
     /// A wide page clips sideways overflow; a split pane's width or zooming in leaves it scrollable,
@@ -332,7 +334,7 @@ struct BrowserTests {
     @Test func restoresAnInternalTabAtLaunch() throws {
         SessionStore.save(Session(tabs: [.init(url: Internal.settingsURL, title: "Settings", customTitle: nil, pinID: nil)], selectedIndex: 0))
         let browser = Browser()
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         #expect(tab.url == Internal.settingsURL)
         #expect(tab.favicon != nil)
     }
@@ -348,19 +350,19 @@ struct BrowserTests {
         let typed = URL(string: "data:text/html,typed")!
 
         browser.select(opener)
-        browser.submitAddress(typed.absoluteString, editing: edited.id)
+        browser.commandWindow.submitAddress(typed.absoluteString, editing: edited.id)
         #expect(edited.url == typed)
         #expect(opener.url == URL(string: "data:text/html,opener"))
-        #expect(browser.selectedTab === edited)
+        #expect(browser.commandWindow.selectedTab === edited)
 
         let gone = edited.id
         browser.close(edited)
-        #expect(browser.selectedTab === opener)
+        #expect(browser.commandWindow.selectedTab === opener)
         let count = browser.tabs.count
-        browser.submitAddress(typed.absoluteString, editing: gone)
+        browser.commandWindow.submitAddress(typed.absoluteString, editing: gone)
         #expect(browser.tabs.count == count + 1)
         #expect(opener.url == URL(string: "data:text/html,opener"))
-        let opened = try #require(browser.selectedTab)
+        let opened = try #require(browser.commandWindow.selectedTab)
         #expect(opened !== opener)
         #expect(opened.url == typed)
     }
@@ -373,7 +375,7 @@ struct BrowserTests {
         defer { browser.close(tab) }
         let mail = URL(string: "mailto:alice@example.com")!
         let (before, count) = (ExternalApps.recorded, browser.tabs.count)
-        browser.submitAddress(mail.absoluteString)
+        browser.commandWindow.submitAddress(mail.absoluteString)
         #expect(ExternalApps.recorded == before + [.open(mail)])
         #expect(tab.url == page)
         #expect(browser.tabs.count == count)
@@ -423,18 +425,22 @@ struct BrowserTests {
         #expect(await waitUntil(120) { loaded(second) && second.webView.title == "Second" })
     }
 
-    /// The sidebar opens as the user left it, and a screenshot's passing flip is not remembered.
+    /// The sidebar opens as the user left it, saved with the session at quit; a screenshot's
+    /// passing flip is never what a new window opens with.
     @Test func sidebarVisibilitySurvivesRelaunch() {
         UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible)
         defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible) }
+        SessionStore.save(Session())
         let first = Browser()
-        #expect(first.isSidebarVisible == true)
+        #expect(first.commandWindow.isSidebarVisible == true)
 
-        first.toggleSidebar()
-        #expect(Browser().isSidebarVisible == false)
+        first.commandWindow.toggleSidebar()
+        first.saveNow()
+        #expect(Browser().commandWindow.isSidebarVisible == false)
 
-        first.isSidebarVisible = true
-        #expect(Browser().isSidebarVisible == false)
+        first.commandWindow.isSidebarVisible = true
+        #expect(UserDefaults.standard.bool(forKey: Preference.sidebarVisible) == false)
+        #expect(Browser().commandWindow.isSidebarVisible == false)
     }
 
     /// A background tab sleeps after 10 minutes, or 5 while the Mac saves energy, which a test can't control.
@@ -470,18 +476,18 @@ struct BrowserTests {
         let browser = Browser()
         browser.newTab(url: URL(string: "data:text/html,one")!)
         browser.newTab(url: URL(string: "data:text/html,two")!)
-        browser.newTabFocusingAddress()
-        browser.selectAdjacentTab(1)
-        #expect(browser.selectedTabID == browser.navigationOrder.first?.id)
-        browser.newTabFocusingAddress()
-        browser.selectAdjacentTab(-1)
-        #expect(browser.selectedTabID == browser.navigationOrder.last?.id)
+        browser.commandWindow.newTabFocusingAddress()
+        browser.commandWindow.selectAdjacentTab(1)
+        #expect(browser.commandWindow.selectedTabID == browser.navigationOrder.first?.id)
+        browser.commandWindow.newTabFocusingAddress()
+        browser.commandWindow.selectAdjacentTab(-1)
+        #expect(browser.commandWindow.selectedTabID == browser.navigationOrder.last?.id)
     }
 
     /// Closing the last tab of the list shows the start page, not a favorite's live page.
     @Test func closingTheLastTabShowsHomeNotAFavorite() {
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         let favorite = browser.newTab(url: URL(string: "data:text/html,favorite")!)
         browser.pin(favorite)
         defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
@@ -489,14 +495,14 @@ struct BrowserTests {
         let second = browser.newTab(url: URL(string: "data:text/html,second")!)
 
         browser.close(second)
-        #expect(browser.selectedTabID == first.id)
+        #expect(browser.commandWindow.selectedTabID == first.id)
         browser.close(first)
-        #expect(browser.selectedTabID == nil)
+        #expect(browser.commandWindow.selectedTabID == nil)
 
         let third = browser.newTab(url: URL(string: "data:text/html,third")!)
         browser.select(favorite)
         browser.close(favorite)
-        #expect(browser.selectedTabID == third.id)
+        #expect(browser.commandWindow.selectedTabID == third.id)
     }
 
     /// A page downloads what it can't show; a frame inside it (an ad, or a site's Download button
@@ -546,8 +552,8 @@ struct BrowserTests {
         if let file = item.destination { try? FileManager.default.removeItem(at: file) }
 
         browser.reopenClosedTab()
-        #expect(browser.selectedTab?.url == page)
-        if let reopened = browser.selectedTab { browser.close(reopened) }
+        #expect(browser.commandWindow.selectedTab?.url == page)
+        if let reopened = browser.commandWindow.selectedTab { browser.close(reopened) }
     }
 
     /// A sign-in window that closes itself once done isn't a tab the user closed: Reopen Closed Tab
@@ -571,8 +577,8 @@ struct BrowserTests {
         #expect(await waitUntil(30) { !browser.tabs.contains { $0 === popup } })
 
         browser.reopenClosedTab()
-        #expect(browser.selectedTab?.url == page)
-        if let reopened = browser.selectedTab { browser.close(reopened, remembering: false) }
+        #expect(browser.commandWindow.selectedTab?.url == page)
+        if let reopened = browser.commandWindow.selectedTab { browser.close(reopened, remembering: false) }
     }
 
     /// A tab opened by no page (a typed address, a link from another app) that only fetched a file
@@ -590,12 +596,12 @@ struct BrowserTests {
 
         let first = browser.newTab(url: base.appending(path: "file"))
         #expect(await waitUntil(30) { !browser.tabs.contains { $0 === first } })
-        #expect(browser.selectedTab === shown)
+        #expect(browser.commandWindow.selectedTab === shown)
 
-        browser.newTabFocusingAddress()
+        browser.commandWindow.newTabFocusingAddress()
         let second = browser.newTab(url: base.appending(path: "file"))
         #expect(await waitUntil(30) { !browser.tabs.contains { $0 === second } })
-        #expect(browser.selectedTabID == nil)
+        #expect(browser.commandWindow.selectedTabID == nil)
         #expect(await waitUntil(30) { Downloads.shared.items.prefix(2).allSatisfy { $0.state != .downloading } })
     }
 
@@ -934,7 +940,7 @@ struct BrowserTests {
         #expect(listed.contains { $0 === normal })
         #expect(!listed.contains { $0 === agentTab || $0 === popup })
         #expect(popup.indexInWindow(for: context) == NSNotFound)
-        #expect(browser.selectedTab === popup)
+        #expect(browser.commandWindow.selectedTab === popup)
         #expect(window.activeTab(for: context) as? Lithium.Tab === normal, "a private tab shown is no extension's active tab")
         #expect(popup.webView.configuration.webExtensionController == nil)
         #expect(agentTab.webView.configuration.webExtensionController == nil)
@@ -944,10 +950,10 @@ struct BrowserTests {
         #expect(window.activeTab(for: context) as? Lithium.Tab === normal)
 
         // An extension showing a tab isn't the user's pick: their address-bar typing goes on.
-        let picks = browser.tabPickToken
+        let picks = browser.commandWindow.tabPickToken
         try await popup.activate(for: context)
-        #expect(browser.selectedTab === popup)
-        #expect(browser.tabPickToken == picks)
+        #expect(browser.commandWindow.selectedTab === popup)
+        #expect(browser.commandWindow.tabPickToken == picks)
     }
 
     /// Double-clicking a tab and clicking away leaves it without a name of its own: its page's
@@ -958,10 +964,10 @@ struct BrowserTests {
         defer { browser.close(tab) }
         #expect(await waitUntil(10) { tab.displayTitle == "First" })
 
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         browser.rename(tab, to: "First", shown: tab.displayTitle)
         #expect(tab.customTitle == nil)
-        #expect(browser.renamingTabID == nil)
+        #expect(browser.commandWindow.renamingTabID == nil)
         browser.rename(tab, to: " Mine ", shown: "First")
         #expect(tab.customTitle == "Mine")
         // A name of its own, left as shown, stays.
@@ -980,14 +986,14 @@ struct BrowserTests {
         defer { browser.tabs.forEach(browser.close) }
         let typed = URL(string: "data:text/html,typed")!
 
-        browser.suggestions.editedTabID = edited.id
+        browser.commandWindow.suggestions.editedTabID = edited.id
         browser.close(edited)
-        #expect(browser.selectedTab === opener)
+        #expect(browser.commandWindow.selectedTab === opener)
         let count = browser.tabs.count
-        browser.accept(.address(typed))
+        browser.commandWindow.accept(.address(typed))
         #expect(browser.tabs.count == count + 1)
         #expect(opener.url == URL(string: "data:text/html,opener"))
-        #expect(browser.selectedTab?.url == typed)
+        #expect(browser.commandWindow.selectedTab?.url == typed)
     }
 
     /// Settings' "Use … on websites" changes the font of open pages in place, both ways, without
@@ -1025,24 +1031,24 @@ struct BrowserTests {
     @Test func closingOrPinningARenamedTabEndsTheRename() {
         let browser = Browser()
         let closed = browser.newTab(url: URL(string: "data:text/html,closed")!, selecting: false)
-        browser.renamingTabID = closed.id
+        browser.commandWindow.renamingTabID = closed.id
         browser.close(closed)
-        #expect(browser.renamingTabID == nil)
+        #expect(browser.commandWindow.renamingTabID == nil)
 
         let pinned = browser.newTab(url: URL(string: "data:text/html,pinned")!, selecting: false)
         defer { browser.pins.filter { $0.id == pinned.pinID }.forEach(browser.unpin) }
-        browser.renamingTabID = pinned.id
+        browser.commandWindow.renamingTabID = pinned.id
         browser.pin(pinned)
         #expect(pinned.pinID != nil)
-        #expect(browser.renamingTabID == nil)
+        #expect(browser.commandWindow.renamingTabID == nil)
 
         // Another tab's rename goes on.
         let other = browser.newTab(url: URL(string: "data:text/html,other")!, selecting: false)
         let renamed = browser.newTab(url: URL(string: "data:text/html,renamed")!, selecting: false)
-        browser.renamingTabID = renamed.id
+        browser.commandWindow.renamingTabID = renamed.id
         browser.close(other)
-        #expect(browser.renamingTabID == renamed.id)
-        browser.renamingTabID = nil
+        #expect(browser.commandWindow.renamingTabID == renamed.id)
+        browser.commandWindow.renamingTabID = nil
         browser.close(renamed)
     }
 
@@ -1208,7 +1214,7 @@ struct BrowserTests {
 
         favorite.receive(.notification)
         #expect(favorite.unread.shown == .dot, "no window is key in tests")
-        browser.windowDidBecomeKey()
+        browser.windowBecameKey(browser.windows[0])
         #expect(favorite.unread.shown == nil)
     }
 
@@ -1223,12 +1229,12 @@ struct BrowserTests {
         defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
         browser.select(favorite)
         let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
-        #expect(browser.selectedTab === popup)
+        #expect(browser.commandWindow.selectedTab === popup)
 
         favorite.receive(.notification)
         #expect(favorite.unread.shown == .dot)
         browser.close(popup)
-        #expect(browser.selectedTab === favorite)
+        #expect(browser.commandWindow.selectedTab === favorite)
         #expect(favorite.unread.shown == nil)
     }
 
@@ -1239,7 +1245,7 @@ struct BrowserTests {
         // Never shown, so never key.
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        browser.window = window
+        browser.windows[0].nsWindow = window
         let favorite = browser.newTab(url: URL(string: "data:text/html,chat")!)
         defer { browser.close(favorite) }
         #expect(await waitUntil(120) { loaded(favorite) })
@@ -1247,14 +1253,14 @@ struct BrowserTests {
         defer { browser.pins.filter { $0.id == favorite.pinID }.forEach(browser.unpin) }
         browser.select(favorite)
         let popup = browser.newTab(url: URL(string: "data:text/html,popup")!, openedFrom: favorite)
-        #expect(browser.selectedTab === popup)
+        #expect(browser.commandWindow.selectedTab === popup)
 
         favorite.receive(.notification)
         browser.close(popup)
-        #expect(browser.selectedTab === favorite)
+        #expect(browser.commandWindow.selectedTab === favorite)
         #expect(favorite.unread.shown == .dot)
-        // `browser.window` is weak: this keeps the window alive until here.
-        #expect(browser.window === window)
+        // `browser.windows[0].nsWindow` is weak: this keeps the window alive until here.
+        #expect(browser.windows[0].nsWindow === window)
     }
 
     /// A tab zoomed in wakes from sleep at the same zoom.
@@ -1792,7 +1798,7 @@ struct BrowserTests {
         let tab = browser.newTab(url: page)
         // Drawn in a window far off screen: WebKit plays video only in a window it takes for visible.
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         [tab, other].forEach { disableOcclusionDetection($0.webView) }
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
@@ -1806,7 +1812,7 @@ struct BrowserTests {
         try #require(started as? Bool == true, "the video plays")
 
         browser.select(other)
-        #expect(await waitUntil(5) { browser.videoPopout.tab === tab && browser.videoPopout.playback?.aspectRatio == 16 / 9 })
+        #expect(await waitUntil(5) { browser.commandWindow.videoPopout.tab === tab && browser.commandWindow.videoPopout.playback?.aspectRatio == 16 / 9 })
         // In the player, in the page's bottom right corner, at its default size.
         #expect(await waitUntil(5) { tab.webView.window === window && tab.webView.bounds.size == CGSize(width: 400, height: 225) })
         let corner = CGPoint(x: 1280 - Layout.margin - PopoutLayout.inset, y: Layout.margin + PopoutLayout.inset)
@@ -1821,33 +1827,33 @@ struct BrowserTests {
             #expect(current.shadowOpacity == 0, "\(String(describing: current.delegate.map { type(of: $0) })) casts a shadow over the player")
             layer = current.superlayer
         }
-        let time = browser.videoPopout.playback?.time ?? 0
-        #expect(await waitUntil(5) { (browser.videoPopout.playback?.time ?? 0) > time + 0.5 }, "the video goes on playing")
+        let time = browser.commandWindow.videoPopout.playback?.time ?? 0
+        #expect(await waitUntil(5) { (browser.commandWindow.videoPopout.playback?.time ?? 0) > time + 0.5 }, "the video goes on playing")
 
         browser.select(tab)
-        #expect(browser.videoPopout.tab == nil)
+        #expect(browser.commandWindow.videoPopout.tab == nil)
         #expect(await poll(5) { await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false })
         #expect(await run(tab, "return document.querySelector('video').paused") as? Bool == false)
 
         // Popped out, then left and back before the page answers: the video stays in the page.
-        browser.videoPopout.showSelected()
+        browser.commandWindow.videoPopout.showSelected()
         browser.select(other)
         browser.select(tab)
         try await Task.sleep(for: .seconds(1))
-        #expect(browser.videoPopout.tab == nil)
+        #expect(browser.commandWindow.videoPopout.tab == nil)
         #expect(await run(tab, "return document.querySelector('video').matches(':popover-open')") as? Bool == false, "a late answer leaves only the video in the page")
 
         await run(tab, "document.querySelector('video').muted = true")
         browser.select(other)
         try await Task.sleep(for: .seconds(1))
-        #expect(browser.videoPopout.tab == nil, "a muted video stays with its tab")
+        #expect(browser.commandWindow.videoPopout.tab == nil, "a muted video stays with its tab")
 
         browser.select(tab)
         await run(tab, "document.querySelector('video').muted = false")
         browser.select(other)
-        #expect(await waitUntil(5) { browser.videoPopout.tab === tab })
+        #expect(await waitUntil(5) { browser.commandWindow.videoPopout.tab === tab })
         browser.close(tab)
-        #expect(browser.videoPopout.tab == nil)
+        #expect(browser.commandWindow.videoPopout.tab == nil)
     }
 
     /// A page narrow at load, in a view wide enough for sideways overflow to be clipped.

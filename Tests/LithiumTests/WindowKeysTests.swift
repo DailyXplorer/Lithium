@@ -22,7 +22,7 @@ struct WindowKeysTests {
         #expect(await waitUntil(10) { browser.permissions.pending.contains { $0.tabID == tab.id } })
         let request = try #require(browser.permissions.pending.first { $0.tabID == tab.id })
 
-        let view = NSHostingView(rootView: PermissionPrompt(request: request).environment(browser))
+        let view = NSHostingView(rootView: PermissionPrompt(request: request).environment(browser).environment(browser.windows[0]))
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 900, height: 46), styleMask: [.borderless], backing: .buffered, defer: false)
         defer { window.orderOut(nil) }
         window.contentView = view
@@ -50,22 +50,22 @@ struct WindowKeysTests {
         defer { browser.tabs.forEach(browser.close) }
         let second = browser.newTab(url: URL(string: "data:text/html,second")!, selecting: false)
         browser.openInSplit(second)
-        let focused = try #require(browser.selectedTab)
-        let other = try #require(browser.shownPartner)
+        let focused = try #require(browser.commandWindow.selectedTab)
+        let other = try #require(browser.commandWindow.shownPartner)
         #expect(Set([focused.id, other.id]) == Set([first.id, second.id]))
         // Asked once the pages are in: a commit drops the prompts of the page before.
         #expect(await waitUntil(60) { [first, second].allSatisfy { !$0.webView.isLoading && $0.webView.url != nil } })
-        #expect(browser.shownPermissionRequest == nil)
+        #expect(browser.commandWindow.shownPermissionRequest == nil)
 
         let host = "camera.example"
         let otherAsked = Task { await browser.permissions.request([.camera], host: host, tabID: other.id) }
-        #expect(await waitUntil(10) { browser.shownPermissionRequest?.tabID == other.id })
+        #expect(await waitUntil(10) { browser.commandWindow.shownPermissionRequest?.tabID == other.id })
         let focusedAsked = Task { await browser.permissions.request([.microphone], host: host, tabID: focused.id) }
-        #expect(await waitUntil(10) { browser.shownPermissionRequest?.tabID == focused.id }, "the focused side's first")
+        #expect(await waitUntil(10) { browser.commandWindow.shownPermissionRequest?.tabID == focused.id }, "the focused side's first")
 
         #expect(browser.dismissOverlay())
         #expect(await focusedAsked.value == false)
-        #expect(browser.shownPermissionRequest?.tabID == other.id)
+        #expect(browser.commandWindow.shownPermissionRequest?.tabID == other.id)
         #expect(browser.dismissOverlay())
         #expect(await otherAsked.value == false)
         #expect(browser.permissions.pending.isEmpty)
@@ -85,16 +85,16 @@ struct WindowKeysTests {
         window.makeFirstResponder(nil)
 
         #expect(!browser.ownsEscape(in: window), "not the browser's window yet")
-        browser.window = window
+        browser.windows[0].nsWindow = window
         #expect(browser.ownsEscape(in: window))
         #expect(!browser.ownsEscape(in: nil))
 
         #expect(window.makeFirstResponder(field))
         #expect((window.firstResponder as? NSTextView)?.isFieldEditor == true)
         #expect(!browser.ownsEscape(in: window), "the field ends its editing itself")
-        browser.find.isFieldFocused = true
+        browser.commandWindow.find.isFieldFocused = true
         #expect(browser.ownsEscape(in: window), "Escape in the find field closes the bar")
-        browser.find.isFieldFocused = false
+        browser.commandWindow.find.isFieldFocused = false
         window.makeFirstResponder(nil)
 
         let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
@@ -113,16 +113,16 @@ struct WindowKeysTests {
         let tab = browser.newTab(url: URL(string: "data:text/html,kept")!)
         defer { browser.close(tab) }
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
-        browser.window = window
+        browser.windows[0].nsWindow = window
         let inspector = ClosingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         inspector.isReleasedWhenClosed = false
 
         browser.closeTabOrWindow(keyWindow: inspector)
         #expect(inspector.didClose, "the window in front closes")
-        #expect(browser.selectedTab === tab, "the tab stays")
+        #expect(browser.commandWindow.selectedTab === tab, "the tab stays")
 
         browser.closeTabOrWindow(keyWindow: nil)
-        #expect(browser.selectedTab === tab, "no window in front, nothing closes")
+        #expect(browser.commandWindow.selectedTab === tab, "no window in front, nothing closes")
 
         let other = browser.newTab(url: URL(string: "data:text/html,closed")!)
         browser.closeTabOrWindow(keyWindow: window)
@@ -144,23 +144,23 @@ struct WindowKeysTests {
         let (browser, tab, window) = try await shownBrowser()
         defer { window.orderOut(nil) }
 
-        browser.find.show()
-        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        browser.commandWindow.find.show()
+        #expect(await waitUntil(5) { browser.commandWindow.find.isFieldFocused })
         #expect(browser.dismissOverlay())
         #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
         // The bar clears its field's flag as it leaves, which its slide-out can delay under load;
         // until then an Escape in the name field reads as the find field's and keeps the keyboard.
-        #expect(await waitUntil(5) { !browser.find.isFieldFocused })
+        #expect(await waitUntil(5) { !browser.commandWindow.find.isFieldFocused })
 
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         let editor = try #require(await nameEditor(in: window))
         editor.insertText("Notes", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
         editor.insertNewline(nil)
-        #expect(await waitUntil(5) { browser.renamingTabID == nil })
+        #expect(await waitUntil(5) { browser.commandWindow.renamingTabID == nil })
         #expect(tab.customTitle == "Notes")
         #expect(await waitUntil(5) { window.firstResponder === tab.contentView }, "\(String(describing: window.firstResponder))")
 
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         _ = try #require(await nameEditor(in: window))
         #expect(browser.dismissOverlay())
         #expect(tab.customTitle == "Notes", "Escape keeps the old name")
@@ -168,11 +168,11 @@ struct WindowKeysTests {
 
         // Each field takes the keyboard again the next time, as the user starts it.
         try await Task.sleep(for: .milliseconds(200))
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         #expect(await nameEditor(in: window) != nil)
         #expect(browser.dismissOverlay())
-        browser.find.show()
-        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        browser.commandWindow.find.show()
+        #expect(await waitUntil(5) { browser.commandWindow.find.isFieldFocused })
         #expect(browser.dismissOverlay())
     }
 
@@ -182,15 +182,15 @@ struct WindowKeysTests {
         let (browser, tab, window) = try await shownBrowser()
         defer { window.orderOut(nil) }
 
-        browser.find.show()
-        #expect(await waitUntil(5) { browser.find.isFieldFocused })
+        browser.commandWindow.find.show()
+        #expect(await waitUntil(5) { browser.commandWindow.find.isFieldFocused })
         #expect(window.makeFirstResponder(tab.webView))
         #expect(!browser.dismissOverlay(), "the page gets the Escape")
-        #expect(browser.find.isVisible)
+        #expect(browser.commandWindow.find.isVisible)
 
         window.makeFirstResponder(nil)
         #expect(browser.dismissOverlay())
-        #expect(!browser.find.isVisible)
+        #expect(!browser.commandWindow.find.isVisible)
     }
 
     /// Hiding the sidebar (⌘B) during a rename ends it with the name typed, so it doesn't go on
@@ -198,13 +198,13 @@ struct WindowKeysTests {
     @Test func hidingTheSidebarEndsARename() async throws {
         let (browser, tab, window) = try await shownBrowser()
         defer { window.orderOut(nil) }
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         let editor = try #require(await nameEditor(in: window))
         editor.insertText("Docs", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
 
-        browser.toggleSidebar()
-        defer { browser.toggleSidebar() }
-        #expect(await waitUntil(5) { browser.renamingTabID == nil })
+        browser.commandWindow.toggleSidebar()
+        defer { browser.commandWindow.toggleSidebar() }
+        #expect(await waitUntil(5) { browser.commandWindow.renamingTabID == nil })
         #expect(tab.customTitle == "Docs")
     }
 
@@ -213,19 +213,19 @@ struct WindowKeysTests {
     @Test func showingTheSidebarKeepsANameTypedInThePeek() async throws {
         let (browser, tab, window) = try await shownBrowser()
         defer { window.orderOut(nil) }
-        browser.toggleSidebar()
-        defer { if !browser.isSidebarVisible { browser.toggleSidebar() } }
+        browser.commandWindow.toggleSidebar()
+        defer { if !browser.commandWindow.isSidebarVisible { browser.commandWindow.toggleSidebar() } }
         try await Task.sleep(for: .milliseconds(300))
-        browser.renamingTabID = tab.id
+        browser.commandWindow.renamingTabID = tab.id
         let editor = try #require(await nameEditor(in: window))
         editor.insertText("Docs", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
 
-        browser.toggleSidebar()
+        browser.commandWindow.toggleSidebar()
         try await Task.sleep(for: .milliseconds(800))
-        if browser.renamingTabID == tab.id {
+        if browser.commandWindow.renamingTabID == tab.id {
             let field = try #require(await nameEditor(in: window))
             #expect(field.string == "Docs")
-            browser.renamingTabID = nil
+            browser.commandWindow.renamingTabID = nil
         } else {
             #expect(tab.customTitle == "Docs")
         }
@@ -237,8 +237,8 @@ struct WindowKeysTests {
         defer { window.orderOut(nil) }
         let others = (1...50).map { browser.newTab(url: URL(string: "data:text/html,\($0)")!, selecting: false) }
         defer { others.forEach { browser.close($0) } }
-        let first = try #require(browser.tabListEntries.first?.tab)
-        browser.renamingTabID = first.id
+        let first = try #require(browser.commandWindow.tabListEntries.first?.tab)
+        browser.commandWindow.renamingTabID = first.id
         #expect(await nameEditor(in: window) != nil)
 
         // The tab list is the only scroll view taller than the window.
@@ -254,9 +254,9 @@ struct WindowKeysTests {
         list.reflectScrolledClipView(list.contentView)
         try await Task.sleep(for: .milliseconds(500))
 
-        #expect(browser.renamingTabID == first.id, "the rename goes on")
+        #expect(browser.commandWindow.renamingTabID == first.id, "the rename goes on")
         #expect(first.customTitle == nil)
-        browser.renamingTabID = nil
+        browser.commandWindow.renamingTabID = nil
     }
 
     /// A tab picked with the keyboard while the address bar edits ends the edit: Return then
@@ -268,7 +268,7 @@ struct WindowKeysTests {
         defer { browser.close(second) }
         let page = first.url
 
-        browser.requestAddressFocus()
+        browser.commandWindow.requestAddressFocus()
         func editor() -> NSTextView? {
             (window.firstResponder as? NSTextView).flatMap { $0.delegate is URLTextField ? $0 : nil }
         }
@@ -278,8 +278,44 @@ struct WindowKeysTests {
         browser.select(second)
         #expect(await waitUntil(5) { editor() == nil }, "the edit ends")
         #expect(await waitUntil(5) { window.firstResponder === second.contentView }, "\(String(describing: window.firstResponder))")
-        #expect(browser.selectedTabID == second.id)
+        #expect(browser.commandWindow.selectedTabID == second.id)
         #expect(first.url == page, "the tab left is untouched")
+    }
+
+    /// A window shown at launch, or shown again from the Dock, gives the address bar the keyboard
+    /// before anything is typed, on the start page and with a page, as the window main opened did.
+    /// The window is built here, off screen, and shown as `BrowserNSWindow` shows its own.
+    @Test func aWindowShownGivesTheAddressBarTheKeyboard() async throws {
+        SessionStore.save(Session())
+        let browser = Browser()
+        let first = browser.commandWindow
+        if first.isZenMode { first.toggleZenMode() }
+        var shown: [NSWindow] = []
+        browser.showWindow = { model, browser in
+            let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                  styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(model))
+            BrowserNSWindow.show(window)
+            shown.append(window)
+            return window
+        }
+        defer { shown.forEach { $0.orderOut(nil) } }
+
+        browser.showRestoredWindows()
+        let atLaunch = try #require(shown.last)
+        #expect(atLaunch.isVisible)
+        #expect(first.selectedTab == nil)
+        #expect(await waitUntil(5) { addressEditor(in: atLaunch) != nil }, "\(String(describing: atLaunch.firstResponder))")
+
+        atLaunch.orderOut(nil)
+        browser.windowWillClose(first)
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        #expect(browser.openWindow() === first)
+        let again = try #require(shown.last)
+        #expect(again !== atLaunch)
+        #expect(await waitUntil(5) { addressEditor(in: again) != nil }, "\(String(describing: again.firstResponder))")
     }
 
     /// ⌘T and ⌘L from a link's window bring the main window forward, whose field gets the keys.
@@ -289,18 +325,18 @@ struct WindowKeysTests {
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
         defer { browser.close(tab) }
         let window = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
-        browser.window = window
-        defer { browser.window = nil }
+        browser.windows[0].nsWindow = window
+        defer { browser.windows[0].nsWindow = nil }
 
-        let token = browser.addressFocusToken
-        browser.focusAddressFromMenu(newTab: false)
+        let token = browser.commandWindow.addressFocusToken
+        browser.commandWindow.focusAddressFromMenu(newTab: false)
         #expect(window.frontings == 1)
-        #expect(browser.addressFocusToken != token)
-        #expect(browser.selectedTab === tab, "Open Location keeps the tab")
+        #expect(browser.commandWindow.addressFocusToken != token)
+        #expect(browser.commandWindow.selectedTab === tab, "Open Location keeps the tab")
 
-        browser.focusAddressFromMenu(newTab: true)
+        browser.commandWindow.focusAddressFromMenu(newTab: true)
         #expect(window.frontings == 2)
-        #expect(browser.selectedTabID == nil, "New Tab shows the start page")
+        #expect(browser.commandWindow.selectedTabID == nil, "New Tab shows the start page")
     }
 
     /// ⌘= zooms in like Zoom In's ⌘+; the shifted key, which types "+", is left to the menu.
@@ -321,18 +357,30 @@ struct WindowKeysTests {
         #expect(tab.webView.pageZoom == 1.1)
     }
 
-    /// The whole window, far off screen, showing one loaded tab.
+    /// The whole window, far off screen, showing one loaded tab, with the sidebar and no Zen mode:
+    /// the session an earlier test's browser saves a moment after its last change may still be
+    /// landing as this one reads it.
     private func shownBrowser() async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()
+        let first = browser.commandWindow
+        if first.isZenMode { first.toggleZenMode() }
+        if !first.isSidebarVisible { first.toggleSidebar() }
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(first))
+        // What `BrowserNSWindow` tells the model as it opens.
+        first.nsWindow = window
         window.orderFrontRegardless()
         #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil && tab.webView.window === window })
         try await Task.sleep(for: .milliseconds(300))
         return (browser, tab, window)
+    }
+
+    /// The address bar's field editor, while it has the keyboard.
+    private func addressEditor(in window: NSWindow) -> NSTextView? {
+        (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor && $0.delegate is URLTextField ? $0 : nil }
     }
 
     /// The tab name field's editor, once it has the keyboard.

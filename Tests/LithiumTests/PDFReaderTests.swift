@@ -17,26 +17,26 @@ extension BrowserTests {
         #expect(tab.pdf?.outline.map(\.label) == ["Page 1", "Page 2", "Page 3"])
         #expect(tab.pdf?.outline.map(\.pageIndex) == [0, 1, 2])
 
-        await browser.find.update(query: "revenue", in: tab.findTarget)
-        #expect(browser.find.matchCount == 2)
-        await browser.find.step(forward: true, in: tab.findTarget)
-        #expect(browser.find.currentMatch == 2)
+        await browser.commandWindow.find.update(query: "revenue", in: tab.findTarget)
+        #expect(browser.commandWindow.find.matchCount == 2)
+        await browser.commandWindow.find.step(forward: true, in: tab.findTarget)
+        #expect(browser.commandWindow.find.currentMatch == 2)
         // Both matches, and the current one again on top in its own color.
         #expect(tab.pdf?.view.highlightedSelections?.count == 3)
-        await browser.find.step(forward: false, in: tab.findTarget)
-        #expect(browser.find.currentMatch == 1)
-        await browser.find.update(query: "", in: tab.findTarget)
+        await browser.commandWindow.find.step(forward: false, in: tab.findTarget)
+        #expect(browser.commandWindow.find.currentMatch == 1)
+        await browser.commandWindow.find.update(query: "", in: tab.findTarget)
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
 
-        await browser.find.update(query: "costs", in: tab.findTarget)
+        await browser.commandWindow.find.update(query: "costs", in: tab.findTarget)
         #expect(tab.pdf?.view.highlightedSelections?.count == 2)
-        browser.find.hide()
+        browser.commandWindow.find.hide()
         #expect(tab.pdf?.view.highlightedSelections?.isEmpty ?? true)
         // ⌘G with the bar closed searches the PDF again: it forgot its matches.
-        browser.find.show()
-        await browser.find.step(forward: true, in: tab.findTarget)
-        #expect(browser.find.matchCount == 1)
-        #expect(browser.find.currentMatch == 1)
+        browser.commandWindow.find.show()
+        await browser.commandWindow.find.step(forward: true, in: tab.findTarget)
+        #expect(browser.commandWindow.find.matchCount == 1)
+        #expect(browser.commandWindow.find.currentMatch == 1)
         #expect(tab.pdf?.view.highlightedSelections?.count == 2)
     }
 
@@ -378,8 +378,8 @@ extension BrowserTests {
         #expect(tab.pdf?.unlock(with: "wrong") == false)
         #expect(tab.pdf?.unlock(with: "open sesame") == true)
         #expect(tab.pdf?.pageCount == 1)
-        await browser.find.update(query: "hidden", in: tab.findTarget)
-        #expect(browser.find.matchCount == 1)
+        await browser.commandWindow.find.update(query: "hidden", in: tab.findTarget)
+        #expect(browser.commandWindow.find.matchCount == 1)
     }
 
     /// Summaries read the PDF's own text and selection: the web view under the viewer has none.

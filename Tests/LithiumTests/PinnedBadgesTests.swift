@@ -166,7 +166,7 @@ struct PinnedBadges {
         let pin = try #require(browser.pins.first { $0.id == tab.pinID })
         let other = browser.newTab()
         browser.newTab()
-        #expect(browser.selectedTabID != tab.id)
+        #expect(browser.commandWindow.selectedTabID != tab.id)
 
         let granted = try await tab.webView.callAsyncJavaScript(
             "if (String(Notification).includes('[native code]')) return 'native'; return await Notification.requestPermission()", contentWorld: .page
@@ -176,12 +176,12 @@ struct PinnedBadges {
         #expect(await waitUntil(5) { tab.unread.shown == .dot })
 
         // Closing the selected tab moves the selection by itself: not the user opening this one.
-        browser.closeSelectedTab()
+        browser.commandWindow.closeSelectedTab()
         browser.close(other)
         #expect(tab.unread.shown == .dot)
 
         browser.activate(pin)
-        #expect(browser.selectedTabID == tab.id)
+        #expect(browser.commandWindow.selectedTabID == tab.id)
         #expect(tab.unread.shown == nil)
 
         browser.unpin(pin)

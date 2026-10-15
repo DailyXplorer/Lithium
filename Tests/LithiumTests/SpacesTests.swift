@@ -19,16 +19,16 @@ struct SpacesTests {
         #expect(browser.allSpaces == [.main])
         let tab = browser.newTab(url: page("a"))
         #expect(tab.spaceID == Space.mainID)
-        #expect(browser.regularTabs.map(\.id) == [tab.id])
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [tab.id])
         #expect(browser.spaceStore(for: Space.mainID) == nil)
         browser.pin(tab)
-        #expect(browser.spacePins.map(\.id) == browser.pins.map(\.id))
+        #expect(browser.commandWindow.spacePins.map(\.id) == browser.pins.map(\.id))
         #expect(browser.pins.first?.spaceID == nil)
 
-        browser.switchSpace(by: 1)
-        browser.switchToSpace(at: 1)
-        #expect(browser.currentSpaceID == Space.mainID)
-        #expect(browser.selectedTab === tab)
+        browser.commandWindow.switchSpace(by: 1)
+        browser.commandWindow.switchToSpace(at: 1)
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
+        #expect(browser.commandWindow.selectedTab === tab)
 
         browser.saveNow()
         let session = try String(decoding: Data(contentsOf: SessionStore.fileURL), as: UTF8.self)
@@ -51,37 +51,37 @@ struct SpacesTests {
         work.name = "Work"
         browser.addSpace(work)
         #expect(browser.spaces.map(\.id) == [Space.mainID, work.id])
-        #expect(browser.currentSpaceID == work.id)
-        #expect(browser.selectedTab == nil, "a new space starts on the start page")
-        #expect(browser.regularTabs.isEmpty)
-        #expect(browser.spacePins.isEmpty)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
+        #expect(browser.commandWindow.selectedTab == nil, "a new space starts on the start page")
+        #expect(browser.commandWindow.regularTabs.isEmpty)
+        #expect(browser.commandWindow.spacePins.isEmpty)
 
         let mail = browser.newTab(url: page("mail"))
         let docs = browser.newTab(url: page("docs"))
         #expect(mail.spaceID == work.id)
         browser.pin(mail)
-        #expect(browser.spacePins.count == 1)
+        #expect(browser.commandWindow.spacePins.count == 1)
         #expect(browser.pins.count == 2)
-        #expect(browser.regularTabs.map(\.id) == [docs.id])
-        browser.selectItem(at: 0)
-        #expect(browser.selectedTab === mail)
-        browser.selectAdjacentTab(1)
-        #expect(browser.selectedTab === docs)
-        browser.selectAdjacentTab(1)
-        #expect(browser.selectedTab === mail, "Next Tab wraps around within the space")
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [docs.id])
+        browser.commandWindow.selectItem(at: 0)
+        #expect(browser.commandWindow.selectedTab === mail)
+        browser.commandWindow.selectAdjacentTab(1)
+        #expect(browser.commandWindow.selectedTab === docs)
+        browser.commandWindow.selectAdjacentTab(1)
+        #expect(browser.commandWindow.selectedTab === mail, "Next Tab wraps around within the space")
 
-        browser.switchToSpace(Space.mainID)
-        #expect(browser.selectedTab === home)
-        #expect(browser.regularTabs.map(\.id) == [home.id])
-        #expect(browser.spacePins.map(\.url) == [page("home-favorite")])
-        browser.selectItem(at: 0)
-        #expect(browser.selectedTab === homeFavorite)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        #expect(browser.commandWindow.selectedTab === home)
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [home.id])
+        #expect(browser.commandWindow.spacePins.map(\.url) == [page("home-favorite")])
+        browser.commandWindow.selectItem(at: 0)
+        #expect(browser.commandWindow.selectedTab === homeFavorite)
 
-        browser.switchSpace(by: 1)
-        #expect(browser.currentSpaceID == work.id)
-        #expect(browser.selectedTab === mail)
-        browser.switchSpace(by: 1)
-        #expect(browser.currentSpaceID == work.id, "the last space is the end")
+        browser.commandWindow.switchSpace(by: 1)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
+        #expect(browser.commandWindow.selectedTab === mail)
+        browser.commandWindow.switchSpace(by: 1)
+        #expect(browser.commandWindow.currentSpaceID == work.id, "the last space is the end")
 
         // Extensions and agents see every space's tabs.
         #expect(Set(browser.navigationOrder.map(\.id)) == Set(browser.tabs.map(\.id)))
@@ -98,13 +98,13 @@ struct SpacesTests {
         let report = browser.newTab(url: page("report"))
 
         browser.select(home)
-        #expect(browser.currentSpaceID == Space.mainID)
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
         browser.select(report)
-        #expect(browser.currentSpaceID == work.id)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
 
         browser.close(report)
-        #expect(browser.currentSpaceID == work.id)
-        #expect(browser.selectedTab == nil)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
+        #expect(browser.commandWindow.selectedTab == nil)
     }
 
     /// With its own data, a space's pages (popups, pages it opens, after sleep too) use its own
@@ -133,7 +133,7 @@ struct SpacesTests {
         tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
         #expect(tab.webView.configuration.websiteDataStore.identifier == work.id, "a tab waking keeps its space's cookies")
 
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         let home = browser.newTab(url: page("home"))
         #expect(home.webView.configuration.websiteDataStore.identifier == nil)
         #expect(home.webView.configuration.websiteDataStore.isPersistent)
@@ -161,7 +161,7 @@ struct SpacesTests {
             await target.httpCookieStore.setCookie(cookie)
         }
 
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         let settings = browser.newTab(url: Internal.settingsURL)
         #expect(await poll(30) { (try? await settings.webView.evaluateJavaScript("typeof call", in: nil, contentWorld: .page) as? String) == "function" })
         let site = try await settings.webView.callAsyncJavaScript("return await call('site', host)", arguments: ["host": host], contentWorld: .page) as? [String: Any]
@@ -195,8 +195,8 @@ struct SpacesTests {
         browser.deleteSpace(work.id)
         #expect(browser.spaces.map(\.id) == [Space.mainID])
         #expect(!browser.hasSpaces)
-        #expect(browser.currentSpaceID == Space.mainID)
-        #expect(browser.selectedTab === home)
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
+        #expect(browser.commandWindow.selectedTab === home)
         #expect(browser.tabs.map(\.id) == [home.id])
         #expect(browser.pins.isEmpty)
         #expect(!browser.canReopenClosedTab)
@@ -219,28 +219,28 @@ struct SpacesTests {
         let docs = browser.newTab(url: page("docs"))
         browser.newTab(url: page("mail"))
         browser.select(docs)
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.saveNow()
 
         let again = Browser()
         defer { reset(again) }
         #expect(again.spaces == browser.spaces)
-        #expect(again.currentSpaceID == Space.mainID)
-        #expect(again.selectedTab?.url == page("home"))
-        #expect(again.regularTabs.map(\.url) == [page("home")])
-        #expect(again.spacePins.isEmpty)
-        again.switchToSpace(work.id)
-        #expect(again.selectedTab?.url == page("docs"))
-        #expect(again.regularTabs.map(\.url) == [page("mail"), page("docs")])
-        #expect(again.spacePins.map(\.url) == [page("work-favorite")])
-        #expect(again.selectedTab?.dataStore.identifier == work.id)
+        #expect(again.commandWindow.currentSpaceID == Space.mainID)
+        #expect(again.commandWindow.selectedTab?.url == page("home"))
+        #expect(again.commandWindow.regularTabs.map(\.url) == [page("home")])
+        #expect(again.commandWindow.spacePins.isEmpty)
+        again.commandWindow.switchToSpace(work.id)
+        #expect(again.commandWindow.selectedTab?.url == page("docs"))
+        #expect(again.commandWindow.regularTabs.map(\.url) == [page("mail"), page("docs")])
+        #expect(again.commandWindow.spacePins.map(\.url) == [page("work-favorite")])
+        #expect(again.commandWindow.selectedTab?.dataStore.identifier == work.id)
 
         SessionStore.save(Session(tabs: [.init(url: page("lost"), title: "Lost", customTitle: nil, pinID: nil, spaceID: UUID())], selectedIndex: 0))
         let lost = Browser()
         defer { reset(lost) }
         #expect(lost.spaces.isEmpty)
-        #expect(lost.regularTabs.map(\.url) == [page("lost")])
-        #expect(lost.selectedTab?.spaceID == Space.mainID)
+        #expect(lost.commandWindow.regularTabs.map(\.url) == [page("lost")])
+        #expect(lost.commandWindow.selectedTab?.spaceID == Space.mainID)
     }
 
     /// A file with more spaces than any build saves (edited by hand) brings back the first
@@ -256,8 +256,8 @@ struct SpacesTests {
         #expect(browser.spaces.count == Space.limit)
         #expect(browser.spaces.first == .main)
         #expect(!browser.spaces.contains { $0.id == last.id })
-        #expect(browser.currentSpaceID == Space.mainID)
-        #expect(browser.regularTabs.map(\.url) == [page("last")])
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
+        #expect(browser.commandWindow.regularTabs.map(\.url) == [page("last")])
     }
 
     /// The address bar suggests another space's tabs and favorites only while neither space keeps
@@ -273,14 +273,14 @@ struct SpacesTests {
         browser.addSpace(work)
         browser.newTab(url: page("work-mail"))
         browser.pin(browser.newTab(url: page("work-favorite-mail")))
-        defer { browser.suggestions.clear() }
-        func suggested() -> Set<URL> { Set(browser.suggestions.items.compactMap(\.url)) }
+        defer { browser.commandWindow.suggestions.clear() }
+        func suggested() -> Set<URL> { Set(browser.commandWindow.suggestions.items.compactMap(\.url)) }
 
-        browser.addressTextChanged("mail")
+        browser.commandWindow.addressTextChanged("mail")
         #expect(suggested() == [page("work-mail"), page("work-favorite-mail")])
 
-        browser.switchToSpace(Space.mainID)
-        browser.addressTextChanged("mail")
+        browser.commandWindow.switchToSpace(Space.mainID)
+        browser.commandWindow.addressTextChanged("mail")
         #expect(suggested() == [page("home-mail"), page("side-mail")], "spaces sharing cookies still suggest each other's")
     }
 
@@ -341,20 +341,20 @@ struct SpacesTests {
         browser.addSpace(work)
 
         browser.openFromOtherApp(page("link"))
-        let link = try #require(browser.selectedTab)
+        let link = try #require(browser.commandWindow.selectedTab)
         #expect(link.spaceID == work.id)
 
         browser.close(link)
-        browser.switchToSpace(Space.mainID)
+        browser.commandWindow.switchToSpace(Space.mainID)
         browser.reopenClosedTab()
-        #expect(browser.currentSpaceID == work.id)
-        let reopened = try #require(browser.selectedTab)
+        #expect(browser.commandWindow.currentSpaceID == work.id)
+        let reopened = try #require(browser.commandWindow.selectedTab)
         #expect(reopened.url == page("link"))
         #expect(reopened.spaceID == work.id)
 
         browser.duplicate(reopened)
-        #expect(browser.selectedTab?.spaceID == work.id)
-        #expect(browser.regularTabs.count == 2)
+        #expect(browser.commandWindow.selectedTab?.spaceID == work.id)
+        #expect(browser.commandWindow.regularTabs.count == 2)
     }
 
     /// Favorites move within their own space's grid, and a tab pinned at a slot lands there.
@@ -364,11 +364,11 @@ struct SpacesTests {
         for name in ["a", "b"] { browser.pin(browser.newTab(url: page(name))) }
         browser.addSpace(browser.newSpaceDraft())
         for name in ["c", "d"] { browser.pin(browser.newTab(url: page(name))) }
-        let d = browser.spacePins[1]
+        let d = browser.commandWindow.spacePins[1]
         browser.movePin(id: d.id, to: 0)
-        #expect(browser.spacePins.map(\.url) == [page("d"), page("c")])
+        #expect(browser.commandWindow.spacePins.map(\.url) == [page("d"), page("c")])
         browser.pin(browser.newTab(url: page("e")), at: 1)
-        #expect(browser.spacePins.map(\.url) == [page("d"), page("e"), page("c")])
+        #expect(browser.commandWindow.spacePins.map(\.url) == [page("d"), page("e"), page("c")])
         #expect(browser.pins(in: Space.mainID).map(\.url) == [page("a"), page("b")])
     }
 
@@ -381,25 +381,25 @@ struct SpacesTests {
         blank.name = "  "
         blank.separatesData = true
         browser.addSpace(blank)
-        #expect(browser.currentSpace.name == "Space 2")
+        #expect(browser.commandWindow.currentSpace.name == "Space 2")
         #expect(browser.newSpaceDraft().color != blank.color)
         #expect(browser.newSpaceDraft().icon != blank.icon)
 
-        var edited = browser.currentSpace
+        var edited = browser.commandWindow.currentSpace
         edited.name = "Clients"
         edited.icon = Phosphor.folder.rawValue
         edited.separatesData = false
         browser.updateSpace(edited)
-        #expect(browser.currentSpace.name == "Clients")
-        #expect(browser.currentSpace.icon == Phosphor.folder.rawValue)
-        #expect(browser.currentSpace.separatesData)
+        #expect(browser.commandWindow.currentSpace.name == "Clients")
+        #expect(browser.commandWindow.currentSpace.icon == Phosphor.folder.rawValue)
+        #expect(browser.commandWindow.currentSpace.separatesData)
 
         while browser.canAddSpace { browser.addSpace(browser.newSpaceDraft()) }
         #expect(browser.spaces.count == Space.limit)
-        browser.switchToSpace(at: 1)
-        #expect(browser.currentSpace.name == "Clients")
-        browser.switchToSpace(at: 0)
-        #expect(browser.currentSpaceID == Space.mainID)
+        browser.commandWindow.switchToSpace(at: 1)
+        #expect(browser.commandWindow.currentSpace.name == "Clients")
+        browser.commandWindow.switchToSpace(at: 0)
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
     }
 
     /// The peeked sidebar slides back on `tabPickToken`: making, switching (a click, ⌃1…⌃9, a
@@ -409,21 +409,21 @@ struct SpacesTests {
         defer { reset(browser) }
         let home = browser.newTab(url: page("home"))
         browser.addSpace(browser.newSpaceDraft())
-        let work = browser.currentSpaceID
+        let work = browser.commandWindow.currentSpaceID
         browser.newTab(url: page("work"))
-        let picks = browser.tabPickToken
+        let picks = browser.commandWindow.tabPickToken
 
-        browser.switchToSpace(Space.mainID)
-        #expect(browser.selectedTab === home)
-        browser.switchToSpace(at: 1)
-        browser.switchSpace(by: -1)
+        browser.commandWindow.switchToSpace(Space.mainID)
+        #expect(browser.commandWindow.selectedTab === home)
+        browser.commandWindow.switchToSpace(at: 1)
+        browser.commandWindow.switchSpace(by: -1)
         browser.addSpace(browser.newSpaceDraft())
-        #expect(browser.selectedTab == nil)
-        browser.deleteSpace(browser.currentSpaceID)
-        #expect(browser.currentSpaceID == work)
+        #expect(browser.commandWindow.selectedTab == nil)
+        browser.deleteSpace(browser.commandWindow.currentSpaceID)
+        #expect(browser.commandWindow.currentSpaceID == work)
         browser.deleteSpace(work)
-        #expect(browser.currentSpaceID == Space.mainID)
-        #expect(browser.tabPickToken == picks)
+        #expect(browser.commandWindow.currentSpaceID == Space.mainID)
+        #expect(browser.commandWindow.tabPickToken == picks)
     }
 
     /// Something opened from the peeked sidebar keeps it out until it is done: a tab's name being
@@ -434,21 +434,21 @@ struct SpacesTests {
         let tab = browser.newTab(url: page("home"))
         let window = PeekWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.borderless], backing: .buffered, defer: true)
         window.isReleasedWhenClosed = false
-        browser.window = window
-        defer { browser.window = nil }
-        #expect(!browser.holdsPeek)
+        browser.windows[0].nsWindow = window
+        defer { browser.windows[0].nsWindow = nil }
+        #expect(!browser.commandWindow.holdsPeek)
 
-        browser.renamingTabID = tab.id
-        #expect(browser.holdsPeek, "the name field")
-        browser.renamingTabID = nil
-        #expect(!browser.holdsPeek)
+        browser.commandWindow.renamingTabID = tab.id
+        #expect(browser.commandWindow.holdsPeek, "the name field")
+        browser.commandWindow.renamingTabID = nil
+        #expect(!browser.commandWindow.holdsPeek)
 
         window.children = [ShownWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)]
-        #expect(browser.holdsPeek, "a popover")
+        #expect(browser.commandWindow.holdsPeek, "a popover")
         window.children = [NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)]
-        #expect(!browser.holdsPeek, "a child window already gone")
+        #expect(!browser.commandWindow.holdsPeek, "a child window already gone")
         window.children = []
-        #expect(!browser.holdsPeek)
+        #expect(!browser.commandWindow.holdsPeek)
     }
 
     private func makeBrowser() -> Browser {

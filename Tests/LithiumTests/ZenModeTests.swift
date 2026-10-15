@@ -34,27 +34,32 @@ struct ZenModeTests {
         UserDefaults.standard.removeObject(forKey: Preference.sidebarReveal)
     }
 
-    /// Zen mode opens as the user left it, and leaves the sidebar's own setting alone; a passing
-    /// change (the screenshot's other look) isn't remembered.
+    /// Zen mode opens as the user left it, saved with the session at quit, and leaves the sidebar's
+    /// own setting alone; a passing change (the screenshot's other look) isn't what a new window
+    /// opens with.
     @Test func zenModeSurvivesRelaunchApartFromTheSidebar() {
         defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
+        SessionStore.save(Session())
         let first = Browser()
-        #expect(first.isZenMode == false)
-        #expect(first.showsSidebar)
+        #expect(first.commandWindow.isZenMode == false)
+        #expect(first.commandWindow.showsSidebar)
 
-        first.toggleZenMode()
-        #expect(first.isZenMode)
-        #expect(first.isSidebarVisible)
-        #expect(!first.showsSidebar)
-        #expect(Browser().isZenMode)
+        first.commandWindow.toggleZenMode()
+        #expect(first.commandWindow.isZenMode)
+        #expect(first.commandWindow.isSidebarVisible)
+        #expect(!first.commandWindow.showsSidebar)
+        first.saveNow()
+        #expect(Browser().commandWindow.isZenMode)
 
-        first.isZenMode = false
-        #expect(Browser().isZenMode)
+        first.commandWindow.isZenMode = false
+        #expect(UserDefaults.standard.bool(forKey: Preference.zenMode))
+        #expect(Browser().commandWindow.isZenMode)
 
-        first.isZenMode = true
-        first.toggleZenMode()
-        #expect(first.showsSidebar)
-        #expect(Browser().isZenMode == false)
+        first.commandWindow.isZenMode = true
+        first.commandWindow.toggleZenMode()
+        #expect(first.commandWindow.showsSidebar)
+        first.saveNow()
+        #expect(Browser().commandWindow.isZenMode == false)
     }
 
     /// Show Sidebar (⌘B, the top bar's button) in Zen mode leaves it with the sidebar shown, even
@@ -65,16 +70,19 @@ struct ZenModeTests {
             UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible)
         }
         let browser = Browser()
-        browser.toggleSidebar()
-        browser.toggleZenMode()
-        #expect(!browser.showsSidebar)
+        let window = browser.commandWindow
+        if window.isZenMode { window.toggleZenMode() }
+        if window.isSidebarVisible { window.toggleSidebar() }
+        window.toggleZenMode()
+        #expect(!window.showsSidebar)
 
-        browser.toggleSidebar()
-        #expect(browser.isZenMode == false)
-        #expect(browser.showsSidebar)
+        window.toggleSidebar()
+        #expect(window.isZenMode == false)
+        #expect(window.showsSidebar)
+        browser.saveNow()
         let relaunched = Browser()
-        #expect(relaunched.isZenMode == false)
-        #expect(relaunched.isSidebarVisible)
+        #expect(relaunched.commandWindow.isZenMode == false)
+        #expect(relaunched.commandWindow.isSidebarVisible)
     }
 
     /// The top bar, its address bar with it, and the traffic lights go; out of Zen mode they're back.
@@ -86,7 +94,7 @@ struct ZenModeTests {
         #expect(addressField(in: window) == nil)
         #expect(close.isHidden)
 
-        browser.toggleZenMode()
+        browser.commandWindow.toggleZenMode()
         #expect(await waitUntil(5) { addressField(in: window) != nil && !close.isHidden })
     }
 
@@ -98,9 +106,9 @@ struct ZenModeTests {
         defer { window.orderOut(nil) }
         let close = try #require(window.standardWindowButton(.closeButton))
 
-        browser.requestAddressFocus()
+        browser.commandWindow.requestAddressFocus()
         #expect(await waitUntil(5) { addressEditor(in: window) != nil })
-        #expect(browser.isEditingAddress)
+        #expect(browser.commandWindow.isEditingAddress)
         #expect(!close.isHidden, "The traffic lights come with the bar")
 
         // Held while typing: past the close delay it is still there.
@@ -110,7 +118,7 @@ struct ZenModeTests {
         window.makeFirstResponder(nil)
         #expect(await waitUntil(5) { window.firstResponder === tab.contentView }, "\(String(describing: window.firstResponder))")
         #expect(await waitUntil(5) { addressField(in: window) == nil && close.isHidden })
-        #expect(!browser.isEditingAddress)
+        #expect(!browser.commandWindow.isEditingAddress)
     }
 
     /// Entering Zen mode mid-edit ends the edit, rather than leaving the new bar held out for a
@@ -119,11 +127,11 @@ struct ZenModeTests {
         defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
         let (browser, _, window) = try await shownBrowser(zen: false)
         defer { window.orderOut(nil) }
-        browser.requestAddressFocus()
+        browser.commandWindow.requestAddressFocus()
         #expect(await waitUntil(5) { addressEditor(in: window) != nil })
 
-        browser.toggleZenMode()
-        #expect(!browser.isEditingAddress)
+        browser.commandWindow.toggleZenMode()
+        #expect(!browser.commandWindow.isEditingAddress)
         #expect(await waitUntil(5) { addressField(in: window) == nil })
     }
 
@@ -135,7 +143,7 @@ struct ZenModeTests {
         let url = try #require(tab.webView.url)
 
         for command in [#selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.insertNewline(_:))] {
-            browser.requestAddressFocus()
+            browser.commandWindow.requestAddressFocus()
             #expect(await waitUntil(5) { addressEditor(in: window) != nil })
             let editor = try #require(addressEditor(in: window))
             editor.string = url.absoluteString
@@ -143,7 +151,7 @@ struct ZenModeTests {
             #expect(window.firstResponder === tab.contentView, "\(command): \(String(describing: window.firstResponder))")
         }
 
-        browser.requestAddressFocus()
+        browser.commandWindow.requestAddressFocus()
         #expect(await waitUntil(5) { addressEditor(in: window) != nil })
         let click = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 640, y: 300), modifierFlags: [],
                                                     timestamp: 0, windowNumber: window.windowNumber, context: nil,
@@ -164,32 +172,38 @@ struct ZenModeTests {
         defer { window.orderOut(nil) }
         #expect(addressField(in: window) == nil)
 
-        browser.summaries.isPanelPresented = true
+        browser.commandWindow.isSummaryPresented = true
         #expect(await waitUntil(5) { addressField(in: window) != nil })
         // Past the close delay it is still there.
         try await Task.sleep(for: .milliseconds(900))
         #expect(addressField(in: window) != nil)
 
         let other = browser.newTab(url: base.appending(path: "a"))
-        #expect(!browser.summaries.isPanelPresented)
+        #expect(!browser.commandWindow.isSummaryPresented)
         #expect(await waitUntil(5) { addressField(in: window) == nil })
 
         #expect(await waitUntil(15) { !other.isLoading && other.webView.url != nil })
-        browser.summaries.isPanelPresented = true
+        browser.commandWindow.isSummaryPresented = true
         other.load(base.appending(path: "b"))
-        #expect(!browser.summaries.isPanelPresented)
+        #expect(!browser.commandWindow.isSummaryPresented)
         browser.tabs.forEach(browser.close)
     }
 
+    /// The look is set, not toggled: the session an earlier test's browser saves a moment after
+    /// its last change may still be landing as this one reads it.
     private func shownBrowser(zen: Bool) async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()
-        if zen { browser.toggleZenMode() }
+        let first = browser.commandWindow
+        if !first.isSidebarVisible { first.toggleSidebar() }
+        if first.isZenMode != zen { first.toggleZenMode() }
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
         // Titled with its buttons, so the traffic lights exist.
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(first))
+        // What `BrowserNSWindow` tells the model as it opens.
+        first.nsWindow = window
         window.orderFrontRegardless()
         #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil && tab.webView.window === window })
         try await Task.sleep(for: .milliseconds(300))

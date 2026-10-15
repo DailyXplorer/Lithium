@@ -404,7 +404,7 @@ struct NavigationTests {
         let browser = Browser()
         let tab = browser.newTab(url: base.appending(path: "many"))
         defer {
-            browser.find.hide()
+            browser.commandWindow.find.hide()
             browser.close(tab)
         }
         // Counted in the page's rendered text: drawn in a window far off screen.
@@ -414,12 +414,12 @@ struct NavigationTests {
         window.contentView = tab.webView
         window.orderFrontRegardless()
         #expect(await waitUntil(30) { tab.webView.title == "Many" && !tab.webView.isLoading })
-        browser.find.show(focusingField: false)
-        await browser.find.update(query: "lithium", in: tab.findTarget)
-        #expect(browser.find.matchCount == 3)
+        browser.commandWindow.find.show(focusingField: false)
+        await browser.commandWindow.find.update(query: "lithium", in: tab.findTarget)
+        #expect(browser.commandWindow.find.matchCount == 3)
 
         tab.load(base.appending(path: "one"))
-        #expect(await waitUntil(15) { tab.webView.title == "One" && browser.find.matchCount == 1 })
+        #expect(await waitUntil(15) { tab.webView.title == "One" && browser.commandWindow.find.matchCount == 1 })
     }
 
     /// Closing the selected tab tells extensions (`chrome.tabs.onActivated`) which tab took over.
@@ -435,7 +435,7 @@ struct NavigationTests {
             "options.js": "chrome.tabs.onActivated.addListener(({ tabId }) => chrome.tabs.get(tabId, (tab) => { document.title = 'Activated ' + tab.url; }));",
         ]), id: id)
         browser.extensions.openOptions(id: id)
-        let options = try #require(browser.selectedTab)
+        let options = try #require(browser.commandWindow.selectedTab)
         #expect(await waitUntil(30) { options.webView.title == "Options" && !options.webView.isLoading })
 
         let (listener, base) = try await LocalHTTP.serve([
@@ -449,7 +449,7 @@ struct NavigationTests {
         _ = try await options.webView.evaluateJavaScript("document.title = 'Ready'; 0")
 
         browser.close(second)
-        #expect(browser.selectedTab === first)
+        #expect(browser.commandWindow.selectedTab === first)
         let url = base.appending(path: "first").absoluteString
         #expect(await waitUntil(10) { options.webView.title == "Activated \(url)" }, "\(options.webView.title ?? "")")
         await browser.extensions.remove(id: id)

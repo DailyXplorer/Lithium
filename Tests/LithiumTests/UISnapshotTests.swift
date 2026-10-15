@@ -84,7 +84,7 @@ struct UISnapshotTests {
         work.name = "Work"
         browser.addSpace(work)
         browser.addSpace(browser.newSpaceDraft())
-        browser.switchToSpace(work.id)
+        browser.commandWindow.switchToSpace(work.id)
         defer {
             browser.spaces.reversed().forEach { browser.deleteSpace($0.id) }
             SessionStore.save(Session())
@@ -92,7 +92,7 @@ struct UISnapshotTests {
         for isDark in [false, true] {
             let palette = SidebarPalette(style: .solid, colorHex: isDark ? "#2B2D42" : work.color ?? Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
             let bar = SpaceBar()
-                .environment(browser)
+                .environment(browser).environment(browser.windows[0])
                 .environment(\.sidebarPalette, palette)
                 .foregroundStyle(palette.ink)
                 .frame(width: Layout.sidebarWidth - 20)
@@ -204,7 +204,7 @@ struct UISnapshotTests {
         tab.customTitle = "Sign in · Shop"
         client.hub.agentTab(for: tab)?.challenge = AgentChallenge(kind: "cloudflare", page: true)
         for isDark in [false, true] {
-            let png = try render(AgentPanel(agent: client.hub).environment(browser), isDark: isDark)
+            let png = try render(AgentPanel(agent: client.hub).environment(browser).environment(browser.windows[0]), isDark: isDark)
             try png.write(to: directory.appending(path: "agent-panel-challenge-\(isDark ? "dark" : "light").png"))
         }
         browser.tabs.forEach(browser.close)
@@ -234,13 +234,13 @@ struct UISnapshotTests {
         for ask in asks {
             let confirmation = AgentConfirmation(kind: ask.kind, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: ask.action, site: ask.site)
             for isDark in [false, true] {
-                let banner = AgentConfirmationBanner(confirmation: confirmation, confirmations: confirmations).frame(width: 900).environment(browser)
+                let banner = AgentConfirmationBanner(confirmation: confirmation, confirmations: confirmations).frame(width: 900).environment(browser).environment(browser.windows[0])
                 try render(banner, isDark: isDark).write(to: directory.appending(path: "agent-banner-\(ask.kind.rawValue)-\(isDark ? "dark" : "light").png"))
             }
         }
         let elsewhere = AgentConfirmation(kind: .download, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: asks[2].action, site: "example.com")
         for isDark in [false, true] {
-            let banner = AgentConfirmationBanner(confirmation: elsewhere, confirmations: confirmations, otherTab: tab, queued: 1).frame(width: 900).environment(browser)
+            let banner = AgentConfirmationBanner(confirmation: elsewhere, confirmations: confirmations, otherTab: tab, queued: 1).frame(width: 900).environment(browser).environment(browser.windows[0])
             try render(banner, isDark: isDark).write(to: directory.appending(path: "agent-banner-other-tab-\(isDark ? "dark" : "light").png"))
         }
 
@@ -249,7 +249,7 @@ struct UISnapshotTests {
         confirmations.answer(granted.id, .allowOnSite)
         confirmations.ask(AgentConfirmation(kind: .payment, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: asks[0].action, site: "shop.example"))
         for isDark in [false, true] {
-            let png = try render(AgentPanel(agent: client.hub).environment(browser), isDark: isDark)
+            let png = try render(AgentPanel(agent: client.hub).environment(browser).environment(browser.windows[0]), isDark: isDark)
             try png.write(to: directory.appending(path: "agent-panel-grants-\(isDark ? "dark" : "light").png"))
         }
         browser.tabs.forEach(browser.close)
@@ -348,7 +348,7 @@ struct UISnapshotTests {
                 let bar = ZenTopBar(style: style, colorHex: Theme.defaultSidebarHex)
                     .foregroundStyle(palette.ink)
                     .environment(\.sidebarPalette, palette)
-                    .environment(browser)
+                    .environment(browser).environment(browser.windows[0])
                     .font(Theme.font(13))
                     .frame(width: 1100)
                     .padding(.bottom, 16)
@@ -373,7 +373,7 @@ struct UISnapshotTests {
                     let toolbar = ToolbarView()
                         .foregroundStyle(palette.ink)
                         .environment(\.sidebarPalette, palette)
-                        .environment(browser)
+                        .environment(browser).environment(browser.windows[0])
                         .font(Theme.font(13))
                         .frame(width: CGFloat(width))
                         .padding(.vertical, 8)
@@ -408,7 +408,7 @@ struct UISnapshotTests {
             .font(Theme.font(13))
             .padding(12)
             .frame(width: 220, alignment: .leading)
-            .environment(browser)
+            .environment(browser).environment(browser.windows[0])
             try render(menu, isDark: isDark).write(to: directory.appending(path: "page-menu-\(isDark ? "dark" : "light").png"))
         }
     }
@@ -484,7 +484,7 @@ struct UISnapshotTests {
             let hex = isDark ? "#2B2D42" : Theme.defaultSidebarHex
             let palette = SidebarPalette(style: .solid, colorHex: hex, scheme: isDark ? .dark : .light)
             let sidebar = SidebarView()
-                .environment(browser)
+                .environment(browser).environment(browser.windows[0])
                 .environment(\.sidebarPalette, palette)
                 .foregroundStyle(palette.ink)
                 .font(Theme.font(13))

@@ -15,8 +15,8 @@ struct TabFoldersTests {
         let a = browser.newTab(url: page("a"))
         let b = browser.newTab(url: page("b"))
         #expect(browser.folders.all.isEmpty)
-        #expect(browser.tabListRows.map(\.id) == [b.id, a.id])
-        #expect(browser.tabListEntries.map(\.index) == [0, 1])
+        #expect(browser.commandWindow.tabListRows.map(\.id) == [b.id, a.id])
+        #expect(browser.commandWindow.tabListEntries.map(\.index) == [0, 1])
 
         browser.saveNow()
         let session = try String(decoding: Data(contentsOf: SessionStore.fileURL), as: UTF8.self)
@@ -31,47 +31,47 @@ struct TabFoldersTests {
         let a = browser.newTab(url: page("a"))
         let b = browser.newTab(url: page("b"))
         let c = browser.newTab(url: page("c"))
-        #expect(browser.regularTabs.map(\.id) == [c.id, b.id, a.id])
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [c.id, b.id, a.id])
 
         let folder = browser.newFolder(with: a)
-        #expect(browser.folders.renamingID == folder.id)
-        #expect(browser.isRenaming)
+        #expect(browser.commandWindow.renamingFolderID == folder.id)
+        #expect(browser.commandWindow.isRenaming)
         browser.renameFolder(folder.id, to: "  Work ")
-        #expect(browser.spaceFolders.map(\.name) == ["Work"])
-        #expect(!browser.isRenaming)
-        browser.folders.renamingID = folder.id
+        #expect(browser.commandWindow.spaceFolders.map(\.name) == ["Work"])
+        #expect(!browser.commandWindow.isRenaming)
+        browser.commandWindow.renamingFolderID = folder.id
         browser.renameFolder(folder.id, to: "  ")
-        #expect(browser.spaceFolders.map(\.name) == ["Work"], "an empty name keeps the one it had")
+        #expect(browser.commandWindow.spaceFolders.map(\.name) == ["Work"], "an empty name keeps the one it had")
 
         #expect(a.folderID == folder.id)
-        #expect(browser.regularTabs.map(\.id) == [a.id, c.id, b.id])
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [a.id, c.id, b.id])
         #expect(browser.navigationOrder.map(\.id) == [a.id, c.id, b.id])
-        #expect(browser.tabListRows.map(\.id) == [folder.id, a.id, c.id, b.id])
-        #expect(browser.tabListEntries.map(\.index) == [0, 0, 1], "places count within the folder, then outside")
+        #expect(browser.commandWindow.tabListRows.map(\.id) == [folder.id, a.id, c.id, b.id])
+        #expect(browser.commandWindow.tabListEntries.map(\.index) == [0, 0, 1], "places count within the folder, then outside")
 
         // Dropped on the header: at the folder's end. On a row: before or after it.
-        #expect(browser.dropTab([c.id.uuidString], on: .folder(folder.id, nil)))
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [a.id, c.id])
-        #expect(browser.dropTab([b.id.uuidString], on: .folder(folder.id, 0)))
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [b.id, a.id, c.id])
-        #expect(browser.dropTab([c.id.uuidString], on: .folder(folder.id, 1)))
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [b.id, c.id, a.id])
-        #expect(browser.dropTab([b.id.uuidString], on: .folder(folder.id, 2)))
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [c.id, b.id, a.id])
-        #expect(browser.dropTab([b.id.uuidString], on: .folder(folder.id, 2)))
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [c.id, b.id, a.id], "dropped on its own row, it stays")
+        #expect(browser.commandWindow.dropTab([c.id.uuidString], on: .folder(folder.id, nil)))
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [a.id, c.id])
+        #expect(browser.commandWindow.dropTab([b.id.uuidString], on: .folder(folder.id, 0)))
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [b.id, a.id, c.id])
+        #expect(browser.commandWindow.dropTab([c.id.uuidString], on: .folder(folder.id, 1)))
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [b.id, c.id, a.id])
+        #expect(browser.commandWindow.dropTab([b.id.uuidString], on: .folder(folder.id, 2)))
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [c.id, b.id, a.id])
+        #expect(browser.commandWindow.dropTab([b.id.uuidString], on: .folder(folder.id, 2)))
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [c.id, b.id, a.id], "dropped on its own row, it stays")
 
         // Out again, on the tab list; a tab already outside folders stays where it is.
-        #expect(browser.dropTab([a.id.uuidString], on: .tabList(0)))
+        #expect(browser.commandWindow.dropTab([a.id.uuidString], on: .tabList(0)))
         #expect(a.folderID == nil)
-        #expect(browser.regularTabs.map(\.id) == [c.id, b.id, a.id])
-        #expect(!browser.dropTab([a.id.uuidString], on: .tabList(1)))
-        #expect(!browser.dropTab([a.id.uuidString], on: .folder(UUID(), nil)), "a folder no longer there")
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [c.id, b.id, a.id])
+        #expect(!browser.commandWindow.dropTab([a.id.uuidString], on: .tabList(1)))
+        #expect(!browser.commandWindow.dropTab([a.id.uuidString], on: .folder(UUID(), nil)), "a folder no longer there")
 
-        browser.selectItem(at: 0)
-        #expect(browser.selectedTab === c)
-        browser.selectAdjacentTab(1)
-        #expect(browser.selectedTab === b)
+        browser.commandWindow.selectItem(at: 0)
+        #expect(browser.commandWindow.selectedTab === c)
+        browser.commandWindow.selectAdjacentTab(1)
+        #expect(browser.commandWindow.selectedTab === b)
     }
 
     /// Collapsed, a folder shows its header and the tab shown, if it is in it, and nothing else:
@@ -89,18 +89,18 @@ struct TabFoldersTests {
         #expect(asleep.isAsleep)
 
         browser.toggleFolder(folder.id)
-        #expect(browser.spaceFolders.first?.isCollapsed == true)
-        #expect(browser.tabListRows.map(\.id) == [folder.id, loose.id])
+        #expect(browser.commandWindow.spaceFolders.first?.isCollapsed == true)
+        #expect(browser.commandWindow.tabListRows.map(\.id) == [folder.id, loose.id])
         #expect(asleep.isAsleep)
-        browser.selectItem(at: 0)
-        #expect(browser.selectedTab === loose, "the folder's hidden tabs have no number")
+        browser.commandWindow.selectItem(at: 0)
+        #expect(browser.commandWindow.selectedTab === loose, "the folder's hidden tabs have no number")
 
         browser.select(shown)
-        #expect(browser.tabListRows.map(\.id) == [folder.id, shown.id, loose.id])
+        #expect(browser.commandWindow.tabListRows.map(\.id) == [folder.id, shown.id, loose.id])
         #expect(asleep.isAsleep)
 
         browser.toggleFolder(folder.id)
-        #expect(browser.tabListRows.map(\.id) == [folder.id, asleep.id, shown.id, loose.id])
+        #expect(browser.commandWindow.tabListRows.map(\.id) == [folder.id, asleep.id, shown.id, loose.id])
         #expect(asleep.isAsleep, "expanding doesn't wake it either")
     }
 
@@ -116,11 +116,11 @@ struct TabFoldersTests {
         browser.renameFolder(folder.id, to: "Work")
 
         let agents = browser.newAgentTab(session: "s1")
-        #expect(browser.dropTab([agents.id.uuidString], on: .folder(folder.id, nil)))
+        #expect(browser.commandWindow.dropTab([agents.id.uuidString], on: .folder(folder.id, nil)))
         #expect(agents.openedByAgent == nil)
         #expect(agents.folderID == folder.id)
-        #expect(browser.agentTabs.isEmpty)
-        #expect(!browser.dropTab([b.id.uuidString], on: .agentGroup))
+        #expect(browser.commandWindow.agentTabs.isEmpty)
+        #expect(!browser.commandWindow.dropTab([b.id.uuidString], on: .agentGroup))
 
         browser.select(a)
         browser.openInSplit(b)
@@ -128,7 +128,7 @@ struct TabFoldersTests {
         browser.moveTab(a, toFolder: folder.id)
         #expect(a.folderID == folder.id)
         #expect(b.folderID == folder.id)
-        let rows = browser.tabListRows.compactMap(\.entry).filter { $0.tab.folderID == folder.id }
+        let rows = browser.commandWindow.tabListRows.compactMap(\.entry).filter { $0.tab.folderID == folder.id }
         #expect(rows.map(\.tab.id) == [agents.id, a.id], "the agent's tab, and the pair as one row")
         #expect(rows.last?.split?.partner(of: a.id) == b.id)
 
@@ -151,13 +151,13 @@ struct TabFoldersTests {
         let split = try #require(browser.split(of: a))
         let first = try #require(browser.tabs.first { $0.id == split.first })
 
-        #expect(browser.dropTab([browser.startDragging(first)], on: .folder(folder.id, nil)))
+        #expect(browser.commandWindow.dropTab([browser.startDragging(first)], on: .folder(folder.id, nil)))
         #expect(browser.splits.draggedTabID == nil)
         #expect(a.folderID == folder.id && b.folderID == folder.id)
-        let rows = browser.tabListRows.compactMap(\.entry).filter { $0.tab.folderID == folder.id }
+        let rows = browser.commandWindow.tabListRows.compactMap(\.entry).filter { $0.tab.folderID == folder.id }
         #expect(rows.count == 1 && rows.first?.split == browser.split(of: a), "the pair as one row")
 
-        #expect(browser.dropTab([browser.startDragging(first)], on: .tabList(0)))
+        #expect(browser.commandWindow.dropTab([browser.startDragging(first)], on: .tabList(0)))
         #expect(a.folderID == nil && b.folderID == nil)
         #expect(browser.split(of: a)?.contains(b.id) == true)
     }
@@ -179,15 +179,15 @@ struct TabFoldersTests {
         browser.renameFolder(later.id, to: "Later")
         browser.pin(pinned)
         #expect(pinned.folderID == nil)
-        #expect(browser.tabList(in: Space.mainID, folder: work.id).map(\.id) == [a.id, b.id, secret.id])
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: work.id).map(\.id) == [a.id, b.id, secret.id])
         browser.select(pinned)
         browser.saveNow()
 
         let again = Browser()
         defer { reset(again) }
-        #expect(again.spaceFolders.map(\.name) == ["Work", "Later"])
-        #expect(again.spaceFolders.map(\.isCollapsed) == [true, false])
-        let restored = again.tabList(in: Space.mainID, folder: work.id)
+        #expect(again.commandWindow.spaceFolders.map(\.name) == ["Work", "Later"])
+        #expect(again.commandWindow.spaceFolders.map(\.isCollapsed) == [true, false])
+        let restored = again.tabList(in: Space.mainID, window: again.commandWindow.id, folder: work.id)
         #expect(restored.map(\.url) == [page("a"), page("b")])
         #expect(restored.map(\.isAsleep) == [true, true])
         let pin = try #require(again.pins.first)
@@ -205,26 +205,26 @@ struct TabFoldersTests {
         let kept = browser.newFolder(with: a)
         browser.moveTab(c, toFolder: kept.id)
         browser.select(b)
-        browser.deleteFolder(kept.id, closingTabs: false)
+        browser.deleteFolder(kept.id, closingTabs: false, in: browser.commandWindow)
         #expect(browser.folders.all.isEmpty)
-        #expect(browser.regularTabs.map(\.id) == [a.id, c.id, b.id])
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [a.id, c.id, b.id])
         #expect([a, b, c].map(\.folderID) == [nil, nil, nil])
-        #expect(browser.selectedTab === b)
+        #expect(browser.commandWindow.selectedTab === b)
 
         let closed = browser.newFolder(with: a)
         browser.moveTab(c, toFolder: closed.id)
         browser.select(a)
-        browser.deleteFolder(closed.id, closingTabs: true)
+        browser.deleteFolder(closed.id, closingTabs: true, in: browser.commandWindow)
         #expect(browser.folders.all.isEmpty)
-        #expect(browser.regularTabs.map(\.id) == [b.id])
-        #expect(browser.selectedTab === b)
+        #expect(browser.commandWindow.regularTabs.map(\.id) == [b.id])
+        #expect(browser.commandWindow.selectedTab === b)
         browser.reopenClosedTab()
-        #expect(browser.selectedTab?.url == page("c"))
-        #expect(browser.selectedTab?.folderID == nil)
-        #expect(browser.regularTabs.first === browser.selectedTab)
+        #expect(browser.commandWindow.selectedTab?.url == page("c"))
+        #expect(browser.commandWindow.selectedTab?.folderID == nil)
+        #expect(browser.commandWindow.regularTabs.first === browser.commandWindow.selectedTab)
         // The rest come back above, in the folder's order.
         browser.reopenClosedTab()
-        #expect(browser.regularTabs.map(\.url) == [page("a"), page("c"), page("b")])
+        #expect(browser.commandWindow.regularTabs.map(\.url) == [page("a"), page("c"), page("b")])
     }
 
     /// A closed tab reopens in its folder, in its place; a copy stays in the folder, just below.
@@ -237,12 +237,12 @@ struct TabFoldersTests {
         browser.moveTab(b, toFolder: folder.id)
         browser.close(a)
         browser.reopenClosedTab()
-        let reopened = try #require(browser.selectedTab)
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [reopened.id, b.id])
+        let reopened = try #require(browser.commandWindow.selectedTab)
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [reopened.id, b.id])
 
         browser.duplicate(reopened)
-        let copy = try #require(browser.selectedTab)
-        #expect(browser.tabList(in: Space.mainID, folder: folder.id).map(\.id) == [reopened.id, copy.id, b.id])
+        let copy = try #require(browser.commandWindow.selectedTab)
+        #expect(browser.tabList(in: Space.mainID, window: browser.commandWindow.id, folder: folder.id).map(\.id) == [reopened.id, copy.id, b.id])
     }
 
     /// Each space has its own folders; a tab only goes into one of its space's, and a deleted
@@ -254,13 +254,13 @@ struct TabFoldersTests {
         var work = browser.newSpaceDraft()
         work.name = "Work"
         browser.addSpace(work)
-        #expect(browser.spaceFolders.isEmpty)
+        #expect(browser.commandWindow.spaceFolders.isEmpty)
         let report = browser.newTab(url: page("report"))
         browser.moveTab(report, toFolder: home.id)
         #expect(report.folderID == nil)
         let projects = browser.newFolder(with: report)
         #expect(projects.space == work.id)
-        #expect(browser.spaceFolders.map(\.id) == [projects.id])
+        #expect(browser.commandWindow.spaceFolders.map(\.id) == [projects.id])
 
         browser.deleteSpace(work.id)
         #expect(browser.folders.all.map(\.id) == [home.id])
@@ -271,11 +271,11 @@ struct TabFoldersTests {
         let browser = makeBrowser()
         defer { reset(browser) }
         let folder = browser.newFolder()
-        #expect(browser.holdsPeek)
+        #expect(browser.commandWindow.holdsPeek)
         #expect(browser.dismissOverlay())
-        #expect(!browser.isRenaming)
-        #expect(!browser.holdsPeek)
-        #expect(browser.spaceFolders.map(\.name) == [folder.name])
+        #expect(!browser.commandWindow.isRenaming)
+        #expect(!browser.commandWindow.holdsPeek)
+        #expect(browser.commandWindow.spaceFolders.map(\.name) == [folder.name])
     }
 
     private func makeBrowser() -> Browser {

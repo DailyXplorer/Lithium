@@ -638,7 +638,7 @@ struct AgentInputTests {
             ])
             // The page counts as shown, though the user never sees it, and the selection stays theirs.
             #expect(try await page(tab, "return document.visibilityState") as? String == "visible")
-            #expect(browser.selectedTabID == mine.id)
+            #expect(browser.commandWindow.selectedTabID == mine.id)
             #expect(tab.webView.window is AgentStageWindow)
             #expect(tab.webView.userWindow == nil)
 
@@ -1049,7 +1049,7 @@ struct AgentInputTests {
     @Test func resultsNameNewTabsDialogsDownloadsAndPageLoads() async throws {
         try await withAgent { client, base in
             let browser = client.browser
-            let selected = browser.selectedTabID
+            let selected = browser.commandWindow.selectedTabID
             let (id, tab) = try await open(client, base.appending(path: "results"))
             let opened = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", "Open"))])
             #expect(!opened.isError, "\(opened.content)")
@@ -1060,7 +1060,7 @@ struct AgentInputTests {
             #expect(first["openedBy"] == .string(id))
             let popup = try #require(client.tab(first["tab"]?.string ?? ""))
             #expect(popup.isInAgentGroup)
-            #expect(browser.selectedTabID == selected)
+            #expect(browser.commandWindow.selectedTabID == selected)
 
             let alerted = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "button", "Alert"))])
             #expect(!alerted.isError, "\(alerted.content)")
@@ -1084,7 +1084,7 @@ struct AgentInputTests {
     @Test func everyTabAnAgentsClickOpensIsTheAgentsAndUnselected() async throws {
         try await withAgent { client, base in
             let browser = client.browser
-            let selected = browser.selectedTabID
+            let selected = browser.commandWindow.selectedTabID
             let (id, tab) = try await open(client, base.appending(path: "results"))
             let usersTabs = browser.tabs.filter { !$0.isInAgentGroup }.count
             let plain = try await ref(client, id, "link", "Plain")
@@ -1106,7 +1106,7 @@ struct AgentInputTests {
                 #expect(opened.isInAgentGroup, "\(name)")
                 #expect(await waitUntil(5) { opened.url?.path() == "/form" }, "\(name)")
                 #expect(tab.url?.path() == "/results", "\(name)")
-                #expect(browser.selectedTabID == selected, "\(name)")
+                #expect(browser.commandWindow.selectedTabID == selected, "\(name)")
             }
             #expect(browser.tabs.filter { !$0.isInAgentGroup }.count == usersTabs)
         }
@@ -1145,7 +1145,7 @@ struct AgentInputTests {
                 try await Task.sleep(for: .milliseconds(1500))
                 let opened = browser.tabs.filter { !tabs.contains($0.id) }
                 #expect(opened.count == 1, "\(next)")
-                #expect(opened.allSatisfy { !$0.isInAgentGroup && browser.selectedTabID == $0.id }, "\(next)")
+                #expect(opened.allSatisfy { !$0.isInAgentGroup && browser.commandWindow.selectedTabID == $0.id }, "\(next)")
                 #expect(confirmations.pending.map(\.kind) == [.payment], "\(next)")
                 confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
                 let clicked = await waiting.value
@@ -1162,7 +1162,7 @@ struct AgentInputTests {
             try press(CGPoint(x: 60, y: 175), [.command, .shift])
             #expect(await waitUntil(5) { browser.tabs.contains { !tabs.contains($0.id) } })
             let opened = browser.tabs.filter { !tabs.contains($0.id) }
-            #expect(opened.count == 1 && opened.allSatisfy { !$0.isInAgentGroup && browser.selectedTabID == $0.id })
+            #expect(opened.count == 1 && opened.allSatisfy { !$0.isInAgentGroup && browser.commandWindow.selectedTabID == $0.id })
             #expect((await waiting.value).code == "user_interrupted")
             #expect(confirmations.pending.isEmpty)
             #expect(browser.tabs.filter(\.isInAgentGroup).count == agents)

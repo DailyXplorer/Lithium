@@ -238,7 +238,7 @@ extension BrowserTests {
         browser.permissions.set(.allow, for: .camera, host: "www.example.com")
         defer { browser.permissions.set(nil, for: .camera, host: "www.example.com") }
         browser.openSettings(section: "site/www.example.com")
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         defer { browser.close(tab) }
         var page: [String: Any]?
         let deadline = Date().addingTimeInterval(15)
@@ -295,7 +295,7 @@ extension BrowserTests {
     @Test func settingsKeepsRuleCountBehindDetails() async throws {
         let browser = Browser()
         browser.openSettings(section: "privacy")
-        let tab = try #require(browser.selectedTab)
+        let tab = try #require(browser.commandWindow.selectedTab)
         defer { browser.close(tab) }
         var page: [String: Any]?
         let deadline = Date().addingTimeInterval(15)

@@ -5,6 +5,7 @@ import SwiftUI
 struct SplitPages: View {
     let split: TabSplit
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         if let first = browser.tabs.first(where: { $0.id == split.first }),
@@ -12,7 +13,7 @@ struct SplitPages: View {
             SplitLayout(
                 isStacked: split.isStacked,
                 fraction: split.fraction,
-                focused: split.side(of: browser.selectedTabID ?? first.id) ?? .first,
+                focused: split.side(of: window.selectedTabID ?? first.id) ?? .first,
                 resize: { browser.resizeSplit(of: first, to: $0) },
                 menu: { SplitMenu(tab: first, isStacked: split.isStacked) },
                 first: { SplitPane(tab: first) },
@@ -117,16 +118,17 @@ private struct SplitDivider: View {
 private struct SplitPane: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         Group {
-            if browser.videoPopout.tab === tab {
-                PoppedOutPlaceholder(popout: browser.videoPopout)
+            if window.videoPopout.tab === tab {
+                PoppedOutPlaceholder(popout: window.videoPopout)
             } else {
                 PageContainer(view: tab.webView)
                     .overlay {
                         if let pdf = tab.pdf {
-                            SplitPDFReader(reader: pdf, tabID: tab.id, takesKeyboard: browser.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
+                            SplitPDFReader(reader: pdf, tabID: tab.id, takesKeyboard: window.selectedTabID == tab.id).id(ObjectIdentifier(pdf))
                         }
                     }
                     .overlay { BlockedPageLayer(tab: tab) }
@@ -138,8 +140,8 @@ private struct SplitPane: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if browser.showsFindBar(over: tab) {
-                FindBar(tab: tab)
+            if window.showsFindBar(over: tab) {
+                FindBar(find: window.find, tab: tab)
                     .padding(.top, tab.pdf == nil ? 10 : 50)
                     .padding(.horizontal, 10)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -186,17 +188,18 @@ struct SplitPDFReader: NSViewRepresentable {
 struct SplitTabRow: View {
     let split: TabSplit
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         if let first = browser.tabs.first(where: { $0.id == split.first }),
            let second = browser.tabs.first(where: { $0.id == split.second }) {
-            let isShown = browser.selectedTabID.map(split.contains) ?? false
-            SidebarRow(isSelected: isShown, action: { browser.selectSplit(showing: first) }) {
-                half(first, dimmed: isShown && browser.selectedTabID != first.id)
+            let isShown = window.selectedTabID.map(split.contains) ?? false
+            SidebarRow(isSelected: isShown, action: { window.selectSplit(showing: first) }) {
+                half(first, dimmed: isShown && window.selectedTabID != first.id)
                 Rectangle()
                     .fill(.primary.opacity(0.15))
                     .frame(width: 1, height: 16)
-                half(second, dimmed: isShown && browser.selectedTabID != second.id)
+                half(second, dimmed: isShown && window.selectedTabID != second.id)
             }
             // As its first side: moving one side to a folder brings the other along.
             .draggable(browser.startDragging(first))
@@ -229,17 +232,19 @@ struct SplitTabRow: View {
     }
 }
 
-/// Over the page while a tab is dragged from the sidebar: dropped on either side, it opens there.
+/// Over the page while a tab is dragged from this window's sidebar: dropped on either side, it
+/// opens there.
 struct SplitDropLayer: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        if let dragged = browser.splits.draggedTabID, let selected = browser.selectedTab,
-           selected.id != dragged, selected.isInTabList {
+        if let dragged = browser.tabs.first(where: { $0.id == browser.splits.draggedTabID }), dragged.windowID == window.id,
+           let selected = window.selectedTab, selected !== dragged, selected.isInTabList {
             // A stacked split stays stacked, so its sides are top and bottom.
             SplitDropZone(isStacked: browser.split(of: selected)?.isStacked == true,
                           isDragging: { browser.splits.draggedTabID != nil }, carries: { browser.carriesDraggedTab($0) }) { item, side in
-                withAnimation(.snappy(duration: 0.2)) { browser.dropForSplit(item, on: side) }
+                withAnimation(.snappy(duration: 0.2)) { window.dropForSplit(item, on: side) }
             }
         }
     }

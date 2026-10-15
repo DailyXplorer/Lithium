@@ -18,7 +18,7 @@ struct SplitViewTests {
     /// A browser whose tab list reads `names` top to bottom, and nothing else in it.
     private func browser(with names: [String]) -> Browser {
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         for name in names.reversed() { browser.newTab(url: page(name)) }
         return browser
     }
@@ -37,7 +37,7 @@ struct SplitViewTests {
 
     /// The tab list as the sidebar shows it: a pair reads "a|c".
     private func rows(_ browser: Browser) -> [String] {
-        browser.tabListEntries.map { entry in
+        browser.commandWindow.tabListEntries.map { entry in
             guard let split = entry.split else { return name(entry.tab) }
             return [split.first, split.second].map { id in name(browser.tabs.first { $0.id == id }) }.joined(separator: "|")
         }
@@ -50,14 +50,14 @@ struct SplitViewTests {
         browser.select(tab("a", in: browser))
         browser.openInSplit(tab("c", in: browser))
         #expect(rows(browser) == ["a|c", "b"])
-        #expect(name(browser.selectedTab) == "c")
+        #expect(name(browser.commandWindow.selectedTab) == "c")
 
-        browser.selectSplit(showing: tab("a", in: browser))
-        #expect(name(browser.selectedTab) == "c")
+        browser.commandWindow.selectSplit(showing: tab("a", in: browser))
+        #expect(name(browser.commandWindow.selectedTab) == "c")
         browser.select(tab("b", in: browser))
-        browser.selectSplit(showing: tab("a", in: browser))
-        #expect(name(browser.selectedTab) == "a")
-        #expect(name(browser.shownPartner) == "c")
+        browser.commandWindow.selectSplit(showing: tab("a", in: browser))
+        #expect(name(browser.commandWindow.selectedTab) == "a")
+        #expect(name(browser.commandWindow.shownPartner) == "c")
     }
 
     @Test func openInSplitViewPairsWithTheSelectedTabAndFocusesIt() {
@@ -65,14 +65,14 @@ struct SplitViewTests {
         browser.select(tab("a", in: browser))
         browser.openInSplit(tab("c", in: browser))
         #expect(rows(browser) == ["a|c", "b"])
-        #expect(name(browser.selectedTab) == "c")
-        #expect(name(browser.shownPartner) == "a")
+        #expect(name(browser.commandWindow.selectedTab) == "c")
+        #expect(name(browser.commandWindow.shownPartner) == "a")
 
         // Another tab picked shows alone; either side of the pair brings both back.
         browser.select(tab("b", in: browser))
-        #expect(browser.shownPartner == nil)
+        #expect(browser.commandWindow.shownPartner == nil)
         browser.select(tab("a", in: browser))
-        #expect(name(browser.shownPartner) == "c")
+        #expect(name(browser.commandWindow.shownPartner) == "c")
     }
 
     @Test func openInSplitViewOnTheSelectedTabTakesItsNeighbour() {
@@ -80,10 +80,10 @@ struct SplitViewTests {
         browser.select(tab("b", in: browser))
         browser.openInSplit(tab("b", in: browser))
         #expect(rows(browser) == ["a|b"])
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
 
         let alone = self.browser(with: ["a"])
-        #expect(alone.splitPartner(for: tab("a", in: alone)) == nil)
+        #expect(alone.commandWindow.splitPartner(for: tab("a", in: alone)) == nil)
     }
 
     /// ⌘W closes the focused side; the other fills the window.
@@ -91,15 +91,15 @@ struct SplitViewTests {
         let browser = browser(with: ["a", "b", "c"])
         browser.select(tab("a", in: browser))
         browser.openInSplit(tab("c", in: browser))
-        browser.closeSelectedTab()
+        browser.commandWindow.closeSelectedTab()
         #expect(rows(browser) == ["a", "b"])
-        #expect(name(browser.selectedTab) == "a")
-        #expect(browser.shownPartner == nil)
+        #expect(name(browser.commandWindow.selectedTab) == "a")
+        #expect(browser.commandWindow.shownPartner == nil)
 
         browser.openInSplit(tab("b", in: browser))
         browser.close(tab("a", in: browser))
         #expect(rows(browser) == ["b"])
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     @Test func swapStackResizeAndExit() throws {
@@ -118,7 +118,7 @@ struct SplitViewTests {
 
         browser.exitSplit(of: b)
         #expect(rows(browser) == ["a", "b"])
-        #expect(name(browser.selectedTab) == "b")
+        #expect(name(browser.commandWindow.selectedTab) == "b")
     }
 
     /// Exit Split View from the pair's row: the focused side fills the page area again, in the window.
@@ -129,7 +129,7 @@ struct SplitViewTests {
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
                               styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
         func width(_ tab: Tab) -> CGFloat { tab.webView.window === window ? tab.webView.frame.width : 0 }
@@ -165,17 +165,17 @@ struct SplitViewTests {
         browser.select(tab("a", in: browser))
         let item = browser.startDragging(tab("c", in: browser))
         #expect(browser.splits.draggedTabID == tab("c", in: browser).id)
-        #expect(browser.dropForSplit(item, on: .first))
+        #expect(browser.commandWindow.dropForSplit(item, on: .first))
         #expect(rows(browser) == ["c|a", "b"])
-        #expect(name(browser.selectedTab) == "c")
+        #expect(name(browser.commandWindow.selectedTab) == "c")
         #expect(browser.splits.draggedTabID == nil)
 
         // Dropped on the right of the split, it takes the other side's place.
         browser.select(tab("a", in: browser))
-        #expect(browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
+        #expect(browser.commandWindow.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
         #expect(rows(browser) == ["a|b", "c"])
         // A tab can't go beside itself.
-        #expect(!browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .first))
+        #expect(!browser.commandWindow.dropForSplit(tab("b", in: browser).id.uuidString, on: .first))
     }
 
     /// A drag dropped off the page leaves the drop zone in the window until SwiftUI next draws;
@@ -246,7 +246,7 @@ struct SplitViewTests {
 
         // Dropped in the sidebar, the tab's drag is over.
         _ = browser.startDragging(tab("b", in: browser))
-        #expect(!browser.dropTab([item], on: .agentGroup))
+        #expect(!browser.commandWindow.dropTab([item], on: .agentGroup))
         #expect(browser.splits.draggedTabID == nil)
     }
 
@@ -276,18 +276,18 @@ struct SplitViewTests {
             browser.noteClick(event)
         }
         try click(atX: 400)
-        #expect(browser.selectedTab === b, "a click on the divider moves nothing")
+        #expect(browser.commandWindow.selectedTab === b, "a click on the divider moves nothing")
         try click(atX: 100)
-        #expect(browser.selectedTab === a)
+        #expect(browser.commandWindow.selectedTab === a)
 
         let typed = base.appending(path: "typed")
-        browser.submitAddress(typed.absoluteString)
+        browser.commandWindow.submitAddress(typed.absoluteString)
         #expect(a.url == typed)
         #expect(b.url == page("b"))
 
         try click(atX: 700)
-        #expect(browser.selectedTab === b)
-        browser.submitAddress(typed.absoluteString)
+        #expect(browser.commandWindow.selectedTab === b)
+        browser.commandWindow.submitAddress(typed.absoluteString)
         #expect(b.url == typed)
         #expect(browser.split(of: a) != nil, "navigating keeps the pair")
     }
@@ -300,17 +300,17 @@ struct SplitViewTests {
         #expect(rows(browser) == ["a|b", "c", "d"])
         let first = browser.pins.count
 
-        browser.selectItem(at: first + 1)
-        #expect(name(browser.selectedTab) == "c")
-        browser.selectItem(at: first + 2)
-        #expect(name(browser.selectedTab) == "d")
-        browser.selectItem(at: first)
-        #expect(name(browser.selectedTab) == "a")
-        #expect(name(browser.shownPartner) == "b")
+        browser.commandWindow.selectItem(at: first + 1)
+        #expect(name(browser.commandWindow.selectedTab) == "c")
+        browser.commandWindow.selectItem(at: first + 2)
+        #expect(name(browser.commandWindow.selectedTab) == "d")
+        browser.commandWindow.selectItem(at: first)
+        #expect(name(browser.commandWindow.selectedTab) == "a")
+        #expect(name(browser.commandWindow.shownPartner) == "b")
 
         browser.select(tab("b", in: browser))
-        browser.selectItem(at: first)
-        #expect(name(browser.selectedTab) == "b", "the focused side stays focused")
+        browser.commandWindow.selectItem(at: first)
+        #expect(name(browser.commandWindow.selectedTab) == "b", "the focused side stays focused")
     }
 
     /// The other side's video popped out, its web view sits in the player: a click on the
@@ -320,9 +320,9 @@ struct SplitViewTests {
         let a = tab("a", in: browser), b = tab("b", in: browser)
         browser.select(a)
         browser.openInSplit(b)
-        browser.videoPopout.adopt(a)
-        defer { browser.videoPopout.discard(a) }
-        #expect(browser.shownPartner === a)
+        browser.commandWindow.videoPopout.adopt(a)
+        defer { browser.commandWindow.videoPopout.discard(a) }
+        #expect(browser.commandWindow.shownPartner === a)
 
         let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         defer { window.contentView = nil }
@@ -337,8 +337,8 @@ struct SplitViewTests {
             with: .leftMouseDown, location: NSPoint(x: 600, y: 60), modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
         browser.noteClick(event)
-        #expect(browser.selectedTab === b)
-        #expect(browser.videoPopout.tab === a)
+        #expect(browser.commandWindow.selectedTab === b)
+        #expect(browser.commandWindow.videoPopout.tab === a)
     }
 
     /// The peeked sidebar lies over the left side: a right-click on its rows (the pair's among
@@ -349,7 +349,7 @@ struct SplitViewTests {
         let a = tab("a", in: browser), b = tab("b", in: browser)
         browser.select(a)
         browser.openInSplit(b)
-        #expect(browser.shownPartner === a)
+        #expect(browser.commandWindow.shownPartner === a)
 
         let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         defer { window.contentView = nil }
@@ -368,14 +368,14 @@ struct SplitViewTests {
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
             browser.noteClick(event)
         }
-        let picks = browser.tabPickToken
+        let picks = browser.commandWindow.tabPickToken
         try click(.rightMouseDown, atX: 100)
         try click(.leftMouseDown, atX: 100)
-        #expect(browser.selectedTab === b)
-        #expect(browser.tabPickToken == picks, "the peeked sidebar slides away on a pick")
+        #expect(browser.commandWindow.selectedTab === b)
+        #expect(browser.commandWindow.tabPickToken == picks, "the peeked sidebar slides away on a pick")
 
         try click(.leftMouseDown, atX: 300)
-        #expect(browser.selectedTab === a)
+        #expect(browser.commandWindow.selectedTab === a)
     }
 
     /// The other side shows a PDF: a click on its viewer's own controls (the toolbar here), not
@@ -385,7 +385,7 @@ struct SplitViewTests {
         let a = tab("a", in: browser), b = tab("b", in: browser)
         browser.select(a)
         browser.openInSplit(b)
-        #expect(browser.shownPartner === a)
+        #expect(browser.commandWindow.shownPartner === a)
 
         let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         defer { window.contentView = nil }
@@ -408,7 +408,7 @@ struct SplitViewTests {
         let hit = try #require(content.hitTest(NSPoint(x: 200, y: 380)))
         #expect(!hit.isDescendant(of: a.webView), "the viewer lies over the page")
         browser.noteClick(event)
-        #expect(browser.selectedTab === a)
+        #expect(browser.commandWindow.selectedTab === a)
     }
 
     /// In Zen mode the page reaches under the window's title bar: a split side's PDF viewer, in
@@ -456,7 +456,7 @@ struct SplitViewTests {
         browser.openInSplit(tab("c", in: browser))
         browser.select(tab("a", in: browser))
         let c = tab("c", in: browser)
-        #expect(browser.shownPartner === c)
+        #expect(browser.commandWindow.shownPartner === c)
 
         var shown = c.lastActive
         try await Task.sleep(for: .milliseconds(50))
@@ -466,18 +466,18 @@ struct SplitViewTests {
         browser.select(tab("a", in: browser))
         shown = c.lastActive
         try await Task.sleep(for: .milliseconds(50))
-        browser.newTabFocusingAddress()
+        browser.commandWindow.newTabFocusingAddress()
         #expect(c.lastActive > shown, "to the start page")
 
         browser.select(tab("a", in: browser))
         shown = c.lastActive
         try await Task.sleep(for: .milliseconds(50))
-        #expect(browser.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
+        #expect(browser.commandWindow.dropForSplit(tab("b", in: browser).id.uuidString, on: .second))
         #expect(c.lastActive > shown, "for another tab dropped beside the selected one")
 
         browser.select(tab("a", in: browser))
         let b = tab("b", in: browser)
-        #expect(browser.shownPartner === b)
+        #expect(browser.commandWindow.shownPartner === b)
         shown = b.lastActive
         try await Task.sleep(for: .milliseconds(50))
         browser.exitSplit(of: tab("a", in: browser))
@@ -521,7 +521,7 @@ struct SplitViewTests {
         #expect(rows(restored) == ["a|c", "b"])
         let split = try #require(restored.split(of: tab("a", in: restored)))
         #expect(split.isStacked && split.fraction == 0.3)
-        #expect(name(restored.selectedTab) == "c")
+        #expect(name(restored.commandWindow.selectedTab) == "c")
     }
 
     /// The tab list's drag source only runs when a drag starts: were it run as the list is
@@ -562,7 +562,7 @@ struct SplitViewSnapshots {
         defer { listener.cancel() }
 
         let browser = Browser()
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
         let notes = browser.newTab(url: base.appending(path: "notes"))
         let docs = browser.newTab(url: base.appending(path: "docs"))
         browser.newTab(url: URL(string: "data:text/html,other")!).customTitle = "Inbox"
@@ -577,7 +577,7 @@ struct SplitViewSnapshots {
             let split = try #require(browser.split(of: docs))
             let window = HStack(spacing: 0) {
                 VStack(spacing: 2) {
-                    ForEach(browser.tabListEntries) { entry in
+                    ForEach(browser.commandWindow.tabListEntries) { entry in
                         if let split = entry.split { SplitTabRow(split: split) } else { SidebarRow(isSelected: false, action: {}) { Text(entry.tab.displayTitle) } }
                     }
                     Spacer()
@@ -589,12 +589,12 @@ struct SplitViewSnapshots {
                     .padding([.trailing, .bottom, .top], 8)
             }
             .frame(width: 1040, height: 420)
-            .environment(browser)
+            .environment(browser).environment(browser.windows[0])
             .environment(\.sidebarPalette, SidebarPalette(style: .solid, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light))
             .font(Theme.font(13))
             try render(window, isDark: isDark).write(to: directory.appending(path: "split-view-\(isDark ? "dark" : "light").png"))
         }
-        browser.regularTabs.forEach(browser.close)
+        browser.commandWindow.regularTabs.forEach(browser.close)
     }
 
     /// The page as WebKit draws it, at the size of one side.

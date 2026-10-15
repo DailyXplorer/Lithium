@@ -62,9 +62,10 @@ struct PopoutLayout {
 
 struct VideoPopoutLayer: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let popout = browser.videoPopout
+        let popout = window.videoPopout
         GeometryReader { proxy in
             if let tab = popout.tab, let playback = popout.playback {
                 VideoPopoutPlayer(popout: popout, tab: tab, playback: playback, container: proxy.size)

@@ -15,18 +15,18 @@ struct CapturePointerTests {
         let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1024, height: 700),
                               styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: BrowserView().environment(browser))
+        window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
         try await Task.sleep(for: .milliseconds(300))
         #expect(captureViews(in: window).isEmpty)
 
-        browser.capture.begin()
+        browser.commandWindow.capture.begin()
         #expect(await waitUntil(5) { captureViews(in: window).count == 1 })
 
         NSCursor.crosshair.set()
         #expect(NSCursor.current == NSCursor.crosshair)
-        browser.capture.finish()
+        browser.commandWindow.capture.finish()
         #expect(await waitUntil(5) { captureViews(in: window).isEmpty })
         #expect(NSCursor.current == NSCursor.arrow)
     }

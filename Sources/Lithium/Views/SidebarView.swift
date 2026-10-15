@@ -14,16 +14,18 @@ struct SidebarHeader: View {
 
 struct SidebarToggle: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         IconButton(icon: .sidebar, help: "Toggle Sidebar (⌘B)") {
-            withAnimation(.snappy(duration: 0.2)) { browser.toggleSidebar() }
+            withAnimation(.snappy(duration: 0.2)) { window.toggleSidebar() }
         }
     }
 }
 
 struct SidebarView: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.sidebarPalette) private var palette
     @AppStorage(Preference.miniPlayer) private var showsMiniPlayer = true
     @State private var deletingFolder: TabFolder?
@@ -31,8 +33,8 @@ struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             spaceContent
-                .id(browser.currentSpaceID)
-                .transition(.push(from: browser.spaceStepsForward ? .trailing : .leading))
+                .id(window.currentSpaceID)
+                .transition(.push(from: window.spaceStepsForward ? .trailing : .leading))
             if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
                 MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -45,7 +47,7 @@ struct SidebarView: View {
         .padding(.bottom, 10)
         .background {
             SpaceSwipeArea(isEnabled: browser.hasSpaces) { offset in
-                withAnimation(.snappy(duration: 0.25)) { browser.switchSpace(by: offset) }
+                withAnimation(.snappy(duration: 0.25)) { window.switchSpace(by: offset) }
             }
         }
         .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
@@ -58,18 +60,18 @@ struct SidebarView: View {
                 .fill(palette.ink.opacity(0.1))
                 .frame(height: 1)
                 .padding(.horizontal, 4)
-            SidebarRow(isSelected: browser.selectedTabID == nil, action: { browser.newTabFocusingAddress() }) {
+            SidebarRow(isSelected: window.selectedTabID == nil, action: { window.newTabFocusingAddress() }) {
                 Icon(.plus, size: 14)
                     .frame(width: 16)
                 Text("New Tab")
             }
-            .opacity(browser.selectedTabID == nil ? 1 : 0.7)
+            .opacity(window.selectedTabID == nil ? 1 : 0.7)
             .contextMenu { ReopenClosedTabButton() }
             // The top of the tab list, which is there to drop on even when the list is empty.
             .dropDestination(for: String.self) { items, _ in dropTab(items, on: .tabList(0)) }
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(browser.tabListRows) { row in
+                    ForEach(window.tabListRows) { row in
                         switch row {
                         case .folder(let folder):
                             FolderHeader(folder: folder) { askToDelete(folder) }
@@ -86,7 +88,7 @@ struct SidebarView: View {
                             }
                         }
                     }
-                    let agentTabs = browser.agentTabs
+                    let agentTabs = window.agentTabs
                     if !agentTabs.isEmpty {
                         VStack(spacing: 2) {
                             AgentGroupHeader()
@@ -102,7 +104,7 @@ struct SidebarView: View {
             // The empty space below the tabs too; a row's own menu wins over this one.
             .contentShape(Rectangle())
             .contextMenu {
-                Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder() } }
+                Button("New Folder") { withAnimation(.snappy(duration: 0.2)) { browser.newFolder(in: window) } }
                 ReopenClosedTabButton()
             }
         }
@@ -115,12 +117,13 @@ struct SidebarView: View {
         }
     }
 
+    /// In the sidebar of the window that holds the playing tab.
     private var playingTab: Tab? {
-        browser.nowPlaying.shownTab(besides: browser.videoPopout.tab)
+        browser.nowPlaying.shownTab(besides: window.videoPopout.tab).flatMap { $0.windowID == window.id ? $0 : nil }
     }
 
     private func askToDelete(_ folder: TabFolder) {
-        if browser.tabList(in: folder.space, folder: folder.id).isEmpty {
+        if browser.tabList(in: folder.space, window: window.id, folder: folder.id).isEmpty {
             deleteFolder(folder, closingTabs: false)
         } else {
             deletingFolder = folder
@@ -128,16 +131,17 @@ struct SidebarView: View {
     }
 
     private func deleteFolder(_ folder: TabFolder, closingTabs: Bool) {
-        withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs) }
+        withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs, in: window) }
     }
 
     private func dropTab(_ items: [String], on target: Browser.TabDropTarget) -> Bool {
-        withAnimation(.snappy(duration: 0.2)) { browser.dropTab(items, on: target) }
+        withAnimation(.snappy(duration: 0.2)) { window.dropTab(items, on: target) }
     }
 }
 
 private struct PinGrid: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.sidebarPalette) private var palette
     @State private var isTargeted = false
     /// Each tile's frame in the grid, to find the slot a drop lands on.
@@ -149,7 +153,7 @@ private struct PinGrid: View {
 
     var body: some View {
         Group {
-            if browser.spacePins.isEmpty {
+            if window.spacePins.isEmpty {
                 Text("Drag a tab here to pin it")
                     .font(Theme.font(11))
                     .multilineTextAlignment(.center)
@@ -162,7 +166,7 @@ private struct PinGrid: View {
                     )
             } else {
                 LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(Array(browser.spacePins.enumerated()), id: \.element.id) { index, pin in
+                    ForEach(Array(window.spacePins.enumerated()), id: \.element.id) { index, pin in
                         PinTile(pin: pin, isTargeted: index == targetedSlot)
                             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.space)) }) { tileFrames[pin.id] = $0 }
                     }
@@ -178,7 +182,7 @@ private struct PinGrid: View {
         // One drop target for the whole grid: a drop target on each tile swallows its right-click, so the
         // tile's context menu never opens. On a tile, a favorite moves into its slot and a tab is pinned
         // there; on the space around the tiles, at the end.
-        .onDrop(of: [.text], delegate: FavoritesDrop(browser: browser, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
+        .onDrop(of: [.text], delegate: FavoritesDrop(window: window, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
     }
 
     private static let space = "PinGrid"
@@ -187,13 +191,13 @@ private struct PinGrid: View {
 /// A delegate rather than `.dropDestination`, whose hover reports only a Bool: following the pointer
 /// tells which tile to outline.
 private struct FavoritesDrop: DropDelegate {
-    let browser: Browser
+    let window: BrowserWindow
     let frames: [Pin.ID: CGRect]
     @Binding var isTargeted: Bool
     @Binding var targetedSlot: Int?
 
     private func slot(at location: CGPoint) -> Int? {
-        browser.favoritesDropSlot(at: location, frames: frames)
+        window.favoritesDropSlot(at: location, frames: frames)
     }
 
     func dropEntered(info: DropInfo) { isTargeted = true }
@@ -212,10 +216,10 @@ private struct FavoritesDrop: DropDelegate {
         let location = info.location
         dropExited(info: info)
         guard let provider = info.itemProviders(for: [.text]).first else { return false }
-        let browser = browser, frames = frames
+        let window = window, frames = frames
         _ = provider.loadTransferable(type: String.self) { result in
             let items = (try? result.get()).map { [$0] } ?? []
-            Task { @MainActor in _ = browser.dropOnFavorites(items, at: location, frames: frames) }
+            Task { @MainActor in _ = window.dropOnFavorites(items, at: location, frames: frames) }
         }
         return true
     }
@@ -230,8 +234,8 @@ func favoriteSlot(at location: CGPoint, order: [Pin.ID], frames: [Pin.ID: CGRect
 /// A favorite drags as `pin:<id>` and a tab as its bare id, both UUID strings: the prefix tells them apart.
 private let pinDragPrefix = "pin:"
 
-extension Browser {
-    /// The slot of the current space's grid under `location`: `pins` also holds other spaces' favorites.
+extension BrowserWindow {
+    /// The slot of the shown space's grid under `location`: `pins` also holds other spaces' favorites.
     func favoritesDropSlot(at location: CGPoint, frames: [Pin.ID: CGRect]) -> Int? {
         favoriteSlot(at: location, order: spacePins.map(\.id), frames: frames)
     }
@@ -243,15 +247,15 @@ extension Browser {
 
     /// A favorite moves into the slot, a tab is pinned there; `nil` is the end of the grid.
     private func dropOnFavorites(_ items: [String], at index: Int?) -> Bool {
-        endTabDrag()
+        browser.endTabDrag()
         guard let item = items.first else { return false }
         withAnimation(.snappy(duration: 0.2)) {
             if item.hasPrefix(pinDragPrefix) {
                 if let id = UUID(uuidString: String(item.dropFirst(pinDragPrefix.count))) {
-                    movePin(id: id, to: index ?? spacePins.count)
+                    browser.movePin(id: id, to: index ?? spacePins.count)
                 }
             } else {
-                pinTab(withID: item, at: index)
+                browser.pinTab(withID: item, at: index)
             }
         }
         return true
@@ -262,12 +266,13 @@ private struct PinTile: View {
     let pin: Pin
     let isTargeted: Bool
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @Environment(\.sidebarPalette) private var palette
     @State private var isHovered = false
 
     var body: some View {
         let live = browser.liveTab(for: pin)
-        let isSelected = live != nil && live?.id == browser.selectedTabID
+        let isSelected = live != nil && live?.id == window.selectedTabID
         RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(palette.tileFill(isSelected: isSelected, isHovered: isHovered))
             .frame(height: 48)
@@ -279,7 +284,7 @@ private struct PinTile: View {
                     .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
             }
             .contentShape(Rectangle())
-            .onTapGesture { browser.activate(pin) }
+            .onTapGesture { browser.activate(pin, in: window) }
             .tabHoverTarget(.pin(pin.id), isHovered: $isHovered)
             .draggable(pinDragPrefix + pin.id.uuidString)
             .contextMenu {
@@ -297,10 +302,11 @@ private struct PinTile: View {
 private struct TabRow: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @State private var isHovered = false
 
     var body: some View {
-        let isSelected = browser.selectedTabID == tab.id
+        let isSelected = window.selectedTabID == tab.id
         SidebarRow(isSelected: isSelected, action: { browser.select(tab) }) {
             Group {
                 if tab.favicon == nil && tab.isLoading {
@@ -313,7 +319,7 @@ private struct TabRow: View {
             .overlay(alignment: .bottomTrailing) {
                 if browser.agent?.isInUse(tab) == true { AgentBadge(isActing: browser.agent?.isActing(in: tab) == true) }
             }
-            if browser.renamingTabID == tab.id {
+            if window.renamingTabID == tab.id {
                 TabNameField(tab: tab)
             } else {
                 Text(tab.displayTitle)
@@ -332,7 +338,7 @@ private struct TabRow: View {
                 .opacity(0.6)
                 .help("Unmute Tab")
             }
-            if (isHovered || isSelected) && browser.renamingTabID != tab.id {
+            if (isHovered || isSelected) && window.renamingTabID != tab.id {
                 Button { browser.close(tab) } label: {
                     Icon(.close, size: 12)
                         .frame(width: 18, height: 18)
@@ -345,7 +351,7 @@ private struct TabRow: View {
         }
         .tabHoverTarget(.tab(tab.id), isHovered: $isHovered)
         // Simultaneous, so a single click still selects instantly instead of waiting for a second one.
-        .simultaneousGesture(TapGesture(count: 2).onEnded { browser.renamingTabID = tab.id })
+        .simultaneousGesture(TapGesture(count: 2).onEnded { window.renamingTabID = tab.id })
         .draggable(browser.startDragging(tab))
         .contextMenu { TabRowMenu(tab: tab) }
     }
@@ -356,13 +362,14 @@ private struct TabRow: View {
 private struct TabRowMenu: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
         Button("Reload Tab") { browser.navigate(tab, .reload) }
             .disabled(tab.url == nil)
         if tab.isInTabList {
             Button("Open in Split View") { browser.openInSplit(tab) }
-                .disabled(browser.splitPartner(for: tab) == nil)
+                .disabled(window.splitPartner(for: tab) == nil)
         }
         Button("Duplicate Tab") { browser.duplicate(tab) }
             .disabled(tab.url == nil)
@@ -373,7 +380,7 @@ private struct TabRowMenu: View {
         Button("Copy Link") { browser.copyLink(of: tab) }
             .disabled(tab.url == nil)
         Divider()
-        Button("Rename Tab…") { browser.renamingTabID = tab.id }
+        Button("Rename Tab…") { window.renamingTabID = tab.id }
         if tab.customTitle != nil {
             Button("Use Page Title") { browser.rename(tab, to: "") }
         }
@@ -448,9 +455,10 @@ private struct MuteButton: View {
 
 private struct ReopenClosedTabButton: View {
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        Button("Reopen Closed Tab") { browser.reopenClosedTab() }
+        Button("Reopen Closed Tab") { browser.reopenClosedTab(into: window) }
             .disabled(!browser.canReopenClosedTab)
     }
 }
@@ -458,6 +466,7 @@ private struct ReopenClosedTabButton: View {
 private struct TabNameField: View {
     let tab: Tab
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @State private var name = ""
     /// The title the field opened with: left as is, it doesn't become the tab's name.
     @State private var shown: String?
@@ -470,17 +479,17 @@ private struct TabNameField: View {
             .onSubmit { commit() }
             .onAppear {
                 shown = tab.displayTitle
-                name = browser.renameDraft ?? tab.displayTitle
+                name = window.renameDraft ?? tab.displayTitle
                 claimFocus($isFocused)
             }
-            .onChange(of: name) { browser.renameDraft = name }
+            .onChange(of: name) { window.renameDraft = name }
             .onChange(of: isFocused) { _, focused in
-                if !focused, browser.renamingTabID == tab.id { commit() }
+                if !focused, window.renamingTabID == tab.id { commit() }
             }
             // Hiding the sidebar (⌘B) would otherwise leave the rename open, holding Escape and the
             // peek. Not when the row only scrolls out of the lazy list.
             .onDisappear {
-                if browser.renamingTabID == tab.id, !browser.showsSidebar { commit() }
+                if window.renamingTabID == tab.id, !window.showsSidebar { commit() }
             }
     }
 
@@ -489,7 +498,7 @@ private struct TabNameField: View {
     private func commit() {
         browser.rename(tab, to: name, shown: shown)
         let hadKeyboard = isFocused
-        DispatchQueue.main.async { [browser] in browser.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
+        DispatchQueue.main.async { [window] in window.returnKeyboardToPage(fieldHadKeyboard: hadKeyboard) }
     }
 }
 

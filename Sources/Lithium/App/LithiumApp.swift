@@ -89,7 +89,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// A Dock menu item doesn't bring Lithium forward: chosen while another app is in front, the
+    /// new window would open behind it.
     @objc private func newWindow() {
+        NSApp.activate()
         LithiumApp.sharedBrowser.openWindow()
     }
 

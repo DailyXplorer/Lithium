@@ -64,4 +64,36 @@ struct HistoryPageTests {
         _ = try await webView.callAsyncJavaScript("more(); await call('ping')", contentWorld: .page)
         #expect(visits.asked.count == asked)
     }
+
+    /// Show All History with the History tab already in front: a visit made meanwhile in a tab
+    /// never selected (an agent's, a background link) is listed, though the page was never hidden.
+    @Test(.timeLimit(.minutes(1))) func showingHistoryAgainListsANewVisit() async throws {
+        let browser = Browser()
+        browser.openHistory()
+        let tab = try #require(browser.commandWindow.selectedTab)
+        defer { browser.close(tab) }
+        let marker = "history-refresh-\(UUID().uuidString)"
+        let url = try #require(URL(string: "https://example.com/?\(marker)"))
+        defer { browser.history.visits(matching: marker).forEach { browser.history.delete($0) } }
+
+        // Polls until the marker's row shows; nil until the list has rendered at all.
+        func listed() async -> Bool? {
+            var answer: Bool?
+            for _ in 0..<100 {
+                try? await Task.sleep(for: .milliseconds(50))
+                answer = try? await tab.webView.callAsyncJavaScript(
+                    "return document.querySelector('#list .visit, #list .empty') ? [...document.querySelectorAll('#list .visit')].some((a) => a.href.includes(marker)) : null",
+                    arguments: ["marker": marker], contentWorld: .page
+                ) as? Bool
+                if answer == true { return true }
+            }
+            return answer
+        }
+        #expect(await listed() == false)
+
+        browser.history.record(url, title: "")
+        browser.openHistory()
+        #expect(browser.commandWindow.selectedTab === tab)
+        #expect(await listed() == true)
+    }
 }

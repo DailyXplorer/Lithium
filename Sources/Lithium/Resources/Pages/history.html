@@ -151,7 +151,9 @@
     if (confirm('Clear all browsing history? This can’t be undone.')) call('clearHistory').then(load);
   };
   // Back on the page, new visits show, unless older pages were scrolled to: that would lose the place.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && shown.length <= pageLength) load(); });
+  // Lithium calls it too when Show All History finds the page already in front.
+  function shownAgain() { if (shown.length <= pageLength) load(); }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) shownAgain(); });
   load();
 </script>
 </body>

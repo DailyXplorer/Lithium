@@ -282,6 +282,42 @@ struct WindowKeysTests {
         #expect(first.url == page, "the tab left is untouched")
     }
 
+    /// A window shown at launch, or shown again from the Dock, gives the address bar the keyboard
+    /// before anything is typed, on the start page and with a page, as the window main opened did.
+    /// The window is built here, off screen, and shown as `BrowserNSWindow` shows its own.
+    @Test func aWindowShownGivesTheAddressBarTheKeyboard() async throws {
+        SessionStore.save(Session())
+        let browser = Browser()
+        let first = browser.commandWindow
+        if first.isZenMode { first.toggleZenMode() }
+        var shown: [NSWindow] = []
+        browser.showWindow = { model, browser in
+            let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                  styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(model))
+            BrowserNSWindow.show(window)
+            shown.append(window)
+            return window
+        }
+        defer { shown.forEach { $0.orderOut(nil) } }
+
+        browser.showRestoredWindows()
+        let atLaunch = try #require(shown.last)
+        #expect(atLaunch.isVisible)
+        #expect(first.selectedTab == nil)
+        #expect(await waitUntil(5) { addressEditor(in: atLaunch) != nil }, "\(String(describing: atLaunch.firstResponder))")
+
+        atLaunch.orderOut(nil)
+        browser.windowWillClose(first)
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        defer { browser.close(tab) }
+        #expect(browser.openWindow() === first)
+        let again = try #require(shown.last)
+        #expect(again !== atLaunch)
+        #expect(await waitUntil(5) { addressEditor(in: again) != nil }, "\(String(describing: again.firstResponder))")
+    }
+
     /// ⌘T and ⌘L from a link's window bring the main window forward, whose field gets the keys.
     /// The window is never shown.
     @Test func newTabAndOpenLocationBringTheMainWindowForward() {
@@ -340,6 +376,11 @@ struct WindowKeysTests {
         #expect(await waitUntil(60) { !tab.webView.isLoading && tab.webView.url != nil && tab.webView.window === window })
         try await Task.sleep(for: .milliseconds(300))
         return (browser, tab, window)
+    }
+
+    /// The address bar's field editor, while it has the keyboard.
+    private func addressEditor(in window: NSWindow) -> NSTextView? {
+        (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor && $0.delegate is URLTextField ? $0 : nil }
     }
 
     /// The tab name field's editor, once it has the keyboard.

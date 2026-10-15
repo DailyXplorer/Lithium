@@ -17,8 +17,12 @@ final class BrowserNSWindow: NSWindow, NSWindowDelegate {
         } else {
             nsWindow.center()
         }
-        nsWindow.makeKeyAndOrderFront(nil)
+        show(nsWindow)
         return nsWindow
+    }
+
+    static func show(_ nsWindow: NSWindow) {
+        nsWindow.makeKeyAndOrderFront(nil)
     }
 
     private init(_ window: BrowserWindow, browser: Browser) {

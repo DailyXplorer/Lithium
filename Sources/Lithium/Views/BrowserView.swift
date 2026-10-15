@@ -332,7 +332,7 @@ private struct ZenTopBarPeek: View {
             if !editing { window.returnKeyboardToPage(fieldHadKeyboard: false) }
             update()
         }
-        .onChange(of: browser.summaries.isPanelPresented) { update() }
+        .onChange(of: window.isSummaryPresented) { update() }
         .onDisappear {
             pending?.cancel()
             showsLights = false
@@ -343,7 +343,7 @@ private struct ZenTopBarPeek: View {
         pending?.cancel()
         showsLights = isShown || zone == .corner
         // ⇧⌘S too: the summary's popover hangs from the bar's button.
-        let typing = focusOnAppear || window.isEditingAddress || browser.summaries.isPanelPresented
+        let typing = focusOnAppear || window.isEditingAddress || window.isSummaryPresented
         let wanted = typing || (isShown ? zone != .outside : zone == .edge)
         guard wanted != isShown else { return }
         if typing {

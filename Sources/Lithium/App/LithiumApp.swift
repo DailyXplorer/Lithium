@@ -179,9 +179,7 @@ struct BrowserCommands: Commands {
                 .disabled(browser.commandTab?.canTranslate != true)
             Divider()
             // The popover is a browser window's toolbar's: a link's window has none.
-            Button(browser.summaries.isPanelPresented ? "Hide Summary" : "Summarize Page") {
-                if let tab = browser.commandWindow.selectedTab { browser.summaries.togglePanel(for: tab) }
-            }
+            Button(browser.commandWindow.isSummaryPresented ? "Hide Summary" : "Summarize Page") { browser.commandWindow.toggleSummary() }
             .keyboardShortcut("s", modifiers: [.command, .shift])
             .disabled(!browser.summaries.isEnabled || !browser.canChangeTabs || PageSummaries.page(of: browser.commandWindow.selectedTab?.url) == nil)
             Button(protectionsEnabled ? "Turn Off Protections for This Site" : "Turn On Protections for This Site") {

@@ -186,6 +186,45 @@ struct WindowsTests {
         #expect(browser.extensions.activeTab === a)
     }
 
+    /// The summary popover and a folder's name field are one window's: ⇧⌘S in one window leaves
+    /// the other's closed, a tab picked in the other window keeps it, and a folder made in one
+    /// window takes its name there, in place of a tab's rename.
+    @Test func theSummaryAndARenameAreTheirWindowsOwn() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        let b = browser.newTab(url: page("b"), in: second)
+        let c = browser.newTab(url: page("c"), in: second)
+
+        first.toggleSummary()
+        #expect(first.isSummaryPresented)
+        #expect(!second.isSummaryPresented)
+        browser.select(b, picked: false)
+        #expect(first.isSummaryPresented, "a pick in the other window leaves it")
+        browser.newTab(url: page("a2"))
+        #expect(!first.isSummaryPresented, "a pick in its window closes it")
+        second.toggleSummary()
+        #expect(second.isSummaryPresented && !first.isSummaryPresented)
+        browser.setSummaries(enabled: false)
+        defer { browser.setSummaries(enabled: true) }
+        #expect(!second.isSummaryPresented)
+
+        let folder = browser.newFolder(in: second)
+        #expect(second.renamingFolderID == folder.id)
+        #expect(second.isRenaming)
+        #expect(first.renamingFolderID == nil)
+        #expect(!first.isRenaming)
+        second.renamingTabID = c.id
+        #expect(second.renamingFolderID == nil, "one name is typed at a time")
+        second.renamingFolderID = folder.id
+        #expect(second.renamingTabID == nil)
+        browser.renameFolder(folder.id, to: "Work")
+        #expect(second.renamingFolderID == nil)
+        #expect(!second.isRenaming)
+    }
+
     /// A session written before windows were saved comes back as one window.
     @Test func anOldSessionOpensInOneWindow() {
         SessionStore.save(Session(tabs: [.init(url: page("old"), title: "Old", customTitle: nil, pinID: nil)], selectedIndex: 0))

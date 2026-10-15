@@ -172,20 +172,20 @@ struct ZenModeTests {
         defer { window.orderOut(nil) }
         #expect(addressField(in: window) == nil)
 
-        browser.summaries.isPanelPresented = true
+        browser.commandWindow.isSummaryPresented = true
         #expect(await waitUntil(5) { addressField(in: window) != nil })
         // Past the close delay it is still there.
         try await Task.sleep(for: .milliseconds(900))
         #expect(addressField(in: window) != nil)
 
         let other = browser.newTab(url: base.appending(path: "a"))
-        #expect(!browser.summaries.isPanelPresented)
+        #expect(!browser.commandWindow.isSummaryPresented)
         #expect(await waitUntil(5) { addressField(in: window) == nil })
 
         #expect(await waitUntil(15) { !other.isLoading && other.webView.url != nil })
-        browser.summaries.isPanelPresented = true
+        browser.commandWindow.isSummaryPresented = true
         other.load(base.appending(path: "b"))
-        #expect(!browser.summaries.isPanelPresented)
+        #expect(!browser.commandWindow.isSummaryPresented)
         browser.tabs.forEach(browser.close)
     }
 

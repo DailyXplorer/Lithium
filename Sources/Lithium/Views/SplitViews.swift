@@ -232,14 +232,15 @@ struct SplitTabRow: View {
     }
 }
 
-/// Over the page while a tab is dragged from the sidebar: dropped on either side, it opens there.
+/// Over the page while a tab is dragged from this window's sidebar: dropped on either side, it
+/// opens there.
 struct SplitDropLayer: View {
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        if let dragged = browser.splits.draggedTabID, let selected = window.selectedTab,
-           selected.id != dragged, selected.isInTabList {
+        if let dragged = browser.tabs.first(where: { $0.id == browser.splits.draggedTabID }), dragged.windowID == window.id,
+           let selected = window.selectedTab, selected !== dragged, selected.isInTabList {
             // A stacked split stays stacked, so its sides are top and bottom.
             SplitDropZone(isStacked: browser.split(of: selected)?.isStacked == true,
                           isDragging: { browser.splits.draggedTabID != nil }, carries: { browser.carriesDraggedTab($0) }) { item, side in

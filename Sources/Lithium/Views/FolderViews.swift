@@ -14,7 +14,7 @@ struct FolderHeader: View {
         SidebarRow(isSelected: false, action: toggle) {
             Icon(.folder, size: 14)
                 .frame(width: 16)
-            if browser.folders.renamingID == folder.id {
+            if window.renamingFolderID == folder.id {
                 FolderNameField(folder: folder)
             } else {
                 Text(folder.name)
@@ -54,8 +54,7 @@ struct FolderHeader: View {
     }
 
     private func startRenaming() {
-        window.renamingTabID = nil
-        browser.folders.renamingID = folder.id
+        window.renamingFolderID = folder.id
     }
 }
 
@@ -77,11 +76,11 @@ private struct FolderNameField: View {
                 claimFocus($isFocused)
             }
             .onChange(of: isFocused) { _, focused in
-                if !focused, browser.folders.renamingID == folder.id { commit() }
+                if !focused, window.renamingFolderID == folder.id { commit() }
             }
             // Gone with the sidebar (⌘B), the rename would otherwise hold Escape and the peek.
             .onDisappear {
-                if browser.folders.renamingID == folder.id, !window.showsSidebar { commit() }
+                if window.renamingFolderID == folder.id, !window.showsSidebar { commit() }
             }
     }
 

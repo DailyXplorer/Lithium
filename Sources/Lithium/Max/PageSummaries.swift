@@ -12,10 +12,7 @@ final class PageSummaries {
     var isEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Self.preferenceKey)
-            if !isEnabled {
-                isPanelPresented = false
-                Array(entries.keys).forEach(discard)
-            }
+            if !isEnabled { Array(entries.keys).forEach(discard) }
         }
     }
 
@@ -59,9 +56,6 @@ final class PageSummaries {
         }
     }
 
-    /// Opening the toolbar popover starts the summary.
-    var isPanelPresented = false
-
     private var entries: [Tab.ID: Entry] = [:]
     @ObservationIgnored private var tasks: [Tab.ID: [SummarySource: Task<Void, Never>]] = [:]
     @ObservationIgnored private let model: AnyObject?
@@ -82,11 +76,6 @@ final class PageSummaries {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
         components.fragment = nil
         return components.url ?? url
-    }
-
-    func togglePanel(for tab: Tab) {
-        isPanelPresented.toggle()
-        if isPanelPresented { Task { await summarize(tab) } }
     }
 
     var unavailableReason: String? {
@@ -217,5 +206,12 @@ private extension PageSummaries.State {
     var isFailure: Bool {
         if case .failed = self { return true }
         return false
+    }
+}
+
+extension Browser {
+    func setSummaries(enabled: Bool) {
+        summaries.isEnabled = enabled
+        if !enabled { windows.forEach { $0.isSummaryPresented = false } }
     }
 }

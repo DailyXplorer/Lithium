@@ -232,7 +232,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         case "setTidyDownloads":
             Downloads.shared.tidy.isEnabled = value as? Bool ?? false
         case "setSummaries":
-            browser.summaries.isEnabled = value as? Bool ?? true
+            browser.setSummaries(enabled: value as? Bool ?? true)
         case "setSummaryLanguage":
             let code = value as? String ?? ""
             let known = browser.summaries.languageChoices.languages.contains { $0.code == code }

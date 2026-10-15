@@ -17,9 +17,10 @@ final class BrowserWindow: Identifiable {
             guard oldValue != selectedTabID else { return }
             videoPopout.selectionChanged(from: browser.tabs.first { $0.id == oldValue }, to: selectedTab)
             // The summary popover is one tab's. Here, not in its button, which a hidden Zen bar lacks.
-            if browser.summaries.isPanelPresented { browser.summaries.isPanelPresented = false }
+            if isSummaryPresented { isSummaryPresented = false }
         }
     }
+    var isSummaryPresented = false
     private(set) var currentSpaceID: Space.ID
     @ObservationIgnored private var spaceSelections: [Space.ID: Tab.ID] = [:]
     /// The last switch went to a space further along: the sidebar slides that way.
@@ -38,7 +39,13 @@ final class BrowserWindow: Identifiable {
     /// Set by the address bar as it starts and ends editing: Zen mode's top bar stays out meanwhile.
     var isEditingAddress = false
     var renamingTabID: Tab.ID? {
-        didSet { if renamingTabID != oldValue { renameDraft = nil } }
+        didSet {
+            if renamingTabID != oldValue { renameDraft = nil }
+            if renamingTabID != nil, renamingFolderID != nil { renamingFolderID = nil }
+        }
+    }
+    var renamingFolderID: TabFolder.ID? {
+        didSet { if renamingFolderID != nil, renamingTabID != nil { renamingTabID = nil } }
     }
     /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
     /// sidebar's field for the sidebar's own.
@@ -73,7 +80,7 @@ final class BrowserWindow: Identifiable {
     var regularTabs: [Tab] { browser.tabList(in: currentSpaceID, window: id) }
     var agentTabs: [Tab] { browser.agentGroup(in: currentSpaceID, window: id) }
 
-    var isRenaming: Bool { renamingTabID != nil || browser.folders.renamingID != nil }
+    var isRenaming: Bool { renamingTabID != nil || renamingFolderID != nil }
 
     /// Something opened from a peeked panel (a rename, popover, alert, menu or drag) is still in
     /// use, so the panel stays out, as they would go with it.
@@ -246,7 +253,7 @@ final class BrowserWindow: Identifiable {
         guard space != currentSpaceID, browser.spaces.contains(where: { $0.id == space }) else { return }
         if isEditingAddress || isRenaming { nsWindow?.makeFirstResponder(nil) }
         renamingTabID = nil
-        browser.folders.renamingID = nil
+        renamingFolderID = nil
         let order = browser.spaces.map(\.id)
         spaceStepsForward = (order.firstIndex(of: space) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
         if let last = spaceSelections[space], let tab = browser.tabs.first(where: { $0.id == last && $0.spaceID == space }) {
@@ -370,7 +377,7 @@ final class BrowserWindow: Identifiable {
         }
         if isRenaming {
             renamingTabID = nil
-            browser.folders.renamingID = nil
+            renamingFolderID = nil
             // The name field, when a field has it: Escape comes here only for find's or that one.
             let nameHadKeyboard = (selectedTab?.contentView.window?.firstResponder as? NSTextView)?.isFieldEditor == true
             returnKeyboardToPage(fieldHadKeyboard: nameHadKeyboard && !find.isFieldFocused)
@@ -378,8 +385,8 @@ final class BrowserWindow: Identifiable {
         }
         if closeFindBar() { return true }
         // Opened with ⇧⌘S, the popover never takes the keyboard, so Escape reaches the window.
-        if browser.summaries.isPanelPresented {
-            browser.summaries.isPanelPresented = false
+        if isSummaryPresented {
+            isSummaryPresented = false
             return true
         }
         // The shown permission prompt, denied this once and not remembered. Not under an agent's
@@ -395,6 +402,12 @@ final class BrowserWindow: Identifiable {
             return true
         }
         return false
+    }
+
+    func toggleSummary() {
+        guard let tab = selectedTab else { return }
+        isSummaryPresented.toggle()
+        if isSummaryPresented { Task { await browser.summaries.summarize(tab) } }
     }
 
     // MARK: Find

@@ -34,12 +34,12 @@ struct TabFoldersTests {
         #expect(browser.commandWindow.regularTabs.map(\.id) == [c.id, b.id, a.id])
 
         let folder = browser.newFolder(with: a)
-        #expect(browser.folders.renamingID == folder.id)
+        #expect(browser.commandWindow.renamingFolderID == folder.id)
         #expect(browser.commandWindow.isRenaming)
         browser.renameFolder(folder.id, to: "  Work ")
         #expect(browser.commandWindow.spaceFolders.map(\.name) == ["Work"])
         #expect(!browser.commandWindow.isRenaming)
-        browser.folders.renamingID = folder.id
+        browser.commandWindow.renamingFolderID = folder.id
         browser.renameFolder(folder.id, to: "  ")
         #expect(browser.commandWindow.spaceFolders.map(\.name) == ["Work"], "an empty name keeps the one it had")
 

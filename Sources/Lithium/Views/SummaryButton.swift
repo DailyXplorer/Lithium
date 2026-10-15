@@ -3,20 +3,19 @@ import SwiftUI
 struct SummaryButton: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        @Bindable var summaries = browser.summaries
+        @Bindable var window = window
         let page = PageSummaries.page(of: tab?.url)
-        if summaries.isEnabled {
-            IconButton(icon: .sparkle, help: "Summarize (⇧⌘S)", isEnabled: page != nil) {
-                if let tab { summaries.togglePanel(for: tab) }
-            }
-            .popover(isPresented: $summaries.isPanelPresented, arrowEdge: .bottom) {
-                if let tab { SummaryPanel(tab: tab) }
-            }
-            // The popover belongs to one tab and one page.
-            .onChange(of: tab?.id) { summaries.isPanelPresented = false }
-            .onChange(of: page) { summaries.isPanelPresented = false }
+        if browser.summaries.isEnabled {
+            IconButton(icon: .sparkle, help: "Summarize (⇧⌘S)", isEnabled: page != nil) { window.toggleSummary() }
+                .popover(isPresented: $window.isSummaryPresented, arrowEdge: .bottom) {
+                    if let tab { SummaryPanel(tab: tab) }
+                }
+                // The popover belongs to one tab and one page.
+                .onChange(of: tab?.id) { window.isSummaryPresented = false }
+                .onChange(of: page) { window.isSummaryPresented = false }
         }
     }
 }

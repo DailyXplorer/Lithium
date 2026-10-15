@@ -132,6 +132,8 @@ struct BrowserCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") { browser.closeTabOrWindow() }
                 .keyboardShortcut("w")
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
             Button("Reopen Closed Tab") { browser.inBrowserWindow { browser.reopenClosedTab(into: $0) } }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(!browser.canReopenClosedTab)

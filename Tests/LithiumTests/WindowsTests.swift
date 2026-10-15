@@ -103,6 +103,50 @@ struct WindowsTests {
         #expect(browser.windows.count == 1)
     }
 
+    /// ⌘W in a window on its start page closes the window, as in Safari and Chrome: one of two
+    /// puts its tabs into Reopen Closed Tab and goes, the last one hides.
+    @Test func commandWInAWindowWithNoTabClosesIt() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        browser.showWindow = { window, browser in ClosableWindow(window, browser: browser) }
+        let first = browser.windows[0]
+        first.nsWindow = ClosableWindow(first, browser: browser)
+        browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        browser.newTab(url: page("b"), in: second)
+
+        browser.closeTabOrWindow(keyWindow: second.nsWindow)
+        #expect(second.selectedTab == nil)
+        #expect(browser.windows.count == 2, "the tab closes first")
+        browser.closeTabOrWindow(keyWindow: second.nsWindow)
+        #expect(browser.windows.map(\.id) == [first.id])
+        #expect(browser.canReopenClosedTab)
+
+        browser.closeTabOrWindow(keyWindow: first.nsWindow)
+        #expect(first.selectedTab == nil)
+        #expect(!first.isHidden)
+        browser.closeTabOrWindow(keyWindow: first.nsWindow)
+        #expect(first.isHidden)
+        #expect(browser.windows.count == 1)
+    }
+
+    /// A tab an agent or a page opens for a window that closed while it awaited goes into the
+    /// window in front, not into no window's list.
+    @Test func aTabForAClosedWindowGoesToTheWindowInFront() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let second = browser.openWindow()
+        browser.windowWillClose(second)
+
+        let agentTab = browser.newAgentTab(session: "s", window: second.id)
+        #expect(agentTab.windowID == first.id)
+        #expect(first.agentTabs.contains { $0 === agentTab })
+        let tab = browser.newTab(url: page("c"), in: second)
+        #expect(tab.windowID == first.id)
+        #expect(first.selectedTab === tab)
+    }
+
     /// The session saves every window with its tabs, selection, space and look, and brings them back.
     @Test func theSessionRoundTripsTwoWindows() {
         let browser = makeBrowser()
@@ -255,6 +299,24 @@ struct WindowsTests {
     }
 
     private func page(_ name: String) -> URL { URL(string: "data:text/html,\(name)")! }
+}
+
+/// Closes as a `BrowserNSWindow` does, through `Browser.windowWillClose`, and stays off screen.
+private final class ClosableWindow: NSWindow, NSWindowDelegate {
+    private let model: BrowserWindow
+    private weak var browser: Browser?
+
+    init(_ model: BrowserWindow, browser: Browser) {
+        self.model = model
+        self.browser = browser
+        super.init(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.titled, .closable], backing: .buffered, defer: true)
+        isReleasedWhenClosed = false
+        delegate = self
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        browser?.windowWillClose(model)
+    }
 }
 
 /// Counts the requests to come forward, minimizes only on paper, and stays off screen.

@@ -15,8 +15,8 @@ final class QuickLinkWindow: NSWindow, NSWindowDelegate {
         window.orderFrontRegardless()
         window.makeKey()
         NSApp.activate()
-        // SwiftUI then brings the main window over this one: bring this one back on the next
-        // run-loop turns and when Lithium becomes active (which can come later).
+        // Lithium becoming active can bring a browser window over this one: bring this one back on
+        // the next run-loop turns and when Lithium becomes active (which can come later).
         for delay in [0.0, 0.15, 0.4] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak window] in window?.bringForward() }
         }

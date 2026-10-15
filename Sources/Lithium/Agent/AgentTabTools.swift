@@ -161,7 +161,7 @@ extension AgentHub {
     ) { _, _, hub in
         guard let browser = hub.browser else { return ["tabs": []] }
         // Named w1, w2… in the order opened; the ids hold only until a window closes.
-        let windowIDs = Dictionary(uniqueKeysWithValues: browser.windows.enumerated().map { ($1.id, "w\($0 + 1)") })
+        let windowIDs = Dictionary(browser.windows.enumerated().map { ($1.id, "w\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
         let windows: [JSONValue] = browser.windows.map { window in
             var fields: [String: JSONValue] = ["id": .string(windowIDs[window.id] ?? ""), "key": .bool(window === browser.commandWindow)]
             if let frame = (window.nsWindow ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain })?.frame {

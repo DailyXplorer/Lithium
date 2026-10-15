@@ -427,6 +427,12 @@ final class Browser {
         windows.first { $0.id == tab.windowID } ?? windows[0]
     }
 
+    /// A window closed while an agent or a page awaited leaves its id behind: the tab opened for
+    /// it goes to the window in front, never into no window's list.
+    private func liveWindow(_ id: BrowserWindow.ID?) -> BrowserWindow {
+        windows.first { $0.id == id } ?? commandWindow
+    }
+
     func window(for nsWindow: NSWindow?) -> BrowserWindow? {
         guard let nsWindow else { return nil }
         return windows.first { $0.nsWindow === nsWindow }
@@ -667,7 +673,7 @@ final class Browser {
     /// goes in its window; without one, in `window`, else the window in front.
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil, space: Space.ID? = nil, in window: BrowserWindow? = nil) -> Tab {
-        let window = opener.map(self.window(of:)) ?? window ?? commandWindow
+        let window = opener.map(self.window(of:)) ?? liveWindow(window?.id)
         let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore, space: space ?? opener?.spaceID ?? window.currentSpaceID, window: window.id)
         if let opener { window.recentTabs.didOpen(tab, from: opener) } else if selecting { window.recentTabs.didOpen(tab, replacing: window.selectedTab) }
         if let url { tab.load(url) }
@@ -713,7 +719,8 @@ final class Browser {
     /// At the end of the Agent group, empty and unselected: the user's tab list and selection
     /// stay as they were.
     func newAgentTab(session: String, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, space: Space.ID? = nil, window: BrowserWindow.ID? = nil) -> Tab {
-        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore, space: space ?? commandWindow.currentSpaceID, window: window ?? commandWindow.id)
+        let window = liveWindow(window)
+        let tab = Tab(browser: self, configuration: configuration ?? makeConfiguration(), privateStore: privateStore, space: space ?? window.currentSpaceID, window: window.id)
         tab.openedByAgent = session
         tabs.append(tab)
         extensions.didOpen(tab)
@@ -884,14 +891,18 @@ final class Browser {
     }
 
     /// ⌘W closes the selected tab of the browser window that is key, or whose page holds the key
-    /// window: a full-screen video is in WebKit's own window, which counts as the tab's. Another
-    /// window in front closes instead.
+    /// window: a full-screen video is in WebKit's own window, which counts as the tab's. A browser
+    /// window on its start page closes, as in Safari and Chrome, and so does another window in front.
     func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
         guard let keyWindow else { return }
         let holdsPage = { (window: BrowserWindow) in
             window.selectedTab?.loadedWebView.map { keyWindow === $0.window || $0.fullscreenState != .notInFullscreen } == true
         }
-        if let window = window(for: keyWindow) ?? windows.first(where: holdsPage) { window.closeSelectedTab() } else { keyWindow.performClose(nil) }
+        if let window = window(for: keyWindow) ?? windows.first(where: holdsPage), window.selectedTab != nil {
+            window.closeSelectedTab()
+        } else {
+            keyWindow.performClose(nil)
+        }
     }
 
     /// The others of its group; favorites' pages stay, as Chrome keeps pinned tabs. Tabs close

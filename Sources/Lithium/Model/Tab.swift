@@ -274,7 +274,7 @@ final class Tab: NSObject, Identifiable {
     var isMuted = false {
         didSet {
             if let loadedWebView { applyMute(to: loadedWebView) }
-            if isMuted { browser?.nowPlaying.discard(self, pageGone: false) }
+            if isMuted { browser?.nowPlaying.mute(self) }
         }
     }
 

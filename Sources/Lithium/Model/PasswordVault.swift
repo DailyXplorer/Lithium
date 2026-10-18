@@ -70,7 +70,7 @@ enum VaultFile {
 /// may block. A file there that this launch can't open is never written over: the passwords it
 /// holds come back with a launch that has the key.
 actor PasswordStore {
-    let fileURL: URL
+    nonisolated let fileURL: URL
     /// `creating` makes one when there is none. Only asked so when there is no file, since a new
     /// key would leave the file's passwords behind for good.
     private let key: @Sendable (_ creating: Bool) -> SymmetricKey?

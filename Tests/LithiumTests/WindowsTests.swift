@@ -297,6 +297,31 @@ struct WindowsTests {
         #expect(!second.isRenaming)
     }
 
+    /// Every window shows the same favorites, but a favorite has one page. Picked in the second
+    /// window, that page comes into it, and the first goes on to its own tab: before, the first
+    /// window came forward with the page, so the second only drove the first.
+    @Test func aFavoritePickedInTheOtherWindowComesIntoIt() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        let favorite = restored(browser, "favorite")
+        browser.pin(favorite)
+        let pin = try #require(browser.pins.first)
+        browser.activate(pin, in: first)
+        #expect(first.selectedTab === favorite)
+        let second = browser.openWindow()
+        browser.windowBecameKey(second)
+
+        browser.activate(pin, in: second)
+        #expect(second.selectedTab === favorite)
+        #expect(browser.window(of: favorite) === second)
+        #expect(first.selectedTab === a)
+        #expect(browser.liveTab(for: pin) === favorite, "the same page, not a second one")
+        #expect(browser.tabs.count == 2)
+        #expect(browser.navigationOrder(in: Space.mainID, window: first.id).map(\.id) == [a.id])
+    }
+
     /// A session written before windows were saved comes back as one window.
     @Test func anOldSessionOpensInOneWindow() {
         SessionStore.save(Session(tabs: [.init(url: page("old"), title: "Old", customTitle: nil, pinID: nil)], selectedIndex: 0))
@@ -327,6 +352,13 @@ struct WindowsTests {
     }
 
     private func page(_ name: String) -> URL { URL(string: "data:text/html,\(name)")! }
+
+    /// Asleep with its address, as a restored tab: pinning needs an address, and nothing loads.
+    private func restored(_ browser: Browser, _ name: String, in window: BrowserWindow? = nil) -> Lithium.Tab {
+        let tab = browser.newTab(selecting: false, in: window)
+        tab.restore(url: page(name), title: name)
+        return tab
+    }
 }
 
 /// Closes as a `BrowserNSWindow` does, through `Browser.windowWillClose`, and stays off screen.

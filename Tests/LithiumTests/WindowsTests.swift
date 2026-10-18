@@ -404,6 +404,34 @@ struct WindowsTests {
         #expect(first.regularTabs.map(\.id) == [b2.id, a.id], "already there, it stays")
     }
 
+    /// A tab moved to the other window is no longer its old window's: closing the tab it opened
+    /// there, or going back to the space it was last shown in, doesn't select it in the old window,
+    /// which would take its page from the window it is in.
+    @Test func aTabMovedAwayIsNotSelectedAgainInItsOldWindow() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        let opener = browser.newTab(url: page("opener"))
+        browser.newTab(url: page("opened"), openedFrom: opener)
+        let second = browser.openWindow()
+
+        browser.move(opener, to: second)
+        first.closeSelectedTab()
+        #expect(first.selectedTab === a, "not its opener, now in the other window")
+        #expect(second.selectedTab === opener)
+
+        var work = browser.newSpaceDraft()
+        work.name = "Work"
+        browser.addSpace(work, in: first)
+        let w = browser.newTab(url: page("w"), in: first)
+        first.switchToSpace(Space.mainID)
+        browser.move(w, to: second)
+        first.switchToSpace(work.id)
+        #expect(first.selectedTab == nil, "the start page, not the tab moved away")
+        #expect(second.selectedTab === w)
+    }
+
     /// Each window's sidebar lists every other window's tabs in that window's order, live, under
     /// "Other window", numbered once there are several; none with one window.
     @Test func otherWindowSectionsListTheOtherWindowsTabs() throws {

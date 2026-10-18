@@ -522,6 +522,10 @@ final class Browser {
             window.isHidden = true
             // WebKit plays on in a page out of any window: nothing the user closed keeps sounding.
             for tab in tabs where tab.windowID == window.id { nowPlaying.pause(tab) }
+            // Off screen now, as when deselected: their idle time starts here, not when they were
+            // selected, or the page read for a while would sleep, and reload, before a Dock click.
+            window.selectedTab?.markActive()
+            window.shownPartner?.markActive()
             return
         }
         // Off the tabs first, so the selection doesn't walk through (and wake) the tabs closing.

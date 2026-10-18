@@ -433,7 +433,8 @@ struct WindowsTests {
     }
 
     /// The last window closed hides with its tabs: their media pauses, its page counts as off
-    /// screen so it can sleep, and the page and tab commands are off until the window shows again.
+    /// screen so it can sleep, idle from the close (not from when it was selected, or a page read
+    /// for long would sleep at once), and the page and tab commands are off until it shows again.
     @Test func theLastWindowClosedPausesItsTabsAndTakesNoCommands() {
         let browser = makeBrowser()
         defer { reset(browser) }
@@ -444,8 +445,10 @@ struct WindowsTests {
         var paused: Set<Lithium.Tab.ID> = []
         browser.nowPlaying.pause = { if mine.contains($0.id) { paused.insert($0.id) } }
         #expect(browser.isShown(b) && browser.commandTab === b && browser.canChangeTabs)
+        let selectedAt = b.lastActive
 
         browser.windowWillClose(first)
+        #expect(b.lastActive > selectedAt)
         #expect(paused == mine)
         #expect(!browser.isShown(b))
         #expect(browser.commandTab == nil)

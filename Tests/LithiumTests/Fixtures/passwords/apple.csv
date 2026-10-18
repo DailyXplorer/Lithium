@@ -1,0 +1,4 @@
+Title,URL,Username,Password,Notes,OTPAuth
+example.com (alice),https://example.com/,alice,Tr0ub4dor&3,,
+192.168.1.1,http://192.168.1.1/,admin,router-pass,home router,
+files.example.com,ftp://files.example.com/,carol,secret,,

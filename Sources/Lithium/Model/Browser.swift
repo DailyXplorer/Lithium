@@ -1020,8 +1020,13 @@ final class Browser {
     /// The sidebars' order, top to bottom, window after window and space after space. Extensions
     /// and agents see every window and space.
     var navigationOrder: [Tab] {
+        windows.flatMap { navigationOrder(of: $0.id) }
+    }
+
+    /// One window's sidebar order, space after space.
+    func navigationOrder(of window: BrowserWindow.ID) -> [Tab] {
         let spaces = spaces.isEmpty ? [Space.mainID] : spaces.map(\.id)
-        return windows.flatMap { window in spaces.flatMap { navigationOrder(in: $0, window: window.id) } }
+        return spaces.flatMap { navigationOrder(in: $0, window: window) }
     }
 
     // MARK: Session

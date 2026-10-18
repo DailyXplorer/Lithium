@@ -4,7 +4,8 @@ import WebKit
 
 /// App state shared by every window; `BrowserWindow` is one window's. Every open page is a `Tab`,
 /// listed in the sidebar of its window (`Tab.windowID`); one whose `pinID` is set is a favorite's
-/// live page. With no tab selected a window shows the start page, so empty tabs never pile up.
+/// live page in that window. Favorites are shared, their pages are not: each window opens its own,
+/// with the same cookies. With no tab selected a window shows the start page, so empty tabs never pile up.
 @MainActor
 @Observable
 final class Browser {
@@ -699,10 +700,19 @@ final class Browser {
         tab.isInAgentGroup ? agentGroup(in: tab.spaceID, window: tab.windowID) : tabList(in: tab.spaceID, window: tab.windowID)
     }
 
-    func liveTab(for pin: Pin) -> Tab? { tabs.first { $0.pinID == pin.id } }
+    /// The favorite's page in `window`, which no other window shows.
+    func liveTab(for pin: Pin, in window: BrowserWindow.ID) -> Tab? { tabs.first { $0.pinID == pin.id && $0.windowID == window } }
+
+    /// One page per window the favorite is open in.
+    func liveTabs(for pin: Pin) -> [Tab] { tabs.filter { $0.pinID == pin.id } }
+
+    /// Every window's tile shows what any of the favorite's pages says: one site, one account.
+    func badge(for pin: Pin) -> UnreadBadge.Shown? {
+        UnreadBadge.merged(liveTabs(for: pin).map(\.unread.shown))
+    }
 
     func icon(for pin: Pin) -> NSImage? {
-        if let live = liveTab(for: pin)?.favicon { return live }
+        if let live = liveTabs(for: pin).lazy.compactMap(\.favicon).first { return live }
         if let cached = pinIcons[pin.id] { return cached }
         let image = pin.favicon.flatMap(NSImage.init(data:))
         pinIcons[pin.id] = image
@@ -742,27 +752,6 @@ final class Browser {
         tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs, space: tab.spaceID, window: window.id))
         extensions.didOpen(tab)
         window.select(tab)
-    }
-
-    /// Another window's tab into the top of `window`'s list, shown there: the same tab and web view,
-    /// so its page and history stay and nothing reloads. The window it leaves shows what closing it would.
-    func move(_ tab: Tab, to window: BrowserWindow) {
-        let from = self.window(of: tab)
-        guard from !== window, let index = tabs.firstIndex(where: { $0 === tab }) else { return }
-        let order = peers(of: tab)
-        let partner = leaveSplit(tab)
-        from.videoPopout.discard(tab)
-        if from.renamingTabID == tab.id { from.renamingTabID = nil }
-        if tab.id == from.selectedTabID { from.selectAfterClosing(tab, partner: partner, among: order, goingBack: false) }
-        from.recentTabs.didClose(tab)
-        extensions.moving(tab) {
-            var reordered = tabs
-            reordered.remove(at: index)
-            tab.move(toWindow: window.id)
-            reordered.insert(tab, at: Self.position(inTabList: 0, of: reordered, space: tab.spaceID, window: window.id, folder: tab.folderID))
-            tabs = reordered
-        }
-        select(tab)
     }
 
     /// `index` is a place in the window's tab list for the space (in `folder`, or outside folders), clamped to it.
@@ -1008,12 +997,12 @@ final class Browser {
     var canReopenClosedTab: Bool { !closedTabs.isEmpty }
 
     /// Like Chrome: back in its place, with its history, in the window ⇧⌘T was pressed in. A
-    /// favorite's page goes back to its favorite if that has no page open, or else to the top of
-    /// the list.
+    /// favorite's page goes back to its favorite if that has no page open in the window, or else
+    /// to the top of the list.
     func reopenClosedTab(into window: BrowserWindow? = nil) {
         guard let closed = closedTabs.popLast() else { return }
         let window = window ?? commandWindow
-        let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0) == nil }
+        let pin = pins.first { $0.id == closed.pinID && liveTab(for: $0, in: window.id) == nil }
         let folder = closed.folderID.flatMap { folderExists($0, in: closed.spaceID) ? $0 : nil }
         let index = pin != nil || closed.folderID != folder ? 0 : closed.index ?? 0
         let tab = insertTab(at: index, configuration: makeConfiguration(for: closed.url), space: closed.spaceID, window: window.id, folder: pin == nil ? folder : nil)
@@ -1410,11 +1399,13 @@ final class Browser {
 
     // MARK: Favorites
 
-    /// Every window shows the favorites, but a favorite has one page: open in another window, it
-    /// comes into `window`, as in Arc; with no window given, it shows where it is. A new one opens in `window`.
+    /// Every window shows the favorites, each with its own page: open in another window only, the
+    /// favorite opens a second page in `window` (the window in front with none given), and the
+    /// first stays as it is, as Safari and Chrome do with one site in two windows.
     func activate(_ pin: Pin, in window: BrowserWindow? = nil) {
-        if let tab = liveTab(for: pin) {
-            if let window, window !== self.window(of: tab) { move(tab, to: window) } else { select(tab) }
+        let window = liveWindow(window?.id)
+        if let tab = liveTab(for: pin, in: window.id) {
+            select(tab)
         } else {
             let tab = newTab(url: pin.url, space: pin.space, in: window)
             extensions.moving(tab) { tab.pinID = pin.id }
@@ -1462,13 +1453,22 @@ final class Browser {
         var reordered = pins
         let moving = reordered.remove(at: from)
         reordered.insert(moving, at: pinsIndex(forSlot: to, in: space, of: reordered))
-        extensions.moving(liveTab(for: pins[from])) { pins = reordered }
+        reportingMoves(of: liveTabs(for: pins[from])[...]) { pins = reordered }
     }
 
+    /// The window in front keeps its page.
     func unpin(_ pin: Pin) {
-        let live = liveTab(for: pin)
-        extensions.moving(live) {
-            live?.pinID = nil
+        unpin(pin, keepingPageIn: commandWindow)
+    }
+
+    /// The page in `window`, the one the user unpinned from, stays there as a tab; the favorite's
+    /// pages in other windows close, as nothing would list them any more.
+    func unpin(_ pin: Pin, keepingPageIn window: BrowserWindow) {
+        let pages = liveTabs(for: pin)
+        pages.filter { $0.windowID != window.id }.reversed().forEach(close)
+        let kept = pages.first { $0.windowID == window.id }
+        extensions.moving(kept) {
+            kept?.pinID = nil
             pins.removeAll { $0.id == pin.id }
         }
         pinIcons[pin.id] = nil
@@ -1518,10 +1518,10 @@ final class Browser {
     }
 
     /// A sleeping tab runs no script, so at each new day the icon its page last named is fetched
-    /// once more for each favorite asleep or without a page; it stays asleep.
+    /// once more for each favorite whose pages are all asleep, or that has none; they stay asleep.
     private func refreshSleepingPinIcons() {
         let due = pins.compactMap { pin -> (Pin.ID, URL)? in
-            guard liveTab(for: pin)?.isAsleep != false, let url = pin.iconURL,
+            guard liveTabs(for: pin).allSatisfy(\.isAsleep), let url = pin.iconURL,
                   ["http", "https"].contains(url.scheme?.lowercased()) else { return nil }
             return (pin.id, url)
         }
@@ -1532,7 +1532,7 @@ final class Browser {
                       let data = await favicons.refresh(host: host, from: url),
                       // The tab may have woken meanwhile and its page named another.
                       let index = pins.firstIndex(where: { $0.id == id }), pins[index].iconURL == url else { continue }
-                if let tab = liveTab(for: pins[index]), tab.isAsleep, tab.url?.host() == host { tab.showFavicon(data) }
+                for tab in liveTabs(for: pins[index]) where tab.isAsleep && tab.url?.host() == host { tab.showFavicon(data) }
                 storeIcon(data, from: url, inPinAt: index)
             }
         }

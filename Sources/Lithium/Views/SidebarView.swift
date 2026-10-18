@@ -98,7 +98,6 @@ struct SidebarView: View {
                         }
                         .dropDestination(for: String.self) { items, _ in dropTab(items, on: .agentGroup) }
                     }
-                    OtherWindowSections()
                 }
             }
             .scrollIndicators(.never)
@@ -272,13 +271,13 @@ private struct PinTile: View {
     @State private var isHovered = false
 
     var body: some View {
-        let live = browser.liveTab(for: pin)
+        let live = browser.liveTab(for: pin, in: window.id)
         let isSelected = live != nil && live?.id == window.selectedTabID
         RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(palette.tileFill(isSelected: isSelected, isHovered: isHovered))
             .frame(height: 48)
             .overlay {
-                BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: live?.unread.shown)
+                BadgedFavicon(image: browser.icon(for: pin), fallback: pin.url.host() ?? pin.title, badge: browser.badge(for: pin))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -295,7 +294,7 @@ private struct PinTile: View {
                     Divider()
                     Button("Close Page") { browser.close(live) }
                 }
-                Button("Unpin") { browser.unpin(pin) }
+                Button("Unpin") { browser.unpin(pin, keepingPageIn: window) }
             }
     }
 }

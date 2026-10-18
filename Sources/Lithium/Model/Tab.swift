@@ -311,8 +311,8 @@ final class Tab: NSObject, Identifiable {
 
     /// The space whose sidebar shows the tab (`Space`). Fixed: its pages' cookies live there.
     let spaceID: Space.ID
-    /// The window whose sidebar lists the tab. Only `Browser.adopt`, for a link's page, and
-    /// `Browser.move` change it.
+    /// The window whose sidebar lists the tab, and no other. Only `Browser.adopt`, for a link's
+    /// page, changes it.
     private(set) var windowID: BrowserWindow.ID
     /// Asked for as a web view is made, so tabs restored asleep make no store.
     private var spaceStore: WKWebsiteDataStore? {
@@ -333,7 +333,7 @@ final class Tab: NSObject, Identifiable {
         super.init()
     }
 
-    /// A link's page taken into a window (`Browser.adopt`), or a tab into another (`Browser.move`).
+    /// A link's page taken into a window (`Browser.adopt`).
     func move(toWindow window: BrowserWindow.ID) {
         windowID = window
     }
@@ -1087,8 +1087,11 @@ final class Tab: NSObject, Identifiable {
         }
     }
 
+    /// A favorite's page in another window is the same site: its notification is seen too.
     func didOpen() {
         updateUnread { $0.open() }
+        guard let pinID, let browser else { return }
+        for page in browser.tabs where page !== self && page.pinID == pinID { page.updateUnread { $0.open() } }
     }
 
     /// Pinned, the page gets its script and channel at once, without a reload. A tab restored asleep

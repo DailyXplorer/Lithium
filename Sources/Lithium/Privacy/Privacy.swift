@@ -347,12 +347,15 @@ final class Privacy {
         guard let host = Self.siteHost(url) else { return }
         if let privateSession {
             privateExceptions[privateSession, default: [:]][host] = enabled
-        } else if let space {
-            spaceExceptions[space, default: [:]][host] = enabled
-            UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
         } else {
-            setEnabled(enabled, host: host)
+            setEnabled(enabled, host: host, space: space)
         }
+    }
+
+    /// Sites turned off in a separate space, for Settings to list beside `disabledHosts`.
+    var spaceDisabledHosts: [(space: Space.ID, host: String)] {
+        spaceExceptions.flatMap { space, sites in sites.filter { !$0.value }.map { (space, $0.key) } }
+            .sorted { $0.host < $1.host }
     }
 
     func forget(privateSession: ObjectIdentifier) {
@@ -379,7 +382,12 @@ final class Privacy {
     }
 
     /// Takes the host as is: rebuilt into an address, an IPv6 one may not parse back to the same host.
-    func setEnabled(_ enabled: Bool, host: String) {
+    func setEnabled(_ enabled: Bool, host: String, space: Space.ID? = nil) {
+        if let space {
+            spaceExceptions[space, default: [:]][host] = enabled
+            UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
+            return
+        }
         if enabled { disabledHosts.remove(host) } else { disabledHosts.insert(host) }
         UserDefaults.standard.set(disabledHosts.sorted(), forKey: Self.disabledHostsKey)
     }

@@ -74,6 +74,7 @@
   const gl1 = glMembers(globalThis.WebGLRenderingContext), gl2 = glMembers(globalThis.WebGL2RenderingContext);
   const ourNavigator = navigator;
   const navigatorLanguage = member(Navigator.prototype, 'language').get;
+  const navigatorLanguages = member(Navigator.prototype, 'languages').get;
   const voiceProto = globalThis.SpeechSynthesisVoice && SpeechSynthesisVoice.prototype;
   const voiceDefault = member(voiceProto, 'default').get;
   const voiceLocal = member(voiceProto, 'localService').get;
@@ -567,20 +568,27 @@
       patchGetter(win.Navigator.prototype, 'hardwareConcurrency', (target, self) => cores(apply(target, self, [])));
     } catch (_) {}
 
-    // Installed voices differ from Mac to Mac; expose only the default voice and those
-    // of the page's language, which every Mac with that language ships.
+    // Installed voices differ from Mac to Mac; expose only the default voice and those of the
+    // user's languages, which every Mac with them ships. Not the page's: a page sets that itself.
     try {
       patch(win.SpeechSynthesis.prototype, 'getVoices', (target, self, args) => {
-        const tag = apply(toLowerCase, read(navigatorLanguage, ourNavigator) || 'en', []);
-        const dash = apply(indexOf, tag, ['-']);
-        const language = dash < 0 ? tag : apply(slice, tag, [0, dash]);
+        // WebKit's own frozen array: its entries can't be swapped by the page.
+        const tags = read(navigatorLanguages, ourNavigator) || [read(navigatorLanguage, ourNavigator) || 'en'];
+        const spoken = (voice) => {
+          const lang = apply(toLowerCase, apply(voiceLang, voice, []), []);
+          for (let j = 0; j < tags.length; j++) {
+            const tag = apply(toLowerCase, tags[j], []);
+            const dash = apply(indexOf, tag, ['-']);
+            if (apply(startsWith, lang, [dash < 0 ? tag : apply(slice, tag, [0, dash])])) return true;
+          }
+          return false;
+        };
         // Compacted in place, so the result stays the frame's own array.
         const voices = apply(target, self, args);
         let kept = 0;
         for (let i = 0; i < voices.length; i++) {
           const voice = voices[i];
-          if (apply(voiceDefault, voice, []) ||
-              (apply(voiceLocal, voice, []) && apply(startsWith, apply(toLowerCase, apply(voiceLang, voice, []), []), [language]))) {
+          if (apply(voiceDefault, voice, []) || (apply(voiceLocal, voice, []) && spoken(voice))) {
             voices[kept++] = voice;
           }
         }

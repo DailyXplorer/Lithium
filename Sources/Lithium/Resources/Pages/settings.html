@@ -654,10 +654,16 @@
     clearTimeout(pollTimer);
     if (protections.updating) pollTimer = setTimeout(() => call('state').then(render), 1000);
 
-    $('#exceptions').replaceChildren(...(protections.disabledHosts.length ? protections.disabledHosts.map((host) => {
+    // A site turned off in a space with its own cookies is off there only: its row names the space.
+    const exceptions = [
+      ...protections.disabledHosts.map((host) => ({ host, value: host })),
+      ...protections.spaceDisabledHosts.map((entry) => ({ host: entry.host, hint: entry.spaceName, value: { host: entry.host, space: entry.space } })),
+    ];
+    $('#exceptions').replaceChildren(...(exceptions.length ? exceptions.map((entry) => {
       const button = el('button', { className: 'button', textContent: 'Turn on' });
-      button.onclick = () => call('enableProtections', host).then(render);
-      return el('div', { className: 'row' }, [el('div', { className: 'title', textContent: host }), button]);
+      button.onclick = () => call('enableProtections', entry.value).then(render);
+      const title = el('div', { className: 'title', textContent: entry.host });
+      return el('div', { className: 'row' }, [entry.hint ? el('div', {}, [title, el('div', { className: 'hint', textContent: entry.hint })]) : title, button]);
     }) : [el('div', { className: 'empty', textContent: 'No sites. Use Site Protections in the ⋯ menu.' })]));
 
     $('#allowed-pages').replaceChildren(...(protections.allowedPages.length ? protections.allowedPages.map((host) => {

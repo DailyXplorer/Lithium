@@ -111,6 +111,9 @@ final class QuickLinks {
 
     var keyWindow: NSWindow? { keyTab.flatMap { windows[$0.id] } }
 
+    /// A Dock click with one up only brings Lithium forward, as with a browser window on screen.
+    var hasWindowOnScreen: Bool { windows.values.contains(where: \.isVisible) }
+
     func windowBecameKey(_ tab: Tab) {
         keyTab = tab
     }

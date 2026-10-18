@@ -22,9 +22,15 @@ struct DockClickTests {
         #expect(Browser.dockClick(on: [(a, .onScreen), (b, .minimized)], lastActive: a) == .comeForward)
     }
 
-    @Test func withNoneOnScreenTheMostRecentMinimizedComesBack() {
-        #expect(Browser.dockClick(on: [(a, .minimized), (b, .minimized)], lastActive: nil) == .restore(b))
-        #expect(Browser.dockClick(on: [(a, .minimized), (b, .closed)], lastActive: b) == .restore(a), "the last active one closed")
+    @Test func withNoneOnScreenTheFirstMinimizedComesBackAsBefore() {
+        #expect(Browser.dockClick(on: [(a, .minimized), (b, .minimized)], lastActive: nil) == .restore(a))
+        #expect(Browser.dockClick(on: [(a, .minimized), (b, .minimized), (c, .closed)], lastActive: c) == .restore(a), "the last active one closed")
+    }
+
+    @Test func aLinksWindowOnScreenOnlyBringsLithiumForward() {
+        #expect(Browser.dockClick(on: [(a, .closed)], lastActive: a, linkOnScreen: true) == .comeForward)
+        #expect(Browser.dockClick(on: [(a, .minimized)], lastActive: nil, linkOnScreen: true) == .comeForward)
+        #expect(Browser.dockClick(on: [(a, .minimized)], lastActive: a, linkOnScreen: true) == .restore(a), "the last active one still comes back")
     }
 
     @Test func withNoWindowShowingOneOpens() {

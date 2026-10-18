@@ -545,13 +545,13 @@ final class Browser {
     enum DockClick: Equatable { case comeForward, restore(BrowserWindow.ID), openWindow }
 
     /// The last active window comes back from the Dock even with another on screen; with one on
-    /// screen otherwise, Lithium only comes forward. With none, the most recent minimized one comes
-    /// back, else the last one closed or a new one.
-    nonisolated static func dockClick(on windows: [(id: BrowserWindow.ID, showing: WindowShowing)], lastActive: BrowserWindow.ID?) -> DockClick {
+    /// screen otherwise, or a link's window, Lithium only comes forward. With none, the first
+    /// minimized one comes back, as before, else the last one closed or a new one.
+    nonisolated static func dockClick(on windows: [(id: BrowserWindow.ID, showing: WindowShowing)], lastActive: BrowserWindow.ID?, linkOnScreen: Bool = false) -> DockClick {
         let minimized = windows.filter { $0.showing == .minimized }.map(\.id)
         if let lastActive, minimized.contains(lastActive) { return .restore(lastActive) }
-        if windows.contains(where: { $0.showing == .onScreen }) { return .comeForward }
-        return minimized.last.map(DockClick.restore) ?? .openWindow
+        if linkOnScreen || windows.contains(where: { $0.showing == .onScreen }) { return .comeForward }
+        return minimized.first.map(DockClick.restore) ?? .openWindow
     }
 
     /// From the browser windows alone: AppKit's `hasVisibleWindows` also counts the agent stage,
@@ -560,7 +560,7 @@ final class Browser {
         let showing = windows.map { window in
             (id: window.id, showing: window.isHidden ? WindowShowing.closed : window.nsWindow?.isMiniaturized == true ? .minimized : .onScreen)
         }
-        switch Self.dockClick(on: showing, lastActive: lastActiveWindowID) {
+        switch Self.dockClick(on: showing, lastActive: lastActiveWindowID, linkOnScreen: quickLinks.hasWindowOnScreen) {
         case .comeForward: break
         case .restore(let id): if let nsWindow = windows.first(where: { $0.id == id })?.nsWindow { bringForward(nsWindow) }
         case .openWindow: openWindow()

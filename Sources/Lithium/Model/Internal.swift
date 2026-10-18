@@ -284,6 +284,10 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/category/extensions")!)
         case "openPasswords":
             Passwords.open()
+        case "passwords", "setPasswordOffers", "setPasswordUnlock", "revealPassword", "copyPassword", "savePasswordEdit",
+             "deletePassword", "removeNeverSaved", "importPasswords", "exportPasswords":
+            // Their own state, apart from the settings': it reads the vault.
+            return await browser.passwords.answerSettings(action, value, window: message.webView?.window)
         case "clearHistory":
             await browser.clearHistory()
             return (await visits(browser, matching: ""), nil)

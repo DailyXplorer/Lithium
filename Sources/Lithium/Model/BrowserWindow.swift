@@ -375,7 +375,8 @@ final class BrowserWindow: Identifiable {
         browser.returnKeyboardToPage(to: selectedTab, fieldHadKeyboard: fieldHadKeyboard)
     }
 
-    func dismissOverlay() -> Bool {
+    /// `pageDeclined`: the Escape came back from a page that had the keyboard and didn't handle it.
+    func dismissOverlay(pageDeclined: Bool = false) -> Bool {
         if recentTabs.target != nil {
             endTabCycle(commit: false)
             return true
@@ -394,6 +395,8 @@ final class BrowserWindow: Identifiable {
             isSummaryPresented = false
             return true
         }
+        // The page has the keyboard: its menu or dialog gets the Escape first, the prompts only if it declines.
+        guard pageDeclined || !(selectedTab?.contentView.window?.firstResponder is WKWebView) else { return false }
         // The shown permission prompt, denied this once and not remembered. Not under an agent's
         // banner, whose Deny Escape triggers.
         if browser.agent?.confirmations.front(selected: selectedTabID) == nil,

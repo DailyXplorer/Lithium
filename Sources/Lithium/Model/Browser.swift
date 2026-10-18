@@ -91,6 +91,9 @@ final class Browser {
     @ObservationIgnored private(set) lazy var colorPicker = PageColorPicker()
     @ObservationIgnored private(set) lazy var passwords = PasswordManager()
     @ObservationIgnored private var eventMonitors: [Any] = []
+    /// Marks the Escapes passed on, on the event itself: WebKit sends one the page didn't handle
+    /// back through `NSApp.sendEvent`, maybe after the next press, and the prompts may take it then.
+    private static let passedOnKey = UnsafeRawPointer(UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1))
 
     /// Popovers are the window's child windows and alerts its sheets; menus and drags run the
     /// event tracking loop until they end.
@@ -655,10 +658,14 @@ final class Browser {
         if field is URLTextField { self.window(for: window)?.returnKeyboardToPage(fieldHadKeyboard: true) }
     }
 
-    /// The key monitor's Escape: true when Lithium acted on it, false to let it go on.
+    /// The key monitor's Escape: true when Lithium acted on it, false to let it go on. A page with
+    /// the keyboard has it before the prompts, which take only one it sends back unhandled.
     func takesEscape(_ event: NSEvent) -> Bool {
         // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
-        !NativeInput.isAgents(event) && ownsEscape(in: event.window) && dismissOverlay(in: event.window)
+        guard !NativeInput.isAgents(event), ownsEscape(in: event.window) else { return false }
+        if dismissOverlay(in: event.window, pageDeclined: objc_getAssociatedObject(event, Self.passedOnKey) != nil) { return true }
+        objc_setAssociatedObject(event, Self.passedOnKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        return false
     }
 
     /// Not in another window or under a sheet, and not while a text field edits (the address bar
@@ -673,10 +680,10 @@ final class Browser {
 
     /// Escape in `nsWindow`, or with none given in the window in front. A link's window has only
     /// its find bar: a tab's name editing in a browser window stays.
-    func dismissOverlay(in nsWindow: NSWindow? = nil) -> Bool {
-        if let window = window(for: nsWindow) { return window.dismissOverlay() }
+    func dismissOverlay(in nsWindow: NSWindow? = nil, pageDeclined: Bool = false) -> Bool {
+        if let window = window(for: nsWindow) { return window.dismissOverlay(pageDeclined: pageDeclined) }
         if quickLinks.keyTab != nil { return quickLinks.closeFindBar() }
-        return commandWindow.dismissOverlay()
+        return commandWindow.dismissOverlay(pageDeclined: pageDeclined)
     }
 
     /// Hands the keyboard back to `tab`'s page once a field of Lithium's own closes: left on the

@@ -140,7 +140,7 @@ extension Browser {
 
     /// The space's live favorites, its tab list and its Agent group, as the window's sidebar reads.
     func navigationOrder(in space: Space.ID, window: BrowserWindow.ID) -> [Tab] {
-        pins(in: space).compactMap(liveTab(for:)).filter { $0.windowID == window } + tabList(in: space, window: window) + agentGroup(in: space, window: window)
+        pins(in: space).compactMap { liveTab(for: $0, in: window) } + tabList(in: space, window: window) + agentGroup(in: space, window: window)
     }
 
     func newSpaceDraft() -> Space {

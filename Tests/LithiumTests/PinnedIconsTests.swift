@@ -175,7 +175,7 @@ struct PinnedIcons {
         let browser = Browser(favicons: Self.favicons(), notifications: center)
         let sleeping = try #require(browser.tabs.first { $0.pinID == calendar.id })
         #expect(sleeping.isAsleep && sleeping.loadedWebView == nil)
-        #expect(browser.liveTab(for: mail) == nil)
+        #expect(browser.liveTabs(for: mail).isEmpty)
 
         await Task.yield()
         #expect(browser.sleepingIconsRefresh == nil)

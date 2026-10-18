@@ -126,6 +126,7 @@ struct TabHoverLayer: View {
 private struct LiveTabHoverCard: View {
     let target: HoverTarget
     @Environment(Browser.self) private var browser
+    @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.tabUsage) private var showsUsage = true
     @State private var usage: TabUsage?
 
@@ -152,7 +153,7 @@ private struct LiveTabHoverCard: View {
             return (tab, tab.title.isEmpty ? tab.displayTitle : tab.title, Self.host(of: tab.url))
         case let .pin(id):
             guard let pin = browser.pins.first(where: { $0.id == id }) else { return nil }
-            let tab = browser.liveTab(for: pin)
+            let tab = browser.liveTab(for: pin, in: window.id)
             let title = tab.map { $0.title.isEmpty ? $0.displayTitle : $0.title } ?? pin.title
             return (tab, title, Self.host(of: tab?.url ?? pin.url))
         }

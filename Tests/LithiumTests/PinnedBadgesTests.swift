@@ -48,6 +48,14 @@ struct PinnedBadges {
         #expect(UnreadBadge.accessibilityLabel(.dot) == "Unread")
     }
 
+    /// A favorite open in several windows shows the most any of its pages says.
+    @Test func mergedAcrossPages() {
+        #expect(UnreadBadge.merged([]) == nil)
+        #expect(UnreadBadge.merged([nil, nil]) == nil)
+        #expect(UnreadBadge.merged([nil, .dot]) == .dot)
+        #expect(UnreadBadge.merged([.dot, .count(2), nil, .count(5)]) == .count(5))
+    }
+
     @Test func precedence() {
         var badge = UnreadBadge()
         #expect(badge.shown == nil)

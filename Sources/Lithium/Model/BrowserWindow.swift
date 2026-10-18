@@ -50,8 +50,6 @@ final class BrowserWindow: Identifiable {
     /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
     /// sidebar's field for the sidebar's own.
     @ObservationIgnored var renameDraft: String?
-    /// The other windows whose section at the foot of the sidebar is folded (`otherWindowSections`).
-    var collapsedOtherWindows: Set<ID> = []
 
     let find = FindInPage()
     let suggestions = AddressSuggestions()
@@ -165,7 +163,7 @@ final class BrowserWindow: Identifiable {
         find.hide()
         let position = order.firstIndex { $0 === tab } ?? 0
         let remaining = order.filter { $0 !== tab }
-        // The opener may have moved to another window since: it stays there.
+        // A link's page that opened it may have been taken into another window since: it stays there.
         let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in browser.tabs.contains { $0 === opener && $0.windowID == id } ? opener : nil }
         if partner == nil, goingBack, let before = recentTabs.shownBefore(tab),
            before.map({ id in browser.tabs.contains { $0.id == id && $0 !== tab && $0.spaceID == tab.spaceID && $0.windowID == self.id } }) ?? true {
@@ -188,7 +186,7 @@ final class BrowserWindow: Identifiable {
 
     func togglePinForSelectedTab() {
         guard let tab = selectedTab else { return }
-        if let pin = browser.pins.first(where: { $0.id == tab.pinID }) { browser.unpin(pin) } else { browser.pin(tab) }
+        if let pin = browser.pins.first(where: { $0.id == tab.pinID }) { browser.unpin(pin, keepingPageIn: self) } else { browser.pin(tab) }
     }
 
     func selectAdjacentTab(_ offset: Int) {
@@ -250,27 +248,6 @@ final class BrowserWindow: Identifiable {
         return true
     }
 
-    // MARK: Other windows
-
-    struct OtherWindowSection: Identifiable {
-        let id: ID
-        let title: String
-        let tabs: [Tab]
-    }
-
-    /// Each other window's tabs, in its sidebar's order, at the foot of this one's: none with one window.
-    var otherWindowSections: [OtherWindowSection] {
-        let others = browser.windows.filter { $0 !== self }
-        return others.enumerated().map { index, other in
-            OtherWindowSection(id: other.id, title: others.count == 1 ? "Other window" : "Other window \(index + 1)",
-                               tabs: browser.navigationOrder(of: other.id))
-        }
-    }
-
-    func toggleOtherWindow(_ id: ID) {
-        collapsedOtherWindows.formSymmetricDifference([id])
-    }
-
     // MARK: Spaces
 
     /// An edit in the address bar or a tab's name ends first: its field would be left editing a
@@ -322,10 +299,11 @@ final class BrowserWindow: Identifiable {
     func addressTextChanged(_ text: String) {
         let edited = suggestions.editedTabID.flatMap { id in browser.tabs.first { $0.id == id } }
         // A space keeping its cookies apart is kept out of the others' suggestions, and they out of
-        // its: their titles and addresses are another identity's.
+        // its: their titles and addresses are another identity's. Another window's tabs are its own:
+        // a favorite open there opens its own page here.
         let (current, apart) = (currentSpaceID, Set(browser.spaces.filter(\.separatesData).map(\.id)))
         let shown = { (space: Space.ID) in space == current || !apart.contains(space) && !apart.contains(current) }
-        suggestions.update(query: text, tabs: browser.tabs.filter { shown($0.spaceID) }, pins: browser.pins.filter { shown($0.space) },
+        suggestions.update(query: text, tabs: browser.tabs.filter { $0.windowID == id && shown($0.spaceID) }, pins: browser.pins.filter { shown($0.space) },
                            history: browser.history, actions: barActions(for: edited))
     }
 

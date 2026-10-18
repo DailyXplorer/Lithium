@@ -57,6 +57,13 @@ struct UnreadBadge: Equatable {
         isNotified = false
     }
 
+    /// A favorite open in several windows: the highest count, else a dot if any page has one.
+    static func merged(_ badges: [Shown?]) -> Shown? {
+        let counts = badges.compactMap { badge -> Int? in if case .count(let count) = badge { count } else { nil } }
+        if let most = counts.max() { return .count(most) }
+        return badges.contains(.dot) ? .dot : nil
+    }
+
     static func label(_ count: Int) -> String {
         count > 99 ? "99+" : String(count)
     }

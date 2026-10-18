@@ -521,13 +521,18 @@ final class Browser {
     }
 
     /// Its tabs go into Reopen Closed Tab, bottom up so ⇧⌘T brings them back top down, each where
-    /// it was. The last window keeps its tabs, hidden, until New Window or the Dock shows it again.
+    /// it was. The last window keeps its tabs, hidden, until New Window or the Dock shows it again;
+    /// its private tabs close, or their sign-ins would live on for that Dock click.
     func windowWillClose(_ window: BrowserWindow) {
         window.nsWindow = nil
         window.videoPopout.hide()
         if keyWindow === window { keyWindow = nil }
         if windows.count == 1 {
             window.isHidden = true
+            let closing = tabs.filter { $0.windowID == window.id && $0.isEphemeral }
+            // Off a private tab first, so the selection doesn't wake a neighbour no window shows.
+            if window.selectedTab?.isEphemeral == true { window.showStartPage(picked: false) }
+            closing.forEach { close($0) }
             // WebKit plays on in a page out of any window: nothing the user closed keeps sounding.
             for tab in tabs where tab.windowID == window.id { nowPlaying.pause(tab) }
             // Off screen now, as when deselected: their idle time starts here, not when they were
@@ -743,6 +748,8 @@ final class Browser {
     @discardableResult
     func newTab(url: URL? = nil, selecting: Bool = true, configuration: WKWebViewConfiguration? = nil, privateStore: WKWebsiteDataStore? = nil, openedFrom opener: Tab? = nil, space: Space.ID? = nil, in window: BrowserWindow? = nil) -> Tab {
         let window = opener.map(self.window(of:)) ?? liveWindow(window?.id)
+        // A link's window opens its tabs in the last window, which may have closed since: out of sight.
+        if window.isHidden, let opener, quickLinks.contains(opener) { show(window) }
         let tab = insertTab(at: 0, configuration: configuration ?? makeConfiguration(for: url), privateStore: privateStore, space: space ?? opener?.spaceID ?? window.currentSpaceID, window: window.id)
         if let opener { window.recentTabs.didOpen(tab, from: opener) } else if selecting { window.recentTabs.didOpen(tab, replacing: window.selectedTab) }
         if let url { tab.load(url) }
@@ -962,7 +969,8 @@ final class Browser {
     /// ⌘W closes the selected tab of the browser window that is key, or whose page holds the key
     /// window: a full-screen video is in WebKit's own window, which counts as the tab's. A browser
     /// window with no tab at all closes, as in Safari and Chrome; one on its start page with tabs
-    /// elsewhere in it stays, since closing it would take them all. Another window in front closes.
+    /// elsewhere in it stays, since closing it would take them all. Favorites' pages don't count:
+    /// ⌘W never goes back to one, and they close with the window. Another window in front closes.
     func closeTabOrWindow(keyWindow: NSWindow? = NSApp.keyWindow) {
         guard let keyWindow else { return }
         let holdsPage = { (window: BrowserWindow) in
@@ -971,7 +979,7 @@ final class Browser {
         guard let window = window(for: keyWindow) ?? windows.first(where: holdsPage) else { return keyWindow.performClose(nil) }
         if window.selectedTab != nil {
             window.closeSelectedTab()
-        } else if !tabs.contains(where: { $0.windowID == window.id }) {
+        } else if !tabs.contains(where: { $0.windowID == window.id && $0.pinID == nil }) {
             keyWindow.performClose(nil)
         }
     }

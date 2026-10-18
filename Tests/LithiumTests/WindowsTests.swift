@@ -139,6 +139,43 @@ struct WindowsTests {
         #expect(browser.tabs.contains { $0 === call }, "still there for the Dock click")
     }
 
+    /// Private tabs close with the last window, as when quitting: hidden, they kept their sign-ins
+    /// until the Dock click. The tab beside the private one selected isn't woken in its place.
+    @Test func closingTheLastWindowClosesItsPrivateTabs() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let kept = restored(browser, "kept")
+        browser.newTab(url: page("private"), privateStore: .nonPersistent())
+        #expect(first.selectedTab?.isEphemeral == true)
+
+        browser.windowWillClose(first)
+        #expect(first.isHidden)
+        #expect(!browser.tabs.contains { $0.isEphemeral })
+        #expect(browser.tabs.map(\.id) == [kept.id])
+        #expect(kept.isAsleep)
+        #expect(!browser.canReopenClosedTab)
+        #expect(browser.openWindow() === first)
+        #expect(first.regularTabs.map(\.id) == [kept.id])
+    }
+
+    /// A ⌘-click in a link's window with the last window closed opens its tab there, which shows
+    /// again: hidden, the tab would run out of sight until a Dock click.
+    @Test func aLinksWindowShowsTheLastWindowClosedForItsNewTab() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        browser.quickLinks.showWindow = { _, _ in ShownWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true) }
+        let first = browser.windows[0]
+        let link = try #require(browser.quickLinks.open())
+        defer { browser.quickLinks.windowClosed(link) }
+        browser.windowWillClose(first)
+
+        let tab = browser.newTab(url: page("b"), selecting: false, openedFrom: link)
+        #expect(!first.isHidden)
+        #expect(browser.window(of: tab) === first)
+        #expect(first.regularTabs.contains { $0 === tab })
+    }
+
     /// ⌘W in a window with no tab left closes the window, as in Safari and Chrome: one of two
     /// goes, the last one hides. On the start page with tabs still in the window, it does nothing.
     @Test func commandWInAWindowWithNoTabClosesIt() {
@@ -171,6 +208,26 @@ struct WindowsTests {
         browser.closeTabOrWindow(keyWindow: first.nsWindow)
         #expect(first.isHidden)
         #expect(browser.windows.count == 1)
+    }
+
+    /// A favorite's page isn't a tab ⌘W goes back to: on the start page over one, the window closes,
+    /// the page with it, as when only list tabs were left.
+    @Test func commandWOnTheStartPageOverAFavoritesPageClosesTheWindow() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        browser.showWindow = { window, browser in ClosableWindow(window, browser: browser) }
+        let first = browser.windows[0]
+        let favorite = restored(browser, "favorite")
+        browser.pin(favorite)
+        let pin = try #require(browser.pins.first)
+        let second = browser.openWindow()
+        browser.activate(pin, in: second)
+        #expect(second.selectedTab?.pinID == pin.id)
+
+        second.newTabFocusingAddress()
+        browser.closeTabOrWindow(keyWindow: second.nsWindow)
+        #expect(browser.windows.map(\.id) == [first.id])
+        #expect(browser.liveTabs(for: pin).map(\.id) == [favorite.id], "the second window's page closed with it")
     }
 
     /// Close Tabs on deleting a folder closes only the tabs the acting window showed in it; another

@@ -1,5 +1,25 @@
 import AppKit
+import CoreTransferable
 import Observation
+import UniformTypeIdentifiers
+
+/// What a tab or a favorite drags as: a type of its own, not text, so one dropped past the
+/// sidebar can't land in a page's text field as its id.
+struct SidebarDrag: Transferable {
+    static let type = UTType(exportedAs: "app.lithium.browser.sidebar-item")
+    static let pasteboardType = NSPasteboard.PasteboardType(type.identifier)
+
+    /// A tab's id, or a favorite's with its prefix (`dropOnFavorites`).
+    let item: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(contentType: type) { Data($0.item.utf8) } importing: { SidebarDrag(item: String(decoding: $0, as: UTF8.self)) }
+    }
+
+    static func item(on pasteboard: NSPasteboard) -> String? {
+        pasteboard.data(forType: pasteboardType).map { String(decoding: $0, as: UTF8.self) }
+    }
+}
 
 /// Two tabs of the tab list shown together. The selected tab is the focused side, so the address
 /// bar, the toolbar and the menus act on it as they would on a lone tab.

@@ -194,6 +194,21 @@ struct WindowsTests {
         #expect(second.selectedTab === b2)
     }
 
+    /// A folder empty in this window but holding another window's tabs still holds tabs, so
+    /// deleting it asks first instead of silently emptying it out of the other window.
+    @Test func aFolderWithTabsOnlyInAnotherWindowAsksBeforeDeleting() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let a = browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        let folder = browser.newFolder(with: a)
+        #expect(browser.tabList(in: folder.space, window: second.id, folder: folder.id).isEmpty)
+        #expect(browser.folderHasTabs(folder.id))
+
+        browser.moveTab(a, toFolder: nil)
+        #expect(!browser.folderHasTabs(folder.id))
+    }
+
     /// A tab an agent or a page opens for a window that closed while it awaited goes into the
     /// window in front, not into no window's list.
     @Test func aTabForAClosedWindowGoesToTheWindowInFront() {

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
+import UniformTypeIdentifiers
 import WebKit
 @testable import Lithium
 
@@ -176,6 +177,23 @@ struct SplitViewTests {
         #expect(rows(browser) == ["a|b", "c"])
         // A tab can't go beside itself.
         #expect(!browser.commandWindow.dropForSplit(tab("b", in: browser).id.uuidString, on: .first))
+    }
+
+    /// A tab or favorite drags as a type of its own with no text in it, so a page's text field
+    /// dropped on never gets its id; the sidebar's drop targets still read it back.
+    @Test func aSidebarDragOffersThePageNoText() {
+        let provider = NSItemProvider()
+        provider.register(SidebarDrag(item: "pin:\(UUID().uuidString)"))
+        #expect(provider.hasItemConformingToTypeIdentifier(SidebarDrag.type.identifier))
+        #expect(!provider.hasItemConformingToTypeIdentifier(UTType.text.identifier))
+
+        let item = UUID().uuidString
+        let board = NSPasteboard(name: .init("SplitViewTests.\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        board.declareTypes([SidebarDrag.pasteboardType], owner: nil)
+        board.setData(Data(item.utf8), forType: SidebarDrag.pasteboardType)
+        #expect(board.string(forType: .string) == nil)
+        #expect(SidebarDrag.item(on: board) == item)
     }
 
     /// A drag dropped off the page leaves the drop zone in the window until SwiftUI next draws;

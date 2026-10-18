@@ -153,6 +153,28 @@ struct VideoPopoutTests {
         #expect(page.clamped(CGPoint(x: 900, y: -50), size: size) == CGPoint(x: 600, y: 0))
     }
 
+    /// Another tab's sound held the page (`hush`), and the player plays its video from a world of its
+    /// own, which the hold doesn't see: Play in the player frees the page too, or its next video
+    /// (or the one after an ad) could never play.
+    @Test func playInThePlayerFreesAPageAnotherTabPaused() {
+        let browser = Browser()
+        let (video, music) = (browser.newTab(), browser.newTab())
+        let player = browser.nowPlaying
+        player.hush = { _, _ in }
+        player.isHeard = { _ in true }
+        var told: [String] = []
+        player.tell = { tab, command, _ in if tab === video { told.append(command) } }
+        let playing = NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date())
+        player.receive(playing, from: video)
+        player.receive(playing, from: music)
+
+        let popout = browser.commandWindow.videoPopout
+        popout.adopt(video, playback: .init(isPaused: true, time: 0, duration: 60, isMuted: false, aspectRatio: 16 / 9))
+        defer { popout.discard(video) }
+        popout.togglePlay()
+        #expect(told == ["release"])
+    }
+
     /// A tall video in a short page (a split, a small window) fits the page's height, narrower
     /// than usual; a page claiming an extreme shape gets 4:1 at most.
     @Test func aTallVideoFitsThePage() throws {

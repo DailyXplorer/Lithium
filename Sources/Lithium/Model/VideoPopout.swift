@@ -78,8 +78,9 @@ final class VideoPopout {
     }
 
     /// For tests: the player takes `tab`, as if its video had popped out.
-    func adopt(_ tab: Tab) {
+    func adopt(_ tab: Tab, playback: Playback? = nil) {
         self.tab = tab
+        self.playback = playback
     }
 
     func discard(_ tab: Tab) {

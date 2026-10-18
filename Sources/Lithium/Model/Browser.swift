@@ -18,6 +18,10 @@ final class Browser {
     /// The browser window last in front; nil until one is, and once the last one closed. A sheet
     /// or a popover taking the key from it leaves it, as the window is still the one in front.
     private(set) var keyWindow: BrowserWindow?
+    /// The browser window the user was last in, for a Dock click. Unlike `keyWindow`, a window
+    /// minimized stays it while AppKit hands the key to another in its place.
+    @ObservationIgnored private(set) var lastActiveWindowID: BrowserWindow.ID?
+    @ObservationIgnored private var isMinimizingWindow = false
     /// Puts a window on screen. Tests open none.
     @ObservationIgnored var showWindow: @MainActor (BrowserWindow, Browser) -> NSWindow? = Browser.openOnScreen
     /// Empty until the user makes a second space (`Space`), then the main one first.
@@ -526,9 +530,41 @@ final class Browser {
     /// user is now looking at that page. Extensions' active tab is the one in front.
     func windowBecameKey(_ window: BrowserWindow) {
         keyWindow = window
+        if !isMinimizingWindow { lastActiveWindowID = window.id }
         quickLinks.browserWindowBecameKey()
         window.selectedTab?.didOpen()
         extensions.didSelect(window.selectedTab)
+    }
+
+    /// Brackets a minimize, so the window that takes the key meanwhile doesn't become the last active.
+    func windowMinimizing(_ minimizing: Bool) {
+        isMinimizingWindow = minimizing
+    }
+
+    enum WindowShowing { case onScreen, minimized, closed }
+    enum DockClick: Equatable { case comeForward, restore(BrowserWindow.ID), openWindow }
+
+    /// The last active window comes back from the Dock even with another on screen; with one on
+    /// screen otherwise, Lithium only comes forward. With none, the most recent minimized one comes
+    /// back, else the last one closed or a new one.
+    nonisolated static func dockClick(on windows: [(id: BrowserWindow.ID, showing: WindowShowing)], lastActive: BrowserWindow.ID?) -> DockClick {
+        let minimized = windows.filter { $0.showing == .minimized }.map(\.id)
+        if let lastActive, minimized.contains(lastActive) { return .restore(lastActive) }
+        if windows.contains(where: { $0.showing == .onScreen }) { return .comeForward }
+        return minimized.last.map(DockClick.restore) ?? .openWindow
+    }
+
+    /// From the browser windows alone: AppKit's `hasVisibleWindows` also counts the agent stage,
+    /// a link's window and panels, so with any of them up a minimized window stayed in the Dock.
+    func reopenFromDock() {
+        let showing = windows.map { window in
+            (id: window.id, showing: window.isHidden ? WindowShowing.closed : window.nsWindow?.isMiniaturized == true ? .minimized : .onScreen)
+        }
+        switch Self.dockClick(on: showing, lastActive: lastActiveWindowID) {
+        case .comeForward: break
+        case .restore(let id): if let nsWindow = windows.first(where: { $0.id == id })?.nsWindow { bringForward(nsWindow) }
+        case .openWindow: openWindow()
+        }
     }
 
     /// Installed once the window exists: a monitor added before NSApplication finishes launching is dropped.

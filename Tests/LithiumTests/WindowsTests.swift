@@ -240,6 +240,35 @@ struct WindowsTests {
         #expect(!nsWindow.minimized, "out of the Dock")
     }
 
+    /// The window minimized from the front comes back from the Dock, though the other took the key
+    /// meanwhile; once the user is in the other, a Dock click leaves the minimized one be.
+    @Test func aDockClickRestoresTheWindowLastActive() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let second = browser.openWindow()
+        let firstNS = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        let secondNS = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        first.nsWindow = firstNS
+        second.nsWindow = secondNS
+        browser.windowBecameKey(first)
+
+        browser.windowMinimizing(true)
+        firstNS.minimized = true
+        browser.windowBecameKey(second)
+        browser.windowMinimizing(false)
+        #expect(browser.commandWindow === second, "menu commands go to the window on screen")
+        browser.reopenFromDock()
+        #expect(!firstNS.minimized, "out of the Dock")
+        #expect(firstNS.frontings == 1)
+
+        browser.windowBecameKey(second)
+        firstNS.minimized = true
+        browser.reopenFromDock()
+        #expect(firstNS.minimized)
+        #expect(browser.windows.count == 2, "no new window")
+    }
+
     /// Extensions see one window: its active tab is the selected tab of the window in front, and a
     /// selection in a window behind waits until that window comes forward.
     @Test func extensionsActiveTabIsTheWindowInFronts() {

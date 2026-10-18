@@ -52,6 +52,14 @@ final class BrowserNSWindow: NSWindow, NSWindowDelegate {
         browser?.windowBecameKey(model)
     }
 
+    func windowWillMiniaturize(_ notification: Notification) {
+        browser?.windowMinimizing(true)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        browser?.windowMinimizing(false)
+    }
+
     func windowDidMove(_ notification: Notification) {
         model.noteFrame(frameDescriptor)
     }

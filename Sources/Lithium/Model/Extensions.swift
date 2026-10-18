@@ -503,7 +503,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
         for context: WKWebExtensionContext
     ) async throws {
         guard let popover = action.popupPopover else { return }
-        if let anchor = popupAnchor, Self.isOnScreen(anchor) {
+        if let anchor = Self.anchor(popupAnchor, in: browser?.commandWindow.nsWindow) {
             popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
         } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.commandWindow.nsWindow?.contentView]) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
@@ -512,6 +512,13 @@ extension Extensions: WKWebExtensionControllerDelegate {
             // meanwhile. Throwing wouldn't help: WebKit resolves that call whatever this returns.
             action.closePopup()
         }
+    }
+
+    /// Every window's toolbar registers its button as the anchor, so the last one drawn may be a
+    /// window behind: a popup the extension opens itself goes under the window in front's.
+    static func anchor(_ anchor: NSView?, in front: NSWindow?) -> NSView? {
+        guard let anchor, let front, anchor.window === front, isOnScreen(anchor) else { return nil }
+        return anchor
     }
 
     static func firstOnScreen(_ views: [NSView?]) -> NSView? {

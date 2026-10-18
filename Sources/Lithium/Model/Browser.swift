@@ -446,9 +446,10 @@ final class Browser {
         return windows.first { $0.nsWindow === nsWindow }
     }
 
-    /// Any window shows it: its selection, or its split partner.
+    /// Any window shows it: its selection, or its split partner. The last window, closed and
+    /// hidden, shows nothing, so its tabs can sleep.
     func isShown(_ tab: Tab) -> Bool {
-        windows.contains { $0.selectedTabID == tab.id || $0.shownPartner === tab }
+        windows.contains { !$0.isHidden && ($0.selectedTabID == tab.id || $0.shownPartner === tab) }
     }
 
     private func isPoppedOut(_ tab: Tab) -> Bool {
@@ -522,6 +523,12 @@ final class Browser {
         if keyWindow === window { keyWindow = nil }
         if windows.count == 1 {
             window.isHidden = true
+            // WebKit plays on in a page out of any window: nothing the user closed keeps sounding.
+            for tab in tabs where tab.windowID == window.id { nowPlaying.pause(tab) }
+            // Off screen now, as when deselected: their idle time starts here, not when they were
+            // selected, or the page read for a while would sleep, and reload, before a Dock click.
+            window.selectedTab?.markActive()
+            window.shownPartner?.markActive()
             return
         }
         // Off the tabs first, so the selection doesn't walk through (and wake) the tabs closing.
@@ -688,11 +695,12 @@ final class Browser {
     func showsFindBar(over tab: Tab) -> Bool { findBar(over: tab) != nil }
 
     /// The page the menu's page commands (Reload, Back, Print…) act on.
-    var commandTab: Tab? { quickLinks.keyTab ?? commandWindow.selectedTab }
+    /// None while the last window is closed: its page is out of sight.
+    var commandTab: Tab? { quickLinks.keyTab ?? (commandWindow.isHidden ? nil : commandWindow.selectedTab) }
     /// The Tabs menu's selection and tab-list commands act on the browser window in front
-    /// (`commandWindow`): not while a link's window is, where they would wake and switch tabs out
-    /// of sight.
-    var canChangeTabs: Bool { quickLinks.keyTab == nil }
+    /// (`commandWindow`): not while a link's window is, or the last window is closed, where they
+    /// would wake and switch tabs out of sight.
+    var canChangeTabs: Bool { quickLinks.keyTab == nil && !commandWindow.isHidden }
 
     /// The group a tab's bulk actions (Close Other Tabs, Close Tabs Below) stay within.
     func peers(of tab: Tab) -> [Tab] {

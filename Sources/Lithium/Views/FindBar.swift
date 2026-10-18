@@ -21,7 +21,7 @@ struct FindBar: View {
                 }
             Text(status(find))
                 .font(Theme.font(12))
-                .foregroundStyle(find.query.isEmpty || find.matchCount > 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.red.opacity(0.8)))
+                .foregroundStyle(find.query.isEmpty || find.matchCount > 0 || find.foundUncounted ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.red.opacity(0.8)))
                 .monospacedDigit()
                 .fixedSize()
                 .padding(.trailing, 4)
@@ -64,6 +64,7 @@ struct FindBar: View {
 
     private func status(_ find: FindInPage) -> String {
         if find.query.isEmpty { return "" }
+        if find.foundUncounted { return "Found" }
         if find.matchCount == 0 { return "No matches" }
         return "\(find.currentMatch)/\(find.matchCount)"
     }

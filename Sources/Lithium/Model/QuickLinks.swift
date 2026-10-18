@@ -99,6 +99,7 @@ final class QuickLinks {
         guard let browser, remove(tab) else { return }
         browser.permissions.cancel(tabID: tab.id)
         browser.appLinks.cancel(tabID: tab.id)
+        browser.passwords.cancel(tabID: tab.id)
         browser.nowPlaying.discard(tab)
         tab.unpair()
         tab.tearDown()

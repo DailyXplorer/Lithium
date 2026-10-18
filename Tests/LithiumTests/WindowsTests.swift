@@ -348,6 +348,93 @@ struct WindowsTests {
         #expect(!second.isRenaming)
     }
 
+    /// Every window shows the same favorites, but a favorite has one page. Picked in the second
+    /// window, that page comes into it, and the first goes on to its own tab: before, the first
+    /// window came forward with the page, so the second only drove the first.
+    @Test func aFavoritePickedInTheOtherWindowComesIntoIt() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        let favorite = restored(browser, "favorite")
+        browser.pin(favorite)
+        let pin = try #require(browser.pins.first)
+        browser.activate(pin, in: first)
+        #expect(first.selectedTab === favorite)
+        let second = browser.openWindow()
+        browser.windowBecameKey(second)
+
+        browser.activate(pin, in: second)
+        #expect(second.selectedTab === favorite)
+        #expect(browser.window(of: favorite) === second)
+        #expect(first.selectedTab === a)
+        #expect(browser.liveTab(for: pin) === favorite, "the same page, not a second one")
+        #expect(browser.tabs.count == 2)
+        #expect(browser.navigationOrder(in: Space.mainID, window: first.id).map(\.id) == [a.id])
+    }
+
+    /// Move to This Window takes the tab itself, its web view and folder kept, to the top of this
+    /// window's list and shows it; the window it leaves goes on as after a close, out of its split.
+    @Test func moveToThisWindowTakesTheSameTab() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        first.select(a)
+        let second = browser.openWindow()
+        let b1 = restored(browser, "b1", in: second)
+        let b2 = restored(browser, "b2", in: second)
+        let folder = browser.newFolder(with: b2)
+        browser.moveTab(b1, toFolder: folder.id)
+        #expect(browser.pair(b2, with: b1, on: .second))
+        #expect(second.selectedTab === b2)
+        let webView = b2.webView
+
+        browser.move(b2, to: first)
+        #expect(first.selectedTab === b2)
+        #expect(b2.webView === webView, "the same page, not a reload")
+        #expect(b2.folderID == folder.id)
+        #expect(first.regularTabs.map(\.id) == [b2.id, a.id])
+        #expect(second.regularTabs.map(\.id) == [b1.id])
+        #expect(second.selectedTab === b1, "its split partner fills the window")
+        #expect(browser.split(of: b1) == nil)
+        #expect(browser.tabs.count == 3)
+
+        browser.move(b2, to: first)
+        #expect(first.regularTabs.map(\.id) == [b2.id, a.id], "already there, it stays")
+    }
+
+    /// Each window's sidebar lists every other window's tabs in that window's order, live, under
+    /// "Other window", numbered once there are several; none with one window.
+    @Test func otherWindowSectionsListTheOtherWindowsTabs() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        #expect(first.otherWindowSections.isEmpty)
+
+        let second = browser.openWindow()
+        let b1 = restored(browser, "b1", in: second)
+        let sections = first.otherWindowSections
+        #expect(sections.map(\.title) == ["Other window"])
+        #expect(sections.first?.id == second.id)
+        #expect(sections.first?.tabs.map(\.id) == [b1.id])
+        #expect(second.otherWindowSections.first?.tabs.map(\.id) == [a.id])
+        let b2 = restored(browser, "b2", in: second)
+        #expect(first.otherWindowSections.first?.tabs.map(\.id) == [b2.id, b1.id], "kept in its order as it changes")
+
+        let third = browser.openWindow()
+        #expect(first.otherWindowSections.map(\.title) == ["Other window 1", "Other window 2"])
+        #expect(first.otherWindowSections.map(\.id) == [second.id, third.id])
+        #expect(third.otherWindowSections.map(\.id) == [first.id, second.id])
+
+        first.toggleOtherWindow(second.id)
+        #expect(first.collapsedOtherWindows == [second.id])
+        #expect(second.collapsedOtherWindows.isEmpty, "folded in one window only")
+        first.toggleOtherWindow(second.id)
+        #expect(first.collapsedOtherWindows.isEmpty)
+    }
+
     /// A session written before windows were saved comes back as one window.
     @Test func anOldSessionOpensInOneWindow() {
         SessionStore.save(Session(tabs: [.init(url: page("old"), title: "Old", customTitle: nil, pinID: nil)], selectedIndex: 0))
@@ -378,6 +465,13 @@ struct WindowsTests {
     }
 
     private func page(_ name: String) -> URL { URL(string: "data:text/html,\(name)")! }
+
+    /// Asleep with its address, as a restored tab: pinning needs an address, and nothing loads.
+    private func restored(_ browser: Browser, _ name: String, in window: BrowserWindow? = nil) -> Lithium.Tab {
+        let tab = browser.newTab(selecting: false, in: window)
+        tab.restore(url: page(name), title: name)
+        return tab
+    }
 }
 
 /// Closes as a `BrowserNSWindow` does, through `Browser.windowWillClose`, and stays off screen.

@@ -163,7 +163,7 @@ struct UISnapshotTests {
             ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
             ("filters", "filters", nil),
             ("extensions", "extensions", nil),
-            ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
+            ("passwords", "passwords", nil), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
             // The segmented controls at the narrowest a tab gets: the smallest window with the sidebar.
             ("appearance-narrow", "appearance", nil), ("advanced-narrow", "advanced", nil),
@@ -494,6 +494,45 @@ struct UISnapshotTests {
         }
     }
 
+    /// The foot of the sidebar with three windows: the second's tabs listed, the third's folded with its count.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func otherWindowSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        SessionStore.save(Session())
+        PinStore.save([])
+        let browser = Browser()
+        let first = browser.windows[0]
+        let second = browser.openWindow()
+        let third = browser.openWindow()
+        defer {
+            [third, second].forEach(browser.windowWillClose)
+            browser.tabs.forEach { browser.close($0, remembering: false) }
+            SessionStore.save(Session())
+        }
+        func tab(_ title: String, _ host: String, in window: BrowserWindow) {
+            browser.newTab(selecting: false, in: window).restore(url: URL(string: "https://\(host)/")!, title: title)
+        }
+        tab("Issue tracker", "code.example", in: second)
+        tab("How tab folders work", "news.example", in: second)
+        tab("Weather · Paris", "weather.example", in: third)
+        tab("Design notes", "docs.example", in: third)
+        first.toggleOtherWindow(third.id)
+        for isDark in [false, true] {
+            let hex = isDark ? "#2B2D42" : Theme.defaultSidebarHex
+            let palette = SidebarPalette(style: .solid, colorHex: hex, scheme: isDark ? .dark : .light)
+            let sections = VStack(spacing: 2) { OtherWindowSections() }
+                .environment(browser).environment(first)
+                .environment(\.sidebarPalette, palette)
+                .foregroundStyle(palette.ink)
+                .font(Theme.font(13))
+                .padding(10)
+                .frame(width: Layout.sidebarWidth)
+                .background(Color(hex: hex))
+            try render(sections, isDark: isDark).write(to: directory.appending(path: "other-windows-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// The page shown for a blocked address: while its lists are read, with the list and filter that
     /// blocked it, with none found, and in a private tab.
     @Test func blockedPageSnapshots() throws {
@@ -514,6 +553,36 @@ struct UISnapshotTests {
                 let view = BlockedPageView(page: BlockedPage(url: url, reason: state.reason), isPrivate: state.isPrivate, onBack: {}, onOpen: { _ in })
                     .frame(width: 760, height: 520)
                 try render(view, isDark: isDark).write(to: directory.appending(path: "blocked-page-\(state.name)-\(isDark ? "dark" : "light").png"))
+            }
+        }
+    }
+
+    /// The list under a sign-in field, with a site's accounts and with a strong password, and the
+    /// bar after a sign-in, to save an account and to update one.
+    @Test func passwordSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let field = CGRect(x: 0, y: 0, width: 280, height: 34)
+        let lists = [
+            ("accounts", PasswordDropdown(tabID: UUID(), host: "www.example.com", field: .username, rect: field, rows: [
+                .account(UUID(), username: "alice@example.com", host: "www.example.com"), .account(UUID(), username: "bob", host: "accounts.example.com"),
+            ])),
+            ("strong", PasswordDropdown(tabID: UUID(), host: "www.example.com", field: .newPassword, rect: field, rows: [.strongPassword])),
+        ]
+        let bars = [
+            ("save", PasswordSaveRequest(tabID: UUID(), host: "accounts.example.com", username: "alice", password: "", offer: .save)),
+            ("update", PasswordSaveRequest(tabID: UUID(), host: "accounts.example.com", username: "alice", password: "", offer: .update(UUID()))),
+        ]
+        for isDark in [false, true] {
+            let scheme = isDark ? "dark" : "light"
+            for (name, dropdown) in lists {
+                let frame = dropdown.frame(in: CGSize(width: 1000, height: 1000))
+                let list = PasswordDropdownView(dropdown: dropdown) { _ in }.frame(width: frame.width, height: frame.height).padding(20)
+                try render(list, isDark: isDark).write(to: directory.appending(path: "password-list-\(name)-\(scheme).png"))
+            }
+            for (name, request) in bars {
+                let bar = PasswordSaveBar(request: request) { _ in }.frame(width: 900)
+                try render(bar, isDark: isDark).write(to: directory.appending(path: "password-bar-\(name)-\(scheme).png"))
             }
         }
     }
@@ -551,8 +620,21 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         if action == "site" { return (["cookies": 14, "hasData": true], nil) }
         if action == "fonts" { return (["DM Sans", "Avenir Next", "Georgia", "Helvetica Neue", "Menlo", "New York"], nil) }
         if action == "filterLists" { return (Self.filterLists, nil) }
+        if action == "passwords" { return (Self.passwords, nil) }
         return (Self.state, nil)
     }
+
+    static let passwords: [String: Any] = [
+        "offers": true, "unlock": "oncePerLaunch",
+        "accounts": [
+            ["id": UUID().uuidString, "site": "example.com", "host": "accounts.example.com", "username": "alice@example.com"],
+            ["id": UUID().uuidString, "site": "example.com", "host": "www.example.com", "username": "bob"],
+            ["id": UUID().uuidString, "site": "shop.example", "host": "shop.example", "username": ""],
+        ],
+        "neverSaved": ["bank.example"],
+        "error": "",
+        "report": "Added 3, updated 1, skipped 2",
+    ]
 
     static let filterLists: [String: Any] = {
         let updated = Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000

@@ -188,6 +188,10 @@ extension BrowserWindow {
         shown(browser.appLinks.pending, tabID: \.tabID)
     }
 
+    var shownPasswordSave: PasswordSaveRequest? {
+        shown(browser.passwords.pending, tabID: \.tabID)
+    }
+
     private func shown<Request>(_ pending: [Request], tabID: KeyPath<Request, Tab.ID>) -> Request? {
         guard !pending.isEmpty else { return nil }
         return pending.first { $0[keyPath: tabID] == selectedTabID }

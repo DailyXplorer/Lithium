@@ -1,0 +1,4 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+,,login,Example,"note, with comma",,0,"https://example.com/login,https://m.example.com",alice,"p""q",
+Work,1,login,Intranet,,,0,http://intranet.example.test:8080/,bob,correct horse,
+,,note,Secure note,just a note,,0,,,,

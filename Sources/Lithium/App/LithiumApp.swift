@@ -50,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard reply == .terminateNow else { return reply }
         quitReplied = false
         Task {
+            // A Save or Import just before ⌘Q is still being written.
+            await LithiumApp.sharedBrowser.passwords.finishSaving()
             await LithiumApp.sharedBrowser.saveSessionCookies()
             replyToQuit(sender)
         }

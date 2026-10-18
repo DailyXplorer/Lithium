@@ -78,8 +78,9 @@ final class VideoPopout {
     }
 
     /// For tests: the player takes `tab`, as if its video had popped out.
-    func adopt(_ tab: Tab) {
+    func adopt(_ tab: Tab, playback: Playback? = nil) {
         self.tab = tab
+        self.playback = playback
     }
 
     func discard(_ tab: Tab) {
@@ -88,6 +89,8 @@ final class VideoPopout {
 
     func togglePlay() {
         guard let playback else { return }
+        // The player plays from its own world, which the page's hold (another tab's sound) doesn't see.
+        if playback.isPaused, let tab { browser?.nowPlaying.release(tab) }
         send(playback.isPaused ? "play" : "pause")
     }
 

@@ -170,6 +170,26 @@ struct SessionCookiesTests {
         #expect(await savedCookies(of: [Space.mainID, work.id]) == [Space.mainID: ["main"], work.id: ["work"]])
     }
 
+    /// A page that only retitles itself (a chat left on screen) gets the session written, but no
+    /// cookie save, which reads every cookie of the stores in use.
+    @Test func aTitleChangeAloneSavesNoCookies() async throws {
+        let (browser, _) = await makeBrowserWithWorkSpace()
+        defer { reset(browser) }
+        browser.titleSaveDelay = .zero
+        let tab = browser.newTab(url: try #require(URL(string: "data:text/html,<title>Start</title>start")), space: Space.mainID)
+        #expect(await title(of: tab) == "Start")
+        browser.saveNow()
+        try await Task.sleep(for: Browser.sessionSaveDelay * 2)
+        browser.cookieSaveInterval = .zero
+        defer { browser.cookieSaveInterval = nil }
+        let before = browser.cookieSave
+
+        _ = try await tab.webView.evaluateJavaScript("document.title = 'Changed'")
+        #expect(await poll { SessionStore.load().tabs.contains { $0.title == "Changed" } })
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(browser.cookieSave == before)
+    }
+
     /// A sign-in soon after a session save, then no change: saved once the next save is due.
     @Test func aSignInSoonAfterASaveIsSavedWhenTheNextIsDue() async throws {
         let site = try await EchoSite.start()

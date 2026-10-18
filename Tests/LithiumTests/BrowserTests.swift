@@ -1576,6 +1576,31 @@ struct BrowserTests {
         #expect(try savesHistory(shown))
     }
 
+    /// A tab asleep through the clear, woken after it, keeps the pages visited since: in the quit
+    /// save and through its next sleep.
+    @Test func aTabAsleepThroughTheClearKeepsItsNewBackList() async throws {
+        let browser = Browser()
+        let tab = try await tabWithSavedBackList(in: browser)
+        let shown = browser.newTab(url: URL(string: "data:text/html,<title>Shown</title>\(UUID().uuidString)")!)
+        defer { browser.close(tab); browser.close(shown); browser.saveNow() }
+        browser.select(shown)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        await browser.clearHistory()
+        #expect(try !savesBackList(tab))
+
+        browser.select(tab)
+        #expect(await waitUntil(30) { loaded(tab) })
+        tab.load(URL(string: "data:text/html,<title>Third</title>\(UUID().uuidString)")!)
+        #expect(await waitUntil(10) { loaded(tab) && tab.webView.title == "Third" && tab.canGoBack })
+        browser.saveNow()
+        #expect(try savesBackList(tab))
+
+        browser.select(shown)
+        tab.sleep(configuration: browser.makeConfiguration(for: tab.url))
+        browser.select(tab)
+        #expect(await waitUntil(30) { loaded(tab) && tab.canGoBack }, "wakes with Back")
+    }
+
     /// A tab whose back list the session file holds, as a quit leaves it.
     private func tabWithSavedBackList(in browser: Browser) async throws -> Tab {
         let id = UUID().uuidString

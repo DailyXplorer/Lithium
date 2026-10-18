@@ -41,6 +41,8 @@ struct Session: Codable, Equatable {
     var folders: [TabFolder]? = nil
     /// Every window, the first one first; nil in files written before windows were saved.
     var windows: [Window]? = nil
+    /// The window the user was last in, shown last at launch so it comes back in front.
+    var lastActiveWindowID: UUID? = nil
 
     /// As saved before quitting.
     var withoutHistory: Session {

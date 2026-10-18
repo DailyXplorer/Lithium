@@ -73,7 +73,7 @@ final class Tab: NSObject, Identifiable {
     @ObservationIgnored private(set) var lastActive = Date()
     @ObservationIgnored private var sleepingState: Any?
     /// Set by Clear History: WebKit can't empty a web view's back list, so it isn't saved or kept
-    /// until the tab gets a new web view.
+    /// until the tab sleeps and wakes again.
     @ObservationIgnored private var historyForgotten = false
     /// The tab whose page opened this one as a popup window, as sign-in windows are.
     @ObservationIgnored weak var opener: Tab?
@@ -380,6 +380,9 @@ final class Tab: NSObject, Identifiable {
         isStartingLoad = true
         self.url = url
         isStartingLoad = false
+        // Waking, its web view holds nothing from before Clear History. One woken while the clear
+        // runs stays flagged: its new list could still hold pages visited before the clear ends.
+        if isAsleep, browser?.history.isClearing != true { historyForgotten = false }
         isAsleep = false
         sleepingState = nil
         addressAfterWaking = nil
@@ -783,7 +786,6 @@ final class Tab: NSObject, Identifiable {
         uploadingFrames = 0
         awaitCommit(false)
         self.configuration = configuration
-        historyForgotten = false
         withMutation(keyPath: \.webView) { loadedWebView = nil }
     }
 

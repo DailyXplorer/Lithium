@@ -398,12 +398,12 @@ private final class ClosableWindow: NSWindow, NSWindowDelegate {
     }
 }
 
-/// Counts the requests to come forward, minimizes only on paper, and stays off screen.
 /// Taken as on screen, never ordered in.
 private final class ShownWindow: NSWindow {
     override var isVisible: Bool { true }
 }
 
+/// Counts the requests to come forward, minimizes only on paper, and stays off screen.
 private final class FrontingWindow: NSWindow {
     private(set) var frontings = 0
     var minimized = false

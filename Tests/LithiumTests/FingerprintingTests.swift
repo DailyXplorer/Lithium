@@ -338,6 +338,26 @@ struct FingerprintingTests {
         #expect(protected["after"] as? Int == shown)
     }
 
+    /// The voices kept are those of every language the user reads, not only the first: here a
+    /// first language no voice speaks, then English, which every Mac ships.
+    @Test func voicesOfEachOfTheUsersLanguagesAreKept() async throws {
+        let probe = """
+            if (!speechSynthesis.getVoices().length) {
+              await new Promise((done) => { speechSynthesis.onvoiceschanged = done; setTimeout(done, 3000); });
+            }
+            return JSON.stringify(speechSynthesis.getVoices().map((voice) => voice.lang.toLowerCase()));
+            """
+        let languages = """
+            Object.defineProperty(SpeechSynthesisVoice.prototype, 'default', { get: () => false });
+            Object.defineProperty(Navigator.prototype, 'language', { get: () => 'xx-XX' });
+            Object.defineProperty(Navigator.prototype, 'languages', { get: () => Object.freeze(['xx-XX', 'en-US']) });
+            """
+        let shown: [String] = try await run(probe, farbling: Self.farbling(), before: languages, awaiting: true)
+
+        #expect(!shown.isEmpty)
+        #expect(shown.allSatisfy { $0.hasPrefix("en") }, "\(shown)")
+    }
+
     /// `readPixels` noise stays inside what the read wrote (from its offset into the array), and
     /// leaves exact the reads GPU picking relies on: integer formats and reads of a few pixels.
     @Test func readPixelsNoiseSparesPickingAndTheRestOfTheArray() async throws {

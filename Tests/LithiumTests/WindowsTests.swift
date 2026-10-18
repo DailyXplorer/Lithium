@@ -253,12 +253,12 @@ struct WindowsTests {
         second.nsWindow = secondNS
         browser.windowBecameKey(first)
 
-        // AppKit's minimize notifications, through the delegate the real window has, never shown.
+        // The minimize calls AppKit makes on the real window's delegate, in order; never shown.
         let minimizing = BrowserNSWindow(first, browser: browser)
-        NotificationCenter.default.post(name: NSWindow.willMiniaturizeNotification, object: minimizing)
+        minimizing.windowWillMiniaturize(Notification(name: NSWindow.willMiniaturizeNotification, object: minimizing))
         firstNS.minimized = true
         browser.windowBecameKey(second)
-        NotificationCenter.default.post(name: NSWindow.didMiniaturizeNotification, object: minimizing)
+        minimizing.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification, object: minimizing))
         #expect(browser.commandWindow === second, "menu commands go to the window on screen")
         browser.reopenFromDock()
         #expect(!firstNS.minimized, "out of the Dock")

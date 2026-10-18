@@ -98,6 +98,7 @@ struct SidebarView: View {
                         }
                         .dropDestination(for: String.self) { items, _ in dropTab(items, on: .agentGroup) }
                     }
+                    OtherWindowSections()
                 }
             }
             .scrollIndicators(.never)

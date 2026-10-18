@@ -494,6 +494,45 @@ struct UISnapshotTests {
         }
     }
 
+    /// The foot of the sidebar with three windows: the second's tabs listed, the third's folded with its count.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+    func otherWindowSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        SessionStore.save(Session())
+        PinStore.save([])
+        let browser = Browser()
+        let first = browser.windows[0]
+        let second = browser.openWindow()
+        let third = browser.openWindow()
+        defer {
+            [third, second].forEach(browser.windowWillClose)
+            browser.tabs.forEach { browser.close($0, remembering: false) }
+            SessionStore.save(Session())
+        }
+        func tab(_ title: String, _ host: String, in window: BrowserWindow) {
+            browser.newTab(selecting: false, in: window).restore(url: URL(string: "https://\(host)/")!, title: title)
+        }
+        tab("Issue tracker", "code.example", in: second)
+        tab("How tab folders work", "news.example", in: second)
+        tab("Weather · Paris", "weather.example", in: third)
+        tab("Design notes", "docs.example", in: third)
+        first.toggleOtherWindow(third.id)
+        for isDark in [false, true] {
+            let hex = isDark ? "#2B2D42" : Theme.defaultSidebarHex
+            let palette = SidebarPalette(style: .solid, colorHex: hex, scheme: isDark ? .dark : .light)
+            let sections = VStack(spacing: 2) { OtherWindowSections() }
+                .environment(browser).environment(first)
+                .environment(\.sidebarPalette, palette)
+                .foregroundStyle(palette.ink)
+                .font(Theme.font(13))
+                .padding(10)
+                .frame(width: Layout.sidebarWidth)
+                .background(Color(hex: hex))
+            try render(sections, isDark: isDark).write(to: directory.appending(path: "other-windows-\(isDark ? "dark" : "light").png"))
+        }
+    }
+
     /// The page shown for a blocked address: while its lists are read, with the list and filter that
     /// blocked it, with none found, and in a private tab.
     @Test func blockedPageSnapshots() throws {

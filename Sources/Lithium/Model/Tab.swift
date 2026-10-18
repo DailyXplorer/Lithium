@@ -311,7 +311,8 @@ final class Tab: NSObject, Identifiable {
 
     /// The space whose sidebar shows the tab (`Space`). Fixed: its pages' cookies live there.
     let spaceID: Space.ID
-    /// The window whose sidebar lists the tab. Only `Browser.adopt` changes it, for a link's page.
+    /// The window whose sidebar lists the tab. Only `Browser.adopt`, for a link's page, and
+    /// `Browser.move` change it.
     private(set) var windowID: BrowserWindow.ID
     /// Asked for as a web view is made, so tabs restored asleep make no store.
     private var spaceStore: WKWebsiteDataStore? {
@@ -332,7 +333,7 @@ final class Tab: NSObject, Identifiable {
         super.init()
     }
 
-    /// A link's page taken into a window (`Browser.adopt`).
+    /// A link's page taken into a window (`Browser.adopt`), or a tab into another (`Browser.move`).
     func move(toWindow window: BrowserWindow.ID) {
         windowID = window
     }

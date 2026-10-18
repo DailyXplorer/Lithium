@@ -650,6 +650,7 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
             "updated": Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000,
             "updating": false,
             "disabledHosts": ["bank.example.com"],
+            "spaceDisabledHosts": [] as [[String: String]],
             "allowedPages": ["tlauncher.org"],
         ] as [String: Any],
         "permissions": [["host": "meet.google.com", "camera": "allow", "microphone": "allow"], ["host": "www.example.com", "location": "deny"]],

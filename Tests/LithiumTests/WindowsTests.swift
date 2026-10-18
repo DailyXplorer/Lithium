@@ -240,6 +240,57 @@ struct WindowsTests {
         #expect(!nsWindow.minimized, "out of the Dock")
     }
 
+    /// The window minimized from the front comes back from the Dock, though the other took the key
+    /// meanwhile; once the user is in the other, a Dock click leaves the minimized one be.
+    @Test func aDockClickRestoresTheWindowLastActive() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let second = browser.openWindow()
+        let firstNS = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        let secondNS = FrontingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true)
+        first.nsWindow = firstNS
+        second.nsWindow = secondNS
+        browser.windowBecameKey(first)
+
+        // The minimize calls AppKit makes on the real window's delegate, in order; never shown.
+        let minimizing = BrowserNSWindow(first, browser: browser)
+        minimizing.windowWillMiniaturize(Notification(name: NSWindow.willMiniaturizeNotification, object: minimizing))
+        firstNS.minimized = true
+        browser.windowBecameKey(second)
+        minimizing.windowDidMiniaturize(Notification(name: NSWindow.didMiniaturizeNotification, object: minimizing))
+        #expect(browser.commandWindow === second, "menu commands go to the window on screen")
+        browser.reopenFromDock()
+        #expect(!firstNS.minimized, "out of the Dock")
+        #expect(firstNS.frontings == 1)
+
+        browser.windowBecameKey(second)
+        firstNS.minimized = true
+        browser.reopenFromDock()
+        #expect(firstNS.minimized)
+        #expect(browser.windows.count == 2, "no new window")
+    }
+
+    /// The last window closed stays hidden while a link's window is on screen, as before; with no
+    /// window left, the Dock shows it again.
+    @Test func aDockClickShowsTheLastWindowClosedUnlessALinksWindowIsUp() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        browser.quickLinks.showWindow = { _, _ in ShownWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: true) }
+        let first = browser.windows[0]
+        let link = try #require(browser.quickLinks.open())
+        browser.windowWillClose(first)
+        #expect(first.isHidden)
+
+        browser.reopenFromDock()
+        #expect(first.isHidden, "Lithium only comes forward")
+
+        browser.quickLinks.windowClosed(link)
+        browser.reopenFromDock()
+        #expect(!first.isHidden)
+        #expect(browser.windows.count == 1)
+    }
+
     /// Extensions see one window: its active tab is the selected tab of the window in front, and a
     /// selection in a window behind waits until that window comes forward.
     @Test func extensionsActiveTabIsTheWindowInFronts() {
@@ -439,6 +490,11 @@ private final class ClosableWindow: NSWindow, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         browser?.windowWillClose(model)
     }
+}
+
+/// Taken as on screen, never ordered in.
+private final class ShownWindow: NSWindow {
+    override var isVisible: Bool { true }
 }
 
 /// Counts the requests to come forward, minimizes only on paper, and stays off screen.

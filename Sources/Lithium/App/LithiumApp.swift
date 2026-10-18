@@ -33,16 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LithiumApp.sharedBrowser.showRestoredWindows()
     }
 
-    /// The Dock icon clicked with no window on screen: a minimized one comes back, else the last
-    /// one closed shows again.
+    /// The Dock icon clicked: `Browser.reopenFromDock` decides, `hasVisibleWindows` aside.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        guard !hasVisibleWindows else { return false }
-        let browser = LithiumApp.sharedBrowser
-        if let minimized = browser.windows.compactMap(\.nsWindow).first(where: \.isMiniaturized) {
-            minimized.deminiaturize(nil)
-        } else {
-            browser.openWindow()
-        }
+        LithiumApp.sharedBrowser.reopenFromDock()
         return false
     }
 

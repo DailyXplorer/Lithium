@@ -28,7 +28,8 @@ final class BrowserNSWindow: NSWindow, NSWindowDelegate {
         nsWindow.makeKeyAndOrderFront(nil)
     }
 
-    private init(_ window: BrowserWindow, browser: Browser) {
+    /// Not shown: `open` shows it. Tests build one to drive its delegate.
+    init(_ window: BrowserWindow, browser: Browser) {
         model = window
         self.browser = browser
         super.init(
@@ -50,6 +51,14 @@ final class BrowserNSWindow: NSWindow, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         browser?.windowBecameKey(model)
+    }
+
+    func windowWillMiniaturize(_ notification: Notification) {
+        browser?.windowMinimizing(true)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        browser?.windowMinimizing(false)
     }
 
     func windowDidMove(_ notification: Notification) {

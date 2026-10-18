@@ -53,9 +53,10 @@ enum AutofillMessage: Equatable, CustomStringConvertible {
         }
     }
 
-    /// Finite numbers only: a JavaScript `NaN` or `Infinity` would place the list nowhere.
+    /// Finite numbers only: a JavaScript `NaN` or `Infinity` would place the list nowhere. A
+    /// boolean comes as an `NSNumber` too, which `is Bool` can't tell from a 0 or a 1.
     private static func number(_ value: Any?) -> Double? {
-        guard let number = value as? NSNumber, !(number is Bool), number.doubleValue.isFinite else { return nil }
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite else { return nil }
         return number.doubleValue
     }
 

@@ -22,7 +22,6 @@ extension PasswordManager {
         case "copyPassword":
             guard let credential = await authorized(value, reason: "copy a password") else { return (nil, "Not allowed") }
             let board = pasteboard()
-            board.clearContents()
             board.declareTypes([.string, Self.concealedType], owner: nil)
             board.setString(credential.password, forType: .string)
             board.setData(Data(), forType: Self.concealedType)

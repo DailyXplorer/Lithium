@@ -78,7 +78,7 @@ final class PasswordManager {
         set {
             defaults.set(newValue, forKey: Preference.passwordOffers)
             if !newValue {
-                dropdown = nil
+                hideDropdown()
                 pending.removeAll()
                 generated.removeAll()
             }
@@ -94,7 +94,10 @@ final class PasswordManager {
 
     func contents() async -> Result<VaultContents, VaultError> {
         if let vault { return vault }
-        if let loading { return await loading.value }
+        if let loading {
+            let result = await loading.value
+            return vault ?? result
+        }
         let store = store
         let task = Task { () -> Result<VaultContents, VaultError> in
             do throws(VaultError) {

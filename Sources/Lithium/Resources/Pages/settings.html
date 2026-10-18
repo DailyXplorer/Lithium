@@ -56,6 +56,14 @@
   #filter-problems .row { padding: 10px 0; }
   #filter-problems code, .hint code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
   #password-search { display: block; width: 100%; margin-top: 4px; }
+  .password-actions { flex-wrap: wrap; row-gap: 10px; }
+  .password-actions + .hint { margin-top: -6px; }
+  /* A text button, in the disclosure's look. */
+  .more { border: 0; background: none; padding: 4px 0; cursor: pointer; color: var(--faint); font-size: 13px; font-weight: 500; }
+  .more:hover { color: var(--ink); }
+  .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #never-saved-section { margin-top: 32px; }
+  #never-saved { color: var(--ink); font-size: 14px; }
   .account .title { overflow-wrap: anywhere; }
   .account .secret { font: 12.5px ui-monospace, Menlo, monospace; user-select: text; -webkit-user-select: text; }
   .account-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
@@ -213,31 +221,25 @@
       <div class="segmented" id="password-unlock"><button data-value="oncePerLaunch">Once per launch</button><button data-value="everyTime">Every time</button><button data-value="never">Never</button></div>
     </div>
     <div class="hint error" id="password-error" hidden></div>
+    <!-- Above the list, so a long one never pushes them out of sight. -->
+    <div class="row password-actions">
+      <div class="actions">
+        <button class="button" id="password-import">Import…</button>
+        <span class="select"><select id="password-format" title="Export format"><option value="chrome">Chrome</option><option value="onePassword">1Password</option><option value="bitwarden">Bitwarden</option><option value="apple">Apple Passwords</option></select></span>
+        <button class="button" id="password-export">Export…</button>
+      </div>
+      <button class="button" id="open-passwords" title="Passwords and passkeys saved there stay there. Right-click a sign-in field and choose Open Passwords.">Open Apple Passwords</button>
+    </div>
+    <div class="hint">Import a CSV file from Chrome, 1Password, Bitwarden or Apple Passwords. Exported files aren’t encrypted: anyone who opens one can read your passwords.</div>
+    <div class="hint" id="password-report" hidden></div>
     <h3>Saved</h3>
     <input type="text" id="password-search" placeholder="Search" autocomplete="off" spellcheck="false">
     <div class="rows" id="password-list"></div>
-    <div id="never-saved-section">
-      <h3>Never saved</h3>
+    <button class="more" id="password-more" hidden></button>
+    <details id="never-saved-section">
+      <summary></summary>
       <div class="rows" id="never-saved"></div>
-    </div>
-    <h3>Import and export</h3>
-    <div class="row">
-      <div><div class="title">Import</div><div class="hint">From a CSV file of Chrome, 1Password, Bitwarden or Apple Passwords.</div></div>
-      <button class="button" id="password-import">Import…</button>
-    </div>
-    <div class="row">
-      <div><div class="title">Export</div><div class="hint">The file isn’t encrypted: anyone who opens it can read your passwords.</div></div>
-      <div class="actions">
-        <span class="select"><select id="password-format"><option value="chrome">Chrome</option><option value="onePassword">1Password</option><option value="bitwarden">Bitwarden</option><option value="apple">Apple Passwords</option></select></span>
-        <button class="button" id="password-export">Export…</button>
-      </div>
-    </div>
-    <div class="hint" id="password-report" hidden></div>
-    <h3>Apple Passwords</h3>
-    <div class="row">
-      <div><div class="title">Passwords app</div><div class="hint">Passwords and passkeys saved there stay there. Right-click a sign-in field and choose Open Passwords.</div></div>
-      <button class="button" id="open-passwords">Open Passwords</button>
-    </div>
+    </details>
   </section>
 
   <section id="max" class="page">
@@ -397,12 +399,19 @@
     }
     // Read from disk, so only while the page shows.
     if (id === 'filters') call('filterLists').then(renderFilters);
-    if (id === 'passwords') call('passwords').then(renderPasswords);
+    if (id === 'passwords') {
+      passwordsExpanded = false;
+      $('#never-saved-section').open = false;
+      call('passwords').then(renderPasswords);
+    }
   };
 
   // The state never holds a password: Show asks for one, after Touch ID.
   const MASK = '••••••••';
   let passwordState = null;
+  // A few accounts until Show all, so a long vault doesn't bury the page. Search always shows every match.
+  const COLLAPSED_ACCOUNTS = 5;
+  let passwordsExpanded = false;
   const button = (label, onclick) => {
     const node = el('button', { className: 'button', textContent: label });
     node.onclick = onclick;
@@ -459,9 +468,14 @@
     $('#password-report').hidden = !$('#password-report').textContent;
     const query = $('#password-search').value.trim().toLowerCase();
     const accounts = state.accounts.filter((account) => !query || [account.host, account.username].some((text) => text.toLowerCase().includes(query)));
-    $('#password-list').replaceChildren(...(accounts.length ? accounts.map(accountRow) : [el('div', { className: 'empty',
+    const collapsible = !query && accounts.length > COLLAPSED_ACCOUNTS;
+    const shown = collapsible && !passwordsExpanded ? accounts.slice(0, COLLAPSED_ACCOUNTS) : accounts;
+    $('#password-list').replaceChildren(...(shown.length ? shown.map(accountRow) : [el('div', { className: 'empty',
       textContent: state.accounts.length ? 'No passwords match.' : 'No passwords yet. Lithium offers to save them when you sign in.' })]));
+    $('#password-more').hidden = !collapsible;
+    $('#password-more').textContent = passwordsExpanded ? 'Show less' : `Show all (${accounts.length})`;
     $('#never-saved-section').hidden = !state.neverSaved.length;
+    $('#never-saved-section summary').textContent = `Never saved (${state.neverSaved.length})`;
     $('#never-saved').replaceChildren(...state.neverSaved.map((site) => el('div', { className: 'row' }, [
       el('div', { className: 'title', textContent: site }),
       button('Remove', () => call('removeNeverSaved', site).then(renderPasswords)),
@@ -850,6 +864,10 @@
     choice.onclick = () => call('setPasswordUnlock', choice.dataset.value).then(renderPasswords);
   });
   $('#password-search').oninput = () => { if (passwordState) renderPasswords(passwordState); };
+  $('#password-more').onclick = () => {
+    passwordsExpanded = !passwordsExpanded;
+    renderPasswords(passwordState);
+  };
   $('#password-import').onclick = () => call('importPasswords').then(renderPasswords);
   $('#password-export').onclick = () => call('exportPasswords', $('#password-format').value).then(renderPasswords);
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);

@@ -163,7 +163,9 @@ struct UISnapshotTests {
             ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
             ("filters", "filters", nil),
             ("extensions", "extensions", nil),
-            ("passwords", "passwords", nil), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
+            ("passwords", "passwords", nil),
+            ("passwords-expanded", "passwords", "$('#password-more').click(); $('#never-saved-section').open = true"),
+            ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
             // The segmented controls at the narrowest a tab gets: the smallest window with the sidebar.
             ("appearance-narrow", "appearance", nil), ("advanced-narrow", "advanced", nil),
@@ -629,9 +631,14 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         "accounts": [
             ["id": UUID().uuidString, "site": "example.com", "host": "accounts.example.com", "username": "alice@example.com"],
             ["id": UUID().uuidString, "site": "example.com", "host": "www.example.com", "username": "bob"],
+            ["id": UUID().uuidString, "site": "github.com", "host": "github.com", "username": "alice"],
+            ["id": UUID().uuidString, "site": "mail.example", "host": "mail.example", "username": "alice@mail.example"],
+            ["id": UUID().uuidString, "site": "news.example", "host": "news.example", "username": "alice"],
             ["id": UUID().uuidString, "site": "shop.example", "host": "shop.example", "username": ""],
+            ["id": UUID().uuidString, "site": "travel.example", "host": "travel.example", "username": "alice"],
+            ["id": UUID().uuidString, "site": "wiki.example", "host": "wiki.example", "username": "bob"],
         ],
-        "neverSaved": ["bank.example"],
+        "neverSaved": ["bank.example", "tax.example"],
         "error": "",
         "report": "Added 3, updated 1, skipped 2",
     ]

@@ -432,6 +432,34 @@ struct PageTranslatorTests {
         #expect(await text("title", in: tab) == "EN(Le lithium, le plus léger des métaux)")
     }
 
+    /// With two windows, each window's session translates only its own tabs' texts; a closed
+    /// window's texts go to a window still shown.
+    @Test func eachWindowsSessionServesItsOwnTabs() async throws {
+        let browser = makeBrowser()
+        let translator = browser.translator
+        translator.engine = nil
+        let first = browser.windows[0], second = browser.openWindow()
+        let french = Locale.Language(identifier: "fr"), english = Locale.Language(identifier: "en")
+        let firstTexts = Task { try await translator.engineTranslate(["un"], from: french, to: english, preparing: false, window: first.id) }
+        let secondTexts = Task { try await translator.engineTranslate(["deux"], from: french, to: english, preparing: false, window: second.id) }
+        #expect(await waitUntil(5) { translator.configuration != nil })
+        await Task.yield()
+
+        var served: [String] = []
+        let session = { (texts: [String], _: Bool) in
+            served += texts
+            return texts.map { "EN(\($0))" as String? }
+        }
+        await translator.serve(in: second.id, with: session)
+        #expect(served == ["deux"], "the other window's texts wait for its own session")
+        #expect(try await secondTexts.value == ["EN(deux)"])
+
+        browser.windowWillClose(first)
+        await translator.serve(in: second.id, with: session)
+        #expect(served == ["deux", "un"])
+        #expect(try await firstTexts.value == ["EN(un)"])
+    }
+
     /// A language not on this Mac yet is downloaded first (macOS's prompt), and said so; refused, the page stays as it was.
     @Test func downloadsTheLanguageFirst() async throws {
         let browser = makeBrowser()

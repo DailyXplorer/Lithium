@@ -64,6 +64,9 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         let pair: Pair
         let texts: [String]
         let preparing: Bool
+        /// The tab's: only that window's session serves it, so macOS's prompt shows over the tab
+        /// and another window closing doesn't take the session from under it.
+        let window: BrowserWindow.ID
         let continuation: CheckedContinuation<[String?], any Error>
     }
 
@@ -280,7 +283,7 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         if preparing { downloads.insert(ObjectIdentifier(tab)) }
         defer { if preparing { downloads.remove(ObjectIdentifier(tab)) } }
         do {
-            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing)
+            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing, window: tab.windowID)
             if preparing, tab.translationRun == run, tab.pageTranslation?.status == .downloading { tab.pageTranslation?.status = .translated }
             return (results.map { $0 ?? NSNull() as Any }, nil)
         } catch {
@@ -300,10 +303,12 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         return await LanguageAvailability().status(from: source, to: target)
     }
 
-    private func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool) async throws -> [String?] {
+    func engineTranslate(
+        _ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool, window: BrowserWindow.ID
+    ) async throws -> [String?] {
         if let engine { return try await engine.translate(texts, from: source, to: target, preparing: preparing) }
         return try await withCheckedThrowingContinuation { continuation in
-            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, continuation: continuation))
+            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, window: window, continuation: continuation))
             serveNext()
         }
     }
@@ -320,15 +325,27 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    func serve(_ session: TranslationSession) async {
+    func serve(_ session: TranslationSession, in window: BrowserWindow.ID) async {
+        await serve(in: window) { texts, preparing in
+            // macOS's own prompt to download the languages, over the window.
+            if preparing { try await session.prepareTranslation() }
+            return try await Self.translate(texts, in: session)
+        }
+    }
+
+    /// Every window's host runs for each pair; each takes only its own tabs' jobs, and those of a
+    /// window gone (closed, or the last one hidden), whose host went with it.
+    func serve(in window: BrowserWindow.ID, with translate: ([String], Bool) async throws -> [String?]) async {
         guard let pair = servedPair, !isServing else { return }
+        let shown = Set(browser?.windows.filter { !$0.isHidden }.map(\.id) ?? [])
+        let serves = { (job: Job) in job.pair == pair && (job.window == window || !shown.contains(job.window)) }
+        // Another window's jobs: its own host serves them, and asks again for what follows.
+        guard jobs.contains(where: serves) else { return }
         isServing = true
-        while let index = jobs.firstIndex(where: { $0.pair == pair }) {
+        while let index = jobs.firstIndex(where: serves) {
             let job = jobs.remove(at: index)
             do {
-                // macOS's own prompt to download the languages, over the window.
-                if job.preparing { try await session.prepareTranslation() }
-                job.continuation.resume(returning: try await Self.translate(job.texts, in: session))
+                job.continuation.resume(returning: try await translate(job.texts, job.preparing))
             } catch {
                 job.continuation.resume(throwing: error)
             }
@@ -361,12 +378,13 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
 /// has a window to show over. Draws nothing, and does nothing until a page is translated.
 struct TranslationHost: View {
     let translator: PageTranslator
+    let window: BrowserWindow.ID
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .translationTask(translator.configuration) { session in
-                await translator.serve(session)
+                await translator.serve(session, in: window)
             }
     }
 }

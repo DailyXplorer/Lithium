@@ -132,6 +132,7 @@ private struct SplitPane: View {
                         }
                     }
                     .overlay { BlockedPageLayer(tab: tab) }
+                    .overlay { PasswordDropdownLayer(tab: tab) }
                     .overlay {
                         if let acting = browser.agent?.tabs[tab.id]?.acting {
                             AgentActingOverlay(acting: acting)

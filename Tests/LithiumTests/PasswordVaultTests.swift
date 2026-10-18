@@ -118,7 +118,107 @@ import Testing
         #expect(PasswordStore.app.fileURL.lastPathComponent == "passwords-unkeyed")
     }
 
+    // MARK: Matching
+
+    @Test func aPageIsOfferedItsOwnSitesAccountsOnly() {
+        let accounts = [
+            account("zoe", on: "accounts.example.com"),
+            account("bob", on: "www.example.com"),
+            account("amy", on: "example.com"),
+            account("eve", on: "example.org"),
+            account("mal", on: "example.com.evil.net"),
+        ]
+        #expect(SiteMatch.credentials(for: "WWW.example.com", in: accounts).map(\.username) == ["bob", "amy", "zoe"], "its host first")
+        #expect(SiteMatch.credentials(for: "login.example.com", in: accounts).map(\.username) == ["amy", "bob", "zoe"], "a sibling host")
+        #expect(SiteMatch.credentials(for: "example.org", in: accounts).map(\.username) == ["eve"])
+        #expect(SiteMatch.credentials(for: "example.com.evil.net", in: accounts).map(\.username) == ["mal"], "a lookalike")
+        #expect(SiteMatch.credentials(for: "example.net", in: accounts).isEmpty)
+        #expect(SiteMatch.credentials(for: "", in: accounts).isEmpty)
+    }
+
+    // MARK: Lock
+
+    @MainActor @Test func theLockAsksAsItsPolicySays() async {
+        // Whether it asks at a fill, a reveal, then another fill and another reveal.
+        let expected: [UnlockPolicy: [Bool]] = [
+            .oncePerLaunch: [true, true, false, true],
+            .everyTime: [true, true, true, true],
+            .never: [false, false, false, false],
+        ]
+        for policy in UnlockPolicy.allCases {
+            let prompts = Prompts(granting: true)
+            let lock = VaultLock(policy: { policy }, authenticate: prompts.ask)
+            var asked: [Bool] = []
+            for purpose in [UnlockPurpose.fill, .reveal, .fill, .reveal] {
+                #expect(lock.needsAuthentication(for: purpose) == (expected[policy]?[asked.count] ?? false), "\(policy) \(purpose)")
+                let before = prompts.reasons.count
+                #expect(await lock.authorize(purpose, reason: "fill"))
+                asked.append(prompts.reasons.count > before)
+            }
+            #expect(asked == expected[policy], "\(policy)")
+        }
+    }
+
+    @MainActor @Test func aFailedAuthenticationKeepsTheVaultLocked() async {
+        let prompts = Prompts(granting: false)
+        let lock = VaultLock(policy: { .oncePerLaunch }, authenticate: prompts.ask)
+        let granted = await lock.authorize(.fill, reason: "Fill your password")
+        #expect(!granted)
+        #expect(!lock.isUnlocked)
+        #expect(lock.needsAuthentication(for: .fill))
+        #expect(prompts.reasons == ["Fill your password"])
+    }
+
+    // MARK: Generator
+
+    @Test func aGeneratedPasswordIsLongReadableAndMixed() {
+        let readable = Set(PasswordGenerator.alphabet)
+        #expect(readable.isDisjoint(with: "0Oo1lI"))
+        var seen = Set<String>()
+        for _ in 0..<200 {
+            let password = PasswordGenerator.strong()
+            #expect(password.count == 20)
+            let groups = password.split(separator: "-", omittingEmptySubsequences: false)
+            #expect(groups.count == 3 && groups.allSatisfy { $0.count == 6 }, "\(groups.map(\.count))")
+            #expect(groups.joined().allSatisfy(readable.contains))
+            #expect(password.contains(where: \.isUppercase) && password.contains(where: \.isLowercase) && password.contains(where: \.isNumber))
+            seen.insert(password)
+        }
+        #expect(seen.count == 200)
+    }
+
+    // MARK: Save offer
+
+    @Test func theBarOffersToSaveOnlyWhatIsNew() {
+        let saved = account("alice", on: "accounts.example.com", password: "one")
+        let vault = VaultContents(credentials: [saved], neverSaved: ["example.org"])
+        func offer(_ host: String, _ username: String, _ password: String, isPrivate: Bool = false) -> SaveOffer? {
+            SaveDecision.offer(host: host, username: username, password: password, isPrivate: isPrivate, in: vault)
+        }
+        #expect(offer("www.example.com", "bob", "two") == .save)
+        #expect(offer("example.net", "alice", "one") == .save, "another site")
+        #expect(offer("www.example.com", "alice", "two") == .update(saved.id))
+        #expect(offer("accounts.example.com", "alice", "one") == nil, "saved as it is")
+        #expect(offer("www.example.com", "alice", "one") == nil, "saved on a sibling host")
+        #expect(offer("www.example.com", "bob", "two", isPrivate: true) == nil)
+        #expect(offer("www.example.com", "bob", "") == nil)
+        #expect(offer("login.example.org", "bob", "two") == nil, "never for this site")
+        #expect(offer("", "bob", "two") == nil)
+    }
+
+    @Test func neverForASiteIsKeptOncePerSite() {
+        var vault = VaultContents()
+        vault.neverSave("www.example.org")
+        vault.neverSave("login.example.org")
+        vault.neverSave("example.com")
+        #expect(vault.neverSaved == ["example.com", "example.org"])
+    }
+
     // MARK: Helpers
+
+    private func account(_ username: String, on host: String, password: String = "secret") -> Credential {
+        Credential(host: host, username: username, password: password, created: Self.date, modified: Self.date)
+    }
 
     private static func fixedKey() -> @Sendable (Bool) -> SymmetricKey? {
         let key = SymmetricKey(data: Data(repeating: 9, count: 32))
@@ -129,6 +229,21 @@ import Testing
         let folder = FileManager.default.temporaryDirectory.appending(path: "passwords-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
+    }
+}
+
+/// Touch ID, answering every ask the same.
+@MainActor private final class Prompts {
+    private let granting: Bool
+    private(set) var reasons: [String] = []
+
+    init(granting: Bool) {
+        self.granting = granting
+    }
+
+    func ask(_ reason: String) async -> Bool {
+        reasons.append(reason)
+        return granting
     }
 }
 

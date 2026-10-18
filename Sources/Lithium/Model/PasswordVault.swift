@@ -122,3 +122,101 @@ actor PasswordStore {
         return try VaultFile.open(data, key: opening)
     }
 }
+
+enum SiteMatch {
+    /// The accounts a page on `host` may be offered: its registrable site's only, so a lookalike
+    /// (`example.com.evil.net`) gets none. The host's own come first, then by username.
+    static func credentials(for host: String, in all: [Credential]) -> [Credential] {
+        let host = host.lowercased()
+        let site = SiteInfo.registrable(host)
+        guard !site.isEmpty else { return [] }
+        return all.filter { $0.site == site }.sorted { first, second in
+            let (firstExact, secondExact) = (first.host.lowercased() == host, second.host.lowercased() == host)
+            if firstExact != secondExact { return firstExact }
+            return first.username.localizedStandardCompare(second.username) == .orderedAscending
+        }
+    }
+}
+
+/// When the vault asks for Touch ID or the Mac's password. Once per launch unless the user picks another.
+enum UnlockPolicy: String, CaseIterable, Sendable {
+    case oncePerLaunch, everyTime, never
+}
+
+enum UnlockPurpose: Sendable {
+    case fill
+    /// Showing or copying a password in the Passwords page.
+    case reveal
+}
+
+/// The Touch ID gate. `authenticate` is LocalAuthentication's `.deviceOwnerAuthentication` in the
+/// app, so the Mac's password works without Touch ID. The policy is read at each ask, so a change
+/// in Settings applies at once.
+@MainActor final class VaultLock {
+    private let policy: () -> UnlockPolicy
+    private let authenticate: @MainActor (_ reason: String) async -> Bool
+    /// Once this launch, which lets fills through under `oncePerLaunch`.
+    private(set) var isUnlocked = false
+
+    init(policy: @escaping () -> UnlockPolicy, authenticate: @escaping @MainActor (_ reason: String) async -> Bool) {
+        self.policy = policy
+        self.authenticate = authenticate
+    }
+
+    /// A password shown or copied always asks, unless the user turned asking off.
+    func needsAuthentication(for purpose: UnlockPurpose) -> Bool {
+        switch (policy(), purpose) {
+        case (.never, _): false
+        case (.everyTime, _), (.oncePerLaunch, .reveal): true
+        case (.oncePerLaunch, .fill): !isUnlocked
+        }
+    }
+
+    func authorize(_ purpose: UnlockPurpose, reason: String) async -> Bool {
+        guard needsAuthentication(for: purpose) else { return true }
+        let granted = await authenticate(reason)
+        if granted { isUnlocked = true }
+        return granted
+    }
+}
+
+enum PasswordGenerator {
+    /// Letters and digits that can't be read one for another: no 0 O o, 1 l I.
+    static let alphabet = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+
+    static func strong() -> String {
+        var generator = SystemRandomNumberGenerator()
+        return strong(using: &generator)
+    }
+
+    /// 20 characters: three groups of six joined by "-", which sites asking for a symbol take, with
+    /// an uppercase letter, a lowercase one and a digit. About 104 bits.
+    static func strong<G: RandomNumberGenerator>(using generator: inout G) -> String {
+        while true {
+            let password = (0..<3).map { _ in
+                String((0..<6).map { _ in alphabet.randomElement(using: &generator)! })
+            }.joined(separator: "-")
+            if password.contains(where: \.isUppercase), password.contains(where: \.isLowercase), password.contains(where: \.isNumber) {
+                return password
+            }
+        }
+    }
+}
+
+/// What the bar offers after a login form is sent.
+enum SaveOffer: Equatable, Sendable {
+    case save
+    case update(Credential.ID)
+}
+
+enum SaveDecision {
+    /// Nothing in a private tab, for an empty password, on a site the user said never for, or
+    /// for an account saved as it is. The same username with another password is an update.
+    static func offer(host: String, username: String, password: String, isPrivate: Bool, in vault: VaultContents) -> SaveOffer? {
+        let site = SiteInfo.registrable(host)
+        guard !isPrivate, !password.isEmpty, !site.isEmpty, !vault.neverSaved.contains(site) else { return nil }
+        let accounts = SiteMatch.credentials(for: host, in: vault.credentials).filter { $0.username == username }
+        guard !accounts.contains(where: { $0.password == password }) else { return nil }
+        return accounts.first.map { .update($0.id) } ?? .save
+    }
+}

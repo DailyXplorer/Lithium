@@ -266,6 +266,19 @@ struct FingerprintingTests {
         #expect(privacy.scripts(true, for: url, privateSession: session).first?.source != ephemeral)
     }
 
+    /// A space keeping its data apart farbles with a key of its own: the same noise there as in
+    /// the main space would link its sign-ins to the main space's.
+    @Test func spacesKeepingTheirDataApartGetTheirOwnKeys() throws {
+        let privacy = Privacy()
+        let url = URL(string: "https://news.example/")!
+        let normal = try #require(privacy.scripts(true, for: url).first?.source)
+        let space = UUID()
+        let separate = try #require(privacy.scripts(true, for: url, space: space).first?.source)
+        #expect(separate != normal)
+        #expect(privacy.scripts(true, for: url, space: space).first?.source == separate)
+        #expect(privacy.scripts(true, for: url, space: UUID()).first?.source != separate)
+    }
+
     /// Built-ins the page replaced before adding a frame don't keep the frame unprotected: a
     /// `call` that always answers true once made it look protected already. Nor do they strip the
     /// page's own noise (a `Math.floor` returning a huge gap once skipped every pixel, a canvas

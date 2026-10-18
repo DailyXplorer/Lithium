@@ -482,7 +482,8 @@ struct PageTranslatorTests {
             Issue.record("not failed: \(String(describing: tab.pageTranslation?.status))")
             return
         }
-        #expect(message.contains("French"))
+        // "French" in the Mac's own language, which may not be English.
+        #expect(message.contains(PageTranslator.name(of: Locale.Language(identifier: "fr"))))
         #expect(await waitUntil(5) { await text("title", in: tab) == "Le lithium, le plus léger des métaux" })
     }
 

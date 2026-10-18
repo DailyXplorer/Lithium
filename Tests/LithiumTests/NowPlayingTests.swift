@@ -192,6 +192,41 @@ struct NowPlayingBrowserTests {
         #expect(player.tab == nil && player.media == nil)
     }
 
+    /// Music on the page, a video in its embed: the video takes the player, and once it stops the
+    /// player shows the music again, which never stopped.
+    @Test func followsAFrameStillPlayingOnceTheOneShownStops() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.isHeard = { _ in true }
+        let music = NowPlaying.Media(message: ["paused": false, "duration": 200, "title": "Music"], at: Date())
+        let video = NowPlaying.Media(message: ["paused": false, "duration": 60, "title": "Video"], at: Date())
+        let paused = NowPlaying.Media(message: ["paused": true, "duration": 60, "title": "Video"], at: Date())
+        let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
+
+        player.receive(music, from: tab, frame: page)
+        player.receive(video, from: tab, frame: embed)
+        #expect(player.media?.title == "Video")
+        player.receive(paused, from: tab, frame: embed)
+        #expect(player.media?.title == "Music" && player.media?.isPaused == false, "the page still plays")
+
+        player.receive(video, from: tab, frame: embed)
+        player.receive(nil, from: tab, frame: embed)
+        #expect(player.tab === tab && player.media?.title == "Music" && player.media?.isPaused == false, "the embed's video gone")
+
+        player.receive(video, from: tab, frame: embed)
+        player.receive(nil, from: tab, frame: page)
+        player.receive(paused, from: tab, frame: embed)
+        #expect(player.media?.title == "Video" && player.media?.isPaused == true, "the page stopped meanwhile")
+
+        player.receive(music, from: tab, frame: page)
+        player.receive(video, from: tab, frame: embed)
+        let other = browser.newTab()
+        player.receive(music, from: other, frame: page)
+        player.receive(paused, from: other, frame: page)
+        #expect(player.tab === other && player.media?.isPaused == true, "another tab's frames are not this one's")
+    }
+
     /// Any page, or an ad in it, may post that it plays: an iframe's word needs WebKit's ear.
     @Test func takesAnIframesWordOnlyIfWebKitHearsIt() {
         let browser = Browser()
@@ -577,6 +612,41 @@ struct NowPlayingBrowserTests {
         tab.isMuted = false
         player.receive(NowPlaying.Media(message: ["paused": false, "duration": 60, "audible": true], at: Date()), from: tab)
         #expect(player.tab === tab, "unmuted, its next report does")
+    }
+
+    /// WebKit hears no muted tab: unmuted, it hears it again, which asks only the page what it plays.
+    /// An embed playing on says nothing new, yet takes the player back.
+    @Test func takesAnEmbedBackWhenUnmuted() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.tell = { _, _, _ in }
+        var heard = true
+        player.isHeard = { _ in heard }
+        let video = NowPlaying.Media(message: ["paused": false, "duration": 60, "title": "Video"], at: Date())
+        let paused = NowPlaying.Media(message: ["paused": true, "duration": 60, "title": "Video"], at: Date())
+        let embed = NowPlaying.Frame(id: "embed", isSubframe: true)
+        let mute = { (muted: Bool) in
+            tab.isMuted = muted
+            heard = !muted
+            player.hearingChanged(tab)
+        }
+
+        player.receive(video, from: tab, frame: embed)
+        mute(true)
+        #expect(player.tab == nil)
+        mute(false)
+        #expect(player.tab === tab && player.media?.title == "Video" && player.media?.isPaused == false)
+
+        mute(true)
+        player.receive(paused, from: tab, frame: embed)
+        mute(false)
+        #expect(player.tab == nil, "paused while muted")
+
+        mute(true)
+        player.receive(video, from: tab, frame: embed)
+        mute(false)
+        #expect(player.tab === tab, "started while muted")
     }
 
     /// Any script of a page can post that it plays: the page's word takes the player, but only

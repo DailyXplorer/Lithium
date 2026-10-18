@@ -607,11 +607,8 @@ final class Browser {
                     return true
                 } ? nil : event
             }
-            // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
             guard event.keyCode == 53, let self else { return event }
-            return MainActor.assumeIsolated {
-                !NativeInput.isAgents(event) && self.ownsEscape(in: event.window) && self.dismissOverlay(in: event.window)
-            } ? nil : event
+            return MainActor.assumeIsolated { self.takesEscape(event) } ? nil : event
         }
         // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
         let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
@@ -656,6 +653,12 @@ final class Browser {
         guard !field.bounds.insetBy(dx: -10, dy: -8).contains(point) else { return }
         window.makeFirstResponder(nil)
         if field is URLTextField { self.window(for: window)?.returnKeyboardToPage(fieldHadKeyboard: true) }
+    }
+
+    /// The key monitor's Escape: true when Lithium acted on it, false to let it go on.
+    func takesEscape(_ event: NSEvent) -> Bool {
+        // An agent's Escape that the page didn't handle comes back here; it isn't the user's.
+        !NativeInput.isAgents(event) && ownsEscape(in: event.window) && dismissOverlay(in: event.window)
     }
 
     /// Not in another window or under a sheet, and not while a text field edits (the address bar

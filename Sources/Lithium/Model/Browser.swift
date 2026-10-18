@@ -156,6 +156,9 @@ final class Browser {
         return info.isLowPowerModeEnabled || info.thermalState == .serious || info.thermalState == .critical
     }
     private static let closedTabsLimit = 25
+    /// How many closed tabs ⇧⌘T keeps: the limit, plus the tabs of the window closed last, so a big
+    /// window loses none of them, nor what was closed before it.
+    @ObservationIgnored private var closedTabsKept = closedTabsLimit
 
     /// `notifications` posts the change of day (`NSCalendarDayChanged`); tests post it themselves.
     init(favicons: Favicons = .shared, notifications: NotificationCenter = .default) {
@@ -523,7 +526,9 @@ final class Browser {
         }
         // Off the tabs first, so the selection doesn't walk through (and wake) the tabs closing.
         window.showStartPage(picked: false)
-        tabs.filter { $0.windowID == window.id }.reversed().forEach { close($0) }
+        let closing = tabs.filter { $0.windowID == window.id }
+        closedTabsKept = Self.closedTabsLimit + closing.count
+        closing.reversed().forEach { close($0) }
         windows.removeAll { $0 === window }
     }
 
@@ -915,7 +920,7 @@ final class Browser {
             let closed = ClosedTab(url: url, pinID: tab.pinID, spaceID: tab.spaceID, customTitle: tab.customTitle, index: place,
                                    folderID: tab.folderID, history: tab.history)
             closedTabs.append(closed)
-            if closedTabs.count > Self.closedTabsLimit { closedTabs.removeFirst() }
+            if closedTabs.count > closedTabsKept { closedTabs.removeFirst(closedTabs.count - closedTabsKept) }
         }
         let partner = leaveSplit(tab)
         let wasSelected = tab.id == window.selectedTabID

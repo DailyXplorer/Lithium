@@ -115,7 +115,9 @@ final class BrowserWindow: Identifiable {
 
     // MARK: Selection
 
+    /// Only this window's tabs: a page shown in two windows draws in one of them only.
     func select(_ tab: Tab, picked: Bool = true) {
+        guard tab.windowID == id else { return }
         let previous = selectedTab
         if picked { tab.didOpen() }
         if tab.id != selectedTabID {
@@ -163,7 +165,8 @@ final class BrowserWindow: Identifiable {
         find.hide()
         let position = order.firstIndex { $0 === tab } ?? 0
         let remaining = order.filter { $0 !== tab }
-        let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in browser.tabs.contains { $0 === opener } ? opener : nil }
+        // The opener may have moved to another window since: it stays there.
+        let opener = recentTabs.opener(returningFrom: tab).flatMap { opener in browser.tabs.contains { $0 === opener && $0.windowID == id } ? opener : nil }
         if partner == nil, goingBack, let before = recentTabs.shownBefore(tab),
            before.map({ id in browser.tabs.contains { $0.id == id && $0 !== tab && $0.spaceID == tab.spaceID && $0.windowID == self.id } }) ?? true {
             selectedTabID = before
@@ -279,7 +282,7 @@ final class BrowserWindow: Identifiable {
         renamingFolderID = nil
         let order = browser.spaces.map(\.id)
         spaceStepsForward = (order.firstIndex(of: space) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
-        if let last = spaceSelections[space], let tab = browser.tabs.first(where: { $0.id == last && $0.spaceID == space }) {
+        if let last = spaceSelections[space], let tab = browser.tabs.first(where: { $0.id == last && $0.spaceID == space && $0.windowID == id }) {
             tab.didOpen()
             select(tab, picked: false)
         } else {

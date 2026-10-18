@@ -68,6 +68,24 @@ struct WindowsTests {
         _ = try #require(browser.tabs.first { $0 === c })
     }
 
+    /// A window with more tabs than ⇧⌘T usually keeps loses none of them on closing, nor the tab
+    /// closed before it: before, only the last 25 closed came back.
+    @Test func closingABigWindowKeepsAllItsTabsForReopen() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        _ = restored(browser, "a")
+        browser.close(restored(browser, "earlier"))
+        let second = browser.openWindow()
+        let names = (1...26).map { "b\($0)" }
+        for name in names { _ = restored(browser, name, in: second) }
+
+        browser.windowWillClose(second)
+        for _ in 0..<27 { browser.reopenClosedTab(into: first) }
+        #expect(!browser.canReopenClosedTab)
+        #expect(Set(first.regularTabs.compactMap(\.url)) == Set((["a", "earlier"] + names).map(page)))
+    }
+
     /// Closing a window puts its tabs into Reopen Closed Tab, bottom up, so ⇧⌘T brings them back
     /// top down into the window it is pressed in. Closing the only window keeps its tabs for the
     /// next New Window or Dock click, which shows that window again.
@@ -371,6 +389,38 @@ struct WindowsTests {
         #expect(browser.liveTab(for: pin) === favorite, "the same page, not a second one")
         #expect(browser.tabs.count == 2)
         #expect(browser.navigationOrder(in: Space.mainID, window: first.id).map(\.id) == [a.id])
+    }
+
+    /// A tab gone to another window is never selected back in the one it left: not as the opener
+    /// of the tab closed there, nor as the tab its space last showed. Before, both windows showed
+    /// it, and ⌘W in the first closed the second's page.
+    @Test func aTabMovedToAnotherWindowStaysOutOfTheFirst() throws {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = restored(browser, "a")
+        let favorite = restored(browser, "favorite")
+        browser.pin(favorite)
+        let pin = try #require(browser.pins.first)
+        browser.activate(pin, in: first)
+        browser.newTab(url: page("child"), openedFrom: favorite)
+        let second = browser.openWindow()
+        browser.activate(pin, in: second)
+
+        first.closeSelectedTab()
+        #expect(first.selectedTab === a, "its opener left, so its neighbour shows")
+        #expect(second.selectedTab === favorite)
+
+        var work = browser.newSpaceDraft()
+        work.name = "Work"
+        browser.addSpace(work, in: first)
+        first.switchToSpace(work.id)
+        browser.move(a, to: second)
+        first.switchToSpace(Space.mainID)
+        #expect(first.currentSpaceID == Space.mainID)
+        #expect(first.selectedTab == nil, "the tab the space showed last is the other window's now")
+        #expect(second.selectedTab === a)
+        #expect(browser.window(of: a) === second)
     }
 
     /// Move to This Window takes the tab itself, its web view and folder kept, to the top of this

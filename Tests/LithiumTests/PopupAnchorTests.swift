@@ -53,6 +53,17 @@ struct PopupAnchorTests {
         #expect(!Extensions.isOnScreen(anchor))
     }
 
+    /// The anchor the last toolbar drawn left may be in a window behind: a popup the extension
+    /// opens itself goes under the front window's button, not that one.
+    @Test func theAnchorCountsOnlyInTheWindowInFront() {
+        let behind = ShownWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: .borderless, backing: .buffered, defer: true)
+        behind.isReleasedWhenClosed = false
+        #expect(Extensions.anchor(anchor, in: window) === anchor)
+        #expect(Extensions.anchor(anchor, in: behind) == nil)
+        #expect(Extensions.anchor(anchor, in: nil) == nil)
+        #expect(Extensions.anchor(nil, in: window) == nil)
+    }
+
     @Test func thePopupGoesToTheFirstViewOnScreen() {
         let offScreen = NSView(frame: container.frame)
         #expect(Extensions.firstOnScreen([nil, offScreen, container, anchor]) === container)

@@ -282,6 +282,7 @@ final class BrowserWindow: Identifiable {
         renamingFolderID = nil
         let order = browser.spaces.map(\.id)
         spaceStepsForward = (order.firstIndex(of: space) ?? 0) > (order.firstIndex(of: currentSpaceID) ?? 0)
+        // The tab last shown there may have moved to another window since.
         if let last = spaceSelections[space], let tab = browser.tabs.first(where: { $0.id == last && $0.spaceID == space && $0.windowID == id }) {
             tab.didOpen()
             select(tab, picked: false)

@@ -458,6 +458,35 @@ struct PageTranslatorTests {
         #expect(await waitUntil(5) { await text("title", in: tab) == "Le lithium, le plus léger des métaux" })
     }
 
+    /// macOS's download prompt shows over the asking page's own window: a job that may show it waits
+    /// for that window's host, a browser window's or a link window's, while it is up. Any host
+    /// serves the other jobs, and those of a page whose host is gone.
+    @Test func theDownloadPromptShowsOverThePagesOwnWindow() throws {
+        let browser = makeBrowser()
+        browser.quickLinks.showWindow = { _, _ in nil }
+        let translator = browser.translator
+        let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
+        let link = try #require(browser.quickLinks.open(URL(string: "data:text/html,link")!))
+        defer {
+            browser.quickLinks.close(link)
+            browser.close(tab, remembering: false)
+        }
+        let window = browser.commandWindow.id
+        #expect(translator.mayServe(tab, preparing: true, from: link.id), "its window's host isn't up yet")
+
+        translator.hostAppeared(window)
+        translator.hostAppeared(link.id)
+        #expect(translator.mayServe(tab, preparing: true, from: window))
+        #expect(!translator.mayServe(tab, preparing: true, from: link.id))
+        #expect(translator.mayServe(link, preparing: true, from: link.id))
+        #expect(!translator.mayServe(link, preparing: true, from: window), "not the browser window it was opened from")
+        #expect(translator.mayServe(tab, preparing: false, from: link.id), "no prompt: any host")
+
+        translator.hostLeft(window)
+        #expect(translator.mayServe(tab, preparing: true, from: link.id), "its window closed")
+        translator.hostLeft(link.id)
+    }
+
     /// A download that outlasts the script's wait says so until it's done, then the page is translated.
     @Test func saysDownloadingUntilTheLanguageArrives() async throws {
         let browser = makeBrowser()

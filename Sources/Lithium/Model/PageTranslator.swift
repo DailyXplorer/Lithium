@@ -49,6 +49,8 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
     @ObservationIgnored private var jobs: [Job] = []
     @ObservationIgnored private var servedPair: Pair?
     @ObservationIgnored private var isServing = false
+    /// The `TranslationHost`s up, by `id`.
+    @ObservationIgnored private var hosts: Set<UUID> = []
     /// Tabs whose first batch waits on macOS's download, which may outlast the script's wait.
     @ObservationIgnored private var downloads: Set<ObjectIdentifier> = []
     /// Never saved: a private session's choices go with it.
@@ -64,6 +66,8 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         let pair: Pair
         let texts: [String]
         let preparing: Bool
+        /// The asking page's: macOS's download prompt shows over its window.
+        weak var tab: Tab?
         let continuation: CheckedContinuation<[String?], any Error>
     }
 
@@ -280,7 +284,7 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         if preparing { downloads.insert(ObjectIdentifier(tab)) }
         defer { if preparing { downloads.remove(ObjectIdentifier(tab)) } }
         do {
-            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing)
+            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing, for: tab)
             if preparing, tab.translationRun == run, tab.pageTranslation?.status == .downloading { tab.pageTranslation?.status = .translated }
             return (results.map { $0 ?? NSNull() as Any }, nil)
         } catch {
@@ -300,10 +304,10 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         return await LanguageAvailability().status(from: source, to: target)
     }
 
-    private func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool) async throws -> [String?] {
+    private func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool, for tab: Tab) async throws -> [String?] {
         if let engine { return try await engine.translate(texts, from: source, to: target, preparing: preparing) }
         return try await withCheckedThrowingContinuation { continuation in
-            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, continuation: continuation))
+            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, tab: tab, continuation: continuation))
             serveNext()
         }
     }
@@ -320,10 +324,13 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    func serve(_ session: TranslationSession) async {
+    /// A host with nothing it may serve leaves the queue as is, or two hosts would hand it back and forth.
+    func serve(_ session: TranslationSession, from id: UUID) async {
         guard let pair = servedPair, !isServing else { return }
+        let takes = { (job: Job) in job.pair == pair && self.mayServe(job.tab, preparing: job.preparing, from: id) }
+        guard jobs.contains(where: takes) else { return }
         isServing = true
-        while let index = jobs.firstIndex(where: { $0.pair == pair }) {
+        while let index = jobs.firstIndex(where: takes) {
             let job = jobs.remove(at: index)
             do {
                 // macOS's own prompt to download the languages, over the window.
@@ -334,6 +341,24 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
             }
         }
         isServing = false
+        serveNext()
+    }
+
+    /// A job that may show macOS's download prompt waits for the host in its page's window while that
+    /// one is up: its link's own window, else its browser window. Any host serves the rest.
+    func mayServe(_ tab: Tab?, preparing: Bool, from id: UUID) -> Bool {
+        guard preparing, let tab else { return true }
+        let own = browser?.quickLinks.contains(tab) == true ? tab.id : tab.windowID
+        return own == id || !hosts.contains(own)
+    }
+
+    func hostAppeared(_ id: UUID) {
+        hosts.insert(id)
+    }
+
+    /// Its jobs go to the hosts left.
+    func hostLeft(_ id: UUID) {
+        hosts.remove(id)
         serveNext()
     }
 
@@ -357,17 +382,21 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
     }
 }
 
-/// Where the translator's sessions come from: in the browser's window, so macOS's download prompt
-/// has a window to show over. Draws nothing, and does nothing until a page is translated.
+/// Where the translator's sessions come from: in each browser window and link window, so macOS's
+/// download prompt has a window to show over. Draws nothing, and does nothing until a page is translated.
 struct TranslationHost: View {
     let translator: PageTranslator
+    /// Its browser window's, or its link's tab's (`PageTranslator.mayServe`).
+    let id: UUID
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .translationTask(translator.configuration) { session in
-                await translator.serve(session)
+                await translator.serve(session, from: id)
             }
+            .onAppear { translator.hostAppeared(id) }
+            .onDisappear { translator.hostLeft(id) }
     }
 }
 

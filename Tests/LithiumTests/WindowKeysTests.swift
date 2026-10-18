@@ -193,6 +193,37 @@ struct WindowKeysTests {
         #expect(!browser.commandWindow.find.isVisible)
     }
 
+    /// Escape typed in the page (its menu, its dialog) goes to the page, and the permission prompt
+    /// stays. One the page didn't handle comes back, maybe after the next press, and dismisses it.
+    @Test func escapeTypedInThePageReachesItBeforeThePrompt() async throws {
+        let (browser, tab, window) = try await shownBrowser()
+        defer { window.orderOut(nil) }
+        let host = "camera.example"
+        defer { browser.permissions.set(nil, for: .camera, host: host) }
+        let asked = Task { await browser.permissions.request([.camera], host: host, tabID: tab.id) }
+        #expect(await waitUntil(10) { browser.commandWindow.shownPermissionRequest?.tabID == tab.id })
+        #expect(window.makeFirstResponder(tab.webView))
+
+        let first = try escapeKey(in: window), second = try escapeKey(in: window)
+        #expect(!browser.takesEscape(first), "the page gets the Escape")
+        #expect(!browser.takesEscape(second))
+        #expect(browser.commandWindow.shownPermissionRequest?.tabID == tab.id)
+        // WebKit hands the first back, unhandled.
+        let declined = browser.takesEscape(first)
+        #expect(declined)
+        // Not dismissed, the request is only answered when the tab closes.
+        guard declined else { return }
+        #expect(await asked.value == false)
+        #expect(browser.permissions.pending.isEmpty)
+
+        let again = Task { await browser.permissions.request([.camera], host: host, tabID: tab.id) }
+        #expect(await waitUntil(10) { browser.commandWindow.shownPermissionRequest?.tabID == tab.id })
+        window.makeFirstResponder(nil)
+        let dismissed = browser.takesEscape(try escapeKey(in: window))
+        #expect(dismissed, "the keyboard off the page: at once")
+        if dismissed { #expect(await again.value == false) }
+    }
+
     /// Hiding the sidebar (⌘B) during a rename ends it with the name typed, so it doesn't go on
     /// holding Escape, the agent's input and the sidebar's peek.
     @Test func hidingTheSidebarEndsARename() async throws {
@@ -399,6 +430,15 @@ struct WindowKeysTests {
             windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
             isARepeat: false, keyCode: keyCode
         )!)
+    }
+
+    /// A new event per press, as typed: WebKit hands back the very event the page didn't handle.
+    private func escapeKey(in window: NSWindow) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53
+        ))
     }
 
     private func waitUntil(_ seconds: Double, _ condition: () -> Bool) async -> Bool {

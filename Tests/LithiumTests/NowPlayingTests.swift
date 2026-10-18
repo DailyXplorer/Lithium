@@ -886,6 +886,7 @@ struct NowPlayingBrowserTests {
         player.receive(playing, from: first, frame: embed)
         #expect(player.tab === first && paused.isEmpty, "another frame of the same tab")
 
+        player.receive(stopped, from: first, frame: page)
         player.receive(stopped, from: first, frame: embed)
         player.receive(playing, from: second)
         #expect(player.tab === second && paused.isEmpty, "a tab already paused")

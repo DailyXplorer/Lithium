@@ -128,6 +128,9 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     /// An iframe's last word from before WebKit heard its tab, one per tab: WebKit often hears a
     /// sound only after the first report, which would otherwise be lost.
     @ObservationIgnored private var unheard: [ObjectIdentifier: (media: Media, frame: Frame)] = [:]
+    /// Each tab's frames another of its frames took the player from while they played on, until they
+    /// say otherwise: one takes it back once the frame shown stops, as a page's script follows its media.
+    @ObservationIgnored private var behind: [ObjectIdentifier: [String: (media: Media, frame: Frame)]] = [:]
     /// A sound not known to last, one per frame of each tab, with when it was first reported playing: a
     /// ping or music, told apart by whether WebKit still hears it `sustain` seconds later.
     @ObservationIgnored private var unproven: [ObjectIdentifier: [String: (media: Media, frame: Frame, since: Date)]] = [:]
@@ -206,6 +209,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         if unheard[key]?.frame.id == frame.id { unheard[key] = nil }
         // Kept only for the same sound: another one (a second ping) may still be heard at the old check.
         let waited = unproven[key]?.removeValue(forKey: frame.id)
+        let next = holds && media?.isPaused != false ? behind[key]?.values.max { $0.media.reportedAt < $1.media.reportedAt } : nil
+        if behind[key]?[frame.id] != nil {
+            behind[key]?[frame.id] = media.flatMap { !$0.isPaused && $0.isAudible ? (media: $0, frame: frame) : nil }
+        }
         // An iframe's word needs WebKit's ear, back from the back-forward cache too.
         let isTrusted = !frame.isSubframe || isHeard(tab) != false
         let lasts = { (media: Media) in lasted || media.isLive || media.duration.map { $0 > Self.brief } == true }
@@ -224,6 +231,10 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
                     unpaused = previous
                     unpausedFrame = self.frame
                 }
+                if self.tab === tab, let shown = self.frame, let reported, !reported.isPaused, reported.isAudible {
+                    behind[key, default: [:]][shown.id] = (reported, shown)
+                }
+                behind[key]?[frame.id] = nil
             }
             if let previous = unpaused, !media.isPaused, media.isAudible {
                 if isHeard(tab) != false {
@@ -254,9 +265,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
             } else {
                 prove(media, from: tab, frame: frame)
             }
-        } else if let media, frame.isSubframe, !media.isPaused, media.isAudible, !tab.isMuted {
-            // Turned down only for want of WebKit's ear.
+        } else if let media, frame.isSubframe, !media.isPaused, media.isAudible {
+            // Turned down only for want of WebKit's ear, which hears no muted tab.
             unheard[key] = (media, frame)
+        }
+        // The frame shown stopped: another of the tab's, playing on, shows instead.
+        if let next {
+            behind[key]?[next.frame.id] = nil
+            receive(next.media, from: tab, frame: next.frame)
         }
     }
 
@@ -316,6 +332,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         return Array(frames.values)
     }
 
+    /// Muted, the tab lets go of the player. An iframe playing on keeps its word for when WebKit hears
+    /// the tab again, which asks only the page what it plays (`hearingChanged`).
+    func mute(_ tab: Tab) {
+        let shown = tab === self.tab ? frame.flatMap { frame in reported.map { (media: $0, frame: frame) } } : nil
+        discard(tab, pageGone: false)
+        if let shown, shown.frame.isSubframe, !shown.media.isPaused { unheard[ObjectIdentifier(tab)] = shown }
+    }
+
     /// The tab closed, fell asleep, went to another page, or was muted. Its iframes' Web Audio is kept
     /// while its page stays (`pageGone` false): each says so only once.
     func discard(_ tab: Tab, pageGone: Bool = true) {
@@ -323,6 +347,7 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         unheard[ObjectIdentifier(tab)] = nil
         unproven[ObjectIdentifier(tab)] = nil
         if pageGone {
+            behind[ObjectIdentifier(tab)] = nil
             audioFrames[ObjectIdentifier(tab)] = nil
             hushed[ObjectIdentifier(tab)] = nil
         }

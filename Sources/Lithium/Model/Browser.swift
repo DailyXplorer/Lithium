@@ -1201,7 +1201,8 @@ final class Browser {
         titleSave = nil
         queuedSession = session
         savedWithHistory = nil
-        saveSessionCookiesIfDue()
+        // A page retitling itself on screen (a chat left open) would otherwise read every cookie each minute.
+        if !titlesDue { saveSessionCookiesIfDue() }
         SessionStore.saveInBackground(session) { [weak self] written in
             guard let self else { return }
             if written {

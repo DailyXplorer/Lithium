@@ -119,6 +119,11 @@ struct ContentCard: View {
                     .id(request.id)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            if let request = window.shownPasswordSave {
+                PasswordSaveBar(request: request) { browser.passwords.answer(request, $0) }
+                    .id(request.id)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             Group {
                 if let tab, let split = browser.split(of: tab) {
                     SplitPages(split: split)
@@ -132,6 +137,7 @@ struct ContentCard: View {
                             }
                         }
                         .overlay { BlockedPageLayer(tab: tab) }
+                        .overlay { PasswordDropdownLayer(tab: tab) }
                         .overlay {
                             if let acting = browser.agent?.tabs[tab.id]?.acting {
                                 AgentActingOverlay(acting: acting)
@@ -161,6 +167,7 @@ struct ContentCard: View {
         // The outgoing page leaves with the keyboard, which falls back on the window: keys beep and
         // the first click only focuses the page. The next run-loop turn has the new page in place.
         .onChange(of: tab?.id) {
+            browser.passwords.hideDropdown()
             DispatchQueue.main.async {
                 guard let tab = window.selectedTab, window.videoPopout.tab !== tab else { return }
                 focusPage(tab.contentView)
@@ -168,6 +175,7 @@ struct ContentCard: View {
         }
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.appLinks.pending)
+        .animation(.snappy(duration: 0.2), value: browser.passwords.pending)
         .animation(.snappy(duration: 0.2), value: browser.agent?.confirmations.pending)
         .animation(.snappy(duration: 0.2), value: window.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

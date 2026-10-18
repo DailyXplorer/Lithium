@@ -113,6 +113,8 @@ enum Preference {
     static let readerButton = "readerButton"
     static let readerStyle = "readerStyle"
     static let energySaving = "energySaving"
+    static let passwordOffers = "passwordOffers"
+    static let passwordUnlock = "passwordUnlock"
 }
 
 enum SidebarStyle: String, CaseIterable, Identifiable {

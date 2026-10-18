@@ -60,6 +60,8 @@ enum Phosphor: String {
     case readerStyle = "sliders-horizontal"
     case translate
     case leaf
+    case key
+    case magicWand = "magic-wand"
 
     @MainActor private static var cache: [Phosphor: NSImage] = [:]
 

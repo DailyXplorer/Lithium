@@ -30,6 +30,22 @@ enum StoredFile {
         return readable
     }
 
+    /// Made 0600 before it takes the file's place, so others can't read it even for a moment.
+    static func writePrivately(_ data: Data, to url: URL) -> Bool {
+        let folder = url.deletingLastPathComponent()
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return false }
+        let temporary = folder.appending(path: ".\(url.lastPathComponent)-\(UUID().uuidString)")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { return false }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        guard (try? handle.write(contentsOf: data)) != nil, (try? handle.close()) != nil,
+              rename(temporary.path, url.path) == 0 else {
+            try? FileManager.default.removeItem(at: temporary)
+            return false
+        }
+        return true
+    }
+
     @discardableResult
     static func moveAside(_ url: URL) -> Bool {
         let date = Date.now.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeSeparator(.omitted))

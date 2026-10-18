@@ -127,6 +127,9 @@ struct QuickLinkView: View {
             if let request = browser.appLinks.pending.first(where: { $0.tabID == tab.id }) {
                 AppLinkPrompt(request: request).id(request.id)
             }
+            if let request = browser.passwords.pending.first(where: { $0.tabID == tab.id }) {
+                PasswordSaveBar(request: request) { browser.passwords.answer(request, $0) }.id(request.id)
+            }
             PageContainer(view: tab.webView)
                 .overlay {
                     if let pdf = tab.pdf {
@@ -134,6 +137,7 @@ struct QuickLinkView: View {
                     }
                 }
                 .overlay { BlockedPageLayer(tab: tab) }
+                .overlay { PasswordDropdownLayer(tab: tab) }
                 .overlay(alignment: .topTrailing) {
                     if browser.quickLinks.showsFindBar(over: tab) {
                         FindBar(find: browser.quickLinks.find, tab: tab)

@@ -52,26 +52,10 @@ enum SessionCookies {
         // Off the main thread: the Keychain may block, on a prompt for the key.
         let (key, url) = (key, fileURL)
         let written = await Task.detached { () -> SymmetricKey? in
-            guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined, write(sealed, to: url) else { return nil }
+            guard let key = key.read(true), let sealed = try? AES.GCM.seal(plist, using: key).combined, StoredFile.writePrivately(sealed, to: url) else { return nil }
             return key
         }.value
         if let written { knownKey = written } else if replacing { forget() }
-    }
-
-    /// Made 0600 before it takes the file's place, so others can't read it even for a moment.
-    nonisolated private static func write(_ data: Data, to url: URL) -> Bool {
-        let folder = url.deletingLastPathComponent()
-        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return false }
-        let temporary = folder.appending(path: ".\(url.lastPathComponent)-\(UUID().uuidString)")
-        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-        guard descriptor >= 0 else { return false }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        guard (try? handle.write(contentsOf: data)) != nil, (try? handle.close()) != nil,
-              rename(temporary.path, url.path) == 0 else {
-            try? FileManager.default.removeItem(at: temporary)
-            return false
-        }
-        return true
     }
 
     /// Puts each store's cookies back in that store only, but those `skipping` names (a site
@@ -126,7 +110,7 @@ enum SessionCookies {
         }
         file["stores"] = stores
         guard let data = try? PropertyListSerialization.data(fromPropertyList: file, format: .binary, options: 0),
-              let resealed = try? AES.GCM.seal(data, using: key).combined, write(resealed, to: fileURL)
+              let resealed = try? AES.GCM.seal(data, using: key).combined, StoredFile.writePrivately(resealed, to: fileURL)
         else { return forget() }
     }
 

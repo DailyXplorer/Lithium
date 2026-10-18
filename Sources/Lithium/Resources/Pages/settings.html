@@ -55,6 +55,13 @@
   .filter-save { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
   #filter-problems .row { padding: 10px 0; }
   #filter-problems code, .hint code { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  #password-search { display: block; width: 100%; margin-top: 4px; }
+  .account .title { overflow-wrap: anywhere; }
+  .account .secret { font: 12.5px ui-monospace, Menlo, monospace; user-select: text; -webkit-user-select: text; }
+  .account-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .account-edit input { flex: 1 1 160px; min-width: 0; border: 1px solid var(--line); border-radius: 9px; height: 37px; padding: 0 12px;
+    background: none; color: inherit; font: inherit; outline: none; }
+  .account-edit input:focus { border-color: var(--accent); }
   .snippet code { display: block; margin-top: 6px; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
     white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 </style>
@@ -196,15 +203,41 @@
 
   <section id="passwords" class="page">
     <h2>Passwords</h2>
-    <p class="lead">Your passwords and passkeys stay in Apple’s Passwords app. Lithium can’t fill or save them yet, so copy them from there.</p>
-    <button class="button accent cta" id="open-passwords">Open Passwords</button>
-    <h3>Signing in</h3>
-    <div class="row"><div><div class="title">From a sign-in field</div><div class="hint">Right-click the field and choose Open Passwords.</div></div></div>
-    <div class="row"><div><div class="title">With a password manager</div><div class="hint">Extensions such as 1Password fill and save passwords. Add one in Extensions.</div></div></div>
-    <details>
-      <summary>Details</summary>
-      <p>Apple lets only the browsers it approves fill and save passwords from the Passwords app, through its iCloud Passwords extension. Passkeys need Apple’s approval too.</p>
-    </details>
+    <p class="lead">Lithium keeps your passwords encrypted on this Mac and fills them when you sign in.</p>
+    <div class="row">
+      <div><div class="title">Offer to save passwords</div><div class="hint">And list them under sign-in fields. Private tabs never save.</div></div>
+      <label class="switch" for="password-offers"><input type="checkbox" id="password-offers" role="switch"><span></span></label>
+    </div>
+    <div class="row">
+      <div><div class="title">Ask for Touch ID</div><div class="hint">Or your Mac’s password, before filling. Showing or copying a password always asks, unless you choose Never.</div></div>
+      <div class="segmented" id="password-unlock"><button data-value="oncePerLaunch">Once per launch</button><button data-value="everyTime">Every time</button><button data-value="never">Never</button></div>
+    </div>
+    <div class="hint error" id="password-error" hidden></div>
+    <h3>Saved</h3>
+    <input type="text" id="password-search" placeholder="Search" autocomplete="off" spellcheck="false">
+    <div class="rows" id="password-list"></div>
+    <div id="never-saved-section">
+      <h3>Never saved</h3>
+      <div class="rows" id="never-saved"></div>
+    </div>
+    <h3>Import and export</h3>
+    <div class="row">
+      <div><div class="title">Import</div><div class="hint">From a CSV file of Chrome, 1Password, Bitwarden or Apple Passwords.</div></div>
+      <button class="button" id="password-import">Import…</button>
+    </div>
+    <div class="row">
+      <div><div class="title">Export</div><div class="hint">The file isn’t encrypted: anyone who opens it can read your passwords.</div></div>
+      <div class="actions">
+        <span class="select"><select id="password-format"><option value="chrome">Chrome</option><option value="onePassword">1Password</option><option value="bitwarden">Bitwarden</option><option value="apple">Apple Passwords</option></select></span>
+        <button class="button" id="password-export">Export…</button>
+      </div>
+    </div>
+    <div class="hint" id="password-report" hidden></div>
+    <h3>Apple Passwords</h3>
+    <div class="row">
+      <div><div class="title">Passwords app</div><div class="hint">Passwords and passkeys saved there stay there. Right-click a sign-in field and choose Open Passwords.</div></div>
+      <button class="button" id="open-passwords">Open Passwords</button>
+    </div>
   </section>
 
   <section id="max" class="page">
@@ -364,6 +397,75 @@
     }
     // Read from disk, so only while the page shows.
     if (id === 'filters') call('filterLists').then(renderFilters);
+    if (id === 'passwords') call('passwords').then(renderPasswords);
+  };
+
+  // The state never holds a password: Show asks for one, after Touch ID.
+  const MASK = '••••••••';
+  let passwordState = null;
+  const button = (label, onclick) => {
+    const node = el('button', { className: 'button', textContent: label });
+    node.onclick = onclick;
+    return node;
+  };
+  const accountRow = (account) => {
+    const secret = el('span', { className: 'secret', textContent: MASK });
+    const show = button('Show', () => {
+      if (show.textContent === 'Hide') {
+        secret.textContent = MASK;
+        show.textContent = 'Show';
+        return;
+      }
+      call('revealPassword', account.id).then((answer) => {
+        secret.textContent = answer.password;
+        show.textContent = 'Hide';
+      }).catch(() => {});
+    });
+    const copy = button('Copy', () => call('copyPassword', account.id).then(() => {
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+    }).catch(() => {}));
+    const row = el('div', { className: 'row account' }, [
+      el('div', {}, [el('div', { className: 'title', textContent: account.host }), el('div', { className: 'hint' }, [account.username || 'No username', ' · ', secret])]),
+      el('div', { className: 'actions' }, [show, copy, button('Edit', () => row.replaceWith(editRow(account))), button('Delete', () => {
+        if (confirm(`Delete the password for ${account.username || account.host}?`)) call('deletePassword', account.id).then(renderPasswords);
+      })]),
+    ]);
+    return row;
+  };
+  // A new password is optional: left empty, the saved one stays.
+  const editRow = (account) => {
+    const username = el('input', { type: 'text', value: account.username, placeholder: 'Username', autocomplete: 'off', spellcheck: false });
+    const password = el('input', { type: 'password', placeholder: 'New password', autocomplete: 'new-password' });
+    const save = el('button', { className: 'button accent', textContent: 'Save' });
+    const cancel = button('Cancel', () => renderPasswords(passwordState));
+    cancel.type = 'button';
+    const form = el('form', { className: 'account-edit' }, [username, password, cancel, save]);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      save.disabled = true;
+      call('savePasswordEdit', { id: account.id, username: username.value, password: password.value }).then(renderPasswords)
+        .catch(() => { save.disabled = false; });
+    };
+    return form;
+  };
+  const renderPasswords = (state) => {
+    passwordState = state;
+    $('#password-offers').checked = state.offers;
+    document.querySelectorAll('#password-unlock button').forEach((b) => b.classList.toggle('on', b.dataset.value === state.unlock));
+    $('#password-error').textContent = state.error;
+    $('#password-error').hidden = !state.error;
+    if (state.report) $('#password-report').textContent = state.report;
+    $('#password-report').hidden = !$('#password-report').textContent;
+    const query = $('#password-search').value.trim().toLowerCase();
+    const accounts = state.accounts.filter((account) => !query || [account.host, account.username].some((text) => text.toLowerCase().includes(query)));
+    $('#password-list').replaceChildren(...(accounts.length ? accounts.map(accountRow) : [el('div', { className: 'empty',
+      textContent: state.accounts.length ? 'No passwords match.' : 'No passwords yet. Lithium offers to save them when you sign in.' })]));
+    $('#never-saved-section').hidden = !state.neverSaved.length;
+    $('#never-saved').replaceChildren(...state.neverSaved.map((site) => el('div', { className: 'row' }, [
+      el('div', { className: 'title', textContent: site }),
+      button('Remove', () => call('removeNeverSaved', site).then(renderPasswords)),
+    ])));
   };
 
   const listHint = (list) => {
@@ -743,6 +845,13 @@
   };
   $('#web-store').onclick = () => call('openWebStore');
   $('#open-passwords').onclick = () => call('openPasswords');
+  $('#password-offers').onchange = (event) => call('setPasswordOffers', event.target.checked).then(renderPasswords);
+  document.querySelectorAll('#password-unlock button').forEach((choice) => {
+    choice.onclick = () => call('setPasswordUnlock', choice.dataset.value).then(renderPasswords);
+  });
+  $('#password-search').oninput = () => { if (passwordState) renderPasswords(passwordState); };
+  $('#password-import').onclick = () => call('importPasswords').then(renderPasswords);
+  $('#password-export').onclick = () => call('exportPasswords', $('#password-format').value).then(renderPasswords);
   $('#tidy-titles').onchange = (event) => call('setTidyTitles', event.target.checked).then(render);
   $('#tidy-downloads').onchange = (event) => call('setTidyDownloads', event.target.checked).then(render);
   $('#summaries').onchange =(event) => call('setSummaries', event.target.checked).then(render);
@@ -772,6 +881,7 @@
     call('state').then(render);
     if (siteHost()) call('site', siteHost()).then(renderSite);
     if (location.hash === '#filters') call('filterLists').then(renderFilters);
+    if (location.hash === '#passwords') call('passwords').then(renderPasswords);
   });
 
   showSection();

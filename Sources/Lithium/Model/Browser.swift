@@ -1447,6 +1447,8 @@ final class Browser {
         let pin = Pin(id: UUID(), url: url, title: tab.displayTitle, favicon: tab.faviconData, spaceID: Space.saved(tab.spaceID))
         extensions.moving(tab) {
             pins.insert(pin, at: pinsIndex(forSlot: index ?? .max, in: tab.spaceID, of: pins))
+            // The other side leaves the screen, as by `exitSplit`.
+            window(of: tab).shownPartner?.markActive()
             leaveSplit(tab)
             tab.pinID = pin.id
             // The user's from now on: unpinned, it goes to the tab list, outside folders.

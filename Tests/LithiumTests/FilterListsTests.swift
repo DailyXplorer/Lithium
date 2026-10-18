@@ -471,6 +471,42 @@ struct FilterListsTests {
         #expect(privacy.filterError == nil)
     }
 
+    /// A catalog list turned off while it downloads stays off, with no copy left behind, and an
+    /// address added twice at once is added once.
+    @Test func filterListChoicesMadeDuringADownloadStand() async throws {
+        let key = "filterChoices"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let privacy = Privacy()
+        privacy.filterStorage = storage
+        privacy.filterSet = try shippedSet(["ads": ["easylist": "||ads.lithium.test^"]])
+        privacy.ruleListStore = try #require(WKContentRuleListStore(url: root.appending(path: "store")))
+        privacy.advanced = AdvancedBlocking(container: root.appending(path: "engine"))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubFilterList.self]
+        privacy.filterSession = URLSession(configuration: configuration)
+
+        let list = try #require(FilterLists.catalog.first { $0.url != nil })
+        StubFilterList.serve(Data("||catalog.lithium.test^\n".utf8), at: try #require(list.url), after: 1)
+        let on = Task { await privacy.setFilterList(list.id, enabled: true) }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await privacy.setFilterList(list.id, enabled: false) == nil)
+        #expect(await on.value == nil)
+        #expect(!privacy.filterChoices.on.contains(list.id))
+        #expect(privacy.filterChoices.copies[list.id] == nil)
+        #expect(!FileManager.default.fileExists(atPath: storage.copy(of: list.id).path))
+
+        let url = URL(string: "https://\(UUID().uuidString.lowercased()).lists.test/list.txt")!
+        StubFilterList.serve(Data("||added.lithium.test^\n".utf8), at: url, after: 0.3)
+        async let first = privacy.addFilterList(url.absoluteString)
+        async let second = privacy.addFilterList(url.absoluteString)
+        _ = await (first, second)
+        #expect(privacy.filterChoices.added == [url])
+    }
+
     /// A blocked page is searched for in the lists as chosen: an added list is, a list turned off
     /// isn't. Nothing found names the groups WebKit has, but not one whose lists are all off, nor
     /// one a failed build left out: "Always allow" would save it for the site.

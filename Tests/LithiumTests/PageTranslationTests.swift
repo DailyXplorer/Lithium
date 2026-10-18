@@ -487,6 +487,55 @@ struct PageTranslatorTests {
         translator.hostLeft(link.id)
     }
 
+    /// Translation stops the app if a host's session is used once its window closed: the host
+    /// stops, and its batch goes to another host, unless the batch's page closed with the window.
+    @Test func aHostWhoseWindowClosesLeavesItsBatchToAnother() async throws {
+        let browser = makeBrowser()
+        browser.quickLinks.showWindow = { _, _ in nil }
+        let translator = browser.translator
+        translator.engine = nil
+        let closing = browser.newTab(url: URL(string: "data:text/html,closing")!)
+        let staying = browser.newTab(url: URL(string: "data:text/html,staying")!)
+        let link = try #require(browser.quickLinks.open(URL(string: "data:text/html,link")!))
+        let other = browser.openWindow()
+        defer { browser.close(staying, remembering: false) }
+        let (french, english) = (Locale.Language(identifier: "fr"), Locale.Language(identifier: "en"))
+        let closingBatch = Task { try await translator.engineTranslate(["Fermée"], from: french, to: english, preparing: false, for: closing) }
+        #expect(await waitUntil(5) { translator.configuration != nil })
+        let stayingBatch = Task { try await translator.engineTranslate(["Restée"], from: french, to: english, preparing: false, for: staying) }
+
+        // A window closes under each batch in turn. The first host's task is cancelled, and the
+        // batch's page closes with it; the others only hear of it from their window closing.
+        let rounds: [(host: UUID, closes: () -> Void)] = [
+            (UUID(), {
+                browser.close(closing, remembering: false)
+                withUnsafeCurrentTask { $0?.cancel() }
+            }),
+            (link.id, { browser.quickLinks.windowClosed(link) }),
+            (other.id, { browser.windowWillClose(other) }),
+        ]
+        for (host, closes) in rounds {
+            translator.hostAppeared(host)
+            var calls = 0
+            await Task {
+                await translator.serve(from: host) { texts, _ in
+                    calls += 1
+                    // Taken again: answered, so the test ends.
+                    guard calls == 1 else { return [String?](repeating: nil, count: texts.count) }
+                    closes()
+                    throw CancellationError()
+                }
+            }.value
+            #expect(calls == 1, "a session used once its view is gone")
+        }
+
+        let last = UUID()
+        translator.hostAppeared(last)
+        await translator.serve(from: last) { texts, _ in texts.map { "EN(\($0))" } }
+        #expect(try await stayingBatch.value == ["EN(Restée)"])
+        await #expect(throws: CancellationError.self) { try await closingBatch.value }
+    }
+
     /// A download that outlasts the script's wait says so until it's done, then the page is translated.
     @Test func saysDownloadingUntilTheLanguageArrives() async throws {
         let browser = makeBrowser()

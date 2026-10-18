@@ -304,7 +304,7 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         return await LanguageAvailability().status(from: source, to: target)
     }
 
-    private func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool, for tab: Tab) async throws -> [String?] {
+    func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool, for tab: Tab) async throws -> [String?] {
         if let engine { return try await engine.translate(texts, from: source, to: target, preparing: preparing) }
         return try await withCheckedThrowingContinuation { continuation in
             jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, tab: tab, continuation: continuation))
@@ -324,24 +324,45 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    /// A host with nothing it may serve leaves the queue as is, or two hosts would hand it back and forth.
     func serve(_ session: TranslationSession, from id: UUID) async {
-        guard let pair = servedPair, !isServing else { return }
+        await serve(from: id) { texts, preparing in
+            // macOS's own prompt to download the languages, over the window.
+            if preparing { try await session.prepareTranslation() }
+            return try await translate(texts, in: session, from: id)
+        }
+    }
+
+    /// `session` is Apple's, or a test's. A host's session goes with its view, and Translation stops
+    /// the app if it's used after that: once its window closes, the host stops, and the batch it had
+    /// under way goes back to the queue, unless its page closed too.
+    func serve(from id: UUID, with session: ([String], Bool) async throws -> [String?]) async {
+        guard let pair = servedPair, !isServing, isUp(id) else { return }
         let takes = { (job: Job) in job.pair == pair && self.mayServe(job.tab, preparing: job.preparing, from: id) }
+        // A host with nothing it may serve leaves the queue as is, or two hosts would hand it back and forth.
         guard jobs.contains(where: takes) else { return }
         isServing = true
-        while let index = jobs.firstIndex(where: takes) {
+        while isUp(id), let index = jobs.firstIndex(where: takes) {
             let job = jobs.remove(at: index)
             do {
-                // macOS's own prompt to download the languages, over the window.
-                if job.preparing { try await session.prepareTranslation() }
-                job.continuation.resume(returning: try await Self.translate(job.texts, in: session))
+                job.continuation.resume(returning: try await session(job.texts, job.preparing))
+            } catch where !isUp(id) && job.tab.map(isOpen) == true {
+                jobs.insert(job, at: index)
             } catch {
                 job.continuation.resume(throwing: error)
             }
         }
         isServing = false
         serveNext()
+    }
+
+    /// Apple doesn't say whether a host's task is cancelled once its view is gone: `hostLeft` says so too.
+    private func isUp(_ id: UUID) -> Bool {
+        !Task.isCancelled && hosts.contains(id)
+    }
+
+    /// In a browser window, even the last one closed (hidden), or in a link's window.
+    private func isOpen(_ tab: Tab) -> Bool {
+        browser?.tabs.contains { $0 === tab } == true || browser?.quickLinks.contains(tab) == true
     }
 
     /// A job that may show macOS's download prompt waits for the host in its page's window while that
@@ -352,8 +373,10 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         return own == id || !hosts.contains(own)
     }
 
+    /// Its task may have run first, and found it not up yet.
     func hostAppeared(_ id: UUID) {
         hosts.insert(id)
+        serveNext()
     }
 
     /// Its jobs go to the hosts left.
@@ -362,7 +385,9 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         serveNext()
     }
 
-    private static func translate(_ texts: [String], in session: TranslationSession) async throws -> [String?] {
+    private func translate(_ texts: [String], in session: TranslationSession, from id: UUID) async throws -> [String?] {
+        // Its view may have gone during the download prompt, and the session with it (`serve`).
+        guard isUp(id) else { throw CancellationError() }
         // Made here and handed over whole: nothing else holds them.
         nonisolated(unsafe) let requests = texts.enumerated().map { TranslationSession.Request(sourceText: $0.element, clientIdentifier: String($0.offset)) }
         do {
@@ -375,7 +400,10 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
             // One text the model refuses fails its whole batch: the others go one by one.
             guard texts.count > 1 else { throw error }
             var results: [String?] = []
-            for text in texts { results.append(try? await session.translate(text).targetText) }
+            for text in texts {
+                guard isUp(id) else { throw CancellationError() }
+                results.append(try? await session.translate(text).targetText)
+            }
             if results.allSatisfy({ $0 == nil }) { throw error }
             return results
         }

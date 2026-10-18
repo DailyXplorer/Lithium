@@ -527,6 +527,8 @@ final class Browser {
     /// it was. The last window keeps its tabs, hidden, until New Window or the Dock shows it again;
     /// its private tabs close, or their sign-ins would live on for that Dock click.
     func windowWillClose(_ window: BrowserWindow) {
+        // Its translation host goes now, whether or not SwiftUI's `onDisappear` says so.
+        translator.hostLeft(window.id)
         window.nsWindow = nil
         window.videoPopout.hide()
         if keyWindow === window { keyWindow = nil }

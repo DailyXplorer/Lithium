@@ -702,6 +702,27 @@ final class Browser {
         window.select(tab)
     }
 
+    /// Another window's tab into the top of `window`'s list, shown there: the same tab and web view,
+    /// so its page and history stay and nothing reloads. The window it leaves shows what closing it would.
+    func move(_ tab: Tab, to window: BrowserWindow) {
+        let from = self.window(of: tab)
+        guard from !== window, let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        let order = peers(of: tab)
+        let partner = leaveSplit(tab)
+        from.videoPopout.discard(tab)
+        if from.renamingTabID == tab.id { from.renamingTabID = nil }
+        if tab.id == from.selectedTabID { from.selectAfterClosing(tab, partner: partner, among: order, goingBack: false) }
+        from.recentTabs.didClose(tab)
+        extensions.moving(tab) {
+            var reordered = tabs
+            reordered.remove(at: index)
+            tab.move(toWindow: window.id)
+            reordered.insert(tab, at: Self.position(inTabList: 0, of: reordered, space: tab.spaceID, window: window.id, folder: tab.folderID))
+            tabs = reordered
+        }
+        select(tab)
+    }
+
     /// `index` is a place in the window's tab list for the space (in `folder`, or outside folders), clamped to it.
     private func insertTab(at index: Int, configuration: WKWebViewConfiguration, privateStore: WKWebsiteDataStore? = nil, space: Space.ID, window: BrowserWindow.ID, folder: TabFolder.ID? = nil) -> Tab {
         let tab = Tab(browser: self, configuration: configuration, privateStore: privateStore, space: space, window: window)
@@ -1341,10 +1362,11 @@ final class Browser {
 
     // MARK: Favorites
 
-    /// Its page, open in any window, shows there; a new one opens in `window`.
+    /// Every window shows the favorites, but a favorite has one page: open in another window, it
+    /// comes into `window`, as in Arc; with no window given, it shows where it is. A new one opens in `window`.
     func activate(_ pin: Pin, in window: BrowserWindow? = nil) {
         if let tab = liveTab(for: pin) {
-            select(tab)
+            if let window, window !== self.window(of: tab) { move(tab, to: window) } else { select(tab) }
         } else {
             let tab = newTab(url: pin.url, space: pin.space, in: window)
             extensions.moving(tab) { tab.pinID = pin.id }

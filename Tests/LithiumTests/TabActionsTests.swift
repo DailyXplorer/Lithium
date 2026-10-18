@@ -238,10 +238,11 @@ struct TabActionsTests {
 
         browser.close(favorite)
         browser.reopenClosedTab()
-        #expect(browser.liveTab(for: pin)?.url == page("favorite"))
+        let window = browser.commandWindow.id
+        #expect(browser.liveTab(for: pin, in: window)?.url == page("favorite"))
         #expect(names(browser) == ["a", "b"])
 
-        browser.close(browser.liveTab(for: pin)!)
+        browser.close(browser.liveTab(for: pin, in: window)!)
         browser.activate(pin)
         browser.reopenClosedTab()
         #expect(names(browser) == ["favorite", "a", "b"], "its favorite has a page already")

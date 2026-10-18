@@ -191,7 +191,7 @@ struct TabFoldersTests {
         #expect(restored.map(\.url) == [page("a"), page("b")])
         #expect(restored.map(\.isAsleep) == [true, true])
         let pin = try #require(again.pins.first)
-        #expect(again.liveTab(for: pin)?.folderID == nil)
+        #expect(again.liveTab(for: pin, in: again.commandWindow.id)?.folderID == nil)
     }
 
     /// Deleting a folder keeps its tabs at the top of the list, where it was, or closes them:

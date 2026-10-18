@@ -299,6 +299,53 @@ struct ExtensionCompatibilityTests {
         #expect(tab.url == page)
     }
 
+    /// Lithium sets up a page's protections with `removeAllContentRuleLists()` and
+    /// `removeAllUserScripts()`. WebKit keeps an extension's declarativeNetRequest rules and content
+    /// scripts apart from those, so both keep working, also with protections off for the site.
+    @Test func anExtensionsRulesAndContentScriptsOutlastLithiumsProtections() async throws {
+        let id = "nnooppqqrrssttuuvvwwxxyyzzaabbcc"
+        let files = [
+            "manifest.json": #"""
+                {"manifest_version": 3, "name": "Blocker", "version": "1.0",
+                 "permissions": ["declarativeNetRequest"], "host_permissions": ["<all_urls>"],
+                 "declarative_net_request": {"rule_resources": [{"id": "rules", "enabled": true, "path": "rules.json"}]},
+                 "content_scripts": [{"matches": ["<all_urls>"], "run_at": "document_start", "js": ["content.js"]}]}
+                """#,
+            "rules.json": #"[{"id": 1, "priority": 1, "action": {"type": "block"}, "condition": {"urlFilter": "blocked.js"}}]"#,
+            "content.js": "document.documentElement.setAttribute('data-extension', 'ran');",
+        ]
+        let browser = Browser()
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(files), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let (server, site) = try await LocalHTTP.serve([
+            "/": ("Content-Type: text/html", "<!doctype html><title>Page</title>"),
+            "/next": ("Content-Type: text/html", "<!doctype html><title>Next</title>"),
+            "/blocked.js": ("Content-Type: text/javascript", ""),
+        ])
+        defer { server.cancel() }
+        let tab = browser.newTab(url: site)
+        defer { browser.close(tab) }
+        #expect(try await waitForTitle("Page", in: tab) == "Page")
+        let run = { (script: String) async -> String? in try? await tab.webView.callAsyncJavaScript(script, contentWorld: .page) as? String }
+        let fetch = { (path: String) in "return await fetch('\(path)').then(() => 'loaded', () => 'blocked')" }
+        // WebKit compiles the rules once the extension has loaded.
+        var fetched: String?
+        for _ in 0..<50 where fetched != "blocked" {
+            fetched = await run(fetch("/blocked.js"))
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(fetched == "blocked")
+
+        browser.privacy.setEnabled(false, for: site)
+        defer { browser.privacy.setEnabled(true, for: site) }
+        tab.load(site.appending(path: "next"))
+        #expect(try await waitForTitle("Next", in: tab) == "Next")
+        #expect(await run(fetch("/blocked.js")) == "blocked", "Lithium's protections off, the extension's rules stay on")
+        #expect(await run(fetch("/next")) == "loaded", "only what the rule names is blocked")
+        #expect(await run("return document.documentElement.getAttribute('data-extension')") == "ran")
+    }
+
     private static let tabsFiles = [
         "manifest.json": #"{"manifest_version": 3, "name": "Tabs", "version": "1.0", "permissions": ["tabs"]}"#,
         "page.html": #"<!doctype html><title>Tabs page</title><script src="page.js"></script>"#,

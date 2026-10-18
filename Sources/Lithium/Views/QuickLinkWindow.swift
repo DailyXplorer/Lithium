@@ -150,6 +150,9 @@ struct QuickLinkView: View {
         }
         .font(Theme.font(13))
         .background(Color(nsColor: .windowBackgroundColor))
+        // Translate Page acts here too: macOS's download prompt shows over this window, and with no
+        // browser window open nothing else would serve it.
+        .background { TranslationHost(translator: browser.translator, id: tab.id) }
         .ignoresSafeArea()
         .onChange(of: tab.displayTitle, initial: true) { onTitle(tab.displayTitle) }
     }

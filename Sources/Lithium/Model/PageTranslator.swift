@@ -49,6 +49,8 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
     @ObservationIgnored private var jobs: [Job] = []
     @ObservationIgnored private var servedPair: Pair?
     @ObservationIgnored private var isServing = false
+    /// The `TranslationHost`s up, by `id`.
+    @ObservationIgnored private var hosts: Set<UUID> = []
     /// Tabs whose first batch waits on macOS's download, which may outlast the script's wait.
     @ObservationIgnored private var downloads: Set<ObjectIdentifier> = []
     /// Never saved: a private session's choices go with it.
@@ -64,6 +66,8 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         let pair: Pair
         let texts: [String]
         let preparing: Bool
+        /// The asking page's: macOS's download prompt shows over its window.
+        weak var tab: Tab?
         let continuation: CheckedContinuation<[String?], any Error>
     }
 
@@ -280,7 +284,7 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         if preparing { downloads.insert(ObjectIdentifier(tab)) }
         defer { if preparing { downloads.remove(ObjectIdentifier(tab)) } }
         do {
-            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing)
+            let results = try await engineTranslate(texts, from: state.source, to: state.target, preparing: preparing, for: tab)
             if preparing, tab.translationRun == run, tab.pageTranslation?.status == .downloading { tab.pageTranslation?.status = .translated }
             return (results.map { $0 ?? NSNull() as Any }, nil)
         } catch {
@@ -300,10 +304,10 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         return await LanguageAvailability().status(from: source, to: target)
     }
 
-    private func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool) async throws -> [String?] {
+    func engineTranslate(_ texts: [String], from source: Locale.Language, to target: Locale.Language, preparing: Bool, for tab: Tab) async throws -> [String?] {
         if let engine { return try await engine.translate(texts, from: source, to: target, preparing: preparing) }
         return try await withCheckedThrowingContinuation { continuation in
-            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, continuation: continuation))
+            jobs.append(Job(pair: Pair(source: source, target: target), texts: texts, preparing: preparing, tab: tab, continuation: continuation))
             serveNext()
         }
     }
@@ -320,15 +324,29 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
-    func serve(_ session: TranslationSession) async {
-        guard let pair = servedPair, !isServing else { return }
+    func serve(_ session: TranslationSession, from id: UUID) async {
+        await serve(from: id) { texts, preparing in
+            // macOS's own prompt to download the languages, over the window.
+            if preparing { try await session.prepareTranslation() }
+            return try await translate(texts, in: session, from: id)
+        }
+    }
+
+    /// `session` is Apple's, or a test's. A host's session goes with its view, and Translation stops
+    /// the app if it's used after that: once its window closes, the host stops, and the batch it had
+    /// under way goes back to the queue, unless its page closed too.
+    func serve(from id: UUID, with session: ([String], Bool) async throws -> [String?]) async {
+        guard let pair = servedPair, !isServing, isUp(id) else { return }
+        let takes = { (job: Job) in job.pair == pair && self.mayServe(job.tab, preparing: job.preparing, from: id) }
+        // A host with nothing it may serve leaves the queue as is, or two hosts would hand it back and forth.
+        guard jobs.contains(where: takes) else { return }
         isServing = true
-        while let index = jobs.firstIndex(where: { $0.pair == pair }) {
+        while isUp(id), let index = jobs.firstIndex(where: takes) {
             let job = jobs.remove(at: index)
             do {
-                // macOS's own prompt to download the languages, over the window.
-                if job.preparing { try await session.prepareTranslation() }
-                job.continuation.resume(returning: try await Self.translate(job.texts, in: session))
+                job.continuation.resume(returning: try await session(job.texts, job.preparing))
+            } catch where !isUp(id) && job.tab.map(isOpen) == true {
+                jobs.insert(job, at: index)
             } catch {
                 job.continuation.resume(throwing: error)
             }
@@ -337,7 +355,39 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
         serveNext()
     }
 
-    private static func translate(_ texts: [String], in session: TranslationSession) async throws -> [String?] {
+    /// Apple doesn't say whether a host's task is cancelled once its view is gone: `hostLeft` says so too.
+    private func isUp(_ id: UUID) -> Bool {
+        !Task.isCancelled && hosts.contains(id)
+    }
+
+    /// In a browser window, even the last one closed (hidden), or in a link's window.
+    private func isOpen(_ tab: Tab) -> Bool {
+        browser?.tabs.contains { $0 === tab } == true || browser?.quickLinks.contains(tab) == true
+    }
+
+    /// A job that may show macOS's download prompt waits for the host in its page's window while that
+    /// one is up: its link's own window, else its browser window. Any host serves the rest.
+    func mayServe(_ tab: Tab?, preparing: Bool, from id: UUID) -> Bool {
+        guard preparing, let tab else { return true }
+        let own = browser?.quickLinks.contains(tab) == true ? tab.id : tab.windowID
+        return own == id || !hosts.contains(own)
+    }
+
+    /// Its task may have run first, and found it not up yet.
+    func hostAppeared(_ id: UUID) {
+        hosts.insert(id)
+        serveNext()
+    }
+
+    /// Its jobs go to the hosts left.
+    func hostLeft(_ id: UUID) {
+        hosts.remove(id)
+        serveNext()
+    }
+
+    private func translate(_ texts: [String], in session: TranslationSession, from id: UUID) async throws -> [String?] {
+        // Its view may have gone during the download prompt, and the session with it (`serve`).
+        guard isUp(id) else { throw CancellationError() }
         // Made here and handed over whole: nothing else holds them.
         nonisolated(unsafe) let requests = texts.enumerated().map { TranslationSession.Request(sourceText: $0.element, clientIdentifier: String($0.offset)) }
         do {
@@ -350,24 +400,31 @@ final class PageTranslator: NSObject, WKScriptMessageHandlerWithReply {
             // One text the model refuses fails its whole batch: the others go one by one.
             guard texts.count > 1 else { throw error }
             var results: [String?] = []
-            for text in texts { results.append(try? await session.translate(text).targetText) }
+            for text in texts {
+                guard isUp(id) else { throw CancellationError() }
+                results.append(try? await session.translate(text).targetText)
+            }
             if results.allSatisfy({ $0 == nil }) { throw error }
             return results
         }
     }
 }
 
-/// Where the translator's sessions come from: in the browser's window, so macOS's download prompt
-/// has a window to show over. Draws nothing, and does nothing until a page is translated.
+/// Where the translator's sessions come from: in each browser window and link window, so macOS's
+/// download prompt has a window to show over. Draws nothing, and does nothing until a page is translated.
 struct TranslationHost: View {
     let translator: PageTranslator
+    /// Its browser window's, or its link's tab's (`PageTranslator.mayServe`).
+    let id: UUID
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .translationTask(translator.configuration) { session in
-                await translator.serve(session)
+                await translator.serve(session, from: id)
             }
+            .onAppear { translator.hostAppeared(id) }
+            .onDisappear { translator.hostLeft(id) }
     }
 }
 

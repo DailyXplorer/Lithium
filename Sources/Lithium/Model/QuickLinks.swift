@@ -106,6 +106,8 @@ final class QuickLinks {
     }
 
     func windowClosed(_ tab: Tab) {
+        // Its translation host goes now, whether or not SwiftUI's `onDisappear` says so.
+        browser?.translator.hostLeft(tab.id)
         windows[tab.id] = nil
         close(tab)
     }

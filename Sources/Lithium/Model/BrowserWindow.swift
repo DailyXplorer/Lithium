@@ -430,7 +430,9 @@ final class BrowserWindow: Identifiable {
     func toggleSummary() {
         guard let tab = selectedTab else { return }
         isSummaryPresented.toggle()
-        if isSummaryPresented { Task { await browser.summaries.summarize(tab) } }
+        // Read now: the task runs later, and `browser` is unowned.
+        let summaries = browser.summaries
+        if isSummaryPresented { Task { await summaries.summarize(tab) } }
     }
 
     // MARK: Find

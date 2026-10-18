@@ -225,6 +225,31 @@ struct FindInPageTests {
         #expect(find.currentMatch == 5)
     }
 
+    /// WebKit's find also finds text in iframes, which the count can't read: the bar says the
+    /// page has matches without claiming "1/1".
+    @Test(.timeLimit(.minutes(1))) func aMatchOnlyInAnIframeIsFoundWithoutANumber() async throws {
+        let page = #"<!doctype html><body><p>Outside</p><iframe srcdoc="<p>Needle one</p><p>Needle two</p>"></iframe></body>"#
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+        let loaded = PageLoad()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(page, baseURL: URL(string: "https://example.com/")!)
+        try await loaded.wait()
+        let framed = "return document.querySelector('iframe').contentDocument?.body?.innerText.includes('Needle') ?? false"
+        for _ in 0..<100 {
+            if try await webView.callAsyncJavaScript(framed, contentWorld: .page) as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let find = FindInPage()
+        await find.update(query: "needle", in: webView)
+        #expect(find.matchCount == 0)
+        #expect(find.foundUncounted)
+        #expect(find.currentMatch == 0)
+        await find.update(query: "outside", in: webView)
+        #expect(!find.foundUncounted)
+        #expect(find.currentMatch == 1)
+    }
+
     @MainActor
     final class Target: FindTarget {
         let matches: Int

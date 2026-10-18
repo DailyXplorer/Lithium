@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 import WebKit
 
@@ -57,8 +57,16 @@ final class VideoPopout {
         guard browser?.quickLinks.keyTab == nil, let tab = window?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
         request += 1
         let current = request
-        Task { await show(tab, request: current) }
+        Task {
+            await show(tab, request: current)
+            // Still the newest request, yet no player: the page has no video the script reaches
+            // (one in an iframe, such as an embed, or a shadow root). Like Reader, say so.
+            if current == request, self.tab !== tab { beep() }
+        }
     }
+
+    /// Replaced in tests.
+    @ObservationIgnored var beep: () -> Void = { NSSound.beep() }
 
     /// Not while a link's window is in front: the menu would pop out a browser window's video,
     /// and the player takes only `Browser.tabs`, which a link's page isn't in.

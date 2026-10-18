@@ -203,7 +203,7 @@ struct SplitTabRow: View {
                 half(second, dimmed: isShown && window.selectedTabID != second.id)
             }
             // As its first side: moving one side to a folder brings the other along.
-            .draggable(browser.startDragging(first))
+            .draggable(SidebarDrag(item: browser.startDragging(first)))
             .contextMenu {
                 SplitMenu(tab: first, isStacked: split.isStacked)
                 MoveToFolderMenu(browser: browser, tab: first)
@@ -274,7 +274,7 @@ struct SplitDropZone: NSViewRepresentable {
         /// Read as the mouse goes down: a drag that ended off the page is over before SwiftUI
         /// takes this view away.
         var isDragging: () -> Bool = { false }
-        /// Whether the drag's text is the dragged tab's; anything else goes through to the page.
+        /// Whether the drag carries the dragged tab; anything else goes through to the page.
         var carries: (String?) -> Bool = { _ in false }
         var drop: (String, TabSplit.Side) -> Bool = { _, _ in false }
         private let highlight = CALayer()
@@ -288,18 +288,18 @@ struct SplitDropZone: NSViewRepresentable {
             highlight.cornerRadius = 9
             highlight.isHidden = true
             layer?.addSublayer(highlight)
-            registerForDraggedTypes([.string])
+            registerForDraggedTypes([SidebarDrag.pasteboardType])
         }
 
         required init?(coder: NSCoder) { fatalError() }
 
         /// Only the dragged tab lands here. Decided here, not on drag enter: the view only registers
-        /// for text, so a file from Finder would never reach it, nor the page.
+        /// for sidebar drags, so a file from Finder would never reach it, nor the page.
         override func hitTest(_ point: NSPoint) -> NSView? {
             takesMouse(buttons: NSEvent.pressedMouseButtons) ? super.hitTest(point) : nil
         }
 
-        func takesMouse(buttons: Int, drag: @autoclosure () -> String? = NSPasteboard(name: .drag).string(forType: .string)) -> Bool {
+        func takesMouse(buttons: Int, drag: @autoclosure () -> String? = SidebarDrag.item(on: NSPasteboard(name: .drag))) -> Bool {
             buttons & 1 != 0 && isDragging() && carries(drag())
         }
 
@@ -333,7 +333,7 @@ struct SplitDropZone: NSViewRepresentable {
         }
 
         override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-            show(carries(sender.draggingPasteboard.string(forType: .string)) ? side(at: sender.draggingLocation) : nil)
+            show(carries(SidebarDrag.item(on: sender.draggingPasteboard)) ? side(at: sender.draggingLocation) : nil)
         }
 
         override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -346,7 +346,7 @@ struct SplitDropZone: NSViewRepresentable {
 
         override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
             _ = show(nil)
-            let item = sender.draggingPasteboard.string(forType: .string)
+            let item = SidebarDrag.item(on: sender.draggingPasteboard)
             guard carries(item), let item, let side = side(at: sender.draggingLocation) else { return false }
             return drop(item, side)
         }

@@ -91,5 +91,18 @@
 	<string>A website wants to use your microphone.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Lithium sidebar item</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.lithium.browser.sidebar-item</string>
+		</dict>
+	</array>
 </dict>
 </plist>

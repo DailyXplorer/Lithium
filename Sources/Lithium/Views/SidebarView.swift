@@ -68,7 +68,7 @@ struct SidebarView: View {
             .opacity(window.selectedTabID == nil ? 1 : 0.7)
             .contextMenu { ReopenClosedTabButton() }
             // The top of the tab list, which is there to drop on even when the list is empty.
-            .dropDestination(for: String.self) { items, _ in dropTab(items, on: .tabList(0)) }
+            .dropDestination(for: SidebarDrag.self) { drags, _ in dropTab(drags, on: .tabList(0)) }
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(window.tabListRows) { row in
@@ -82,9 +82,9 @@ struct SidebarView: View {
                                 if let split = entry.split { SplitTabRow(split: split) } else { TabRow(tab: entry.tab) }
                             }
                             .padding(.leading, folder == nil ? 0 : folderIndent)
-                            .dropDestination(for: String.self) { items, location in
+                            .dropDestination(for: SidebarDrag.self) { drags, location in
                                 let place = location.y < sidebarRowHeight / 2 ? index : index + 1
-                                return dropTab(items, on: folder.map { Browser.TabDropTarget.folder($0, place) } ?? .tabList(place))
+                                return dropTab(drags, on: folder.map { Browser.TabDropTarget.folder($0, place) } ?? .tabList(place))
                             }
                         }
                     }
@@ -96,7 +96,7 @@ struct SidebarView: View {
                                 TabRow(tab: tab)
                             }
                         }
-                        .dropDestination(for: String.self) { items, _ in dropTab(items, on: .agentGroup) }
+                        .dropDestination(for: SidebarDrag.self) { drags, _ in dropTab(drags, on: .agentGroup) }
                     }
                 }
             }
@@ -134,8 +134,8 @@ struct SidebarView: View {
         withAnimation(.snappy(duration: 0.2)) { browser.deleteFolder(folder.id, closingTabs: closingTabs, in: window) }
     }
 
-    private func dropTab(_ items: [String], on target: Browser.TabDropTarget) -> Bool {
-        withAnimation(.snappy(duration: 0.2)) { window.dropTab(items, on: target) }
+    private func dropTab(_ drags: [SidebarDrag], on target: Browser.TabDropTarget) -> Bool {
+        withAnimation(.snappy(duration: 0.2)) { window.dropTab(drags.map(\.item), on: target) }
     }
 }
 
@@ -182,7 +182,7 @@ private struct PinGrid: View {
         // One drop target for the whole grid: a drop target on each tile swallows its right-click, so the
         // tile's context menu never opens. On a tile, a favorite moves into its slot and a tab is pinned
         // there; on the space around the tiles, at the end.
-        .onDrop(of: [.text], delegate: FavoritesDrop(window: window, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
+        .onDrop(of: [SidebarDrag.type], delegate: FavoritesDrop(window: window, frames: tileFrames, isTargeted: $isTargeted, targetedSlot: $targetedSlot))
     }
 
     private static let space = "PinGrid"
@@ -215,10 +215,10 @@ private struct FavoritesDrop: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         let location = info.location
         dropExited(info: info)
-        guard let provider = info.itemProviders(for: [.text]).first else { return false }
+        guard let provider = info.itemProviders(for: [SidebarDrag.type]).first else { return false }
         let window = window, frames = frames
-        _ = provider.loadTransferable(type: String.self) { result in
-            let items = (try? result.get()).map { [$0] } ?? []
+        _ = provider.loadTransferable(type: SidebarDrag.self) { result in
+            let items = (try? result.get()).map { [$0.item] } ?? []
             Task { @MainActor in _ = window.dropOnFavorites(items, at: location, frames: frames) }
         }
         return true
@@ -286,7 +286,7 @@ private struct PinTile: View {
             .contentShape(Rectangle())
             .onTapGesture { browser.activate(pin, in: window) }
             .tabHoverTarget(.pin(pin.id), isHovered: $isHovered)
-            .draggable(pinDragPrefix + pin.id.uuidString)
+            .draggable(SidebarDrag(item: pinDragPrefix + pin.id.uuidString))
             .contextMenu {
                 if let live {
                     Button("Duplicate Tab") { browser.duplicate(live) }
@@ -352,7 +352,7 @@ private struct TabRow: View {
         .tabHoverTarget(.tab(tab.id), isHovered: $isHovered)
         // Simultaneous, so a single click still selects instantly instead of waiting for a second one.
         .simultaneousGesture(TapGesture(count: 2).onEnded { window.renamingTabID = tab.id })
-        .draggable(browser.startDragging(tab))
+        .draggable(SidebarDrag(item: browser.startDragging(tab)))
         .contextMenu { TabRowMenu(tab: tab) }
     }
 }

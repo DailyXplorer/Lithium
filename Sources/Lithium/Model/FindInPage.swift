@@ -25,6 +25,9 @@ final class FindInPage {
     private(set) var query = ""
     private(set) var matchCount = 0
     private(set) var currentMatch = 0
+    /// A match is shown that the count missed (in an iframe, or a form field): the page has
+    /// matches, but no number to give.
+    private(set) var foundUncounted = false
     private(set) var focusToken = 0
     /// The link's page (`QuickLinks`) the bar was opened over; nil for the main window's.
     private(set) var linkTab: Tab?
@@ -62,6 +65,7 @@ final class FindInPage {
         let current = search
         query = newQuery
         currentMatch = 0
+        foundUncounted = false
         guard !newQuery.isEmpty else {
             matchCount = 0
             target.clearMatches()
@@ -99,6 +103,12 @@ final class FindInPage {
         guard current == search else { return }
         guard case .shown(let position) = step else {
             currentMatch = 0
+            foundUncounted = false
+            return
+        }
+        // The page couldn't place it either: not "1/1" for any number of matches out of its reach.
+        guard matchCount > 0 || position != nil else {
+            foundUncounted = true
             return
         }
         if matchCount == 0 { matchCount = 1 }

@@ -376,10 +376,11 @@ final class Browser {
         reloadForProtections(pages.filter { $0.privateSession == session && $0.siteSpace == space && Privacy.siteHost($0.url) == host }, from: tab)
     }
 
-    /// Reloads every open page of the site, so their content blockers and scripts match.
-    func setProtections(_ enabled: Bool, host: String, from tab: Tab? = nil) {
-        privacy.setEnabled(enabled, host: host)
-        reloadForProtections(pages.filter { Privacy.siteHost($0.url) == host }, from: tab)
+    /// Reloads every open page of the site (of `space` only, for a separate space's choice), so
+    /// their content blockers and scripts match.
+    func setProtections(_ enabled: Bool, host: String, space: Space.ID? = nil, from tab: Tab? = nil) {
+        privacy.setEnabled(enabled, host: host, space: space)
+        reloadForProtections(pages.filter { Privacy.siteHost($0.url) == host && (space == nil || $0.siteSpace == space) }, from: tab)
     }
 
     /// A reload would lose what another page holds (a draft, an upload), and nothing asks first, not

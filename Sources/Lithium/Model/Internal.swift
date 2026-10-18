@@ -197,7 +197,12 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             let error = await browser.privacy.setMyFilters(value as? String ?? "")
             return (await filterLists(browser, error: error), nil)
         case "enableProtections":
-            if let host = value as? String { browser.setProtections(true, host: host) }
+            // A site turned off in a separate space comes with that space's id.
+            if let host = value as? String {
+                browser.setProtections(true, host: host)
+            } else if let entry = value as? [String: String], let host = entry["host"], let space = entry["space"].flatMap(UUID.init(uuidString:)) {
+                browser.setProtections(true, host: host, space: space)
+            }
         case "removeAllowedPage":
             // Open pages of the site keep theirs until their next load.
             if let host = value as? String { browser.privacy.removeAllowedPages(host: host) }
@@ -484,6 +489,9 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "updated": browser.privacy.filtersUpdated.map { $0.timeIntervalSince1970 * 1000 } ?? 0,
                 "updating": browser.privacy.isUpdatingFilters,
                 "disabledHosts": browser.privacy.disabledHosts.sorted(),
+                "spaceDisabledHosts": browser.privacy.spaceDisabledHosts.compactMap { entry in
+                    browser.spaces.first { $0.id == entry.space }.map { ["host": entry.host, "space": entry.space.uuidString, "spaceName": $0.name] }
+                },
                 "allowedPages": browser.privacy.allowedPages.keys.sorted(),
             ],
             "permissions": browser.permissions.decisions.keys.sorted().map { host in

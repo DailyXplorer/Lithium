@@ -175,6 +175,27 @@ struct VideoPopoutTests {
         #expect(told == ["release"])
     }
 
+    /// Pop Out Video on a page whose only video the script can't reach (here, none in an iframe)
+    /// beeps rather than doing nothing.
+    @Test func popOutWithNoVideoBeeps() async throws {
+        let browser = Browser()
+        let tab = browser.newTab(url: URL(string: "data:text/html,<iframe srcdoc='<p>embed'></iframe>")!)
+        defer { browser.tabs.forEach(browser.close) }
+        for _ in 0..<200 where tab.webView.isLoading || tab.url == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let popout = browser.commandWindow.videoPopout
+        var beeps = 0
+        popout.beep = { beeps += 1 }
+        #expect(popout.canShowSelected)
+        popout.showSelected()
+        for _ in 0..<200 where beeps == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(beeps == 1)
+        #expect(popout.tab == nil)
+    }
+
     /// A tall video in a short page (a split, a small window) fits the page's height, narrower
     /// than usual; a page claiming an extreme shape gets 4:1 at most.
     @Test func aTallVideoFitsThePage() throws {

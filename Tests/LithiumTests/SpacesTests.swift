@@ -330,6 +330,29 @@ struct SpacesTests {
         #expect(!PageStyle.keepsSiteFont(host, space: work.id))
     }
 
+    /// A site turned off in a space with its own cookies is listed for Settings with that space,
+    /// and turning it back on from there turns it on in that space only.
+    @Test func sitesTurnedOffInASpaceCanBeTurnedOnFromSettings() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let host = "space-off-\(UUID().uuidString.prefix(8).lowercased()).example"
+        let url = URL(string: "https://\(host)/")!
+        browser.addSpace(browser.newSpaceDraft())
+        var work = browser.newSpaceDraft()
+        work.separatesData = true
+        browser.addSpace(work)
+        defer { browser.deleteSpace(work.id) }
+
+        browser.privacy.setEnabled(false, for: url, space: work.id)
+        #expect(browser.privacy.spaceDisabledHosts.contains { $0.space == work.id && $0.host == host })
+        #expect(!browser.privacy.disabledHosts.contains(host))
+
+        browser.setProtections(true, host: host, space: work.id)
+        #expect(browser.privacy.isEnabled(for: url, space: work.id))
+        #expect(!browser.privacy.spaceDisabledHosts.contains { $0.host == host })
+        #expect(browser.privacy.isEnabled(for: url))
+    }
+
     /// A link from another app opens in the space shown; a closed tab reopens in its own space,
     /// which comes back with it; a copy stays in its space.
     @Test func linksFromOtherAppsOpenInTheSpaceShown() throws {

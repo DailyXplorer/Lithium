@@ -749,6 +749,7 @@ final class Tab: NSObject, Identifiable {
         // An unanswered prompt holds the page's delegate call, and with it the old web view.
         browser?.permissions.cancel(tabID: id)
         browser?.appLinks.cancel(tabID: id)
+        browser?.passwords.cancel(tabID: id)
         sleepingState = loadedWebView.flatMap(restorableState(of:))
         addressAfterWaking = nil
         // Its page and its popup's no longer know each other once it wakes in a new web view.
@@ -887,6 +888,7 @@ final class Tab: NSObject, Identifiable {
         controller.addUserScript(PageOverrides.script)
         browser?.nowPlaying.install(on: controller)
         UnsavedInput.shared.install(on: controller)
+        browser?.passwords.install(on: controller, for: url)
         if pinID != nil { controller.addUserScript(PinnedPages.script) }
         privacy.addScripts(enabled, for: url, privateSession: privateSession, to: controller)
         browser?.agent?.install(on: controller, for: self)
@@ -1458,6 +1460,7 @@ extension Tab: WKNavigationDelegate {
         // A prompt left from the page before would read as the new page's.
         browser?.permissions.cancel(tabID: id)
         browser?.appLinks.cancel(tabID: id)
+        browser?.passwords.pageChanged(tabID: id, host: webView.url?.host())
         browser?.nowPlaying.discard(self)
         // Only once another site shows: a load that never does keeps the page's icon.
         if let old = shownHost, old != webView.url?.host() {

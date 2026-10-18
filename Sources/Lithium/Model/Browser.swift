@@ -84,6 +84,7 @@ final class Browser {
 
     @ObservationIgnored private(set) lazy var internalBridge = InternalBridge(browser: self)
     @ObservationIgnored private(set) lazy var colorPicker = PageColorPicker()
+    @ObservationIgnored private(set) lazy var passwords = PasswordManager()
     @ObservationIgnored private var eventMonitors: [Any] = []
 
     /// Popovers are the window's child windows and alerts its sheets; menus and drags run the
@@ -868,6 +869,7 @@ final class Browser {
         agent?.didClose(tab)
         permissions.cancel(tabID: tab.id)
         appLinks.cancel(tabID: tab.id)
+        passwords.cancel(tabID: tab.id)
         // A name field gone with its row would never end the rename, which holds Escape and the agent.
         if window.renamingTabID == tab.id { window.renamingTabID = nil }
         summaries.discard(tab)

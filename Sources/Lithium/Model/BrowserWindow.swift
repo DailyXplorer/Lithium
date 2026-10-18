@@ -401,6 +401,11 @@ final class BrowserWindow: Identifiable {
             browser.appLinks.answer(request, open: false)
             return true
         }
+        if browser.agent?.confirmations.front(selected: selectedTabID) == nil,
+           let request = shownPasswordSave {
+            browser.passwords.answer(request, .notNow)
+            return true
+        }
         return false
     }
 

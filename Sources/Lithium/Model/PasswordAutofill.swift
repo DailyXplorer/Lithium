@@ -95,8 +95,12 @@ struct PasswordDropdown: Equatable {
     static let minWidth: CGFloat = 260
 
     /// A new password field gets a strong password; any other the site's accounts, its own host's first.
-    static func rows(for field: PasswordField, host: String, in vault: VaultContents) -> [Row] {
-        if field == .newPassword { return [.strongPassword] }
+    /// None where it wouldn't be saved (a private tab, a site never saved): nobody would know it.
+    static func rows(for field: PasswordField, host: String, isPrivate: Bool, in vault: VaultContents) -> [Row] {
+        if field == .newPassword {
+            let site = SiteInfo.registrable(host)
+            return isPrivate || site.isEmpty || vault.neverSaved.contains(site) ? [] : [.strongPassword]
+        }
         return SiteMatch.credentials(for: host, in: vault.credentials).map { .account($0.id, username: $0.username, host: $0.host) }
     }
 

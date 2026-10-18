@@ -141,6 +141,15 @@ enum SiteMatch {
 /// When the vault asks for Touch ID or the Mac's password. Once per launch unless the user picks another.
 enum UnlockPolicy: String, CaseIterable, Sendable {
     case oncePerLaunch, everyTime, never
+
+    /// How often it asks.
+    var strictness: Int {
+        switch self {
+        case .never: 0
+        case .oncePerLaunch: 1
+        case .everyTime: 2
+        }
+    }
 }
 
 enum UnlockPurpose: Sendable {
@@ -177,6 +186,13 @@ enum UnlockPurpose: Sendable {
         let granted = await authenticate(reason)
         if granted { isUnlocked = true }
         return granted
+    }
+
+    /// Asking less often always asks first, whatever the policy being left lets through, so nobody
+    /// at the Mac can turn asking off and then show every password.
+    func authorizeChange(to new: UnlockPolicy, reason: String) async -> Bool {
+        if new.strictness >= policy().strictness { return true }
+        return await authenticate(reason)
     }
 }
 

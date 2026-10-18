@@ -163,7 +163,7 @@ final class PasswordManager {
             focusCount += 1
             let count = focusCount
             guard case let .success(vault) = await contents(), count == focusCount else { return }
-            let rows = PasswordDropdown.rows(for: field, host: host, in: vault)
+            let rows = PasswordDropdown.rows(for: field, host: host, isPrivate: page.isPrivate, in: vault)
             guard !rows.isEmpty else { return hideDropdown(in: page.tabID) }
             let zoom = page.webView?.pageZoom ?? 1
             dropdownPage = page

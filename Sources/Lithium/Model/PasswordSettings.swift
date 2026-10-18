@@ -15,7 +15,10 @@ extension PasswordManager {
         case "setPasswordOffers":
             offersPasswords = value as? Bool ?? true
         case "setPasswordUnlock":
-            if let policy = (value as? String).flatMap(UnlockPolicy.init(rawValue:)) { unlockPolicy = policy }
+            if let policy = (value as? String).flatMap(UnlockPolicy.init(rawValue:)) {
+                guard await lock.authorizeChange(to: policy, reason: "ask less often for your passwords") else { return (nil, "Not allowed") }
+                unlockPolicy = policy
+            }
         case "revealPassword":
             guard let credential = await authorized(value, reason: "show a password") else { return (nil, "Not allowed") }
             return (["password": credential.password], nil)
@@ -108,7 +111,7 @@ extension PasswordManager {
     /// Warned first, and asked for Touch ID: the file holds every password in clear. Written
     /// straight to the chosen file, readable by its owner only.
     private func exportFile(as format: PasswordCSV.Format, window: NSWindow?) async -> String {
-        guard case let .success(vault) = await contents() else { return "" }
+        guard case .success = await contents() else { return "" }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Export passwords?"
@@ -121,7 +124,8 @@ extension PasswordManager {
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "Lithium Passwords.csv"
         let response = if let window { await panel.beginSheetModal(for: window) } else { panel.runModal() }
-        guard response == .OK, let url = panel.url else { return "" }
+        // Read now, so edits made while the warning and the panel were open are in the file.
+        guard response == .OK, let url = panel.url, case let .success(vault) = await contents() else { return "" }
         let data = Data(PasswordCSV.export(vault.credentials, as: format).utf8)
         guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
               let file = try? FileHandle(forWritingTo: url) else { return "Lithium couldn’t write that file." }

@@ -173,6 +173,20 @@ struct PasswordManagerTests {
         #expect(manager.dropdown == nil, "no account for the site: no list")
     }
 
+    /// A strong password nobody would save would leave the new account with a password nobody knows.
+    @Test func noStrongPasswordWhereItWouldntBeSaved() async throws {
+        let harness = try await Harness(saved: VaultContents(neverSaved: ["example.org"]))
+        defer { harness.finish() }
+        let manager = harness.manager!
+
+        await focus(.newPassword, on: "www.example.com", page(isPrivate: true), in: manager)
+        #expect(manager.dropdown == nil, "a private tab")
+        await focus(.newPassword, on: "accounts.example.org", page(), in: manager)
+        #expect(manager.dropdown == nil, "a site never saved")
+        await focus(.newPassword, on: "www.example.com", page(), in: manager)
+        #expect(manager.dropdown?.rows == [.strongPassword])
+    }
+
     /// Under the field, over it near the page's bottom, never past the page's sides.
     @Test func theListStaysInsideThePage() {
         let rows: [PasswordDropdown.Row] = [.strongPassword, .strongPassword]
@@ -278,7 +292,29 @@ struct PasswordManagerTests {
 
         _ = await manager.answerSettings("setPasswordUnlock", "never", window: nil)
         #expect(await manager.answerSettings("revealPassword", alice.id.uuidString, window: nil).0 as? [String: String] == ["password": "pa55-word"])
-        #expect(harness.prompts.asks.count == 4, "never asks")
+        #expect(harness.prompts.asks.count == 5, "never asks, once it is set")
+    }
+
+    /// Asking less often asks first, so nobody at the Mac can turn Touch ID off and show every password.
+    @Test func askingLessOftenAsksFirst() async throws {
+        let harness = try await Harness()
+        defer { harness.finish() }
+        let manager = harness.manager!
+        manager.unlockPolicy = .everyTime
+
+        harness.prompts.grants = false
+        #expect(await manager.answerSettings("setPasswordUnlock", "never", window: nil).1 == "Not allowed")
+        #expect(await manager.answerSettings("setPasswordUnlock", "oncePerLaunch", window: nil).1 == "Not allowed")
+        #expect(manager.unlockPolicy == .everyTime)
+        #expect(harness.prompts.asks == ["ask less often for your passwords", "ask less often for your passwords"])
+
+        harness.prompts.grants = true
+        _ = await manager.answerSettings("setPasswordUnlock", "never", window: nil)
+        #expect(manager.unlockPolicy == .never)
+        harness.prompts.grants = false
+        let state = await manager.answerSettings("setPasswordUnlock", "everyTime", window: nil).0 as? [String: Any]
+        #expect(state?["unlock"] as? String == "everyTime", "asking more often asks nothing")
+        #expect(harness.prompts.asks.count == 3)
     }
 
     @Test func settingsEditDeleteAndTurnOff() async throws {
@@ -429,8 +465,39 @@ struct PasswordManagerTests {
         #expect(request.offer == .update(alice.id) && request.username == "alice" && request.password == "n3w-secret")
     }
 
-    /// "Use a strong password" fills both new password fields; sent, it is saved without asking,
-    /// except in a private tab, where nothing is saved.
+    /// A sign-in sent by script reports on its button's click, but a show-password eye beside the
+    /// field isn't one: the bar would ask with a half-typed password.
+    @Test func aShowPasswordButtonIsntASignIn() async throws {
+        let harness = try await Harness()
+        defer { harness.finish() }
+        let manager = harness.manager!
+        let page = try await open("""
+            <!doctype html><title>Sign in</title>
+            <div><input id="user" autocomplete="username">
+              <span><input id="pass" type="password"><button id="eye" type="button">Show</button></span>
+              <button id="go" type="button">Sign in</button></div>
+            """, in: harness)
+        defer { page.close() }
+        let input = try NativeInput(webView: page.webView, sends: [.pointer, .buttons], check: {}, onPointer: { _ in })
+        func click(_ id: String) async throws {
+            let r = try #require(try await page.run("const r = document.getElementById('\(id)').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]") as? [Double])
+            try input.click(at: CGPoint(x: r[0], y: r[1]), button: .left, count: 1, modifiers: [])
+        }
+
+        try await click("pass")
+        _ = try await page.run("document.getElementById('user').value = 'alice'; document.getElementById('pass').value = 's3c'")
+        try await click("eye")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(manager.pending.isEmpty)
+
+        _ = try await page.run("document.getElementById('pass').value = 's3cret'")
+        try await click("go")
+        #expect(await waitUntil { !manager.pending.isEmpty })
+        #expect(manager.pending.first?.password == "s3cret")
+    }
+
+    /// "Use a strong password" fills both new password fields; sent, it is saved without asking.
+    /// A private tab saves nothing, so it isn't offered there.
     @Test(arguments: [false, true])
     func aStrongPasswordIsFilledAndSavedOnSubmit(isPrivate: Bool) async throws {
         let harness = try await Harness()
@@ -440,6 +507,13 @@ struct PasswordManagerTests {
         defer { page.close() }
 
         _ = try await page.run("document.getElementById('new').focus()")
+        if isPrivate {
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(manager.dropdown == nil)
+            #expect(await !manager.choose(.strongPassword))
+            #expect(try await page.run("return document.getElementById('new').value") as? String == "")
+            return
+        }
         #expect(await waitUntil { manager.dropdown != nil })
         #expect(manager.dropdown?.rows == [.strongPassword])
         #expect(await manager.choose(.strongPassword))
@@ -448,14 +522,8 @@ struct PasswordManagerTests {
         #expect(values[0].count == 20 && values[0] == values[1])
 
         _ = try await page.run("document.getElementById('user').value = 'alice@example.com'; document.getElementById('signup').requestSubmit()")
-        if isPrivate {
-            try await Task.sleep(for: .milliseconds(300))
-            #expect(manager.pending.isEmpty)
-            #expect(try await harness.saved() == VaultContents())
-        } else {
-            #expect(await waitUntil { (try? await harness.saved().credentials.isEmpty) == false })
-            #expect(try await harness.saved().credentials.map { [$0.host, $0.username, $0.password] } == [["example.com", "alice@example.com", values[0]]])
-            #expect(manager.pending.isEmpty, "saved without asking")
-        }
+        #expect(await waitUntil { (try? await harness.saved().credentials.isEmpty) == false })
+        #expect(try await harness.saved().credentials.map { [$0.host, $0.username, $0.password] } == [["example.com", "alice@example.com", values[0]]])
+        #expect(manager.pending.isEmpty, "saved without asking")
     }
 }

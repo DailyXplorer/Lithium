@@ -81,6 +81,9 @@
     if (!event.isTrusted || !(event.target instanceof Element)) return;
     const button = target(event).closest?.('button, input[type=submit], input[type=button], [role=button]');
     if (!button) return;
+    // A button that shares a wrapper with the password field alone (a show-password eye) sends nothing.
+    const wrapper = button.parentElement;
+    if (wrapper && passwords(wrapper).length && wrapper.querySelectorAll('input:not([type=hidden])').length === 1) return;
     const root = button.form || button.closest('form') || document;
     if (passwords(root).length) submitted(root);
   };

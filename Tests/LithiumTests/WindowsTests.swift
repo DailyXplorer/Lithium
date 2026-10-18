@@ -432,6 +432,29 @@ struct WindowsTests {
         #expect(second.selectedTab === w)
     }
 
+    /// The last window closed hides with its tabs: their media pauses, its page counts as off
+    /// screen so it can sleep, and the page and tab commands are off until the window shows again.
+    @Test func theLastWindowClosedPausesItsTabsAndTakesNoCommands() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = browser.newTab(url: page("a"))
+        let b = browser.newTab(url: page("b"))
+        let mine = Set([a.id, b.id])
+        var paused: Set<Lithium.Tab.ID> = []
+        browser.nowPlaying.pause = { if mine.contains($0.id) { paused.insert($0.id) } }
+        #expect(browser.isShown(b) && browser.commandTab === b && browser.canChangeTabs)
+
+        browser.windowWillClose(first)
+        #expect(paused == mine)
+        #expect(!browser.isShown(b))
+        #expect(browser.commandTab == nil)
+        #expect(!browser.canChangeTabs)
+
+        #expect(browser.openWindow() === first)
+        #expect(browser.isShown(b) && browser.commandTab === b && browser.canChangeTabs)
+    }
+
     /// Each window's sidebar lists every other window's tabs in that window's order, live, under
     /// "Other window", numbered once there are several; none with one window.
     @Test func otherWindowSectionsListTheOtherWindowsTabs() throws {

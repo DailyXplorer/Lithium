@@ -163,7 +163,7 @@ struct UISnapshotTests {
             ("privacy-details", "privacy", "document.querySelectorAll('details').forEach((d) => d.open = true)"),
             ("filters", "filters", nil),
             ("extensions", "extensions", nil),
-            ("passwords", "passwords", "document.querySelectorAll('details').forEach((d) => d.open = true)"), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
+            ("passwords", "passwords", nil), ("max", "max", nil), ("agents", "agents", nil), ("permissions", "permissions", nil), ("advanced", "advanced", nil),
             ("site", "site/www.example.com", nil), ("about", "about", nil),
             // The segmented controls at the narrowest a tab gets: the smallest window with the sidebar.
             ("appearance-narrow", "appearance", nil), ("advanced-narrow", "advanced", nil),
@@ -518,6 +518,36 @@ struct UISnapshotTests {
         }
     }
 
+    /// The list under a sign-in field, with a site's accounts and with a strong password, and the
+    /// bar after a sign-in, to save an account and to update one.
+    @Test func passwordSnapshots() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        Theme.registerFonts()
+        let field = CGRect(x: 0, y: 0, width: 280, height: 34)
+        let lists = [
+            ("accounts", PasswordDropdown(tabID: UUID(), host: "www.example.com", field: .username, rect: field, rows: [
+                .account(UUID(), username: "alice@example.com", host: "www.example.com"), .account(UUID(), username: "bob", host: "accounts.example.com"),
+            ])),
+            ("strong", PasswordDropdown(tabID: UUID(), host: "www.example.com", field: .newPassword, rect: field, rows: [.strongPassword])),
+        ]
+        let bars = [
+            ("save", PasswordSaveRequest(tabID: UUID(), host: "accounts.example.com", username: "alice", password: "", offer: .save)),
+            ("update", PasswordSaveRequest(tabID: UUID(), host: "accounts.example.com", username: "alice", password: "", offer: .update(UUID()))),
+        ]
+        for isDark in [false, true] {
+            let scheme = isDark ? "dark" : "light"
+            for (name, dropdown) in lists {
+                let frame = dropdown.frame(in: CGSize(width: 1000, height: 1000))
+                let list = PasswordDropdownView(dropdown: dropdown) { _ in }.frame(width: frame.width, height: frame.height).padding(20)
+                try render(list, isDark: isDark).write(to: directory.appending(path: "password-list-\(name)-\(scheme).png"))
+            }
+            for (name, request) in bars {
+                let bar = PasswordSaveBar(request: request) { _ in }.frame(width: 900)
+                try render(bar, isDark: isDark).write(to: directory.appending(path: "password-bar-\(name)-\(scheme).png"))
+            }
+        }
+    }
+
     /// Through an off-screen window, so AppKit controls such as switches draw as they do in the app.
     private func render(_ view: some View, isDark: Bool) throws -> Data {
         let hosting = NSHostingView(rootView: view.background(isDark ? Color(white: 0.17) : Color(white: 0.97)))
@@ -551,8 +581,21 @@ final class SampleBridge: NSObject, WKScriptMessageHandlerWithReply {
         if action == "site" { return (["cookies": 14, "hasData": true], nil) }
         if action == "fonts" { return (["DM Sans", "Avenir Next", "Georgia", "Helvetica Neue", "Menlo", "New York"], nil) }
         if action == "filterLists" { return (Self.filterLists, nil) }
+        if action == "passwords" { return (Self.passwords, nil) }
         return (Self.state, nil)
     }
+
+    static let passwords: [String: Any] = [
+        "offers": true, "unlock": "oncePerLaunch",
+        "accounts": [
+            ["id": UUID().uuidString, "site": "example.com", "host": "accounts.example.com", "username": "alice@example.com"],
+            ["id": UUID().uuidString, "site": "example.com", "host": "www.example.com", "username": "bob"],
+            ["id": UUID().uuidString, "site": "shop.example", "host": "shop.example", "username": ""],
+        ],
+        "neverSaved": ["bank.example"],
+        "error": "",
+        "report": "Added 3, updated 1, skipped 2",
+    ]
 
     static let filterLists: [String: Any] = {
         let updated = Date().addingTimeInterval(-3 * 3600).timeIntervalSince1970 * 1000

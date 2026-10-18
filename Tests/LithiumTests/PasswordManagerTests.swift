@@ -364,6 +364,49 @@ struct PasswordManagerTests {
         #expect(try Data(contentsOf: harness.fileURL) == before)
     }
 
+    /// A long vault shows its first five accounts until Show all, every match while searching, and
+    /// is collapsed again, with Never saved, whenever the section is opened.
+    @Test func theSavedListShowsFiveUntilShowAll() async throws {
+        let configuration = WKWebViewConfiguration()
+        InternalSchemeHandler.shared.install(on: configuration)
+        configuration.userContentController.addScriptMessageHandler(SampleBridge(), contentWorld: .page, name: InternalBridge.name)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 700), configuration: configuration)
+        let load = PageLoad()
+        webView.navigationDelegate = load
+        webView.load(URLRequest(url: URL(string: "lithium://settings#passwords")!))
+        try await load.wait()
+        let seen = try await webView.callAsyncJavaScript("""
+            const until = async (test) => { for (let i = 0; i < 100 && !test(); i++) await new Promise((r) => setTimeout(r, 50)); return test(); };
+            const rows = () => document.querySelectorAll('#password-list .account').length;
+            const seen = [];
+            const look = () => seen.push([rows(), $('#password-more').hidden ? '-' : $('#password-more').textContent,
+              $('#never-saved-section summary').textContent, $('#never-saved-section').open ? 'open' : 'closed'].join(' | '));
+            const search = (text) => { $('#password-search').value = text; $('#password-search').dispatchEvent(new Event('input')); };
+            await until(() => rows() > 0);
+            look();
+            $('#password-more').click();
+            look();
+            search('example');
+            look();
+            search('');
+            look();
+            $('#never-saved-section').open = true;
+            location.hash = 'max';
+            await until(() => $('#max').classList.contains('active'));
+            location.hash = 'passwords';
+            await until(() => $('#passwords').classList.contains('active') && rows() === 5);
+            look();
+            return seen;
+            """, contentWorld: .page) as? [String]
+        #expect(seen == [
+            "5 | Show all (8) | Never saved (2) | closed",
+            "8 | Show less | Never saved (2) | closed",
+            "7 | - | Never saved (2) | closed",
+            "8 | Show less | Never saved (2) | closed",
+            "5 | Show all (8) | Never saved (2) | closed",
+        ])
+    }
+
     // MARK: In a page
 
     private static let login = """

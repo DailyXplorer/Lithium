@@ -73,6 +73,9 @@ final class Keychain: @unchecked Sendable {
     static let sessionCookies = Keychain(service: "app.lithium.browser.session-cookies", account: "file-key",
                                          label: "Lithium sign-in cookies", size: 32)
 
+    static let passwords = Keychain(service: "app.lithium.browser.passwords", account: "vault-key",
+                                    label: "Lithium Passwords Vault Key", size: 32)
+
     /// What builds that may not use the Keychain hand WebKit (`Tab.webCryptoMasterKey`) to wrap the
     /// CryptoKeys sites store, instead of WebKit's own login Keychain item. Never nil: WebKit may
     /// read its item when handed none. A key for the launch, so CryptoKeys these builds store last

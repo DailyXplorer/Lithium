@@ -87,6 +87,11 @@ extension Browser {
         folders.all.removeAll { $0.space == space }
     }
 
+    /// In any window: every window of the space shows the folder, and deleting it takes it from all.
+    func folderHasTabs(_ id: TabFolder.ID) -> Bool {
+        tabs.contains { $0.folderID == id && $0.isInTabList }
+    }
+
     func folderExists(_ id: TabFolder.ID, in space: Space.ID) -> Bool {
         folders.all.contains { $0.id == id && $0.space == space }
     }

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
+import UniformTypeIdentifiers
 import WebKit
 @testable import Lithium
 
@@ -176,6 +177,23 @@ struct SplitViewTests {
         #expect(rows(browser) == ["a|b", "c"])
         // A tab can't go beside itself.
         #expect(!browser.commandWindow.dropForSplit(tab("b", in: browser).id.uuidString, on: .first))
+    }
+
+    /// A tab or favorite drags as a type of its own with no text in it, so a page's text field
+    /// dropped on never gets its id; the sidebar's drop targets still read it back.
+    @Test func aSidebarDragOffersThePageNoText() {
+        let provider = NSItemProvider()
+        provider.register(SidebarDrag(item: "pin:\(UUID().uuidString)"))
+        #expect(provider.hasItemConformingToTypeIdentifier(SidebarDrag.type.identifier))
+        #expect(!provider.hasItemConformingToTypeIdentifier(UTType.text.identifier))
+
+        let item = UUID().uuidString
+        let board = NSPasteboard(name: .init("SplitViewTests.\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        board.declareTypes([SidebarDrag.pasteboardType], owner: nil)
+        board.setData(Data(item.utf8), forType: SidebarDrag.pasteboardType)
+        #expect(board.string(forType: .string) == nil)
+        #expect(SidebarDrag.item(on: board) == item)
     }
 
     /// A drag dropped off the page leaves the drop zone in the window until SwiftUI next draws;
@@ -448,7 +466,7 @@ struct SplitViewTests {
         #expect(!tab("c", in: browser).isAsleep)
     }
 
-    /// Leaving a split, for another tab or the start page, its other side counts as used until
+    /// Leaving a split, for another tab, the start page or a pin, its other side counts as used until
     /// then, like the selected side: it doesn't sleep at the next pass for time spent on screen.
     @Test func theOtherSideCountsAsUsedWhenLeft() async throws {
         let browser = browser(with: ["a", "b", "c"])
@@ -482,6 +500,17 @@ struct SplitViewTests {
         try await Task.sleep(for: .milliseconds(50))
         browser.exitSplit(of: tab("a", in: browser))
         #expect(b.lastActive > shown, "by Exit Split View")
+
+        let a = tab("a", in: browser)
+        browser.openInSplit(b)
+        browser.select(a)
+        #expect(browser.commandWindow.shownPartner === b)
+        shown = b.lastActive
+        try await Task.sleep(for: .milliseconds(50))
+        browser.pin(a)
+        defer { browser.pins.filter { $0.id == a.pinID }.forEach(browser.unpin) }
+        #expect(browser.splits.pairs.isEmpty)
+        #expect(b.lastActive > shown, "by pinning the selected side")
     }
 
     /// From one split straight to another, the panes are reused and don't appear again: the new

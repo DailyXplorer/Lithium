@@ -52,11 +52,15 @@ final class Privacy {
     @ObservationIgnored private let farblingKey = SymmetricKey(size: .bits256)
     /// Per private session, so nothing in it matches the same site in another session or a normal tab.
     @ObservationIgnored private var privateFarblingKeys: [ObjectIdentifier: SymmetricKey] = [:]
-    /// Farbling as built for a site (and private session): each main-frame navigation needs it,
+    /// Per space keeping its data apart, which is another identity's: a site mustn't read the same
+    /// noise there as in the main space and so link the two.
+    @ObservationIgnored private var spaceFarblingKeys: [Space.ID: SymmetricKey] = [:]
+    /// Farbling as built for a site (and private session or space): each main-frame navigation needs it,
     /// and building it means three passes over a 46 KB template and three HMACs.
     @ObservationIgnored private var farblingSources: [FarblingSite: String] = [:]
     private struct FarblingSite: Hashable {
         let privateSession: ObjectIdentifier?
+        let space: Space.ID?
         let site: String
     }
     private static let farblingSourcesLimit = 8
@@ -65,6 +69,8 @@ final class Privacy {
     @ObservationIgnored private var engineIsShipped = false
     @ObservationIgnored private let userAgentSuffix: String
     private(set) var filterChoices: FilterChoices
+    /// Catalog lists' toggles so far, by id: one turned on applies only if none came while it downloaded.
+    @ObservationIgnored private var filterChoiceCounts: [String: Int] = [:]
     /// Set by tests, for a folder, a filter set, a rule list store, an engine and downloads of their own.
     @ObservationIgnored var filterStorage = FilterLists.Storage.standard
     @ObservationIgnored var filterSet: (folder: URL, manifest: Manifest)?
@@ -178,7 +184,8 @@ final class Privacy {
 
     /// One script holds every address of the page and replaces the one before, so they don't pile up.
     /// Without WebKit's private call to remove one, each address gets a script of its own, once.
-    func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
+    func addTrustedTypesScript(_ enabled: Bool, for response: URLResponse, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil,
+                               to controller: WKUserContentController) {
         guard enabled, let mode = Self.trustedTypes(of: response), let url = response.url else { return }
         // Gone with the rest of the scripts at a main-frame navigation: the new page starts afresh.
         let last = trustedTypesScripts.object(forKey: controller).flatMap { last in
@@ -189,7 +196,7 @@ final class Privacy {
         guard modes[address] != mode else { return }
         modes[address] = mode
         let replaces = controller.responds(to: Self.removeUserScript)
-        guard let source = Self.trustedTypesScript(modes: replaces ? modes : [address: mode], key: farblingKey(for: privateSession)) else { return }
+        guard let source = Self.trustedTypesScript(modes: replaces ? modes : [address: mode], key: farblingKey(for: privateSession, space: space)) else { return }
         let script = WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         // Added before the old one goes, so no document starts with neither.
         controller.addUserScript(script)
@@ -368,15 +375,23 @@ final class Privacy {
         blockReasons.reasons = blockReasons.reasons.filter { $0.key.privateSession != privateSession }
     }
 
-    private func farblingKey(for privateSession: ObjectIdentifier?) -> SymmetricKey {
-        guard let privateSession else { return farblingKey }
-        if let key = privateFarblingKeys[privateSession] { return key }
+    /// `space` is a `Tab.siteSpace`: nil in a private tab, which its session covers.
+    private func farblingKey(for privateSession: ObjectIdentifier?, space: Space.ID?) -> SymmetricKey {
+        if let privateSession {
+            if let key = privateFarblingKeys[privateSession] { return key }
+            let key = SymmetricKey(size: .bits256)
+            privateFarblingKeys[privateSession] = key
+            return key
+        }
+        guard let space else { return farblingKey }
+        if let key = spaceFarblingKeys[space] { return key }
         let key = SymmetricKey(size: .bits256)
-        privateFarblingKeys[privateSession] = key
+        spaceFarblingKeys[space] = key
         return key
     }
 
     func forget(space: Space.ID) {
+        spaceFarblingKeys[space] = nil
         guard spaceExceptions.removeValue(forKey: space) != nil else { return }
         UserDefaults.standard.set(Space.stored(spaceExceptions), forKey: Self.spaceExceptionsKey)
     }
@@ -465,24 +480,24 @@ final class Privacy {
     }
 
     /// The caller has already reset the controller's scripts.
-    func addScripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil, to controller: WKUserContentController) {
-        scripts(enabled, for: url, privateSession: privateSession).forEach(controller.addUserScript)
+    func addScripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil, to controller: WKUserContentController) {
+        scripts(enabled, for: url, privateSession: privateSession, space: space).forEach(controller.addUserScript)
     }
 
-    func scripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil) -> [WKUserScript] {
+    func scripts(_ enabled: Bool, for url: URL, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> [WKUserScript] {
         guard enabled else { return [] }
         // Every frame gets the top page's site, as in Brave: a frame embedded on many sites
         // farbles differently on each.
-        let farbling = WKUserScript(source: farblingSource(for: url, privateSession: privateSession),
+        let farbling = WKUserScript(source: farblingSource(for: url, privateSession: privateSession, space: space),
                                     injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page)
         guard let source = advanced.script(for: url) else { return [farbling] }
         return [farbling, WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)]
     }
 
-    func farblingSource(for url: URL, privateSession: ObjectIdentifier? = nil) -> String {
-        let site = FarblingSite(privateSession: privateSession, site: Self.farblingSite(url))
+    func farblingSource(for url: URL, privateSession: ObjectIdentifier? = nil, space: Space.ID? = nil) -> String {
+        let site = FarblingSite(privateSession: privateSession, space: space, site: Self.farblingSite(url))
         if let source = farblingSources[site] { return source }
-        let source = Self.farbling(farblingTemplate, key: farblingKey(for: privateSession), site: site.site)
+        let source = Self.farbling(farblingTemplate, key: farblingKey(for: privateSession, space: space), site: site.site)
         if farblingSources.count >= Self.farblingSourcesLimit { farblingSources.removeAll(keepingCapacity: true) }
         farblingSources[site] = source
         return source
@@ -713,8 +728,16 @@ final class Privacy {
         if FilterLists.shipped.contains(where: { $0.id == id }) {
             if enabled { choices.off.remove(id) } else { choices.off.insert(id) }
         } else if let info = FilterLists.catalog.first(where: { $0.id == id }), let url = info.url {
+            filterChoiceCounts[id, default: 0] += 1
             if enabled {
-                guard let copy = await download(id: id, url: url) else { return "Couldn’t download \(info.name). Try again later." }
+                let count = filterChoiceCounts[id]
+                let downloaded = await download(id: id, url: url)
+                // Turned off (or on again) while it downloaded: the later choice stands.
+                guard filterChoiceCounts[id] == count else {
+                    if filterChoices.copies[id] == nil { try? FileManager.default.removeItem(at: filterStorage.copy(of: id)) }
+                    return nil
+                }
+                guard let copy = downloaded else { return "Couldn’t download \(info.name). Try again later." }
                 choices = filterChoices
                 choices.copies[id] = copy
                 choices.on.insert(id)
@@ -740,6 +763,8 @@ final class Privacy {
         guard !filterChoices.added.contains(url) else { return "This list is already added." }
         if FilterLists.catalog.contains(where: { $0.url == url }) { return "This list is in the catalog: turn it on there." }
         guard let copy = await download(id: id, url: url) else { return "That address doesn’t lead to a filter list." }
+        // Added twice at once: the first to download keeps it.
+        guard !filterChoices.added.contains(url) else { return nil }
         var choices = filterChoices
         choices.added.append(url)
         choices.copies[id] = copy

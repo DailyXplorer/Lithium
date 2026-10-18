@@ -36,14 +36,14 @@ struct FolderHeader: View {
                 .strokeBorder(palette.ink.opacity(isTargeted ? 0.45 : 0), lineWidth: 2)
         }
         .simultaneousGesture(TapGesture(count: 2).onEnded { startRenaming() })
-        .dropDestination(for: String.self) { items, _ in
-            withAnimation(.snappy(duration: 0.2)) { window.dropTab(items, on: .folder(folder.id, nil)) }
+        .dropDestination(for: SidebarDrag.self) { drags, _ in
+            withAnimation(.snappy(duration: 0.2)) { window.dropTab(drags.map(\.item), on: .folder(folder.id, nil)) }
         } isTargeted: { isTargeted = $0 }
         .contextMenu {
             Button(folder.isCollapsed ? "Expand Folder" : "Collapse Folder", action: toggle)
             Button("Rename Folder…", action: startRenaming)
             Divider()
-            Button(count > 0 ? "Delete Folder…" : "Delete Folder", action: delete)
+            Button(browser.folderHasTabs(folder.id) ? "Delete Folder…" : "Delete Folder", action: delete)
         }
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(folder.isCollapsed ? "Collapsed" : "Expanded")

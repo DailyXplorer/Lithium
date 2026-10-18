@@ -121,6 +121,24 @@ struct WindowsTests {
         #expect(browser.windows.count == 1)
     }
 
+    /// A call in the last window ends as it closes: hidden, its page would keep sending the
+    /// microphone and camera until a Dock click. Its tab sleeps; the other tabs stay as they were.
+    @Test func closingTheLastWindowEndsItsCalls() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let call = browser.newTab(url: page("call"))
+        let other = browser.newTab(url: page("other"), selecting: false)
+        browser.nowPlaying.isInCall = { $0 === call }
+        browser.nowPlaying.pause = { _ in }
+
+        browser.windowWillClose(first)
+        #expect(first.isHidden)
+        #expect(call.isAsleep, "the call ends")
+        #expect(!other.isAsleep)
+        #expect(browser.tabs.contains { $0 === call }, "still there for the Dock click")
+    }
+
     /// ⌘W in a window with no tab left closes the window, as in Safari and Chrome: one of two
     /// goes, the last one hides. On the start page with tabs still in the window, it does nothing.
     @Test func commandWInAWindowWithNoTabClosesIt() {
@@ -174,6 +192,21 @@ struct WindowsTests {
         #expect(second.regularTabs.map(\.id) == [b1.id, b2.id])
         #expect(b1.folderID == nil)
         #expect(second.selectedTab === b2)
+    }
+
+    /// A folder empty in this window but holding another window's tabs still holds tabs, so
+    /// deleting it asks first instead of silently emptying it out of the other window.
+    @Test func aFolderWithTabsOnlyInAnotherWindowAsksBeforeDeleting() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let a = browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        let folder = browser.newFolder(with: a)
+        #expect(browser.tabList(in: folder.space, window: second.id, folder: folder.id).isEmpty)
+        #expect(browser.folderHasTabs(folder.id))
+
+        browser.moveTab(a, toFolder: nil)
+        #expect(!browser.folderHasTabs(folder.id))
     }
 
     /// A tab an agent or a page opens for a window that closed while it awaited goes into the

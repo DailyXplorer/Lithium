@@ -534,6 +534,11 @@ final class Browser {
             // selected, or the page read for a while would sleep, and reload, before a Dock click.
             window.selectedTab?.markActive()
             window.shownPartner?.markActive()
+            // Pausing leaves a call's microphone and camera on, and a tab in a call never sleeps
+            // by itself: it would go on sending them with no window. After `markActive`, which wakes.
+            for tab in tabs where tab.windowID == window.id && nowPlaying.isInCall(tab) {
+                tab.sleep(configuration: makeConfiguration(for: tab.url))
+            }
             return
         }
         // Off the tabs first, so the selection doesn't walk through (and wake) the tabs closing.

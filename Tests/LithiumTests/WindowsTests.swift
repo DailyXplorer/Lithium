@@ -231,6 +231,29 @@ struct WindowsTests {
         #expect(again.windows[1].regularTabs.map(\.url) == [page("b")])
     }
 
+    /// After a relaunch the window the user was last in comes back in front, though opened first.
+    @Test func theWindowLastActiveComesBackInFront() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        browser.newTab(url: page("a"))
+        let second = browser.openWindow()
+        browser.newTab(url: page("b"), in: second)
+        browser.windowBecameKey(second)
+        browser.windowBecameKey(first)
+        browser.saveNow()
+
+        let again = Browser()
+        defer { reset(again) }
+        var shown: [BrowserWindow.ID] = []
+        again.showWindow = { window, _ in
+            shown.append(window.id)
+            return nil
+        }
+        again.showRestoredWindows()
+        #expect(shown == [second.id, first.id], "the last shown is the one in front")
+    }
+
     /// An agent's `tab_select` or an extension's activate shows the tab in its window but leaves
     /// the window in front, and the keys, where they are. The user's pick brings the window
     /// forward, out of the Dock if minimized.

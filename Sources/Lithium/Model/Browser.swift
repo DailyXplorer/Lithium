@@ -457,9 +457,12 @@ final class Browser {
         windows.contains { $0.videoPopout.tab === tab }
     }
 
-    /// At launch: every saved window, the first at the back and the last in front.
+    /// At launch: every saved window, the one the user was last in shown last, so it is in front.
     func showRestoredWindows() {
-        windows.forEach(show)
+        // Read first: each window shown becomes key, and the last active with it.
+        let front = lastActiveWindowID
+        windows.filter { $0.id != front }.forEach(show)
+        windows.filter { $0.id == front }.forEach(show)
         windowsDidShow()
     }
 
@@ -1102,6 +1105,7 @@ final class Browser {
             Session.Window(id: window.id, frame: window.frame, selectedIndex: selected[window.id], spaceID: Space.saved(window.currentSpaceID),
                            isSidebarVisible: window.isSidebarVisible, isZenMode: window.isZenMode)
         }
+        session.lastActiveWindowID = lastActiveWindowID
         return session
     }
 
@@ -1115,6 +1119,7 @@ final class Browser {
             BrowserWindow(browser: self, id: window.id, space: knownSpace(window.spaceID), frame: window.frame,
                           isSidebarVisible: window.isSidebarVisible, isZenMode: window.isZenMode)
         }
+        lastActiveWindowID = session.lastActiveWindowID.flatMap { id in windows.contains { $0.id == id } ? id : nil }
         var restored: [Int: Tab] = [:]
         var lastShown: [Tab] = []
         for (index, tab) in session.tabs.enumerated() {

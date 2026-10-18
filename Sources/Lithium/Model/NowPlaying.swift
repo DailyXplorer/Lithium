@@ -333,11 +333,18 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
     }
 
     /// Muted, the tab lets go of the player. An iframe playing on keeps its word for when WebKit hears
-    /// the tab again, which asks only the page what it plays (`hearingChanged`).
+    /// the tab again, which asks only the page what it plays (`hearingChanged`). The page playing on
+    /// stays behind: an iframe that takes the player back on unmute shows it again once it stops.
     func mute(_ tab: Tab) {
         let shown = tab === self.tab ? frame.flatMap { frame in reported.map { (media: $0, frame: frame) } } : nil
         discard(tab, pageGone: false)
-        if let shown, shown.frame.isSubframe, !shown.media.isPaused { unheard[ObjectIdentifier(tab)] = shown }
+        guard let shown, !shown.media.isPaused else { return }
+        let key = ObjectIdentifier(tab)
+        if shown.frame.isSubframe {
+            unheard[key] = shown
+        } else if shown.media.isAudible {
+            behind[key, default: [:]][shown.frame.id] = shown
+        }
     }
 
     /// The tab closed, fell asleep, went to another page, or was muted. Its iframes' Web Audio is kept

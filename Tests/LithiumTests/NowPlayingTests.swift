@@ -649,6 +649,42 @@ struct NowPlayingBrowserTests {
         #expect(player.tab === tab, "started while muted")
     }
 
+    /// The page's music plays on through a mute, saying nothing new; an embed started while muted
+    /// takes the player back on unmute, and once it stops the player shows the music again.
+    @Test func followsThePageOnceAnEmbedStartedWhileMutedStops() {
+        let browser = Browser()
+        let tab = browser.newTab()
+        let player = browser.nowPlaying
+        player.tell = { _, _, _ in }
+        var heard = true
+        player.isHeard = { _ in heard }
+        let music = NowPlaying.Media(message: ["paused": false, "duration": 200, "title": "Music"], at: Date())
+        let stopped = NowPlaying.Media(message: ["paused": true, "duration": 200, "title": "Music"], at: Date())
+        let video = NowPlaying.Media(message: ["paused": false, "duration": 60, "title": "Video"], at: Date())
+        let paused = NowPlaying.Media(message: ["paused": true, "duration": 60, "title": "Video"], at: Date())
+        let (page, embed) = (NowPlaying.Frame(id: "page"), NowPlaying.Frame(id: "embed", isSubframe: true))
+        let mute = { (muted: Bool) in
+            tab.isMuted = muted
+            heard = !muted
+            player.hearingChanged(tab)
+        }
+
+        player.receive(music, from: tab, frame: page)
+        mute(true)
+        player.receive(video, from: tab, frame: embed)
+        mute(false)
+        #expect(player.media?.title == "Video")
+        player.receive(paused, from: tab, frame: embed)
+        #expect(player.media?.title == "Music" && player.media?.isPaused == false, "the page still plays")
+
+        mute(true)
+        player.receive(stopped, from: tab, frame: page)
+        player.receive(video, from: tab, frame: embed)
+        mute(false)
+        player.receive(paused, from: tab, frame: embed)
+        #expect(player.media?.title == "Video" && player.media?.isPaused == true, "the page paused while muted")
+    }
+
     /// Any script of a page can post that it plays: the page's word takes the player, but only
     /// WebKit's ear pauses another tab, maybe a report later, once the media loaded.
     @Test func pausesTheTabHeardBeforeOnlyOnceWebKitHearsTheNewOne() {

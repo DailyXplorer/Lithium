@@ -123,7 +123,7 @@ struct SidebarView: View {
     }
 
     private func askToDelete(_ folder: TabFolder) {
-        if browser.tabList(in: folder.space, window: window.id, folder: folder.id).isEmpty {
+        if !browser.folderHasTabs(folder.id) {
             deleteFolder(folder, closingTabs: false)
         } else {
             deletingFolder = folder

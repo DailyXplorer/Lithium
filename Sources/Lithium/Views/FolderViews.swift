@@ -43,7 +43,7 @@ struct FolderHeader: View {
             Button(folder.isCollapsed ? "Expand Folder" : "Collapse Folder", action: toggle)
             Button("Rename Folder…", action: startRenaming)
             Divider()
-            Button(count > 0 ? "Delete Folder…" : "Delete Folder", action: delete)
+            Button(browser.folderHasTabs(folder.id) ? "Delete Folder…" : "Delete Folder", action: delete)
         }
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(folder.isCollapsed ? "Collapsed" : "Expanded")

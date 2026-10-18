@@ -482,6 +482,32 @@ struct WindowsTests {
         #expect(again.tabs.count == 2)
     }
 
+    /// The last window closed hides with its tabs: their media pauses, its page counts as off
+    /// screen so it can sleep, idle from the close (not from when it was selected, or a page read
+    /// for long would sleep at once), and the page and tab commands are off until it shows again.
+    @Test func theLastWindowClosedPausesItsTabsAndTakesNoCommands() {
+        let browser = makeBrowser()
+        defer { reset(browser) }
+        let first = browser.windows[0]
+        let a = browser.newTab(url: page("a"))
+        let b = browser.newTab(url: page("b"))
+        let mine = Set([a.id, b.id])
+        var paused: Set<Lithium.Tab.ID> = []
+        browser.nowPlaying.pause = { if mine.contains($0.id) { paused.insert($0.id) } }
+        #expect(browser.isShown(b) && browser.commandTab === b && browser.canChangeTabs)
+        let selectedAt = b.lastActive
+
+        browser.windowWillClose(first)
+        #expect(b.lastActive > selectedAt)
+        #expect(paused == mine)
+        #expect(!browser.isShown(b))
+        #expect(browser.commandTab == nil)
+        #expect(!browser.canChangeTabs)
+
+        #expect(browser.openWindow() === first)
+        #expect(browser.isShown(b) && browser.commandTab === b && browser.canChangeTabs)
+    }
+
     /// Classic windows: no sidebar lists, nor menu moves, another window's tabs.
     @Test func noWindowListsAnotherWindowsTabs() throws {
         let sources = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Sources/Lithium").standardized

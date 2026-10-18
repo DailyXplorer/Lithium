@@ -64,6 +64,11 @@ final class RecentTabs {
         shown[tab.id] = nil
         openings[tab.id] = nil
         replacements[tab.id] = nil
+        // Gone, or moved to another window: closing the other tab of the pair mustn't go to it.
+        if opened === tab || opener === tab {
+            opened = nil
+            opener = nil
+        }
     }
 
     /// Forward goes to the tab shown before `current`, back to the one shown longest ago; tabs

@@ -325,6 +325,14 @@ final class NowPlaying: NSObject, WKScriptMessageHandler {
         for info in frames { tell(tab, "free", info) }
     }
 
+    /// Played again outside the page's world (the floating player): the page and the iframes held
+    /// with it may play again, their Web Audio too.
+    func release(_ tab: Tab) {
+        guard let frames = hushed.removeValue(forKey: ObjectIdentifier(tab)) else { return }
+        tell(tab, "release", nil)
+        for info in frames { tell(tab, "release", info) }
+    }
+
     /// The iframes to hold besides the page: the one that played and those with Web Audio.
     private func subframes(of tab: Tab) -> [WKFrameInfo] {
         var frames = audioFrames[ObjectIdentifier(tab)] ?? [:]

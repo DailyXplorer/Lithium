@@ -50,6 +50,8 @@ final class BrowserWindow: Identifiable {
     /// The name typed so far, for whichever field shows the rename next: ⌘B swaps the peeked
     /// sidebar's field for the sidebar's own.
     @ObservationIgnored var renameDraft: String?
+    /// The other windows whose section at the foot of the sidebar is folded (`otherWindowSections`).
+    var collapsedOtherWindows: Set<ID> = []
 
     let find = FindInPage()
     let suggestions = AddressSuggestions()
@@ -245,6 +247,27 @@ final class BrowserWindow: Identifiable {
         return true
     }
 
+    // MARK: Other windows
+
+    struct OtherWindowSection: Identifiable {
+        let id: ID
+        let title: String
+        let tabs: [Tab]
+    }
+
+    /// Each other window's tabs, in its sidebar's order, at the foot of this one's: none with one window.
+    var otherWindowSections: [OtherWindowSection] {
+        let others = browser.windows.filter { $0 !== self }
+        return others.enumerated().map { index, other in
+            OtherWindowSection(id: other.id, title: others.count == 1 ? "Other window" : "Other window \(index + 1)",
+                               tabs: browser.navigationOrder(of: other.id))
+        }
+    }
+
+    func toggleOtherWindow(_ id: ID) {
+        collapsedOtherWindows.formSymmetricDifference([id])
+    }
+
     // MARK: Spaces
 
     /// An edit in the address bar or a tab's name ends first: its field would be left editing a
@@ -407,7 +430,9 @@ final class BrowserWindow: Identifiable {
     func toggleSummary() {
         guard let tab = selectedTab else { return }
         isSummaryPresented.toggle()
-        if isSummaryPresented { Task { await browser.summaries.summarize(tab) } }
+        // Read now: the task runs later, and `browser` is unowned.
+        let summaries = browser.summaries
+        if isSummaryPresented { Task { await summaries.summarize(tab) } }
     }
 
     // MARK: Find

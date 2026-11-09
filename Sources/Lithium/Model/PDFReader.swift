@@ -423,7 +423,7 @@ extension PDFReader: FindTarget {
     }
 
     /// `go(to:)` with a selection leaves the view where it is when the match is pages away.
-    private func reveal(_ selection: PDFSelection) {
+    func reveal(_ selection: PDFSelection) {
         guard let page = selection.pages.first, let document = view.documentView,
               let scrollView = document.enclosingScrollView else {
             view.go(to: selection)

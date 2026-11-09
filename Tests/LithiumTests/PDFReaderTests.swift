@@ -443,6 +443,21 @@ extension BrowserTests {
         try expectShown(3, onPage: 37)
     }
 
+    /// PDFKit gives a selection it can't place a null box, which is NaN once converted to the view,
+    /// and AppKit stops the app on a scroll to NaN ("Invalid view geometry: value is NaN").
+    @Test func aMatchPDFKitCantPlaceShowsItsPage() async throws {
+        let file = try makePDF(title: "Long", pages: (1...12).map { "Page \($0)" })
+        let reader = PDFReader(url: file)
+        #expect(reader.open(try Data(contentsOf: file)))
+        reader.view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        reader.view.layoutDocumentView()
+        let page = try #require(reader.document?.page(at: 8))
+        #expect(reader.view.currentPage !== page)
+
+        reader.reveal(UnplacedSelection(on: page))
+        #expect(reader.view.currentPage === page)
+    }
+
     /// A text PDF with one outline entry per page, written by hand: PDFKit drops outlines it is given.
     private func makePDF(title: String, pages: [String], password: String? = nil) throws -> URL {
         let count = pages.count
@@ -549,4 +564,18 @@ struct PDFPageFieldAndOutlineTests {
         }
         #expect(PDFReader.entries(of: wide, in: document).count == PDFReader.outlineEntryLimit)
     }
+}
+
+/// A selection on `page` that PDFKit draws nowhere.
+private final class UnplacedSelection: PDFSelection {
+    private let page: PDFPage
+
+    init(on page: PDFPage) {
+        self.page = page
+        super.init(document: page.document!)
+    }
+
+    override var pages: [PDFPage] { [page] }
+
+    override func bounds(for page: PDFPage) -> CGRect { .null }
 }

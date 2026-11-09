@@ -36,6 +36,7 @@ final class QuickLinks {
         let tab = Tab(browser: browser, configuration: configuration ?? browser.makeConfiguration(for: url), space: space ?? window.currentSpaceID, window: window.id)
         if let url { tab.load(url) }
         tabs.append(tab)
+        browser.extensions.didOpen(tab)
         windows[tab.id] = showWindow(tab, browser)
         return tab
     }
@@ -50,10 +51,14 @@ final class QuickLinks {
     /// on an answer. False when it didn't move.
     @discardableResult
     func moveToBrowserWindow(_ tab: Tab) -> Bool {
-        guard windows[tab.id]?.attachedSheet == nil, let browser, remove(tab) else { return false }
-        browser.inBrowserWindow { window in
-            browser.adopt(tab, into: window)
-            window.nsWindow?.makeKeyAndOrderFront(nil)
+        guard windows[tab.id]?.attachedSheet == nil, let browser, contains(tab) else { return false }
+        // The same tab to extensions, at another place in the one window they see.
+        browser.extensions.moving(tab) {
+            _ = remove(tab)
+            browser.inBrowserWindow { window in
+                browser.adopt(tab, into: window)
+                window.nsWindow?.makeKeyAndOrderFront(nil)
+            }
         }
         return true
     }
@@ -103,6 +108,12 @@ final class QuickLinks {
         browser.nowPlaying.discard(tab)
         tab.unpair()
         tab.tearDown()
+        browser.extensions.didClose(tab)
+    }
+
+    /// An extension's `tabs.update({active: true})`: a link has no tab to select, only its window.
+    func bringForward(_ tab: Tab) {
+        windows[tab.id]?.makeKeyAndOrderFront(nil)
     }
 
     func windowClosed(_ tab: Tab) {

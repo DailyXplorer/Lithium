@@ -78,6 +78,8 @@ struct ShowcaseShots {
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        // Said, not inherited: on a Mac in Dark Mode the light pictures would come out dark.
+        window.appearance = NSAppearance(named: .aqua)
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
@@ -249,13 +251,15 @@ struct ShowcaseShots {
     }
 
     /// A page just put in the window answers its first snapshots with a blank sheet: asked again
-    /// until it shows more than one color.
+    /// until it shows more than one color. One still blank after that fails the run, so a blank page
+    /// never ends up in the README.
     private func painted(_ page: WKWebView) async throws -> NSImage {
         var image = try await page.takeSnapshot(configuration: nil)
         for _ in 0..<12 where isBlank(image) {
             try await Task.sleep(for: .milliseconds(250))
             image = try await page.takeSnapshot(configuration: nil)
         }
+        try #require(!isBlank(image), "\(page.url?.host() ?? "a page") is still blank after 3 seconds")
         return image
     }
 

@@ -807,36 +807,27 @@
 
   // The parser adds frames through no method the hooks see, and `frames[n]` reaches them past the
   // getters. While the page parses, an observer protects them before each inline script runs.
+  // Each batch asks the window for its frames, by the same index a page would use, and never reads
+  // what was added: those reads took a page of 1,600 elements 4 ms at every load, frames or not.
   let watchParsing = () => {};
   try {
     const MutationObserverCtor = MutationObserver;
     const observe = MutationObserver.prototype.observe;
     const disconnect = MutationObserver.prototype.disconnect;
     const takeRecords = MutationObserver.prototype.takeRecords;
-    const addedNodes = member(MutationRecord.prototype, 'addedNodes').get;
-    const protectFrame = (frame) => {
-      try { protect(read(iframeWindow, frame) || read(frameWindow, frame)); } catch (_) {}
-    };
-    // Only elements whose parent isn't in the batch are searched, or nested nodes are searched
-    // once per level.
+    const frameCount = member(globalThis, 'length').get || member(Window.prototype, 'length').get;
     watchParsing = (doc) => {
+      // The frames a batch has seen. One that goes on to another page is `frameLoaded`'s, and its own copy's.
+      const known = new WeakSetCtor();
       const parsed = (records) => {
-        const batch = new WeakSetCtor();
-        for (let pass = 0; pass < 2; pass++) for (let i = 0; i < records.length; i++) {
-          const added = read(addedNodes, records[i]);
-          const count = added ? read(nodeCount, added) : 0;
-          for (let j = 0; j < count; j++) {
-            const node = added[j];
-            if (read(nodeType, node) !== 1) continue;
-            if (pass === 0) { apply(weakSetAdd, batch, [node]); continue; }
-            const name = read(elementName, node);
-            if (name === 'iframe' || name === 'frame') protectFrame(node);
-            else if (read(firstElementChild, node) && !apply(weakSetHas, batch, [read(parentNode, node)])) {
-              const found = apply(queryAll[1], node, ['iframe, frame']);
-              const total = read(nodeCount, found);
-              for (let k = 0; k < total; k++) protectFrame(found[k]);
-            }
-          }
+        const view = read(documentView, doc);
+        const count = view ? read(frameCount, view) : 0;
+        for (let i = 0; i < count; i++) {
+          let frame = null;
+          try { frame = view[i]; } catch (_) {}
+          if (frame === null || typeof frame !== 'object' || apply(weakSetHas, known, [frame])) continue;
+          apply(weakSetAdd, known, [frame]);
+          try { protect(frame); } catch (_) {}
         }
         // A Trusted Types policy in the markup still applies once a script removes it.
         if (isTrustedHTML && records.length && !apply(weakMapGet, trustedTypesModes, [doc])) {

@@ -212,10 +212,12 @@
     }
     // Pages sometimes replace document.adoptedStyleSheets wholesale.
     adopt(document);
+    // What sits under something else that was added goes first: only the rest is asked for the
+    // editor around it, which walks up the tree again.
     const roots = [...pending].filter((root) => {
-      if (!root.isConnected || inEditor(root)) return false;
+      if (!root.isConnected) return false;
       for (let node = root.parentNode; node; node = node.parentNode) if (pending.has(node)) return false;
-      return true;
+      return !inEditor(root);
     });
     pending.clear();
     const seen = new Set();
@@ -358,22 +360,35 @@
     schedule();
   };
 
+  // Records and their nodes are read by index: `for...of` over them took a page being parsed 2.5
+  // times as long. The parser reports a parent's children one record each, so a parent is asked
+  // for the editor around it once, not once per child.
   observer = new MutationObserver((records) => {
     countBurst();
-    for (const record of records) {
-      if (inEditor(record.target)) continue;
+    let lastTarget = null;
+    let lastInEditor = false;
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i];
+      const target = record.target;
+      if (target !== lastTarget) {
+        lastTarget = target;
+        lastInEditor = inEditor(target);
+      }
+      if (lastInEditor) continue;
       if (record.type === 'childList') {
-        for (const node of record.addedNodes) {
+        const added = record.addedNodes;
+        for (let j = 0; j < added.length; j++) {
+          const node = added[j];
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
           if (node.localName === 'style' || node.localName === 'link') queueSheet(node);
           else queue(node);
         }
       } else if (record.attributeName === 'class'
-        || `${record.oldValue} ${record.target.getAttribute('style')}`.includes('font')) {
+        || `${record.oldValue} ${target.getAttribute('style')}`.includes('font')) {
         // A small component is rescanned whole; a large one (a page's body, a feed, a video player) isn't.
-        if (record.target.getElementsByTagName('*').length <= 64) queue(record.target);
-        else if (record.attributeName === 'class') queueClassChange(record.target, record.oldValue);
-        else queueChange(record.target);
+        if (target.getElementsByTagName('*').length <= 64) queue(target);
+        else if (record.attributeName === 'class') queueClassChange(target, record.oldValue);
+        else queueChange(target);
       }
     }
   });

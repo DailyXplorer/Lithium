@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # By hand, on any branch, every job: `gh workflow run ci.yml --ref <branch>`.
+  workflow_dispatch:
+
+permissions: {contents: read}
+
+# A new push to a pull request cancels its stale run. Every other run gets its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Selects the jobs a pull request can affect. Pushes, runs by hand and pull requests too
+  # large for the files API (3000 files) skip the filter, which selects every job.
+  changes:
+    # A private repository pays for its Actions minutes: there CI runs by hand only, or on
+    # every push and pull request once the repository variable PRIVATE_CI is set.
+    if: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' || vars.PRIVATE_CI != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read, pull-requests: read}
+    outputs:
+      # The jobs to run, as a JSON list of job ids.
+      jobs: ${{ steps.select.outputs.jobs }}
+    steps:
+      # On a pull request the filter reads the changed files through the API: no checkout.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request' && github.event.pull_request.changed_files < 3000
+        with:
+          filters: |
+            workflows: &workflows ['.github/**']
+            tooling: [*workflows, 'scripts/**']
+            page-scripts: [*workflows, 'Sources/Lithium/Resources/**']
+            docs: [*workflows, '**/*.md']
+      - name: Select the jobs
+        id: select
+        env:
+          ALL: ${{ steps.filter.outcome == 'skipped' }}
+          CHANGES: ${{ steps.filter.outputs.changes || '[]' }}
+        run: |
+          jobs=$(jq -cn --arg all "$ALL" --argjson changes "$CHANGES" '
+            ["tooling", "page-scripts", "docs"] as $filtered
+            | [$filtered[] | select($all == "true" or IN($changes[]))] + ["personal-data"]')
+          echo "jobs=$jobs" | tee -a "$GITHUB_OUTPUT"
+
+  # The repository's scripts parse, and the scripts behind these checks pass their tests.
+  tooling:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.jobs), 'tooling')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Shell scripts parse
+        run: |
+          sh -n scripts/build-app.sh
+          bash -n scripts/test
+          bash -n scripts/test-fast
+          shellcheck --severity=error scripts/build-app.sh scripts/test scripts/test-fast
+      - name: Python scripts compile
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+      - name: Node scripts parse
+        run: git ls-files -z '*.mjs' | xargs -0 -n 1 node --check
+      - name: The check scripts pass their tests
+        run: python3 -m unittest discover -s .github/tests -v
+
+  # A script that does not parse never runs in a page, and nothing says so.
+  page-scripts:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.jobs), 'page-scripts')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - *checkout
+      - run: node .github/scripts/page_scripts.mjs
+
+  docs:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.jobs), 'docs')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - *checkout
+      - run: python3 .github/scripts/doc_links.py
+
+  # Always selected: any file and any commit can carry a home-folder path or an address.
+  personal-data:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.jobs), 'personal-data')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Every commit: the pull request's own are read from the merge commit's history.
+        with: {persist-credentials: false, fetch-depth: 0}
+      - name: No home-folder path, address or machine name
+        env:
+          # The pull request's commits; empty on a push or a run by hand, which scan the files only.
+          COMMITS: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
+        run: python3 .github/scripts/personal_data.py ${COMMITS:+--commits "$COMMITS"}
+
+  # The one check to require on `main`: green when every selected job succeeded. A job the
+  # filter did not select is skipped, and that is fine; a selected job that is skipped,
+  # cancelled or failed is not.
+  ci-ok:
+    if: always() && needs.changes.result != 'skipped'
+    needs: [changes, tooling, page-scripts, docs, personal-data]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every selected job succeeded
+        env: {NEEDS: '${{ toJSON(needs) }}'}
+        run: |
+          jq -en --argjson needs "$NEEDS" '
+            ($needs.changes.outputs.jobs // "[]" | fromjson) as $selected
+            | [$needs | to_entries[]
+                | select(.value.result != "success" and (.value.result != "skipped" or (.key | IN($selected[]))))
+                | "\(.key): \(.value.result)"]
+            | if . == [] then "every selected job succeeded" else error("not green: \(join(", "))") end'

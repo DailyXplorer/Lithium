@@ -24,6 +24,7 @@ Every command runs from the repository root.
 | `./scripts/test` | The reference run before a merge: one test at a time, in about 5 minutes. |
 | `python3 -m unittest discover -s .github/tests` | Tests the scripts behind the pull request checks. |
 | `python3 scripts/update-filters.py` | Refreshes the filter lists. Rebuild afterwards. |
+| `LITHIUM_SHOWCASE_DIR=docs/images ./scripts/test --filter ShowcaseShots` | Redraws the pictures of the README from an invented session, off screen. Run it when the interface changes. |
 
 Never run plain `swift test`: side by side, the suites that run a whole browser share one settings folder and break each other. The README's [Running tests](README.md#running-tests) section says more. `scripts/test` ends by naming the tests it skipped because they only run when asked (real network, real model, real sites).
 

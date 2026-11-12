@@ -117,7 +117,8 @@ struct ShowcaseShots {
     /// it is asked.
     @Test func aPageLeftBlankFailsTheRun() async throws {
         let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
-        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 320, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 320, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = page
         defer { window.contentView = nil }
         page.loadHTMLString("<!doctype html><title>Nothing</title>", baseURL: nil)

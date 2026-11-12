@@ -1,93 +1,95 @@
-# Audit de performance Lithium et Helium du 27 septembre 2026
+# Performance audit of Lithium and Helium, 27 September 2026
 
-Les changements locaux améliorent le traitement des grands conteneurs, le bruit anti-fingerprinting du canvas et l'application des filtres. Une régression de police est reproduite dans l'optimisation des grands conteneurs. Helium reste plus rapide sur la création du DOM de cette page de test. WebKit sans les ajouts de Lithium présente déjà presque tout cet écart.
+This is a record of that day. Findings and file references describe the code as it was then. The font regression reported below was fixed before the change landed, the next day (commit `c8380ae`), and `PageFontTests.largeContainerFollowsItsClassChanges` covers it.
 
-## Périmètre et protocole
+The local changes improve the handling of large containers, the canvas anti-fingerprinting noise and the way filters are applied. A font regression is reproduced in the large-container optimization. Helium stays faster at creating the DOM of this test page. WebKit without Lithium's additions already shows almost all of that gap.
 
-Le code Swift et les ressources du répertoire de travail ont été compilés en release, y compris les modifications non commitées. Le commit de référence est `75c9f0f7a272c59845a1f930dd2aa321e795d314`. Les comparaisons avant et après portent sur les scripts `page-font.js` et `farbling.js`, et séparément sur les règles natives brutes et préparées. La colonne « scripts HEAD » n'est pas une compilation complète de l'ancienne application.
+## Scope and protocol
 
-La machine est un MacBook avec Apple M4 Pro et 24 Gio, sous macOS 27.0, build 26A428. WebKit est en version 22625.1.29.11.27. Helium 0.18.1.1 embarque Chromium 154.0.8037.57. Les tests tournent sur batterie, avec une priorité réduite `nice 15`. Les navigateurs de l'utilisateur et les autres applications restent ouverts.
+The Swift code and the resources of the working tree were compiled in release, uncommitted changes included. The reference commit is `75c9f0f7a272c59845a1f930dd2aa321e795d314`. The before and after comparisons cover the scripts `page-font.js` and `farbling.js`, and separately the raw and the prepared native rules. The "HEAD scripts" column is not a full build of the old application.
 
-Lithium est exercé via le WebKit système et ses vrais types compilés. Les `WKWebView` n'ont pas de fenêtre visible. Helium est lancé avec `--headless=new`, un profil temporaire propre et le son coupé. Le [mode headless de Chromium](https://developer.chrome.com/docs/automation-and-testing/headless) permet cette exécution sans fenêtre affichée. Chaque navigateur tourne séparément. Les profils temporaires ne lisent pas l'historique ni les extensions de l'utilisateur.
+The machine is a MacBook with an Apple M4 Pro and 24 GB, on macOS 27.0, build 26A428. WebKit is version 22625.1.29.11.27. Helium 0.18.1.1 ships Chromium 154.0.8037.57. The tests run on battery, at a reduced priority (`nice 15`). The user's browsers and the other applications stay open.
 
-La taille est de 1280 × 800. Chaque microtest comporte un passage de chauffe et sept mesures. Trois processus de test successifs donnent 21 mesures par case. L'ordre WebKit et Helium, ainsi que l'ordre des variantes WebKit, est inversé au deuxième passage. Les nombres sont les médianes regroupées, en millisecondes. Plus petit est meilleur.
+Lithium is exercised through the system's WebKit and its real compiled types. The `WKWebView`s have no visible window. Helium is started with `--headless=new`, a clean temporary profile and the sound off. [Chromium's headless mode](https://developer.chrome.com/docs/automation-and-testing/headless) allows this run without a window on screen. Each browser runs separately. The temporary profiles read neither the user's history nor their extensions.
 
-| Opération | WebKit seul | Scripts HEAD | Scripts locaux | Helium |
+The size is 1280 × 800. Each microtest has one warm-up pass and seven measurements. Three test processes in a row give 21 measurements per cell. The order of WebKit and Helium, and the order of the WebKit variants, is reversed on the second pass. The numbers are the pooled medians, in milliseconds. Smaller is better.
+
+| Operation | WebKit alone | HEAD scripts | Local scripts | Helium |
 |---|---:|---:|---:|---:|
-| JSON et tri, 15 séries de 6 000 objets | 16,0 | 17,0 | 17,0 | 15,3 |
-| DOM, 2 500 lignes avec lecture de hauteur | 19,0 | 18,0 | 18,0 | 7,3 |
-| Mise en page, 12 changements sur 1 200 lignes | 28,0 | 28,0 | 29,0 | 21,1 |
-| Canvas, 8 lectures de 512 × 512 pixels | 2,0 | 9,0 | 4,0 | 39,3 |
+| JSON and sorting, 15 series of 6,000 objects | 16.0 | 17.0 | 17.0 | 15.3 |
+| DOM, 2,500 rows with a height read | 19.0 | 18.0 | 18.0 | 7.3 |
+| Layout, 12 changes over 1,200 rows | 28.0 | 28.0 | 29.0 | 21.1 |
+| Canvas, 8 reads of 512 × 512 pixels | 2.0 | 9.0 | 4.0 | 39.3 |
 
-Les [mesures brutes](../.tools/perf-audit-2026-09-27/final/) et le [résumé JSON](../.tools/perf-audit-2026-09-27/final/summary.json) contiennent les valeurs de chaque passage.
+The raw measurements and their JSON summary hold the values of every pass. They were written to `.tools/perf-audit-2026-09-27/final/`, a folder that is not versioned. The same goes for every JSON file and log named below.
 
-Le test DOM mesure une création synchrone et une lecture de hauteur. Il ne comprend pas le travail différé de l'observateur de polices, mesuré séparément ci-dessous. Le résultat DOM est de 18 ms pour les scripts locaux contre 7,3 ms pour Helium. WebKit seul est à 19 ms. Ce résultat ne permet pas d'imputer cet écart aux protections ajoutées par Lithium.
+The DOM test measures a synchronous creation and a height read. It does not include the deferred work of the font observer, measured separately below. The DOM result is 18 ms for the local scripts against 7.3 ms for Helium. WebKit alone is at 19 ms. This result does not allow blaming that gap on the protections Lithium adds.
 
-Le canvas descend de 9 à 4 ms avec le nouveau script, soit environ 56 % de temps en moins sur ce cas. Le canvas de 512 × 512 reste sous la limite de 500 000 pixels du script. Les protections diffèrent entre Helium et Lithium. Le résultat canvas n'est donc pas une preuve de supériorité générale de WebKit, ni d'équivalence de leur protection contre le fingerprinting.
+The canvas goes down from 9 to 4 ms with the new script, about 56% less time on this case. The 512 × 512 canvas stays under the script's limit of 500,000 pixels. The protections differ between Helium and Lithium. The canvas result is therefore no proof that WebKit is faster in general, nor that their fingerprinting protections are equivalent.
 
-## Changements locaux mesurés
+## Local changes measured
 
-### Polices et grands conteneurs
+### Fonts and large containers
 
-Une page de 1 500 lignes, soit 4 500 descendants du conteneur, alterne sa classe six fois. L'instrumentation du monde isolé mesure le temps passé dans les callbacks de police et le nombre de lectures de style. L'attente de 450 ms entre mutations est exclue du temps rapporté.
+A page of 1,500 rows, 4,500 descendants of the container, toggles its class six times. Instrumentation in the isolated world measures the time spent in the font callbacks and the number of style reads. The 450 ms wait between mutations is excluded from the reported time.
 
-Le script HEAD fait entre 4 501 et 7 501 lectures de style par changement. Sa médiane est de 13,5 ms. Le script local n'en fait qu'une. Sa médiane est inférieure à la résolution de l'horloge, de l'ordre de la milliseconde. Il ne faut pas lire les valeurs 0 ms comme un coût nul.
+The HEAD script makes between 4,501 and 7,501 style reads per change. Its median is 13.5 ms. The local script makes only one. Its median is below the resolution of the clock, about one millisecond. The 0 ms values must not be read as a cost of zero.
 
-Une régression accompagne ce gain. La règle `.special .icon { font-family: Menlo, monospace; }` s'applique à un enfant lorsque son grand parent prend la classe `special`. L'ancien script conserve alors Menlo. Le nouveau conserve DM Sans sur les trois activations testées. La condition de [page-font.js, ligne 192](../Sources/Lithium/Resources/Scripts/page-font.js#L192) ne recontrôle que le grand conteneur. Elle ignore le changement de police du descendant causé par un sélecteur CSS sur l'ancêtre.
+A regression comes with this gain. The rule `.special .icon { font-family: Menlo, monospace; }` applies to a child when its grandparent takes the class `special`. The old script then keeps Menlo. The new one keeps DM Sans on the three activations tested. The condition in [page-font.js](../Sources/Lithium/Resources/Scripts/page-font.js) (line 192 at the time) rechecks only the large container. It ignores the font change of the descendant caused by a CSS selector on the ancestor.
 
-C'est le premier point à corriger. Un recontrôle sélectif doit inclure les descendants dont une règle de police dépend de la classe modifiée. Une reprise complète différée est une autre piste à comparer. Réintroduire systématiquement le scan synchrone initial rétablirait aussi son coût.
+This is the first point to fix. A selective recheck must include the descendants whose font rule depends on the changed class. A deferred full pass is another lead to compare. Bringing back the initial synchronous scan every time would also bring back its cost.
 
-Preuve dans [font-mutations.json](../.tools/perf-audit-2026-09-27/final/round-1/font-mutations.json). Les tests `PageFontTests` existants passent parce que leur grand conteneur change lui-même de police. Ils ne couvrent pas ce sélecteur appliqué uniquement à un descendant.
+Evidence in `font-mutations.json`. The existing `PageFontTests` pass because their large container changes font itself. They do not cover this selector applied to a descendant only.
 
-### Filtres natifs
+### Native filters
 
-Une page locale charge 160 scripts distincts sans cache. Les trois listes réelles embarquées sont compilées. Cinq chargements alternent les variantes.
+A local page loads 160 distinct scripts without a cache. The three real bundled lists are compiled. Five loads alternate the variants.
 
-| Variante | Médiane du chargement |
+| Variant | Median load |
 |---|---:|
-| Sans règles | 84 ms |
-| Règles brutes | 91 ms |
-| Règles préparées par le code local | 84 ms |
+| No rules | 84 ms |
+| Raw rules | 91 ms |
+| Rules prepared by the local code | 84 ms |
 
-Le gain observé est d'environ 8 % par rapport aux règles brutes dans ce scénario. Il ne confirme pas le facteur 2,3 mentionné dans un commentaire du code, mesuré sur une autre charge. Une règle cosmétique de contrôle masque bien son élément avec les variantes brute et préparée. Les 160 scripts attendus s'exécutent dans chaque variante.
+The gain observed is about 8% over the raw rules in this scenario. It does not confirm the factor of 2.3 mentioned in a code comment, measured on another workload. A cosmetic control rule does hide its element with the raw and the prepared variants. The 160 expected scripts run in each variant.
 
-La préparation et la compilation initiales des trois listes prennent 5,10 s au total contre 4,75 s pour les listes brutes dans ce passage. Ce temps comprend la réécriture JSON, pas seulement le compilateur WebKit. Ce n'est pas le temps de chaque navigation. Le cache évite normalement ce travail. Cependant, `Tab.applyProtections` attend `privacy.waitUntilReady()` avant d'autoriser la navigation. Un démarrage avec un cache absent ou invalidé peut donc attendre la compilation. C'est une déduction du code, pas une mesure du lancement complet de l'application. Il faut préserver la protection pendant toute optimisation de ce chemin.
+The initial preparation and compilation of the three lists take 5.10 s in total against 4.75 s for the raw lists in this pass. That time includes the JSON rewrite, not only WebKit's compiler. It is not the time of each navigation. The cache normally avoids this work. However, `Tab.applyProtections` waits for `privacy.waitUntilReady()` before allowing the navigation. A start with a missing or invalidated cache can therefore wait for the compilation. This is deduced from the code, not measured on a full launch of the application. Protection must be preserved through any optimization of this path.
 
-Preuves dans [native-rules.json](../.tools/perf-audit-2026-09-27/final/round-1/native-rules.json), [rule-compilation.json](../.tools/perf-audit-2026-09-27/final/round-1/rule-compilation.json), [Privacy.swift](../Sources/Lithium/Privacy/Privacy.swift#L187) et [Tab.swift](../Sources/Lithium/Model/Tab.swift#L192).
+Evidence in `native-rules.json`, `rule-compilation.json`, [Privacy.swift](../Sources/Lithium/Privacy/Privacy.swift) (line 187 at the time) and [Tab.swift](../Sources/Lithium/Model/Tab.swift) (line 192 at the time).
 
-### Recherche dans l'historique
+### History search
 
-La base de test est synthétique. Aucun historique personnel n'a été utilisé. Les requêtes sont exécutées cinq fois par cas via les fonctions réelles de `HistoryStore`.
+The test database is synthetic. No personal history was used. The queries run five times per case through the real functions of `HistoryStore`.
 
-| Historique et requête | Fonction synchrone | Fonction en arrière-plan |
+| History and query | Synchronous function | Background function |
 |---|---:|---:|
-| 10 000 visites, `site` | 4,7 ms | 4,6 ms |
-| 200 000 visites, `site` | 61,3 ms | 59,6 ms |
-| 200 000 visites, `article 123` | 22,3 ms | 22,0 ms |
-| 200 000 visites, aucun résultat | 14,1 ms | 14,0 ms |
+| 10,000 visits, `site` | 4.7 ms | 4.6 ms |
+| 200,000 visits, `site` | 61.3 ms | 59.6 ms |
+| 200,000 visits, `article 123` | 22.3 ms | 22.0 ms |
+| 200,000 visits, no result | 14.1 ms | 14.0 ms |
 
-Le déplacement hors du thread principal est utile pour la réactivité. Il ne réduit pas le travail SQL. La requête conserve une recherche `LIKE '%texte%'`, un scan `NOT INDEXED` et un regroupement des visites. À grande taille, une table de pages préagrégées et un index de recherche sont des pistes à mesurer avant de les adopter. Le débit CPU et la consommation d'énergie de ce chemin ne sont pas mesurés ici.
+Moving the work off the main thread helps responsiveness. It does not reduce the SQL work. The query keeps a `LIKE '%text%'` search, a `NOT INDEXED` scan and a grouping of the visits. At a large size, a table of pre-aggregated pages and a search index are leads to measure before adopting them. The CPU throughput and the energy use of this path are not measured here.
 
-Preuves dans [history-search.json](../.tools/perf-audit-2026-09-27/final/round-1/history-search.json) et [History.swift, ligne 98](../Sources/Lithium/Model/History.swift#L98).
+Evidence in `history-search.json` and [History.swift](../Sources/Lithium/Model/History.swift) (line 98 at the time).
 
-## Vérifications et limites
+## Checks and limits
 
-Les quatre tests de mesure du premier passage passent. Les deux répétitions du microtest passent. Les 12 tests existants des suites AddressSuggestions, Extensions, Fingerprinting, HistoryStore, PageFont et RuleList passent en release avec un répertoire utilisateur temporaire. Le [journal des tests existants](../.tools/perf-audit-2026-09-27/regression-tests.log) contient le détail. Le passage des tests existants ne couvre pas la régression de sélecteur CSS reproduite ici.
+The four measurement tests of the first pass succeed. The two repetitions of the microtest succeed. The 12 existing tests of the AddressSuggestions, Extensions, Fingerprinting, HistoryStore, PageFont and RuleList suites pass in release with a temporary user folder. The log of the existing tests (`regression-tests.log`) holds the details. The existing tests passing does not cover the CSS selector regression reproduced here.
 
-Le processus Lithium de l'utilisateur, PID 14072 au début de l'audit, est resté actif. Aucun script de packaging, installation ou fermeture de l'application n'a été exécuté. L'assertion de visibilité du test confirme l'absence de fenêtre visible. WebKit crée une fenêtre interne `TUINSWindow` cachée, visible dans [test-windows.json](../.tools/perf-audit-2026-09-27/final/round-1/test-windows.json).
+The user's Lithium process, PID 14072 at the start of the audit, stayed active. No packaging, installation or app-closing script was run. The test's visibility assertion confirms that no window was visible. WebKit creates a hidden internal `TUINSWindow`, visible in `test-windows.json`.
 
-Ces mesures ne constituent pas un classement global des deux navigateurs. Elles ne mesurent ni la batterie, ni la mémoire de l'application complète, ni les images perdues pendant YouTube, ni la fluidité du défilement visible. Les changements de chargement des extensions, de création paresseuse des onglets et de favicons sont inclus dans la compilation, mais leur gain n'est pas quantifié ici. Les filtres avancés par site et les extensions installées ne sont pas présents dans les microtests DOM et canvas.
+These measurements are not an overall ranking of the two browsers. They measure neither battery, nor the memory of the whole application, nor frames dropped during YouTube, nor the smoothness of visible scrolling. The changes to extension loading, lazy tab creation and favicons are included in the build, but their gain is not quantified here. Per-site advanced filters and installed extensions are not present in the DOM and canvas microtests.
 
-`document.visibilityState` vaut `hidden` dans les vues WebKit et `visible` dans Helium headless. Cela limite surtout les conclusions sur les animations et le travail différé. Les mesures synchrones n'attendent pas de `requestAnimationFrame`. La vidéo de l'utilisateur et les autres applications restent une source de variation. L'horloge JavaScript de WebKit est grossière, proche de la milliseconde dans ce protocole. Les petits écarts ne sont pas à surinterpréter. Aucun score officiel Speedometer n'est annoncé.
+`document.visibilityState` is `hidden` in the WebKit views and `visible` in headless Helium. This mostly limits the conclusions about animations and deferred work. The synchronous measurements wait for no `requestAnimationFrame`. The user's video and the other applications remain a source of variation. WebKit's JavaScript clock is coarse, close to a millisecond in this protocol. Small gaps should not be over-interpreted. No official Speedometer score is claimed.
 
-## Reproduire
+## Reproducing
 
-Depuis le dépôt, lancer la commande suivante. Elle compile les tests en release par défaut. Elle ne lance pas `scripts/build-app.sh` ni l'ancien `scripts/bench/run.py`, car ils ferment Lithium.
+From the repository, run the following command. It compiles the tests in release by default. It runs neither `scripts/build-app.sh` nor the older `scripts/bench/run.py`, because they close Lithium.
 
 ```sh
 python3 scripts/bench/run-headless.py .tools/perf-audit-new --rounds 3
 ```
 
-Après une compilation récente des tests, `--skip-build` évite de recompiler. Les résultats détaillés sont écrits dans le dossier choisi. Les profils temporaires sont supprimés après les tests. Les sources sont [HeadlessPerformanceTests.swift](../Tests/LithiumTests/HeadlessPerformanceTests.swift), [workloads.js](../scripts/bench/workloads.js), [headless-helium.mjs](../scripts/bench/headless-helium.mjs) et [run-headless.py](../scripts/bench/run-headless.py).
+After a recent build of the tests, `--skip-build` avoids recompiling. The detailed results are written to the chosen folder. The temporary profiles are deleted after the tests. The sources are [HeadlessPerformanceTests.swift](../Tests/LithiumTests/HeadlessPerformanceTests.swift), [workloads.js](../scripts/bench/workloads.js), [headless-helium.mjs](../scripts/bench/headless-helium.mjs) and [run-headless.py](../scripts/bench/run-headless.py).
 
-Le skill `poteto-mode` a guidé l'audit. Build the Lever a conduit à conserver les scripts reproductibles. Model the Domain a conduit à comparer une table de variantes sur les mêmes charges. Prove It Works et Test Behavior, Not Implementation ont conduit aux mesures du WebKit réel, au contrôle de masquage et à la vérification des polices calculées. Aucun sous-agent n'a été utilisé.
+The `poteto-mode` skill guided the audit. Build the Lever led to keeping the reproducible scripts. Model the Domain led to comparing a table of variants on the same workloads. Prove It Works and Test Behavior, Not Implementation led to the measurements on the real WebKit, the hiding control and the check of the computed fonts. No subagent was used.

@@ -2,13 +2,15 @@
 
   doc_links.py   checks every tracked *.md and prints `path:line: target` for each dead link
 
-Links to other sites are not fetched. The unit tests import dead_links() and slug().
+Inline links only (`[text](target)`), and links to other sites are not fetched. The unit
+tests import dead_links() and slug().
 """
 
 import posixpath
 import re
 import subprocess
 import sys
+from urllib.parse import unquote
 
 LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 ELSEWHERE = re.compile(r"^([a-z][a-z0-9+.-]*:|//)", re.IGNORECASE)
@@ -41,14 +43,14 @@ def dead_links(path, docs, tracked):
     `docs` maps each Markdown path to its text, `tracked` holds every tracked path.
     """
     folders = {posixpath.dirname(p) for p in tracked}
-    folders |= {parent for folder in folders for parent in iter_parents(folder)}
+    folders |= {parent for folder in folders for parent in iter_parents(folder)} | {"."}  # the root
     dead = []
     for number, line in prose_lines(docs[path]):
         for target in LINK.findall(CODE_SPAN.sub("", line)):
             if ELSEWHERE.match(target):
                 continue
             file, _, fragment = target.partition("#")
-            file = file.partition("?")[0]
+            file = unquote(file.partition("?")[0])
             if file.startswith("/"):
                 resolved = posixpath.normpath(file.lstrip("/"))
             else:

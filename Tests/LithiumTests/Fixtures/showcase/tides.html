@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<title>Harbor Lights · Tides</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; color: #eef4f3; font: 15px/1.5 system-ui, sans-serif;
+         background: radial-gradient(1200px 700px at 18% -10%, #1f6f78 0%, #123b47 42%, #0b1d26 100%); }
+  nav { display: flex; align-items: center; gap: 26px; padding: 20px 44px; font-size: 14px; color: #9fc0c0; }
+  nav b { font-size: 20px; color: #fff; margin-right: auto; letter-spacing: -.01em; }
+  nav b::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 9px; background: #7ee0c8; box-shadow: 0 0 0 5px #7ee0c833; }
+  nav span.on { color: #fff; }
+  .top { display: flex; gap: 38px; align-items: flex-end; padding: 26px 44px 30px; }
+  .cover { flex: none; width: 250px; height: 250px; border-radius: 18px; position: relative; overflow: hidden;
+           background: linear-gradient(160deg, #0f2a44 0%, #1d5a73 45%, #f29e6b 78%, #ffd9a0 100%); box-shadow: 0 30px 60px #0008; }
+  .cover::before { content: ""; position: absolute; left: 50%; top: 56%; width: 96px; height: 96px; margin: -48px; border-radius: 50%; background: #ffe9c4; box-shadow: 0 0 60px 26px #ffcf9a88; }
+  .cover::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 40%;
+                  background: repeating-linear-gradient(180deg, #0c2233ee 0 9px, #16405299 9px 14px); }
+  .meta small { text-transform: uppercase; letter-spacing: .16em; font-size: 12px; color: #7ee0c8; font-weight: 600; }
+  h1 { font-size: 64px; line-height: 1; letter-spacing: -.03em; margin: 10px 0 12px; }
+  .meta p { margin: 0 0 22px; color: #b9d2d1; }
+  .play { display: inline-flex; align-items: center; gap: 10px; padding: 12px 26px 12px 20px; border-radius: 99px; background: #7ee0c8; color: #082026; font-weight: 600; }
+  .play::before { content: ""; border-left: 13px solid #082026; border-top: 8px solid transparent; border-bottom: 8px solid transparent; }
+  .ghost { display: inline-block; margin-left: 10px; padding: 11px 22px; border-radius: 99px; border: 1px solid #ffffff33; color: #dcebea; }
+  ol { list-style: none; margin: 0; padding: 0 44px 40px; }
+  li { display: flex; align-items: center; gap: 18px; padding: 13px 14px; border-radius: 12px; color: #cfe2e1; }
+  li + li { border-top: 1px solid #ffffff12; }
+  li.now { background: #ffffff14; color: #fff; border-color: transparent; }
+  li.now + li { border-color: transparent; }
+  li em { font-style: normal; width: 22px; text-align: right; color: #7fa5a6; }
+  li.now em { color: #7ee0c8; }
+  li span { flex: 1; }
+  li time { color: #7fa5a6; font-variant-numeric: tabular-nums; }
+</style>
+<nav><b>Tides</b><span>Home</span><span class="on">Albums</span><span>Radio</span><span>Library</span></nav>
+<div class="top">
+  <div class="cover"></div>
+  <div class="meta">
+    <small>Album · 2026</small>
+    <h1>Harbor Lights</h1>
+    <p>Paper Lanterns · 9 songs, 38 minutes</p>
+    <span class="play">Playing</span><span class="ghost">Save</span>
+  </div>
+</div>
+<ol>
+  <li><em>1</em><span>First Ferry</span><time>3:41</time></li>
+  <li class="now"><em>2</em><span>Harbor Lights</span><time>4:12</time></li>
+  <li><em>3</em><span>Salt on the Window</span><time>3:58</time></li>
+  <li><em>4</em><span>Low Tide Radio</span><time>4:36</time></li>
+  <li><em>5</em><span>Lighthouse Keeper</span><time>5:02</time></li>
+</ol>
+</html>

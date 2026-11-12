@@ -168,5 +168,10 @@ struct TestScriptTests {
 
         let own = folder.appending(path: "own").path
         #expect(try build(checkout("custom", linkedTo: own)) == own)
+
+        // The caches folder emptied leaves the checkout's link leading nowhere, and swift build fails on it.
+        try manager.removeItem(atPath: first)
+        #expect(try build(firstCheckout) == first)
+        #expect(manager.fileExists(atPath: first), "a folder gone from the caches is made again")
     }
 }

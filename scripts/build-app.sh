@@ -26,6 +26,9 @@ if [ ! -L .build ] || case $(readlink .build) in "$build_dir") false ;; "$cache/
   mkdir -p "$build_dir"
   ln -s "$build_dir" .build
 fi
+# The caches folder may be emptied at any time: the link then leads nowhere, and the build
+# fails on it.
+[ "$(readlink .build 2>/dev/null)" = "$build_dir" ] && mkdir -p "$build_dir"
 
 # A missing, half-written or outdated set (FilterSources.json changed since) is built again.
 if ! python3 scripts/update-filters.py --check; then

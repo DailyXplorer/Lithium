@@ -683,8 +683,6 @@ extension AgentHub {
             for attempt in 1...2 {
                 AgentHub.callNotes?.startAttempt()
                 let webView = staged(tab)
-                stage.hold(webView)
-                defer { stage.letGo(webView) }
                 do {
                     return try await body(ActionContext(named: named, webView: webView, state: state, session: session, deadline: deadline, timeout: timeout))
                 } catch let change as NativeInput.WindowChanged where !change.afterPress {
@@ -693,17 +691,6 @@ extension AgentHub {
             }
             throw AgentToolError(code: "user_interrupted", message: "\(named.id) moved between windows, or its page changed, while the agent acted in it.")
         }
-    }
-
-    /// The tab's web view in a window that takes events: its own, else the stage.
-    @discardableResult
-    func staged(_ tab: Tab) -> WKWebView {
-        let webView = sizedWebView(of: tab)
-        if webView.userWindow == nil {
-            stage.host(webView, size: pageAreaSize)
-            fitViewport(of: webView, in: tab)
-        }
-        return webView
     }
 
     private func waitWhileUserBusy(_ named: NamedTab, until deadline: ContinuousClock.Instant) async throws {

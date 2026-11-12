@@ -1334,8 +1334,10 @@ struct AgentReadTests {
             let webView = try #require(client.tab(moving)?.webView)
             try await Task.sleep(for: .milliseconds(300))
             let left = { (result: AgentTabsTests.ToolResult) in self.node(result, role: "button", name: "Mover")?["box"].map(self.items)?.first }
+            // The page is shown to itself, so its transition runs: the page's script holds its
+            // clock at the start, then moves it on as time would, for two exact reads.
+            _ = try await webView.callAsyncJavaScript("const moving = document.getAnimations()[0]; moving.pause(); moving.currentTime = 0", contentWorld: .page)
             let before = try #require(left(await client.call("snapshot", ["tab": .string(moving), "format": "json"])))
-            // A tab out of sight holds its animations' clock: the page's script moves it on, as time would.
             _ = try await webView.callAsyncJavaScript("document.getAnimations()[0].currentTime = 3000", contentWorld: .page)
             let after = try #require(left(await client.call("snapshot", ["tab": .string(moving), "format": "json"])))
             #expect(Self.number(before) == 0)

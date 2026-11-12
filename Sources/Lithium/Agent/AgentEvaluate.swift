@@ -88,7 +88,7 @@ extension AgentHub {
                 try checkWakeable(named)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
-            let webView = sizedWebView(of: tab)
+            let webView = staged(tab)
             guard let state = agentTab(for: tab) else { throw named.closedError }
 
             var element: ElementAddress?

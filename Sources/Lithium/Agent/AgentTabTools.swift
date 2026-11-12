@@ -554,8 +554,8 @@ extension AgentHub {
         if Self.callSession != nil { state?.drive = AgentDrive(marks: tab.loadMarks, deadline: deadline) }
         defer { if wait > .none, !tab.isLoading { state?.drive = nil } }
         start()
-        // Laid out at the size the user would see it, not in an empty viewport.
-        if !tab.isAsleep, tab.loadedWebView != nil { _ = sizedWebView(of: tab) }
+        // Shown to its page from the start of its load, at the size the user would see it.
+        if !tab.isAsleep, tab.loadedWebView != nil { staged(tab) }
         touch(tab)
         guard wait > .none else { return page(named, reached: LoadWait.none) }
         return try await follow(since, in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: landedWithinPage)

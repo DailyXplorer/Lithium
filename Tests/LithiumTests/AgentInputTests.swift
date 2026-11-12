@@ -263,7 +263,7 @@ struct AgentInputTests {
             <button id="off" disabled style="position:absolute;left:40px;top:300px">Off</button>
             <button id="gone" style="position:absolute;left:200px;top:300px">Gone</button>
             <select id="menu" style="position:absolute;left:40px;top:360px"><option>One</option></select>
-            <div id="cookie-banner" style="position:fixed;left:0;top:0;width:100%;height:120px;background:white">We use cookies</div>
+            <div id="page-cover" style="position:fixed;left:0;top:0;width:100%;height:120px;background:white">We use cookies</div>
             """),
         "/results": (html, """
             <title>Results</title><style>body { margin: 0 }</style>
@@ -973,9 +973,9 @@ struct AgentInputTests {
             let (id, tab) = try await open(client, base.appending(path: "covered"))
             let under = try await ref(client, id, "button", "Under")
             let covered = await client.call("click", ["tab": .string(id), "ref": .string(under)])
-            #expect(covered.code == "covered")
+            #expect(covered.code == "covered", "\(covered.content)")
             let banner = try #require(covered.message.firstMatch(of: /\((e\d+)\)/)?.1)
-            #expect(covered.message.hasPrefix("\(under) button \"Under\" is covered by DIV#cookie-banner \"We use cookies\" (\(banner))"), "\(covered.message)")
+            #expect(covered.message.hasPrefix("\(under) button \"Under\" is covered by DIV#page-cover \"We use cookies\" (\(banner))"), "\(covered.message)")
             #expect((await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "button", "Off"))])).code == "disabled")
             let gone = try await ref(client, id, "button", "Gone")
             _ = try await page(tab, "document.getElementById('gone').style.display = 'none'")

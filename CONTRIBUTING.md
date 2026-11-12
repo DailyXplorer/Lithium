@@ -69,6 +69,8 @@ The pull requests that merge fastest are small, focused, in sync with `main` and
 
 `PR size` is separate and never blocks: it comments when a pull request is above the soft budget.
 
+`main` is protected by the ruleset in [`.github/rulesets/main.json`](.github/rulesets/main.json): changes land through a pull request, `ci-ok` must be green, and the branch can be neither force-pushed nor deleted. Maintainers apply a change to that file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`.
+
 CI does not build the app or run the Swift tests yet. Run them on your Mac before you ask for a merge.
 
 ### Contributing with a coding agent

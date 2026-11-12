@@ -37,7 +37,7 @@ extension AgentHub {
     /// Tools a batch never runs: itself, and pictures, which can't come back in its result.
     private static let refusedInBatch: Set<String> = ["batch", "screenshot", "pdf"]
 
-    /// Each step runs as the tool alone would, through its own checks, prompts, redaction and log
+    /// Each step runs as the tool alone would, through its own checks, redaction and log
     /// line. Other calls may run in the tab between two steps.
     static let batchTool = AgentTool(
         name: "batch",
@@ -72,7 +72,7 @@ extension AgentHub {
         let ephemeral = try arguments.bool("ephemeral", default: false)
         let close = try arguments.bool("close", default: false)
         if url == nil, ephemeral || close { throw Arguments.invalid("ephemeral and close go with url: a batch closes only the tab it opened.") }
-        if let url { try hub.checkNotBlocked(url) }
+        if let url { try hub.checkOpenable(url) }
         let timeout = try arguments.timeout(default: 60_000)
         let ready = try arguments.readyTimeout()
         let deadline = ContinuousClock.now + timeout
@@ -80,7 +80,7 @@ extension AgentHub {
             return .object(try await hub.runBatch(steps, in: named, stopOnError: stopOnError, diff: diff, ready: ready, deadline: deadline, timeout: timeout, session: session))
         }
         guard let url else { throw Arguments.invalid("Give tab or url.") }
-        let opened = try await hub.openAgentTab(url, ephemeral: ephemeral, session: session, until: deadline)
+        let opened = try hub.openAgentTab(ephemeral: ephemeral, session: session)
         defer { if close, hub.isOpen(opened.tab) { hub.browser?.close(opened.tab) } }
         do {
             _ = try await hub.load(url, in: opened, wait: .domcontentloaded, snapshot: false, session: session, deadline: deadline, timeout: timeout)

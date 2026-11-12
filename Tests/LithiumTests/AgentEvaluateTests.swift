@@ -87,9 +87,7 @@ struct AgentEvaluateTests {
     private func evaluate(_ client: Client, _ tab: String, _ function: String, _ extra: [String: JSONValue] = [:]) async -> AgentTabsTests.ToolResult {
         var arguments: [String: JSONValue] = ["tab": .string(tab), "function": .string(function)]
         arguments.merge(extra) { $1 }
-        let result = await client.call("evaluate", .object(arguments))
-        #expect(client.hub.confirmations.pending.isEmpty && client.hub.confirmations.grants.isEmpty)
-        return result
+        return await client.call("evaluate", .object(arguments))
     }
 
     private func toolNames(_ client: Client) async -> [String] {
@@ -114,7 +112,6 @@ struct AgentEvaluateTests {
             ]])
             #expect(batch.code == "unsupported", "\(batch.content)")
             #expect(client.tab(id)?.title == "Page")
-            #expect(client.hub.confirmations.pending.isEmpty)
 
             UserDefaults.standard.set(true, forKey: Preference.agentRunScripts)
             #expect(await toolNames(client).contains("evaluate"))
@@ -133,7 +130,6 @@ struct AgentEvaluateTests {
             #expect(!mine.isInAgentGroup)
             let ran = await evaluate(client, client.hub.id(for: mine), "() => document.querySelector('#greeting').textContent")
             #expect(ran["result"] == "Hello", "\(ran.content)")
-            #expect(ran["grant"] == nil)
             let id = try await open(client, base.appending(path: "page"))
             let again = await evaluate(client, id, "async () => { await new Promise((done) => setTimeout(done, 10)); return [1, 'two', null] }")
             #expect(again["result"] == [1, "two", .null], "\(again.content)")
@@ -226,7 +222,6 @@ struct AgentEvaluateTests {
                 #expect(refused.code == "blocked", "\(function): \(refused.content)")
                 #expect(refused.message.contains("a password or card field holds a value on this page"), "\(refused.content)")
             }
-            #expect(client.hub.confirmations.pending.isEmpty)
             try await Task.sleep(for: .milliseconds(200))
             #expect(client.tab(id)?.title == "Sign in")
 
@@ -403,7 +398,6 @@ struct AgentEvaluateTests {
             #expect(await waitUntil(20) { client.tab(provider)?.isLoading == false })
             let framed = await evaluate(client, provider, "() => 1")
             #expect(framed.code == "blocked", "\(framed.content)")
-            #expect(client.hub.confirmations.pending.isEmpty)
         }
     }
 

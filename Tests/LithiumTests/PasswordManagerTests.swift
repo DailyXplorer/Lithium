@@ -521,7 +521,7 @@ struct PasswordManagerTests {
               <button id="go" type="button">Sign in</button></div>
             """, in: harness)
         defer { page.close() }
-        let input = try NativeInput(webView: page.webView, sends: [.pointer, .buttons], check: {}, onPointer: { _ in })
+        let input = try NativeInput(webView: page.webView, check: {}, onPointer: { _ in })
         func click(_ id: String) async throws {
             let r = try #require(try await page.run("const r = document.getElementById('\(id)').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]") as? [Double])
             try input.click(at: CGPoint(x: r[0], y: r[1]), button: .left, count: 1, modifiers: [])

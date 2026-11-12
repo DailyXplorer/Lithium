@@ -210,7 +210,7 @@ extension AgentHub {
         let arguments = Arguments(value: arguments)
         let ephemeral = try arguments.bool("ephemeral", default: false)
         let url = try arguments.optionalString("url").map { _ in try arguments.url("url") }
-        if let url { try hub.checkNotBlocked(url) }
+        if let url { try hub.checkOpenable(url) }
         let snapshot = try arguments.bool("snapshot", default: true)
         let given = arguments.value["steps"]
         let steps = try given == nil || given == .null ? nil : hub.batchSteps(given, tab: nil)
@@ -220,7 +220,7 @@ extension AgentHub {
         let timeout = try arguments.timeout(default: steps == nil ? 15_000 : 60_000)
         let ready = try arguments.readyTimeout()
         let deadline = ContinuousClock.now + timeout
-        let named = try await hub.openAgentTab(url, ephemeral: ephemeral, session: session, until: deadline)
+        let named = try hub.openAgentTab(ephemeral: ephemeral, session: session)
         var page = hub.page(named, reached: .load)
         if let url { page = try await hub.load(url, in: named, wait: wait, snapshot: snapshot && steps == nil, session: session, deadline: deadline, timeout: timeout) }
         guard let steps else { return page }
@@ -236,10 +236,8 @@ extension AgentHub {
         return .object(opened.merging(batch) { $1 })
     }
 
-    /// A `file:` address is asked before the tab opens, so one the user denies leaves no tab behind.
-    func openAgentTab(_ url: URL?, ephemeral: Bool, session: MCPSession, until deadline: ContinuousClock.Instant) async throws -> NamedTab {
+    func openAgentTab(ephemeral: Bool, session: MCPSession) throws -> NamedTab {
         guard let browser else { throw AgentToolError(code: "unsupported", message: "Lithium has no window to open a tab in.") }
-        if let url { try await checkOpenable(url, in: nil, isPrivate: ephemeral, until: deadline) }
         let tab = browser.newAgentTab(session: session.label, privateStore: ephemeral ? .nonPersistent() : nil)
         let named = NamedTab(tab: tab, id: id(for: tab))
         touch(tab)
@@ -284,7 +282,7 @@ extension AgentHub {
     ) { arguments, _, hub in
         let named = try hub.tab(named: try Arguments(value: arguments).string("tab"))
         // Lithium's own pages are shown to the user, never to the agent: those can wake.
-        if !AgentURLs.isBlocked(named.tab.url) { try await hub.checkWakeable(named, until: .now + AgentConfirmations.timeout) }
+        if !AgentURLs.isBlocked(named.tab.url) { try hub.checkWakeable(named) }
         // Not the user's pick, so their typing in the address bar goes on.
         hub.browser?.select(named.tab, picked: false)
         hub.touch(named.tab)
@@ -301,14 +299,13 @@ extension AgentHub {
         let arguments = Arguments(value: arguments)
         let named = try hub.tab(named: try arguments.string("tab"))
         let url = try arguments.url("url")
-        try hub.checkNotBlocked(url)
+        try hub.checkOpenable(url)
         let wait = try arguments.wait(default: .load)
         let timeout = try arguments.timeout(default: 15_000)
         let diff = try arguments.bool("diff", default: true)
         let deadline = ContinuousClock.now + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
-            try await hub.checkOpenable(url, in: named, until: deadline)
             let tab = named.tab
             var landedWithinPage: (@MainActor () -> Bool)?
             if !tab.isAsleep, AgentURLs.isMoveWithinPage(from: tab.url, to: url) {
@@ -335,14 +332,14 @@ extension AgentHub {
             let deadline = ContinuousClock.now + timeout
             return try await hub.exclusive(named, until: deadline, timeout: timeout) {
                 try hub.checkDrivable(named)
-                try await hub.checkWakeable(named, until: deadline)
+                try hub.checkWakeable(named)
                 let tab = named.tab
                 tab.wake()
                 let list = tab.webView.backForwardList
                 guard let item = forward ? list.forwardItem : list.backItem else {
                     throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to go \(forward ? "forward" : "back") to.")
                 }
-                try await hub.checkOpenable(item.url, in: named, until: deadline)
+                try hub.checkOpenable(item.url)
                 // Only a same-origin entry can be in the document shown (an anchor, a `pushState`).
                 var landedWithinPage: (@MainActor () -> Bool)?
                 if let current = tab.url, AgentURLs.sameOrigin(current, item.url) {
@@ -371,7 +368,7 @@ extension AgentHub {
             try hub.checkDrivable(named)
             let tab = named.tab
             guard let url = tab.url else { throw AgentToolError(code: "navigation_failed", message: "\(named.id) has no page to reload.") }
-            try await hub.checkOpenable(url, in: named, until: deadline)
+            try hub.checkOpenable(url)
             let page = try await hub.navigation(in: named, wait: wait, deadline: deadline, timeout: timeout, landedWithinPage: nil) {
                 if tab.isAsleep { tab.wake() } else { tab.reload() }
             }
@@ -425,7 +422,8 @@ extension AgentHub {
         let element = try arguments.optionalString("ref")
         let text = try arguments.optionalString("text")
         let textGone = try arguments.optionalString("textGone")
-        let idle = try arguments.value["networkIdle"].flatMap { $0 == .null ? nil : try arguments.int("networkIdle", default: 500, in: 0...30_000) }
+        // `true` is the quiet half second `wait: networkidle` means.
+        let idle = try arguments.value["networkIdle"].flatMap { $0 == .null || $0 == .bool(false) ? nil : $0 == .bool(true) ? 500 : try arguments.int("networkIdle", default: 500, in: 0...30_000) }
         guard [load, pattern, element, text, textGone, idle.map(String.init), time.map(String.init)].compactMap({ $0 }).count == 1 else {
             throw Arguments.invalid("Give exactly one condition: load, url, ref, text, textGone, networkIdle or time.")
         }
@@ -446,7 +444,7 @@ extension AgentHub {
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             var note: String?
             try hub.checkDrivable(named)
-            try await hub.checkWakeable(named, until: deadline)
+            try hub.checkWakeable(named)
             if let pattern, let matches {
                 tab.wake()
                 let met = try await hub.watch(named, until: deadline) { matches(tab.url?.absoluteString ?? "") ? true : nil }
@@ -492,9 +490,9 @@ extension AgentHub {
     }
 
     /// Waking loads the page the tab slept on, which must pass `checkOpenable` like any other.
-    func checkWakeable(_ named: NamedTab, until deadline: ContinuousClock.Instant) async throws {
+    func checkWakeable(_ named: NamedTab) throws {
         guard named.tab.isAsleep, let url = named.tab.url else { return }
-        try await checkOpenable(url, in: named, until: deadline)
+        try checkOpenable(url)
     }
 
     func page(_ named: NamedTab, reached: LoadWait?) -> JSONValue {
@@ -547,13 +545,13 @@ extension AgentHub {
 
     /// Starts a navigation, then waits until the next document the tab commits gets as far as
     /// `wait`. A move within the document shown commits nothing: `landedWithinPage` tells it
-    /// from a move the page's own script made meanwhile. A load that becomes a download asks the user.
+    /// from a move the page's own script made meanwhile. A load that becomes a download answers with its file.
     func navigation(in named: NamedTab, wait: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration, landedWithinPage: (@MainActor () -> Bool)?, _ start: () -> Void) async throws -> JSONValue {
         try checkNetworkIdle(wait)
         let tab = named.tab
         let since = LoadProgress(of: tab, agentTab(for: tab))
         let state = agentTab(for: tab)
-        if let session = Self.callSession { state?.drive = AgentDrive(session: session, marks: tab.loadMarks, deadline: deadline) }
+        if Self.callSession != nil { state?.drive = AgentDrive(marks: tab.loadMarks, deadline: deadline) }
         defer { if wait > .none, !tab.isLoading { state?.drive = nil } }
         start()
         // Laid out at the size the user would see it, not in an empty viewport.
@@ -572,19 +570,17 @@ extension AgentHub {
         /// The load before may have failed with its error page still on its way: that page
         /// committing is not this call's answer.
         let earlierError: NSError?
-        let answers: Int
 
         @MainActor
         init(of tab: Tab, _ state: AgentTab?) {
             (commits, starts, moves, unshown) = (tab.commits, tab.loadStarts, tab.sameDocumentNavigations, tab.unshownLoads)
             earlierError = tab.loadError
-            answers = state?.downloadAnswers ?? 0
         }
 
         /// A load already under way doesn't count.
         @MainActor
         func hasMoved(_ tab: Tab, _ state: AgentTab?) -> Bool {
-            tab.loadStarts > starts || tab.unshownLoads > unshown || (state?.downloadAnswers ?? 0) > answers
+            tab.loadStarts > starts || tab.unshownLoads > unshown
         }
     }
 
@@ -592,7 +588,7 @@ extension AgentHub {
         enum Outcome { case document, withinPage, download(String?) }
         let tab = named.tab
         var commits = since.commits
-        let (moves, unshown, earlierError, answers) = (since.moves, since.unshown, since.earlierError, since.answers)
+        let (moves, unshown, earlierError) = (since.moves, since.unshown, since.earlierError)
         let state = agentTab(for: tab)
         let outcome = try await AgentWait.until(deadline) { () -> Outcome? in
             // Before the tab closing: a tab opened just for a file closes once its download starts.
@@ -605,7 +601,6 @@ extension AgentHub {
                     throw AgentToolError(code: "navigation_cancelled", message: "\(named.id)’s load stopped before it showed a page: the server answered with no content (204), or the load was stopped.")
                 }
             }
-            if let state, state.downloadAnswers > answers, case .failure(let error) = state.downloadAnswer { throw error }
             try self.checkStillWaitable(named)
             if tab.commits > commits {
                 guard let error = tab.loadError else { return .document }
@@ -621,15 +616,10 @@ extension AgentHub {
         }
         switch outcome {
         case nil:
-            if confirmations.isAsking(about: tab.id, .download) {
-                throw AgentToolError(code: "confirmation_timeout", message: "\(named.id)’s page became a download, and the user didn’t answer within \(Int(timeout / .seconds(1))) s. Ask the user, then try again with a longer timeoutMs.")
-            }
             throw timedOut(named, after: timeout, "no page had started to show")
         case .download(let fileName):
             var fields = page(named, reached: nil).object ?? [:]
-            var download: [String: JSONValue] = ["file": fileName.map(JSONValue.string) ?? .null]
-            if let state, state.downloadAnswers > answers, case .success(let grant) = state.downloadAnswer { download["grant"] = .string(grant.rawValue) }
-            fields["download"] = .object(download)
+            fields["download"] = .object(try await downloaded(fileName, in: tab, until: deadline))
             fields["loading"] = false
             return .object(fields)
         case .document:
@@ -639,6 +629,23 @@ extension AgentHub {
         }
         if wait == .networkidle { try await waitForNetworkIdle(named, deadline: deadline, timeout: timeout) }
         return page(named, reached: wait)
+    }
+
+    /// What a download the agent started tells it: where the file went, and whether it is all
+    /// there. Waits for the file within the call's own time, since a file half written is no use;
+    /// one still coming then is `done: false`.
+    private func downloaded(_ fileName: String?, in tab: Tab, until deadline: ContinuousClock.Instant) async throws -> [String: JSONValue] {
+        var download: [String: JSONValue] = ["file": fileName.map(JSONValue.string) ?? .null]
+        guard let item = tab.lastDownload else { return download }
+        _ = try await AgentWait.until(deadline) { item.state == .downloading ? nil : true }
+        if let path = item.destination?.path(percentEncoded: false) { download["path"] = .string(path) }
+        switch item.state {
+        case .downloading: download["done"] = false
+        case .finished: download["done"] = true
+        case .failed(let reason): download["error"] = .string(reason)
+        case .cancelled: download["error"] = "cancelled"
+        }
+        return download
     }
 
     func waitForLoad(of named: NamedTab, _ state: LoadWait, deadline: ContinuousClock.Instant, timeout: Duration) async throws {

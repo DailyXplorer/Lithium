@@ -354,23 +354,18 @@ struct AgentSpeedTests {
         }
     }
 
-    @Test func aPasswordStepInABatchAsksAndIsRedacted() async throws {
+    @Test func aPasswordStepInABatchIsRedacted() async throws {
         try await withAgent { client, base in
             let id = try await open(client, base.appending(path: "signin"))
             let shown = await nodes(client, id)
             let (user, password) = (try ref(shown, "textbox", "User"), try ref(shown, "textbox", "Password"))
-            let confirmations = client.hub.confirmations
-            let call = Task { await client.call("batch", ["tab": .string(id), "steps": [
+            let batch = await client.call("batch", ["tab": .string(id), "steps": [
                 ["tool": "type", "args": ["ref": .string(user), "text": "ann"]],
                 ["tool": "type", "args": ["ref": .string(password), "text": "hunter2-batch"]],
-            ]]) }
-            let asked = try await AgentWait.until(.now + .seconds(20)) { confirmations.pending.first }
-            #expect(asked?.kind == .password)
-            if let asked { confirmations.answer(asked.id, .allowOnce) }
-            let batch = await call.value
+            ]])
             let results = batch["steps"]?.items ?? []
             #expect(results.map { $0["ok"] } == [true, true], "\(batch.content)")
-            #expect(results.last?["grant"] == "once" && results.last?["typed"] == 13, "\(batch.content)")
+            #expect(results.last?["grant"] == nil && results.last?["typed"] == 13, "\(batch.content)")
             #expect(try await page(client, id, "return document.getElementById('pw').value") as? String == "hunter2-batch")
 
             let logged = await client.hub.log.entries(limit: 10)

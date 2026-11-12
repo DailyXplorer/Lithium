@@ -325,11 +325,9 @@ struct AgentNetworkTests {
             let tab = try #require(client.tab(id))
             #expect((await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "links").absoluteString)]))["title"] == "Links")
             let report = try #require(await client.call("snapshot", ["tab": .string(id)])["text"]?.string?.firstMatch(of: /\[(e\d+)\] link "Report"/)?.1)
-            let confirmations = client.hub.confirmations
-            let click = Task { await client.call("click", ["tab": .string(id), "ref": .string(String(report)), "diff": false]) }
-            #expect(await waitUntil(20) { confirmations.pending.first?.kind == .download })
-            if let asked = confirmations.pending.first { confirmations.answer(asked.id, .deny) }
-            #expect(await click.value.code == "denied_by_user")
+            let clicked = await client.call("click", ["tab": .string(id), "ref": .string(String(report)), "diff": false])
+            #expect(clicked["download"]?["file"] == "report.csv", "\(clicked.content)")
+            if let path = clicked["download"]?["path"]?.string { try? FileManager.default.removeItem(atPath: path) }
             _ = try await tab.webView.evaluateJavaScript("console.log('after the download'); fetch('/api/data'); 0")
             let capture = try #require(client.hub.tabs[tab.id]?.capture)
             #expect(await waitUntil(5) { capture.entries.contains { $0.url.hasSuffix("/api/data") && $0.ended != nil } })

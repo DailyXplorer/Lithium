@@ -88,7 +88,7 @@ struct AgentKeysTests {
         let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         window.contentView = webView
         defer { window.contentView = nil }
-        let input = try NativeInput(webView: webView, sends: [.pointer, .buttons, .keys], check: {}, onPointer: { _ in })
+        let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
         try input.key(try #require(NativeKey.parse("Meta+W")).key, modifiers: .command)
         let users = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil, characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13))
         #expect(NativeInput.guarded(users) === users)
@@ -128,7 +128,7 @@ struct AgentKeysTests {
         for _ in 0..<100 where webView.isLoading { try await Task.sleep(for: .milliseconds(100)) }
         #expect(try await webView.evaluateJavaScript("window.ready") as? Bool == true)
 
-        let input = try NativeInput(webView: webView, sends: [.pointer, .keys], check: {}, onPointer: { _ in })
+        let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
         try input.key(try #require(NativeKey.parse("Meta+W")).key, modifiers: .command)
         // The agent goes on meanwhile, here or in another tab.
         try await Task.sleep(for: .milliseconds(2500))
@@ -296,12 +296,6 @@ struct AgentInputTests {
             </form>
             <script>document.getElementById('notes').addEventListener('focus', () => document.getElementById('title').focus());</script>
             """),
-        "/notes-login": (html, """
-            <title>Notes sign-in</title><style>body { margin: 0 } textarea, input { position: absolute; left: 40px; width: 160px }</style>
-            <textarea id="notes" aria-label="Notes" style="top: 40px"></textarea><input type="password" id="secret" aria-label="Secret" style="top: 120px">
-            <script>document.getElementById('notes').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });</script>
-            \(logger)
-            """),
         "/later": (html, """
             <title>Later</title><style>body { margin: 0 } input { position: absolute; left: 40px; width: 160px }</style>
             <form action="/done">
@@ -312,19 +306,6 @@ struct AgentInputTests {
               const account = document.getElementById('account');
               account.addEventListener('click', () => setTimeout(() => document.getElementById(account.dataset.next).focus(), 0));
             </script>
-            """),
-        "/script-login": (html, """
-            <title>Script sign-in</title><style>body { margin: 0 } input, button, #next { position: absolute; left: 40px; width: 160px; height: 30px }</style>
-            <input id="who" aria-label="Who" style="top: 40px"><secret-field></secret-field>
-            <button type="button" id="go" style="top: 160px" onclick="location = '/done'"><span style="display: block">Sign in</span></button>
-            <div id="next" style="top: 220px; cursor: pointer" onclick="location = '/done'">Continue</div>
-            <script>
-              document.getElementById('who').addEventListener('keydown', (event) => { if (event.key === 'Enter') location = '/done'; });
-              // The password in one component's shadow root, the buttons outside it.
-              document.querySelector('secret-field').attachShadow({ mode: 'open' }).innerHTML =
-                '<input type="password" aria-label="Secret" style="position: absolute; left: 40px; top: 100px; width: 160px">';
-            </script>
-            \(logger)
             """),
         "/report.csv": ("Content-Type: text/csv\r\nContent-Disposition: attachment; filename=report.csv", "a,b"),
         "/pay": (html, """
@@ -337,6 +318,25 @@ struct AgentInputTests {
               <select id="exp" autocomplete="cc-exp-month" aria-label="Expiry month"><option>01</option><option>02</option></select>
             </form>
             \(logger)
+            """),
+        "/upload-hidden": (html, """
+            <title>Upload</title><style>body { margin: 0 }</style>
+            <button id="choose" style="position:absolute;left:40px;top:40px">Choose a file</button>
+            <input id="hidden" type="file" style="display: none">
+            <p id="names" style="position:absolute;left:40px;top:100px"></p>
+            <script>document.getElementById('hidden').addEventListener('change', (event) => { document.getElementById('names').textContent = 'hidden:' + [...event.target.files].map((file) => file.name).join(','); });</script>
+            """),
+        "/upload-zone": (html, """
+            <title>Upload zone</title><style>body { margin: 0 }</style>
+            <div id="zone" role="button" style="position:absolute;left:40px;top:40px;width:240px;height:60px">Drop files here<input id="inner" type="file" multiple hidden></div>
+            <input id="covered" type="file" aria-label="Covered" style="position:absolute;left:40px;top:140px;width:240px;height:30px">
+            <div id="veil" style="position:absolute;left:0;top:130px;width:400px;height:60px;background:rgba(0,0,0,0.2)"></div>
+            <p id="names" style="position:absolute;left:40px;top:220px"></p>
+            <script>
+              for (const input of document.querySelectorAll('input')) {
+                input.addEventListener('change', () => { document.getElementById('names').textContent = input.id + ':' + [...input.files].map((file) => file.name).join(','); });
+              }
+            </script>
             """),
         "/login-frame": (html, """
             <title>Login frame</title><style>body { margin: 0 } iframe { position: absolute; left: 40px; top: 40px; width: 400px; height: 200px; border: 0 }</style>
@@ -352,12 +352,6 @@ struct AgentInputTests {
             <title>Mail links</title><style>body { margin: 0 } a { position: absolute; left: 40px; width: 120px; height: 30px }</style>
             <a href="mailto:x@example.com" style="top: 40px">Write</a>
             <a href="/mail" style="top: 100px">Redirect</a>
-            """),
-        "/moved": (html, """
-            <title>Moved</title><style>body { margin: 0 } button { position: absolute; left: 40px; width: 160px; height: 40px }</style>
-            <button id="pay" style="top: 40px">Pay €42.00</button>
-            <button id="decoy" style="top: 140px">Decoy</button>
-            \(logger)
             """),
         "/done": (html, "<title>Done</title>"),
         // Custom listboxes as Radix's Select builds them, one under another past the fold. Each
@@ -509,6 +503,8 @@ struct AgentInputTests {
     /// `openingFirst`: pages opened before agent access is on, whose frames never say hello.
     private func withAgent(openingFirst paths: [String] = [], _ body: (Client, URL) async throws -> Void) async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
+        // The throwaway home the tests run in has no Downloads folder, and a transfer into none fails.
+        try FileManager.default.createDirectory(at: .downloadsDirectory, withIntermediateDirectories: true)
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
         defer { listener.cancel() }
         let browser = Browser()
@@ -607,19 +603,6 @@ struct AgentInputTests {
         return condition()
     }
 
-    /// Starts a call, waits for the prompt it raises, and answers it as the user would.
-    private func call(_ client: Client, _ tool: String, _ arguments: JSONValue, answering answer: ConfirmationAnswer, expecting kind: ConfirmationKind) async throws -> AgentTabsTests.ToolResult {
-        let confirmations = client.hub.confirmations
-        let task = Task { await client.call(tool, arguments) }
-        guard await waitUntil(20, { !confirmations.pending.isEmpty }), let asked = confirmations.pending.first else {
-            Issue.record("\(tool) asked nothing: \(await task.value.content)")
-            throw CancellationError()
-        }
-        #expect(asked.kind == kind)
-        confirmations.answer(asked.id, answer)
-        return await task.value
-    }
-
     // MARK: Pointer
 
     @Test func clicksDoubleClicksRightClicksAndHoversAreTrustedInAStagedTab() async throws {
@@ -672,12 +655,15 @@ struct AgentInputTests {
             #expect(!(await client.call("type", ["tab": .string(id), "ref": .string(field), "text": "ok"])).isError)
             #expect(try await page(tab, "return document.getElementById('field').value") as? String == "ok")
 
-            // WebKit gives a page out of the user's front window no pointer moves without a
-            // button (design section 3, item 4): hover says so rather than claiming it worked.
+            // A page out of the user's front window gets no pointer move without a button
+            // (design section 3, item 4), so the hover goes as a drag of a button never pressed.
             let hover = try await ref(client, id, "button", "Hover me")
+            try await clearLog(tab)
             let hovered = await client.call("hover", ["tab": .string(id), "ref": .string(hover)])
-            #expect(hovered.code == "unsupported", "\(hovered.content)")
-            #expect(try await page(tab, "return document.getElementById('hover').matches(':hover')") as? Bool == false)
+            #expect(!hovered.isError, "\(hovered.content)")
+            #expect(try await page(tab, "return document.getElementById('hover').matches('#hover:hover')") as? Bool == true)
+            #expect(try await page(tab, "return getComputedStyle(document.getElementById('hover')).backgroundColor") as? String == "rgb(255, 0, 0)")
+            #expect(try await log(tab, ["mousedown", "mouseup", "click"]).isEmpty, "a hover presses nothing")
 
             // By point: the same element, trusted.
             try await clearLog(tab)
@@ -696,11 +682,21 @@ struct AgentInputTests {
             let value = try #require(Int(try await page(tab, "return document.getElementById('range').value") as? String ?? ""))
             #expect(value > 80, "range at \(value)")
 
+            // Four wheel events, of which WebKit hands the page fewer: the call answers once the
+            // page has come to rest where they lead, not a second later.
+            let wheelStarted = ContinuousClock.now
             let wheeled = await client.call("scroll", ["tab": .string(id), "dy": 400])
+            let wheelTook = ContinuousClock.now - wheelStarted
             #expect(!wheeled.isError, "\(wheeled.content)")
+            #expect(wheelTook < .milliseconds(700), "scroll took \(wheelTook)")
             #expect(try await log(tab, ["wheel"]).allSatisfy { $0.hasPrefix("wheel:true:") })
             let scrolled = try await page(tab, "return scrollY") as? Double ?? 0
-            #expect(scrolled >= 300, "scrolled to \(scrolled)")
+            #expect(scrolled == 400, "scrolled to \(scrolled)")
+            // As other browser tools ask for it.
+            let further = await client.call("scroll", ["tab": .string(id), "direction": "down", "amount": 200])
+            #expect(!further.isError, "\(further.content)")
+            #expect(try await page(tab, "return scrollY") as? Double == 600)
+            #expect(!(await client.call("scroll", ["tab": .string(id), "direction": "up", "amount": 200])).isError)
             let back = await client.call("scroll", ["tab": .string(id), "ref": .string(try await ref(client, id, "button", "Press"))])
             #expect(!back.isError, "\(back.content)")
             #expect(try await page(tab, "return scrollY") as? Double ?? -1 < scrolled)
@@ -714,6 +710,8 @@ struct AgentInputTests {
             #expect(try await page(tab, "return document.getElementById('pick').value") as? String == "b")
             #expect(try await log(tab, ["change"]) == ["change:false:pick"])
             #expect(await eventually { await client.hub.log.entries(limit: 1).first?["params"]?["labels"] == ["Beta"] })
+            let single = await client.call("select_option", ["tab": .string(id), "ref": .string(pick), "value": "a"])
+            #expect(single["selected"] == ["Alpha"], "\(single.content)")
             let missing = await client.call("select_option", ["tab": .string(id), "ref": .string(pick), "labels": ["Gamma"]])
             #expect(missing.code == "invalid_params" && missing.message.contains("\"Alpha\", \"Beta\""), "\(missing.message)")
             #expect((await client.call("click", ["tab": .string(id), "ref": .string(pick)])).code == "use_select_option")
@@ -1069,8 +1067,11 @@ struct AgentInputTests {
             #expect(!(await client.call("dialog_respond", ["tab": .string(id), "accept": true])).isError)
 
             let report = try await ref(client, id, "link", "Report")
-            let denied = try await call(client, "click", ["tab": .string(id), "ref": .string(report)], answering: .deny, expecting: .download)
-            #expect(denied.code == "denied_by_user")
+            let downloaded = await client.call("click", ["tab": .string(id), "ref": .string(report)])
+            #expect(downloaded["download"]?["file"] == "report.csv" && downloaded["download"]?["done"] == true, "\(downloaded.content)")
+            #expect(downloaded["navigated"] == false)
+            #expect(try String(contentsOfFile: try #require(downloaded["download"]?["path"]?.string), encoding: .utf8) == "a,b")
+            #expect(tab.url?.path() == "/results")
 
             let next = await client.call("click", ["tab": .string(id), "ref": .string(try await ref(client, id, "link", "Next")), "wait": "load"])
             #expect(!next.isError, "\(next.content)")
@@ -1112,13 +1113,14 @@ struct AgentInputTests {
         }
     }
 
-    /// The user's own click opens the user's tab, even while an agent's action in the same tab
-    /// waits for their Allow: the agent didn't press.
+    /// The user's own click opens the user's tab, even while an agent's action is under way in
+    /// the same tab: the agent didn't press.
     @Test func whatTheUsersClickOpensDuringAnAgentsActionIsTheUsers() async throws {
         try await withAgent { client, base in
             let browser = client.browser
-            let (id, tab) = try await open(client, base.appending(path: "user-opens"))
-            let pay = try await ref(client, id, "button", "Pay €42.00")
+            let (_, tab) = try await open(client, base.appending(path: "user-opens"))
+            let hub = client.hub
+            let session = try #require(hub.sessions.first)
             let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1000, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
             shown.isReleasedWhenClosed = false
             let webView = tab.webView
@@ -1126,7 +1128,6 @@ struct AgentInputTests {
             webView.frame = shown.contentLayoutRect
             shown.contentView = webView
             defer { shown.contentView = nil }
-            let confirmations = client.hub.confirmations
             let agents = browser.tabs.filter(\.isInAgentGroup).count
             let press = { (css: CGPoint, modifiers: NSEvent.ModifierFlags) in
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -1139,32 +1140,29 @@ struct AgentInputTests {
                 let tabs = Set(browser.tabs.map(\.id))
                 _ = try await page(tab, "window.next = '\(next)'")
                 try press(CGPoint(x: 100, y: 115), [])
-                let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
-                #expect(await waitUntil(20) { !confirmations.pending.isEmpty }, "\(next)")
+                // An agent's action begins in the tab, and has pressed nothing yet.
+                hub.tabs[tab.id]?.acting = AgentActing(session: session.id, caption: "Clicking")
+                defer { hub.tabs[tab.id]?.acting = nil }
+                #expect(hub.isActing(in: tab) && hub.actingSession(in: tab) == nil, "\(next)")
                 // The page opens it 700 ms after the user's click.
                 try await Task.sleep(for: .milliseconds(1500))
                 let opened = browser.tabs.filter { !tabs.contains($0.id) }
                 #expect(opened.count == 1, "\(next)")
                 #expect(opened.allSatisfy { !$0.isInAgentGroup && browser.commandWindow.selectedTabID == $0.id }, "\(next)")
-                #expect(confirmations.pending.map(\.kind) == [.payment], "\(next)")
-                confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
-                let clicked = await waiting.value
-                #expect(clicked.code == "denied_by_user", "\(next): \(clicked.content)")
-                #expect(clicked["newTabs"] == nil)
+                #expect(hub.tabs[tab.id]?.opened.isEmpty == true, "\(next)")
                 opened.forEach(browser.close)
             }
 
-            // The user's own ⌘⇧-click while the agent's click waits: their tab, selected, and the agent's action ends.
+            // The user's own ⌘⇧-click during the agent's action: their tab, selected.
             browser.select(tab)
             let tabs = Set(browser.tabs.map(\.id))
-            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            hub.tabs[tab.id]?.acting = AgentActing(session: session.id, caption: "Clicking")
+            defer { hub.tabs[tab.id]?.acting = nil }
             try press(CGPoint(x: 60, y: 175), [.command, .shift])
             #expect(await waitUntil(5) { browser.tabs.contains { !tabs.contains($0.id) } })
             let opened = browser.tabs.filter { !tabs.contains($0.id) }
             #expect(opened.count == 1 && opened.allSatisfy { !$0.isInAgentGroup && browser.commandWindow.selectedTabID == $0.id })
-            #expect((await waiting.value).code == "user_interrupted")
-            #expect(confirmations.pending.isEmpty)
+            #expect(hub.tabs[tab.id]?.interruption == .userInput, "the user's press ends the agent's action")
             #expect(browser.tabs.filter(\.isInAgentGroup).count == agents)
             #expect(tab.url?.path() == "/user-opens")
         }
@@ -1350,103 +1348,161 @@ struct AgentInputTests {
         }
     }
 
-    // MARK: Guardrails
+    // MARK: Sensitive actions
 
-    /// The first Allow a call asks for, denied, or `none` when it ran without asking.
-    private func firstAsk(_ client: Client, _ tool: String, _ arguments: JSONValue) async -> String {
-        final class Done { var value = false }
-        let done = Done()
-        let confirmations = client.hub.confirmations
-        let task = Task {
-            let result = await client.call(tool, arguments)
-            done.value = true
-            return result
-        }
-        _ = await waitUntil(20) { done.value || !confirmations.pending.isEmpty }
-        guard let asked = confirmations.pending.first else {
-            _ = await task.value
-            return "none"
-        }
-        confirmations.answer(asked.id, .deny)
-        _ = await task.value
-        return asked.kind.rawValue
-    }
-
-    /// Every input tool on the elements Guardrails cares about asks exactly what a click (for
-    /// a button pressed) or typing (for keys) asks there: no tool sends a press or a key the
-    /// gate didn't weigh.
-    @Test func everyToolAsksWhatAClickOrTypingAsksOnTheSameElement() async throws {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-gate-\(UUID().uuidString)")
+    /// Lithium asks the user nothing: a payment button, a password, a card number and an upload
+    /// go through like any action, and what is typed into a secret field is never logged.
+    @Test func sensitiveActionsRunUnaskedAndTypedSecretsAreNeverLogged() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appending(path: "notes.txt")
         try "notes".write(to: file, atomically: true, encoding: .utf8)
-        try await withAgent(openingFirst: ["login-frame"]) { client, base in
+        try await withAgent { client, base in
+            await client.hub.log.clear()
+            let (id, tab) = try await open(client, base.appending(path: "pay"))
+            let started = ContinuousClock.now
+            let pay = try await ref(client, id, "button", "Pay €42.00")
+            let paid = await client.call("click", ["tab": .string(id), "ref": .string(pay)])
+            #expect(!paid.isError && paid["grant"] == nil, "\(paid.content)")
+            #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
+
+            let user = try await ref(client, id, "textbox", "User")
+            let typedUser = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "ann"])
+            #expect(!typedUser.isError && typedUser["typed"] == nil, "\(typedUser.content)")
+            let password = try await ref(client, id, "textbox", "Password")
+            let typed = await client.call("type", ["tab": .string(id), "ref": .string(password), "text": "hunter2secret"])
+            #expect(!typed.isError && typed["grant"] == nil && typed["typed"] == 13, "\(typed.content)")
+            #expect(try await page(tab, "return document.getElementById('pw').value") as? String == "hunter2secret")
+
+            let card = try await ref(client, id, "textbox", "Card number")
+            let carded = await client.call("type", ["tab": .string(id), "ref": .string(card), "text": "4242424242424242"])
+            #expect(!carded.isError && carded["typed"] == 16, "\(carded.content)")
+            let cvc = await client.call("type", ["tab": .string(id), "ref": .string(try await ref(client, id, "textbox", "CVC")), "text": "cvc-secret"])
+            #expect(!cvc.isError && cvc["grant"] == nil, "\(cvc.content)")
+            let month = await client.call("select_option", ["tab": .string(id), "ref": .string(try await ref(client, id, "combobox", "Expiry month")), "labels": ["02"]])
+            #expect(!month.isError && month["selected"] == nil, "\(month.content)")
+            #expect(try await page(tab, "return [document.getElementById('card').value, document.getElementById('cvc').value, document.getElementById('exp').value]") as? [String] == ["4242424242424242", "cvc-secret", "02"])
+
+            let upload = try await ref(client, id, "button", "Attachment")
+            let uploaded = await client.call("upload_files", ["tab": .string(id), "ref": .string(upload), "paths": [.string(file.path())]])
+            #expect(!uploaded.isError && uploaded["grant"] == nil, "\(uploaded.content)")
+            #expect(uploaded["inputFiles"] == ["notes.txt"])
+            #expect(ContinuousClock.now - started < .seconds(20), "no call waited on the user")
+
+            var entries: [JSONValue] = []
+            #expect(await eventually {
+                entries = await client.hub.log.entries(limit: 100)
+                return entries.filter { $0["tool"] == "type" }.count == 4
+            })
+            #expect(entries.allSatisfy { $0["event"] == nil && $0["confirmation"] == nil }, "no prompt is logged")
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            for secret in ["hunter2secret", "4242424242424242", "cvc-secret"] { #expect(!logged.contains(secret), "\(secret) in the log") }
+            #expect(logged.contains("\"text\":\"ann\""))
+            #expect(entries.first { $0["tool"] == "select_option" }?["params"]?["labels"] == "[redacted]")
+        }
+    }
+
+    /// A file input the page hides behind a button, or covers, takes its files all the same: by
+    /// its own ref, by the drop zone around it, or as the page's only one with no ref at all.
+    @Test func uploadsReachFileInputsThePageHidesOrCovers() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (notes, photo) = (folder.appending(path: "notes.txt"), folder.appending(path: "photo.txt"))
+        try "notes".write(to: notes, atomically: true, encoding: .utf8)
+        try "photo".write(to: photo, atomically: true, encoding: .utf8)
+        try await withAgent { client, base in
+            let (id, tab) = try await open(client, base.appending(path: "upload-hidden"))
+            let tabID: JSONValue = .string(id)
+            // The button opens no chooser on a click: the call says so, and how to go on.
+            let choose = try await ref(client, id, "button", "Choose a file")
+            let none = await client.call("upload_files", ["tab": tabID, "ref": .string(choose), "paths": [.string(notes.path())]])
+            #expect(none.code == "unsupported" && none.message.contains("leave ref out"), "\(none.content)")
+            // No ref: the page's only file input, which no snapshot shows.
+            let only = await client.call("upload_files", ["tab": tabID, "paths": .string(notes.path())])
+            #expect(!only.isError, "\(only.content)")
+            #expect(only["inputFiles"] == ["notes.txt"] && only["files"] == ["notes.txt"])
+            #expect(try await page(tab, "return document.getElementById('names').textContent") as? String == "hidden:notes.txt")
+            #expect(only["diff"]?.string?.contains("hidden:notes.txt") == true, "\(only["diff"] ?? .null)")
+            #expect((await client.call("upload_files", ["tab": tabID, "paths": [.string(folder.appending(path: "missing.txt").path())]])).code == "invalid_params")
+
+            let (zones, zoneTab) = try await open(client, base.appending(path: "upload-zone"))
+            let zonesID: JSONValue = .string(zones)
+            // Two inputs: without a ref the call names them rather than picking one.
+            let which = await client.call("upload_files", ["tab": zonesID, "paths": [.string(notes.path())]])
+            #expect(which.code == "invalid_params" && which.message.contains("2 file inputs") && which.message.contains("\"Covered\""), "\(which.content)")
+            // The drop zone stands for the input inside it.
+            let zone = try await ref(client, zones, "button", "Drop files here")
+            let dropped = await client.call("upload_files", ["tab": zonesID, "ref": .string(zone), "paths": [.string(notes.path()), .string(photo.path())]])
+            #expect(dropped["inputFiles"] == ["notes.txt", "photo.txt"], "\(dropped.content)")
+            // An overlay over the input would refuse a click; its chooser opens all the same.
+            let covered = try await ref(client, zones, "button", "Covered")
+            #expect((await client.call("click", ["tab": zonesID, "ref": .string(covered)])).code == "covered")
+            let given = await client.call("upload_files", ["tab": zonesID, "ref": .string(covered), "paths": [.string(photo.path())]])
+            #expect(given["inputFiles"] == ["photo.txt"], "\(given.content)")
+            #expect(try await page(zoneTab, "return document.getElementById('names').textContent") as? String == "covered:photo.txt")
+        }
+    }
+
+    /// Keys pressed in a password field are never logged, named or not; elsewhere a named key is,
+    /// and a character key never.
+    @Test func keysInAPasswordFieldAreNeverLogged() async throws {
+        try await withAgent { client, base in
+            await client.hub.log.clear()
+            let (id, tab) = try await open(client, base.appending(path: "login"))
+            let focus = { (role: String, name: String) in
+                let focused = await client.call("focus", ["tab": .string(id), "ref": .string(try await ref(client, id, role, name))])
+                #expect(!focused.isError, "\(focused.content)")
+            }
+            try await focus("textbox", "Secret")
+            // As other browser tools name the argument.
+            let typed = await client.call("press", ["tab": .string(id), "key": "q", "repeat": 2])
+            #expect(!typed.isError && typed["grant"] == nil, "\(typed.content)")
+            #expect(try await page(tab, "return document.getElementById('secret').value") as? String == "qq")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Backspace"])).isError)
+            try await focus("checkbox", "Remember")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Space"])).isError)
+            #expect(try await page(tab, "return document.getElementById('remember').checked") as? Bool == true)
+            try await focus("textbox", "Who")
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "z"])).isError)
+            #expect(!(await client.call("press", ["tab": .string(id), "keys": "ArrowLeft"])).isError)
+
+            let expected = ["[redacted]", "[redacted]", "Space", "[redacted]", "ArrowLeft"]
+            var entries: [JSONValue] = []
+            var keys: [String] = []
+            _ = await eventually {
+                entries = await client.hub.log.entries(limit: 200)
+                keys = entries.filter { $0["tool"] == "press" }.reversed().compactMap { $0["params"]?["keys"]?.string }
+                return keys == expected
+            }
+            #expect(keys == expected)
+            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
+            #expect(!logged.contains("\"q\"") && !logged.contains("\"key\""), "\(logged)")
+
+            // Enter on a checkbox submits its form, password and all, unasked.
+            try await focus("checkbox", "Remember")
+            let submitted = await client.call("press", ["tab": .string(id), "keys": "Enter", "wait": "load"])
+            #expect(submitted["navigated"] == true, "\(submitted.content)")
+            #expect(tab.url?.path() == "/done")
+        }
+    }
+
+    /// Text and keys sent into a frame Lithium can't read (open before agent access was on) go
+    /// through, and are never logged: the field there may be a password's.
+    @Test func whatIsTypedIntoAFrameLithiumCantReadIsNeverLogged() async throws {
+        try await withAgent(openingFirst: ["login-frame"]) { client, _ in
             // Earlier tests' tabs had the same ids.
             await client.hub.log.clear()
-            var table: [String] = []
-            var failures: [String] = []
-            func row(_ id: String, _ label: String, _ ref: String, _ expected: [String: String]) async throws {
-                var cells: [String] = []
-                for tool in ["click", "drag", "upload_files", "set_checked", "select_option", "hover", "scroll", "focus", "type", "press"] {
-                    guard let want = expected[tool] else { continue }
-                    let tab: JSONValue = .string(id)
-                    let arguments: JSONValue = switch tool {
-                    case "drag": ["tab": tab, "from": .string(ref), "to": .string(ref)]
-                    case "upload_files": ["tab": tab, "ref": .string(ref), "paths": [.string(file.path())]]
-                    case "set_checked": ["tab": tab, "ref": .string(ref), "checked": true]
-                    case "select_option": ["tab": tab, "ref": .string(ref), "labels": ["02"]]
-                    case "scroll": ["tab": tab, "at": .string(ref), "dy": 10]
-                    case "type": ["tab": tab, "ref": .string(ref), "text": "4242"]
-                    case "press": ["tab": tab, "keys": .string(want.hasPrefix("Enter") || want.hasPrefix("Space") ? String(want.prefix { $0 != ":" }) : "4")]
-                    default: ["tab": tab, "ref": .string(ref)]
-                    }
-                    if tool == "press" { _ = await client.call("focus", ["tab": tab, "ref": .string(ref)]) }
-                    let expectedKind = String(want.split(separator: ":").last ?? "")
-                    let got = await firstAsk(client, tool, arguments)
-                    if got != expectedKind { failures.append("\(label) \(tool): asked \(got), expected \(expectedKind)") }
-                    cells.append("\(tool)=\(got)")
-                }
-                table.append("\(label): " + cells.joined(separator: " "))
-            }
-
-            let (pay, payTab) = try await open(client, base.appending(path: "pay"))
-            let both = ["click", "drag", "upload_files", "hover", "scroll", "focus"]
-            func asks(_ tools: [String], _ kind: String, _ more: [String: String] = [:]) -> [String: String] {
-                Dictionary(uniqueKeysWithValues: tools.map { ($0, kind) }).merging(more) { _, new in new }
-            }
-            try await row(pay, "Pay €42.00", try await ref(client, pay, "button", "Pay €42.00"), asks(["click", "drag", "upload_files"], "payment", ["hover": "none", "scroll": "none", "focus": "none", "press": "Enter:payment"]))
-            try await row(pay, "Pay €42.00 (Space)", try await ref(client, pay, "button", "Pay €42.00"), ["press": "Space:payment"])
-            try await row(pay, "Card number", try await ref(client, pay, "textbox", "Card number"), asks(both, "none", ["upload_files": "upload", "type": "payment", "press": "payment"]))
-            try await row(pay, "Expiry month", try await ref(client, pay, "combobox", "Expiry month"), ["select_option": "payment"])
-            // Nothing the user denied reached the page.
-            #expect(try await log(payTab, ["mousedown", "keydown"]).filter { $0.hasSuffix(":pay") || $0 == "keydown:true:card" }.isEmpty)
-
-            let (login, loginTab) = try await open(client, base.appending(path: "login"))
-            _ = try await page(loginTab, "document.getElementById('secret').value = 'filled'")
-            try await row(login, "Sign in, password filled", try await ref(client, login, "button", "Sign in"), asks(["click", "drag", "upload_files"], "password", ["hover": "none", "scroll": "none", "focus": "none", "press": "Enter:password"]))
-            try await row(login, "Sign in (Space)", try await ref(client, login, "button", "Sign in"), ["press": "Space:password"])
-            try await row(login, "Password field", try await ref(client, login, "textbox", "Secret"), asks(both, "none", ["upload_files": "upload", "type": "password", "press": "password"]))
-            try await row(login, "Remember checkbox", try await ref(client, login, "checkbox", "Remember"), ["click": "none", "set_checked": "none"])
-            #expect(loginTab.url?.path() == "/login")
-            #expect(try await page(loginTab, "return document.getElementById('secret').value") as? String == "filled")
-
-            // A password field in a frame open before agent access was on, of the page's own
-            // origin: nothing asks, as for any field of a known site, and nothing typed is logged.
             let frameTab = try #require(client.browser.tabs.first { $0.url?.path() == "/login-frame" })
             let frame = client.hub.id(for: frameTab)
-            var cells: [String] = []
             for (tool, arguments) in [
                 ("type", ["tab": .string(frame), "text": "hunter2"]), ("press", ["tab": .string(frame), "keys": "q"]),
                 ("press", ["tab": .string(frame), "keys": "Tab"]), ("click", ["tab": .string(frame), "x": 45, "y": 45]),
-                ("drag", ["tab": .string(frame), "from": ["x": 45, "y": 45], "to": ["x": 45, "y": 45]]),
-                ("hover", ["tab": .string(frame), "x": 45, "y": 45]), ("scroll", ["tab": .string(frame), "x": 45, "y": 45, "dy": 10]),
             ] as [(String, JSONValue)] {
-                let got = await firstAsk(client, tool, arguments)
-                if got != "none" { failures.append("unread frame \(tool): asked \(got)") }
-                cells.append("\(tool)=\(got)")
+                let result = await client.call(tool, arguments)
+                #expect(!result.isError, "\(tool): \(result.content)")
             }
-            table.append("Field in an unread frame: " + cells.joined(separator: " "))
             #expect(try await page(frameTab, "return document.getElementById('login').contentDocument.getElementById('secret').value") as? String == "hunter2q")
 
             var logged: [String] = []
@@ -1457,204 +1513,23 @@ struct AgentInputTests {
                 return logged.count == 3
             }
             #expect(logged == ["[redacted]", "[redacted]", "[redacted]"], "\(logged)")
-            // What every tool put in a field above (text, a key, an expiry month) is logged as
-            // [redacted]; only a named key pressed on a button shows.
-            var values: [String: [JSONValue]] = [:]
-            _ = await eventually {
-                values = [:]
-                for entry in await client.hub.log.entries(limit: 400) where [pay, login].contains(entry["tab"]?["id"]?.string ?? "") {
-                    for key in ["text", "keys", "values", "labels"] {
-                        if let value = entry["params"]?[key] { values[entry["tool"]?.string ?? "", default: []].append(value) }
-                    }
-                }
-                return values["type"]?.count == 2 && values["select_option"]?.count == 1
-            }
-            #expect(values["type"]?.count == 2 && values["select_option"]?.count == 1, "\(values)")
-            for (tool, logged) in values {
-                for value in logged where value != "[redacted]" && !(tool == "press" && ["Enter", "Space"].contains(value.string ?? "")) {
-                    failures.append("\(tool) logged \(value)")
-                }
-            }
             let all = String(decoding: JSONValue.array(await client.hub.log.entries(limit: 400)).encoded(), as: UTF8.self)
             #expect(!all.contains("hunter2"))
-            print("Gate table:\n" + table.joined(separator: "\n"))
-            #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
-        }
-    }
-
-    @Test func enterAndSpaceAskWhateverTheirSpellingOrModifiers() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "pay"))
-            _ = try await page(tab, "document.getElementById('pw').value = 'filled'")
-            // The form holds a card field: its submit asks for a payment.
-            let targets: [(name: String, kind: ConfirmationKind, keys: [String])] = [
-                ("Password", .payment, ["enter", "ENTER", "return", "Shift+Enter", "Control+Enter", "Meta+Enter", "Alt+return", "Control+M"]),
-                ("Pay €42.00", .payment, ["space", " ", "Shift+Space", "Control+space", "enter", "return", "Shift+Enter", "Control+M"]),
-            ]
-            for (name, kind, keys) in targets {
-                let target = try await ref(client, id, name == "Password" ? "textbox" : "button", name)
-                #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(target)])).isError)
-                for combo in keys {
-                    let denied = try await call(client, "press", ["tab": .string(id), "keys": .string(combo)], answering: .deny, expecting: kind)
-                    #expect(denied.code == "denied_by_user", "\(combo) in \(name): \(denied.content)")
-                }
-            }
-            // Nothing reached the page before the user's answer.
-            #expect(try await log(tab, ["keydown", "click"]).isEmpty)
-            #expect(tab.url?.path() == "/pay")
-        }
-    }
-
-    @Test func keysAskWhatTypingAndClickingAskAndCharactersAreNeverLogged() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "login"))
-            let focus = { (role: String, name: String) in
-                let focused = await client.call("focus", ["tab": .string(id), "ref": .string(try await ref(client, id, role, name))])
-                #expect(!focused.isError, "\(focused.content)")
-            }
-            try await focus("textbox", "Secret")
-            let denied = try await call(client, "press", ["tab": .string(id), "keys": "q"], answering: .deny, expecting: .password)
-            #expect(denied.code == "denied_by_user")
-            #expect(try await log(tab, ["keydown"]).isEmpty)
-            let typed = try await call(client, "press", ["tab": .string(id), "keys": "q", "repeat": 2], answering: .allowOnce, expecting: .password)
-            #expect(!typed.isError, "\(typed.content)")
-            #expect(try await page(tab, "return document.getElementById('secret').value") as? String == "qq")
-            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Backspace"])).isError)
-
-            // The password is filled: what submits the form asks, as a click on Sign in does.
-            for (role, name, combo) in [("button", "Sign in", "Space"), ("button", "Sign in", "Enter"), ("checkbox", "Remember", "Enter")] {
-                try await focus(role, name)
-                let refused = try await call(client, "press", ["tab": .string(id), "keys": .string(combo)], answering: .deny, expecting: .password)
-                #expect(refused.code == "denied_by_user", "\(combo) on \(name): \(refused.content)")
-            }
-            #expect(try await log(tab, ["click"]).isEmpty)
-            #expect(tab.url?.path() == "/login")
-            let checked = await client.call("press", ["tab": .string(id), "keys": "Space"])
-            #expect(!checked.isError && checked["grant"] == nil, "\(checked.content)")
-            #expect(try await page(tab, "return document.getElementById('remember').checked") as? Bool == true)
-            try await focus("textbox", "Who")
-            #expect(!(await client.call("press", ["tab": .string(id), "keys": "Tab"])).isError)
-            #expect(!(await client.call("press", ["tab": .string(id), "keys": "z"])).isError)
-
-            // Named keys only, and only outside the password field.
-            let expected = ["[redacted]", "[redacted]", "[redacted]", "Space", "Enter", "Enter", "Space", "Tab", "[redacted]"]
-            var entries: [JSONValue] = []
-            var keys: [String] = []
-            _ = await eventually {
-                entries = await client.hub.log.entries(limit: 200)
-                keys = entries.filter { $0["tool"] == "press" }.prefix(expected.count).reversed().compactMap { $0["params"]?["keys"]?.string }
-                return keys == expected
-            }
-            #expect(keys == expected)
-            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
-            #expect(!logged.contains("press q") && !logged.contains("\"q\""), "\(logged)")
-
-            // Enter on a checkbox does submit its form.
-            try await focus("checkbox", "Remember")
-            let submitted = try await call(client, "press", ["tab": .string(id), "keys": "Enter", "wait": "load"], answering: .allowOnce, expecting: .password)
-            #expect(submitted["navigated"] == true, "\(submitted.content)")
-            #expect(tab.url?.path() == "/done")
-        }
-    }
-
-    /// A sign-in a script sends, with no form: once the password is filled (by the user or a
-    /// password manager), its plain button, a right click on it, and Enter in a field ask as a
-    /// form's submit does, and nothing denied reaches the page: also with the password in a
-    /// component's shadow root, a div that only has a click listener, and a click by point,
-    /// which lands on the label inside the button.
-    @Test func aSignInWithoutAFormAsksOnceItsPasswordIsFilled() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "script-login"))
-            let button = try await ref(client, id, "button", "Sign in")
-            let next = try await ref(client, id, "clickable", "Continue")
-            let who = try await ref(client, id, "textbox", "Who")
-            _ = try await page(tab, "document.querySelector('secret-field').shadowRoot.querySelector('input').value = 'filled'")
-            for (tool, arguments) in [
-                ("click", ["tab": .string(id), "ref": .string(button)]), ("click", ["tab": .string(id), "ref": .string(button), "button": "right"]),
-                ("click", ["tab": .string(id), "ref": .string(next)]), ("click", ["tab": .string(id), "x": 120, "y": 175]),
-                ("type", ["tab": .string(id), "ref": .string(who), "text": "me", "submit": true]),
-            ] as [(String, JSONValue)] {
-                let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)
-                #expect(denied.code == "denied_by_user", "\(tool) \(arguments): \(denied.content)")
-            }
-            #expect(!(await client.call("focus", ["tab": .string(id), "ref": .string(who)])).isError)
-            let entered = try await call(client, "press", ["tab": .string(id), "keys": "Enter"], answering: .deny, expecting: .password)
-            #expect(entered.code == "denied_by_user", "\(entered.content)")
-            #expect(try await log(tab, ["mousedown", "click", "contextmenu", "keydown"]).isEmpty)
-            #expect(tab.url?.path() == "/script-login")
-            #expect(try await page(tab, "return document.getElementById('who').value") as? String == "")
-        }
-    }
-
-    /// Focus in a frame open before agent access was on, which Lithium can't read: a payment
-    /// provider's asks for a payment, as by point, and one of an origin nobody knows asks too.
-    @Test func keysIntoAFrameLithiumCantReadAskTheUser() async throws {
-        try await withAgent(openingFirst: ["card-frame", "blank-frame"]) { client, _ in
-            client.hub.paymentProviders = PaymentProviders(hosts: ["localhost"])
-            for (path, kind) in [("/card-frame", ConfirmationKind.payment), ("/blank-frame", .password)] {
-                let tab = try #require(client.browser.tabs.first { $0.url?.path() == path })
-                let id = client.hub.id(for: tab)
-                #expect(try await page(tab, "return document.activeElement.localName") as? String == "iframe", "\(path)")
-                for (tool, arguments) in [("press", ["tab": .string(id), "keys": "4"]), ("press", ["tab": .string(id), "keys": "Enter"]), ("type", ["tab": .string(id), "text": "4242"])] as [(String, JSONValue)] {
-                    let denied = try await call(client, tool, arguments, answering: .deny, expecting: kind)
-                    #expect(denied.code == "denied_by_user", "\(path) \(tool): \(denied.content)")
-                }
-            }
-        }
-    }
-
-    @Test func guardedActionsWaitForTheUserAndTypedSecretsAreNeverLogged() async throws {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let file = folder.appending(path: "notes.txt")
-        try "notes".write(to: file, atomically: true, encoding: .utf8)
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "pay"))
-            let pay = try await ref(client, id, "button", "Pay €42.00")
-            let denied = try await call(client, "click", ["tab": .string(id), "ref": .string(pay)], answering: .deny, expecting: .payment)
-            #expect(denied.code == "denied_by_user")
-            // Nothing reached the page before the user's answer.
-            #expect(try await log(tab, ["mousedown", "click"]).isEmpty)
-
-            let user = try await ref(client, id, "textbox", "User")
-            let typedUser = await client.call("type", ["tab": .string(id), "ref": .string(user), "text": "ann"])
-            #expect(!typedUser.isError, "\(typedUser.content)")
-            let password = try await ref(client, id, "textbox", "Password")
-            let typed = try await call(client, "type", ["tab": .string(id), "ref": .string(password), "text": "hunter2secret"], answering: .allowOnce, expecting: .password)
-            #expect(!typed.isError, "\(typed.content)")
-            #expect(typed["grant"] == "once")
-            #expect(try await page(tab, "return document.getElementById('pw').value") as? String == "hunter2secret")
-
-            // Card number asks once for the form; its CVC then goes in on that Allow.
-            let card = try await ref(client, id, "textbox", "Card number")
-            let carded = try await call(client, "type", ["tab": .string(id), "ref": .string(card), "text": "4242424242424242"], answering: .allowOnce, expecting: .payment)
-            #expect(!carded.isError, "\(carded.content)")
-            let cvc = await client.call("type", ["tab": .string(id), "ref": .string(try await ref(client, id, "textbox", "CVC")), "text": "cvc-secret"])
-            #expect(!cvc.isError, "\(cvc.content)")
-            #expect(cvc["grant"] == "form")
-
-            let upload = try await ref(client, id, "button", "Attachment")
-            let uploaded = try await call(client, "upload_files", ["tab": .string(id), "ref": .string(upload), "paths": [.string(file.path())]], answering: .allowOnce, expecting: .upload)
-            #expect(!uploaded.isError, "\(uploaded.content)")
-            #expect(uploaded["inputFiles"] == ["notes.txt"])
-
-            let entries = await client.hub.log.entries(limit: 100)
-            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
-            for secret in ["hunter2secret", "4242424242424242", "cvc-secret"] { #expect(!logged.contains(secret), "\(secret) in the log") }
-            #expect(logged.contains("\"text\":\"ann\""))
         }
     }
 
     // MARK: The user wins
 
     @Test func theUsersInputEndsTheAgentsActionAndTheirEditingHoldsItUp() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/slow": (Self.html, "<title>Slow</title>")], delay: 3)
+        defer { slow.cancel() }
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "pay"))
-            let pay = try await ref(client, id, "button", "Pay €42.00")
-            let confirmations = client.hub.confirmations
-            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
+            // An action under way: the agent's click on a link whose page is slow to come.
+            _ = try await page(tab, "document.body.insertAdjacentHTML('beforeend', '<a href=\"\(slowBase.appending(path: "slow").absoluteString)\" style=\"position:absolute;left:40px;top:320px\">Slow</a>')")
+            let link = try await ref(client, id, "link", "Slow")
+            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(link)]) }
+            #expect(await waitUntil(5) { tab.isAwaitingCommit })
             let webView = try #require(tab.webView as? PageWebView)
             let window = try #require(webView.window)
             let users = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 5, y: 5), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
@@ -1662,7 +1537,8 @@ struct AgentInputTests {
             webView.mouseUp(with: try #require(NSEvent.mouseEvent(with: .leftMouseUp, location: CGPoint(x: 5, y: 5), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 0)))
             let interrupted = await waiting.value
             #expect(interrupted.code == "user_interrupted", "\(interrupted.content)")
-            #expect(confirmations.pending.isEmpty)
+            tab.stopLoading()
+            #expect(await waitUntil(5) { !tab.isLoading })
 
             // In a window the user sees, their editing in Lithium's own field holds the agent up.
             let user = try await ref(client, id, "textbox", "User")
@@ -1702,7 +1578,7 @@ struct AgentInputTests {
     }
 
     /// The user scrolling and typing while the agent's download is on its way doesn't make it
-    /// theirs: it still asks. Only a load of their own, from their click, takes the tab back.
+    /// theirs: it goes ahead unasked. Only a load of their own, from their click, takes the tab back.
     @Test func theUsersInputLeavesTheAgentsDownloadTheAgents() async throws {
         // Redirected on its way, as download links often are: the redirect is still the agent's load.
         #expect(WKNavigationAction.instancesRespond(to: NSSelectorFromString("_isRedirect")))
@@ -1719,7 +1595,7 @@ struct AgentInputTests {
                 """)
             let report = try await ref(client, id, "link", "Slow report")
             let webView = try #require(tab.webView as? PageWebView)
-            let confirmations = client.hub.confirmations
+            let permissions = client.browser.permissions
 
             let clicking = Task { await client.call("click", ["tab": .string(id), "ref": .string(report)]) }
             #expect(await waitUntil(5) { tab.isAwaitingCommit })
@@ -1729,9 +1605,8 @@ struct AgentInputTests {
             webView.scrollWheel(with: try #require(NSEvent(cgEvent: wheel)))
             webView.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)))
             #expect((await clicking.value).code == "user_interrupted")
-            #expect(await waitUntil(10) { !confirmations.pending.isEmpty }, "the download asks")
-            #expect(confirmations.pending.map(\.kind) == [.download])
-            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+            #expect(await waitUntil(10) { tab.lastDownload?.state == .finished }, "the download goes ahead")
+            #expect(permissions.pending.isEmpty, "nothing asked")
 
             let again = Task { await client.call("click", ["tab": .string(id), "ref": .string(report)]) }
             #expect(await waitUntil(5) { tab.isAwaitingCommit && client.hub.drive(of: tab) != nil })
@@ -1748,7 +1623,7 @@ struct AgentInputTests {
             #expect(await waitUntil(5) { tab.isAwaitingCommit && tab.url?.path() == "/elsewhere" })
             #expect(client.hub.tabs[tab.id]?.drive == nil)
             #expect(await waitUntil(10) { tab.title == "Elsewhere" })
-            #expect(confirmations.pending.isEmpty)
+            #expect(permissions.pending.isEmpty)
         }
     }
 
@@ -1772,7 +1647,7 @@ struct AgentInputTests {
                 """)
             let export = try await ref(client, id, "link", "Export")
             let webView = try #require(tab.webView as? PageWebView)
-            let confirmations = client.hub.confirmations
+            let permissions = client.browser.permissions
 
             let clicking = Task { await client.call("click", ["tab": .string(id), "ref": .string(export)]) }
             #expect(await waitUntil(5) { tab.isAwaitingCommit })
@@ -1781,9 +1656,9 @@ struct AgentInputTests {
                 webView.keyDown(with: try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)))
             }
             #expect((await clicking.value).code == "user_interrupted")
-            #expect(await waitUntil(10) { !confirmations.pending.isEmpty }, "the page's download asks")
-            #expect(confirmations.pending.map(\.kind) == [.download])
-            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
+            // A frame's download the user's own click starts asks them; the agent's doesn't.
+            #expect(await waitUntil(10) { tab.lastDownload?.state == .finished }, "the page's download goes ahead")
+            #expect(permissions.pending.isEmpty, "nothing asked")
 
             #expect(tab.isAwaitingCommit && client.hub.drive(of: tab) != nil, "the agent's page is still on its way")
             let top = try #require(try await page(tab, "return document.getElementById('mine').getBoundingClientRect().top") as? Double)
@@ -1792,60 +1667,27 @@ struct AgentInputTests {
                 let event = try #require(NSEvent.mouseEvent(with: type, location: mine, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
                 type == .leftMouseDown ? webView.mouseDown(with: event) : webView.mouseUp(with: event)
             }
-            // Their click's load took the tab back: what it downloads won't ask for the agent.
+            // Their click's load took the tab back: what it downloads is no longer the agent's.
             #expect(await waitUntil(5) { client.hub.tabs[tab.id]?.drive == nil })
             #expect(tab.isLoading, "the agent's page is still on its way")
-            #expect(confirmations.pending.isEmpty)
         }
     }
 
-    /// An action tried again after the user's Allow decides its log afresh: text the first try
-    /// would have typed into a plain field, and the second types into a password, is never logged.
-    @Test func anActionTriedAgainIntoAPasswordNeverLogsItsText() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "pay"))
-            _ = try await page(tab, "document.getElementById('user').focus()")
-            let confirmations = client.hub.confirmations
-            let typing = Task { await client.call("type", ["tab": .string(id), "text": "hunter2retry", "submit": true]) }
-            // Enter in the User field submits a form with card fields: the first try asks.
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
-            #expect(confirmations.pending.map(\.kind) == [.payment])
-            _ = try await page(tab, "document.getElementById('pw').focus()")
-            confirmations.pending.forEach { confirmations.answer($0.id, .allowOnce) }
-            // The prompt sends the action round again, now focused in the password field.
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
-            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
-            #expect((await typing.value).code == "denied_by_user")
-
-            let entries = await client.hub.log.entries(limit: 100)
-            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
-            #expect(!logged.contains("hunter2retry"))
-            #expect(logged.contains("\"text\":\"[redacted]\""))
-        }
-    }
-
-    /// A field whose click moves focus to a password field: the keys go there, so typing and
-    /// clearing ask as typing into the password does, and the text is never logged.
-    @Test func typingWhereTheClickMovesFocusAsksForTheFieldFocused() async throws {
+    /// A field whose click moves focus to a password field: the keys go there, and the text is
+    /// never logged.
+    @Test func typingWhereTheClickMovesFocusIsLoggedAsForTheFieldFocused() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "decoy"))
             let account = try await ref(client, id, "textbox", "Account")
             _ = try await page(tab, "document.getElementById('real').value = 'kept'")
-            for clear in [false, true] {
-                _ = try await page(tab, "document.activeElement.blur()")
-                let denied = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2decoy", "clear": .bool(clear)], answering: .deny, expecting: .password)
-                #expect(denied.code == "denied_by_user", "clear \(clear): \(denied.content)")
-                #expect(try await page(tab, "return document.getElementById('real').value") as? String == "kept", "clear \(clear)")
-            }
-            _ = try await page(tab, "document.activeElement.blur()")
-            let typed = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2decoy", "clear": true], answering: .allowOnce, expecting: .password)
-            #expect(!typed.isError, "\(typed.content)")
+            let typed = await client.call("type", ["tab": .string(id), "ref": .string(account), "text": "hunter2decoy", "clear": true])
+            #expect(!typed.isError && typed["typed"] == 12, "\(typed.content)")
             #expect(try await page(tab, "return [document.getElementById('account').value, document.getElementById('real').value]") as? [String] == ["", "hunter2decoy"])
 
             var entries: [JSONValue] = []
             #expect(await eventually {
                 entries = await client.hub.log.entries(limit: 100).filter { $0["tool"] == "type" && $0["tab"]?["url"] == .string(tab.url?.absoluteString ?? "") }
-                return entries.count == 3
+                return entries.count == 1
             })
             let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
             #expect(!logged.contains("hunter2decoy"), "\(logged)")
@@ -1853,27 +1695,8 @@ struct AgentInputTests {
         }
     }
 
-    /// Each "\n" is a real Enter key, which a page's own listener may take to send a filled
-    /// password: in a multi-line field, `type` and `fill_form` ask as `press Enter` there does.
-    @Test func newlinesBesideAFilledPasswordAsk() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "notes-login"))
-            let notes = try await ref(client, id, "textbox", "Notes")
-            _ = try await page(tab, "document.getElementById('secret').value = 'filled'")
-            for (tool, arguments) in [
-                ("type", ["tab": .string(id), "ref": .string(notes), "text": "a\nb"]),
-                ("fill_form", ["tab": .string(id), "fields": [["ref": .string(notes), "type": "textbox", "value": "a\nb"]]]),
-            ] as [(String, JSONValue)] {
-                let denied = try await call(client, tool, arguments, answering: .deny, expecting: .password)
-                #expect(denied.code == "denied_by_user", "\(tool): \(denied.content)")
-            }
-            #expect(try await log(tab, ["keydown"]).isEmpty)
-            #expect(tab.url?.path() == "/notes-login")
-        }
-    }
-
     /// A multi-line field whose click moves focus to a one-line one: "\n" would be Enter there,
-    /// which submits its form past the gate, so the call is refused before any key.
+    /// which submits its form, so the call is refused before any key.
     @Test func newlinesAreRefusedWhenFocusMovesToAOneLineField() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "to-one-line"))
@@ -1887,20 +1710,13 @@ struct AgentInputTests {
     }
 
     /// A field whose click moves focus to a password field a moment later: the keys go where
-    /// focus is before the first, so typing and clearing ask for the password field.
-    @Test func typingWhereFocusMovesAfterTheClickAsksForTheFieldFocused() async throws {
+    /// focus is before the first, and the text is never logged.
+    @Test func typingWhereFocusMovesAfterTheClickIsLoggedAsForTheFieldFocused() async throws {
         try await withAgent { client, base in
             let (id, tab) = try await open(client, base.appending(path: "later"))
             let account = try await ref(client, id, "textbox", "Account")
             _ = try await page(tab, "document.getElementById('real').value = 'kept'")
-            for clear in [false, true] {
-                _ = try await page(tab, "document.activeElement.blur()")
-                let denied = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2later", "clear": .bool(clear)], answering: .deny, expecting: .password)
-                #expect(denied.code == "denied_by_user", "clear \(clear): \(denied.content)")
-                #expect(try await page(tab, "return [document.getElementById('account').value, document.getElementById('real').value]") as? [String] == ["", "kept"], "clear \(clear)")
-            }
-            _ = try await page(tab, "document.activeElement.blur()")
-            let typed = try await call(client, "type", ["tab": .string(id), "ref": .string(account), "text": "hunter2later", "clear": true], answering: .allowOnce, expecting: .password)
+            let typed = await client.call("type", ["tab": .string(id), "ref": .string(account), "text": "hunter2later", "clear": true])
             #expect(!typed.isError, "\(typed.content)")
             #expect(typed["typed"] == 12)
             #expect(try await page(tab, "return [document.getElementById('account').value, document.getElementById('real').value]") as? [String] == ["", "hunter2later"])
@@ -1908,67 +1724,11 @@ struct AgentInputTests {
             var entries: [JSONValue] = []
             #expect(await eventually {
                 entries = await client.hub.log.entries(limit: 100).filter { $0["tool"] == "type" && $0["tab"]?["url"] == .string(tab.url?.absoluteString ?? "") }
-                return entries.count == 3
+                return entries.count == 1
             })
             let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
             #expect(!logged.contains("hunter2later"), "\(logged)")
             #expect(entries.allSatisfy { $0["params"]?["text"] == "[redacted]" }, "\(entries)")
-        }
-    }
-
-    /// Focus moved to a password field while the user answers for the field focused before:
-    /// the password field asks on its own, and nothing is typed without its Allow.
-    @Test func focusMovedDuringTheAllowAsksForTheFieldFocusedNow() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "later"))
-            let account = try await ref(client, id, "textbox", "Account")
-            _ = try await page(tab, "document.getElementById('account').dataset.next = 'card'")
-            let confirmations = client.hub.confirmations
-            let typing = Task { await client.call("type", ["tab": .string(id), "ref": .string(account), "text": "hunter2during"]) }
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
-            #expect(confirmations.pending.map(\.kind) == [.payment])
-            _ = try await page(tab, "document.getElementById('real').focus()")
-            confirmations.pending.forEach { confirmations.answer($0.id, .allowOnce) }
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
-            #expect(confirmations.pending.map(\.kind) == [.password])
-            confirmations.pending.forEach { confirmations.answer($0.id, .deny) }
-            #expect((await typing.value).code == "denied_by_user")
-            #expect(try await page(tab, "return ['account', 'real', 'card'].map((id) => document.getElementById(id).value)") as? [String] == ["", "", ""])
-
-            let entries = await client.hub.log.entries(limit: 100)
-            let logged = String(decoding: JSONValue.array(entries).encoded(), as: UTF8.self)
-            #expect(!logged.contains("hunter2during"))
-            #expect(logged.contains("\"text\":\"[redacted]\""))
-        }
-    }
-
-    @Test func theTargetIsPlacedAgainWhenTheUserSelectsItsTabDuringTheirAllow() async throws {
-        try await withAgent { client, base in
-            let (id, tab) = try await open(client, base.appending(path: "moved"))
-            let pay = try await ref(client, id, "button", "Pay €42.00")
-            let confirmations = client.hub.confirmations
-            let waiting = Task { await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
-            #expect(await waitUntil(20) { !confirmations.pending.isEmpty })
-            let asked = try #require(confirmations.pending.first)
-            #expect(asked.kind == .payment)
-            #expect(tab.webView.window is AgentStageWindow)
-            // The user selects the tab: its web view goes to their window, 100 points taller
-            // than the stage, where the stage's window point for Pay is on Decoy.
-            let stageHeight = try #require(tab.webView.window).contentLayoutRect.height
-            let shown = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: stageHeight + 100), styleMask: [.borderless], backing: .buffered, defer: false)
-            shown.isReleasedWhenClosed = false
-            let webView = tab.webView
-            webView.removeFromSuperview()
-            webView.frame = shown.contentLayoutRect
-            shown.contentView = webView
-            defer { shown.contentView = nil }
-            client.browser.select(tab)
-            confirmations.answer(asked.id, .allowOnce)
-            let clicked = await waiting.value
-            #expect(!clicked.isError, "\(clicked.content)")
-            #expect(clicked["grant"] == "once")
-            #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
-            #expect(confirmations.pending.isEmpty)
         }
     }
 
@@ -1989,7 +1749,7 @@ struct AgentInputTests {
                 windows.forEach { $0.contentView = nil }
             }
             try await clearLog(tab)
-            let input = try NativeInput(webView: webView, sends: [.pointer, .buttons, .keys], check: {}, onPointer: { _ in })
+            let input = try NativeInput(webView: webView, check: {}, onPointer: { _ in })
             try input.down(at: CGPoint(x: 100, y: 60))
             #expect(await eventually { try await log(tab, ["mousedown"]) == ["mousedown:true:b"] })
             // The user selects the tab before the last event of a drag: the up fails, and the
@@ -2024,40 +1784,6 @@ struct AgentInputTests {
             }
             #expect(await waitUntil(5) { first.webView.window == nil && second.webView.window == nil })
             #expect(hub.stage.staged.isEmpty)
-
-            // Closing the tab while its action waits for the user.
-            let (payID, payTab) = try await open(client, base.appending(path: "pay"))
-            let pay = try await ref(client, payID, "button", "Pay €42.00")
-            let waiting = Task { await client.call("click", ["tab": .string(payID), "ref": .string(pay)]) }
-            #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty })
-            client.browser.close(payTab)
-            #expect((await waiting.value).code == "tab_closed")
-        }
-    }
-
-    @Test func anActionWaitingForTheUserKeepsItsTabStagedAndAsksOnce() async throws {
-        try await withAgent { client, base in
-            let hub = client.hub
-            hub.stage.releaseDelay = .milliseconds(300)
-            let (id, tab) = try await open(client, base.appending(path: "moved"))
-            let pay = try await ref(client, id, "button", "Pay €42.00")
-            var clicked: AgentTabsTests.ToolResult?
-            Task { clicked = await client.call("click", ["tab": .string(id), "ref": .string(pay)]) }
-            #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty })
-            let asked = try #require(hub.confirmations.pending.first)
-            // Many times the stage's delay, as a user reading the prompt takes.
-            try await Task.sleep(for: .milliseconds(1500))
-            #expect(tab.webView.window is AgentStageWindow)
-            hub.confirmations.answer(asked.id, .allowOnce)
-            #expect(await waitUntil(20) { clicked != nil || hub.confirmations.pending.contains { $0.id != asked.id } })
-            let again = hub.confirmations.pending.filter { $0.id != asked.id }
-            #expect(again.isEmpty, "asked again: \(again)")
-            again.forEach { hub.confirmations.answer($0.id, .deny) }
-            #expect(await waitUntil(20) { clicked != nil })
-            #expect(clicked?.isError == false, "\(clicked?.content ?? .null)")
-            #expect(try await log(tab, ["click"]) == ["click:true:pay:1"])
-            // Once the action is over, the stage lets it go.
-            #expect(await waitUntil(5) { tab.webView.window == nil })
         }
     }
 }

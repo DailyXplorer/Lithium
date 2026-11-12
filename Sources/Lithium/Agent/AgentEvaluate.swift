@@ -32,7 +32,7 @@ struct ScriptAnswer: Decodable {
 extension AgentHub {
     static let evaluateTools: [AgentTool] = [evaluateTool]
 
-    /// Not `agent.js`'s world: what that script reports decides what asks the user, so no agent
+    /// Not `agent.js`'s world: what that script reports decides where a script may run, so no agent
     /// code runs beside it.
     static let scriptWorld = WKContentWorld.world(name: "lithium-agent-script")
     static let scriptTimeouts = 100...30_000
@@ -80,11 +80,12 @@ extension AgentHub {
         return try await exclusive(named, until: deadline, timeout: AgentHub.readTimeout) {
             try checkDrivable(named)
             let tab = named.tab
-            if let url = tab.url, AgentURLs.verdict(for: url) != .allowed {
+            // A local file's script could read the folder around it, so scripts stay on the web.
+            if let url = tab.url, url.isFileURL || AgentURLs.verdict(for: url) != .allowed {
                 throw AgentToolError(code: "blocked_page", message: "\(named.id) shows \(url.scheme ?? "a"): page. Scripts run only in web pages.")
             }
             if tab.isAsleep {
-                try await checkWakeable(named, until: deadline)
+                try checkWakeable(named)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
             let webView = sizedWebView(of: tab)

@@ -40,17 +40,6 @@ struct AgentPanel: View {
             ForEach(challenges, id: \.tab.id) { item in
                 ChallengeRow(tab: item.tab, challenge: item.challenge)
             }
-            ForEach(agent.confirmations.pending) { confirmation in
-                PendingRow(confirmation: confirmation, tab: browser.tabs.first { $0.id == confirmation.tabID })
-            }
-            if !agent.confirmations.grants.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Allowed until the agent stops").font(Theme.font(11, .medium)).foregroundStyle(.secondary)
-                    ForEach(agent.confirmations.grants) { grant in
-                        GrantRow(grant: grant) { agent.confirmations.revoke(grant) }
-                    }
-                }
-            }
             if !agent.sessions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(agent.sessions) { session in
@@ -131,55 +120,6 @@ private struct ChallengeRow: View {
         }
         .padding(10)
         .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct PendingRow: View {
-    let confirmation: AgentConfirmation
-    let tab: Tab?
-    @Environment(Browser.self) private var browser
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Icon(confirmation.kind.icon, size: 18).foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Waiting for your answer").font(Theme.font(13, .medium)).lineLimit(1).fixedSize()
-                Text("\(confirmation.sessionLabel) wants to \(confirmation.action)")
-                    .font(Theme.font(11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            if let tab {
-                Button("Show Tab") { browser.select(tab) }
-                    .buttonStyle(.plain)
-                    .font(Theme.font(12))
-                    .foregroundStyle(Color.accentColor)
-            }
-        }
-        .padding(10)
-        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-/// "s1 · Downloads on example.com", with Revoke.
-private struct GrantRow: View {
-    let grant: AgentGrant
-    let revoke: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Icon(grant.kind.icon, size: 14).foregroundStyle(.secondary)
-            Text("\(grant.sessionLabel) · \(grant.kind.label) on \(grant.site)")
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            Button("Revoke", action: revoke)
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-        }
-        .font(Theme.font(12))
     }
 }
 

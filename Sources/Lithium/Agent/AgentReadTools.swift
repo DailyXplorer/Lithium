@@ -356,7 +356,7 @@ extension AgentHub {
             try checkDrivable(named)
             let tab = named.tab
             if tab.isAsleep {
-                try await checkWakeable(named, until: deadline)
+                try checkWakeable(named)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
             return try await body(sizedWebView(of: tab), deadline)

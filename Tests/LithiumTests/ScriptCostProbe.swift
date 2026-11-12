@@ -84,7 +84,7 @@ struct ScriptCostProbe {
         }
         // With a family the Mac has, so the font's own bytes aren't what is measured; `embedded` adds them.
         func font(_ source: String, embedded: Bool = false) -> [WKUserScript] {
-            let text = source.replacingOccurrences(of: "__LITHIUM_FONT__", with: embedded ? PageStyle.fontBase64 : "")
+            let text = source.replacingOccurrences(of: "__LITHIUM_FONT__", with: embedded ? PageStyle.scriptFontBase64 : "")
                 .replacingOccurrences(of: "__LITHIUM_FAMILY__", with: embedded ? "\"Lithium DM Sans\"" : "\"Helvetica Neue\"")
             return [WKUserScript(source: text, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient)]
         }

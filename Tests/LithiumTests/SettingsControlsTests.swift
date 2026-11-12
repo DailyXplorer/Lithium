@@ -118,7 +118,8 @@ struct SettingsControlsTests {
             const height = button.getBoundingClientRect().height, first = buttons[0].getBoundingClientRect().height;
             if (height !== first) problems.push(`${name} “${button.textContent}” ${height}px tall, not ${first}px`);
           }
-          if (box.right > row.getBoundingClientRect().right + 0.5) problems.push(`${name} overflows its row`);
+          const past = box.right - row.getBoundingClientRect().right;
+          if (past > 0.5) problems.push(`${name} overflows its row by ${past.toFixed(1)}px (${box.width.toFixed(1)}px wide)`);
           if (\(wide) && box.top >= row.firstElementChild.getBoundingClientRect().bottom) problems.push(`${name} under its label`);
         }
         sections.forEach((s) => s.style.display = '');

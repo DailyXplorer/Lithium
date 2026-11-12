@@ -57,6 +57,9 @@ final class VideoPopout {
         guard browser?.quickLinks.keyTab == nil, let tab = window?.selectedTab, !tab.isAsleep, tab.pdf == nil else { return }
         request += 1
         let current = request
+        // Known from now, not from when the task starts: the tab can be left and shown again
+        // before it does, and the answer must then put the video back.
+        pending = (tab, current)
         Task {
             await show(tab, request: current)
             // Still the newest request, yet no player: the page has no video the script reaches

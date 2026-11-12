@@ -1731,11 +1731,11 @@ struct BrowserTests {
         let id = "mnjggcdmjocbbbhaepdhchncahnbgone"
         let (video, sponsor) = try await videoWithASponsor()
         let browser = Browser()
-        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1280, height: 860), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 860), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
         func show(_ tab: Tab) {
-            // A test runner's window never counts as visible to WebKit, so pages would stay hidden.
+            // A window no screen shows never counts as visible to WebKit, so pages would stay hidden.
             let occlusion = Selector(("_setWindowOcclusionDetectionEnabled:"))
             if tab.webView.responds(to: occlusion) {
                 typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
@@ -1750,7 +1750,9 @@ struct BrowserTests {
             const button = (label) => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === label);
             """
 
-        let store = browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/detail/\(id)")!)
+        // In English whatever the Mac's language: the store names its buttons in the reader's own
+        // ("Ajouter à Google Chrome"), and the test finds them by name.
+        let store = browser.newTab(url: URL(string: "https://\(ChromeWebStore.host)/detail/\(id)?hl=en")!)
         show(store)
         #expect(await poll(90) { await self.run(store, pastConsent + "const add = button('Add to Chrome'); return !!add && !add.disabled;") as? Bool == true })
         await run(store, pastConsent + "button('Add to Chrome').click();")

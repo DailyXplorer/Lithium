@@ -42,19 +42,11 @@ struct OffscreenWindowTests {
             // The call that makes the window, up to its style: `super.init` is its class's, checked by name.
             for match in source.text.matches(of: /(\w+)\(contentRect:[^\[]*styleMask:\s*\[([^\]]*)\]/) where match.2.contains(".titled") {
                 let made = match.1 == "init" ? Self.enclosingClass(of: match.range.lowerBound, in: source.text) : match.1
-                if !allowed.contains(made) && !Self.onScreenOnPurpose.contains("\(source.name) \(made)") {
-                    offenders.append("\(source.name): \(made)")
-                }
+                if !allowed.contains(made) { offenders.append("\(source.name): \(made)") }
             }
         }
         #expect(offenders == [], "make these from OffscreenWindow, or AppKit shows them on the main screen")
     }
-
-    /// Windows left on screen on purpose, each for a test that runs only when asked.
-    private static let onScreenOnPurpose: Set<String> = [
-        // LITHIUM_LIVE_TESTS only: adds an extension from the real store through the window's sheet.
-        "BrowserTests.swift NSWindow",
-    ]
 
     private static func enclosingClass(of index: String.Index, in text: String) -> Substring {
         text[..<index].matches(of: /class\s+(\w+)/).last?.1 ?? "?"

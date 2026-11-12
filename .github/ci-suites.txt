@@ -1,0 +1,17 @@
+# The test suites CI runs on macOS, one per line: those that need no web view, screen,
+# network or model, and do not depend on how fast the machine is.
+AddressSuggestionsTests
+AgentBridgeTests
+AgentGuardrailsTests
+CaptureCompositionTests
+DockClickTests
+FontChoiceTests
+LithiumProcessTests
+PasswordCSVTests
+PasswordVaultTests
+PermissionPromptTests
+PinDropTargetTests
+SidebarPaletteTests
+SidebarRevealTests
+StoredStateTests
+TabHoverCardTests

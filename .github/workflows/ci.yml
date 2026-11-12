@@ -38,15 +38,20 @@ jobs:
             tooling: [*workflows, 'scripts/**']
             page-scripts: [*workflows, 'Sources/Lithium/Resources/**']
             docs: [*workflows, '**/*.md']
+            macos: [*workflows, 'Sources/**', 'Tests/**', 'Package.swift', 'Package.resolved', 'scripts/test']
       - name: Select the jobs
         id: select
         env:
           ALL: ${{ steps.filter.outcome == 'skipped' }}
           CHANGES: ${{ steps.filter.outputs.changes || '[]' }}
+          # macOS minutes cost a private repository ten times the Linux ones: there the macOS
+          # job runs by hand only, or with the repository variable PRIVATE_CI set to 'all'.
+          MACOS: ${{ !github.event.repository.private || github.event_name == 'workflow_dispatch' || vars.PRIVATE_CI == 'all' }}
         run: |
-          jobs=$(jq -cn --arg all "$ALL" --argjson changes "$CHANGES" '
-            ["tooling", "page-scripts", "docs"] as $filtered
-            | [$filtered[] | select($all == "true" or IN($changes[]))] + ["personal-data"]')
+          jobs=$(jq -cn --arg all "$ALL" --arg macos "$MACOS" --argjson changes "$CHANGES" '
+            ["tooling", "page-scripts", "docs", "macos"] as $filtered
+            | [$filtered[] | select($all == "true" or IN($changes[]))]
+            | (if $macos == "true" then . else . - ["macos"] end) + ["personal-data"]')
           echo "jobs=$jobs" | tee -a "$GITHUB_OUTPUT"
 
   # The repository's scripts parse, and the scripts behind these checks pass their tests.
@@ -107,12 +112,31 @@ jobs:
           COMMITS: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
         run: python3 .github/scripts/personal_data.py ${COMMITS:+--commits "$COMMITS"}
 
+  # Builds the app and its tests with the toolchain Lithium is developed with, then runs the
+  # suites of .github/ci-suites.txt: the ones that need no web view, screen, network or
+  # model. The others run on a Mac, with `scripts/test`, before a merge.
+  macos:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.jobs), 'macos')
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - *checkout
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+      - name: Build, then run the suites that need no screen
+        run: |
+          suites=$(grep -v '^#' .github/ci-suites.txt | paste -sd '|' -)
+          ./scripts/test --filter "^LithiumTests\.($suites)/"
+
   # The one check to require on `main`: green when every selected job succeeded. A job the
   # filter did not select is skipped, and that is fine; a selected job that is skipped,
   # cancelled or failed is not.
   ci-ok:
     if: always() && needs.changes.result != 'skipped'
-    needs: [changes, tooling, page-scripts, docs, personal-data]
+    needs: [changes, tooling, page-scripts, docs, personal-data, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

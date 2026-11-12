@@ -132,7 +132,19 @@ struct AgentTabsTests {
         "/ticking": ("Content-Type: text/html", "<title>Ticking</title><script>let n = 0; setInterval(() => { location.hash = 'tick' + (++n) }, 20)</script>"),
         "/busy": ("Content-Type: text/html", busy),
         "/busy?again": ("Content-Type: text/html", busy),
+        "/when-visible": ("Content-Type: text/html", whenVisible),
     ]
+    /// As pages that wait to be seen before they load their data: its text comes only once the
+    /// page counts itself visible, and it remembers every state it was told.
+    private static let whenVisible = """
+        <title>When visible</title><p id="state">waiting to be seen</p>
+        <script>
+          window.states = [document.visibilityState];
+          const show = () => { if (document.visibilityState === 'visible') document.getElementById('state').textContent = 'loaded once seen'; };
+          document.addEventListener('visibilitychange', () => { states.push(document.visibilityState); show(); });
+          show();
+        </script>
+        """
     /// Its script keeps the page busy for 3 seconds before the document is parsed.
     private static let busy = "<title>Busy</title><script>const end = Date.now() + 3000; while (Date.now() < end) {}</script><p>done</p>"
 
@@ -188,7 +200,8 @@ struct AgentTabsTests {
             #expect(tab.openedByAgent == "s1")
             #expect(client.hub.isTouched(tab))
             #expect(!client.hub.isTouched(mine))
-            #expect(tab.loadedWebView?.window == nil)
+            // In no window of the user's: the stage shows the page to itself alone.
+            #expect(tab.loadedWebView?.userWindow == nil && tab.loadedWebView?.window is AgentStageWindow)
 
             browser.keep(tab)
             #expect(browser.commandWindow.agentTabs.isEmpty)
@@ -488,6 +501,48 @@ struct AgentTabsTests {
             let navigated = await client.call("navigate", ["tab": id, "url": .string(two.absoluteString)])
             #expect(navigated["title"] == "Two", "\(navigated.content)")
             #expect(asleep.webView.backForwardList.backList.isEmpty)
+        }
+    }
+
+    /// Out of every window a page counts itself hidden, and some wait to be seen before they
+    /// load their data. A tab an agent opens is shown to its page from its first load, and the
+    /// user's own background tab from the first call that reads it, without changing what the
+    /// user looks at.
+    @Test func aTabAnAgentUsesIsShownToItsPage() async throws {
+        try await withAgent { client, base in
+            let browser = client.browser
+            let url = base.appending(path: "when-visible")
+            let selected = browser.commandWindow.selectedTabID
+            let visibility = { (tab: Lithium.Tab) in try await tab.webView.callAsyncJavaScript("return document.visibilityState", contentWorld: .page) as? String }
+
+            let opened = await client.call("tab_open", ["url": .string(url.absoluteString), "wait": "load"])
+            #expect(opened["diff"]?.string?.contains("loaded once seen") == true, "\(opened.content)")
+            let tab = try #require(client.tab(opened["tab"]?.string ?? ""))
+            #expect(tab.webView.window is AgentStageWindow && tab.webView.userWindow == nil)
+            #expect(try await visibility(tab) == "visible")
+            #expect(try await tab.webView.callAsyncJavaScript("return states", contentWorld: .page) as? [String] == ["visible"], "seen from its first script on")
+
+            // The user's own tab, left in the background: hidden until an agent reads it.
+            let mine = browser.newTab(url: url, selecting: false)
+            #expect(await waitUntil(30) { !mine.isLoading && mine.title == "When visible" })
+            #expect(try await visibility(mine) == "hidden")
+            let read = await client.call("read_text", ["tab": .string(client.hub.id(for: mine))])
+            #expect(!read.isError, "\(read.content)")
+            let waited = await client.call("wait_for", ["tab": .string(client.hub.id(for: mine)), "text": "loaded once seen"])
+            #expect(waited["met"] == true, "\(waited.content)")
+            #expect(try await visibility(mine) == "visible")
+            #expect(browser.commandWindow.selectedTabID == selected)
+
+            // It leaves the stage a while after the agent's last call, and is hidden again.
+            client.hub.stage.releaseDelay = .milliseconds(200)
+            #expect(!(await client.call("snapshot", ["tab": .string(client.hub.id(for: mine))])).isError)
+            #expect(await waitUntil(5) { mine.webView.window == nil })
+            var hiddenAgain = false
+            for _ in 0..<50 where !hiddenAgain {
+                hiddenAgain = (try? await visibility(mine)) == "hidden"
+                if !hiddenAgain { try await Task.sleep(for: .milliseconds(100)) }
+            }
+            #expect(hiddenAgain)
         }
     }
 

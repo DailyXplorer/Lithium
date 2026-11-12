@@ -184,8 +184,13 @@ final class AgentHub {
     /// `wait: none`).
     @TaskLocal static var callSession: MCPSession?
     @TaskLocal static var callNotes: CallNotes?
-    /// Where background tabs' web views take an agent's events.
-    @ObservationIgnored private(set) lazy var stage = AgentStage()
+    /// Where the web views of tabs out of the user's window are shown to their pages, and take
+    /// an agent's events.
+    @ObservationIgnored private(set) lazy var stage = {
+        let stage = AgentStage()
+        stage.isInUse = { [weak self] webView in self?.tabs.values.contains { $0.isBusy && $0.tab?.loadedWebView === webView } == true }
+        return stage
+    }()
     /// Keeps an agent's keys from Lithium's menus while access is on.
     @ObservationIgnored private var keyGuard: Any?
 
@@ -828,6 +833,7 @@ final class AgentHub {
             defer {
                 state.isBusy = false
                 state.interruption = nil
+                if let webView = named.tab.loadedWebView { stage.used(webView) }
             }
             return try await body()
         } catch var error as AgentToolError {

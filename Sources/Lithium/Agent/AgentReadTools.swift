@@ -359,17 +359,21 @@ extension AgentHub {
                 try checkWakeable(named)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
-            return try await body(sizedWebView(of: tab), deadline)
+            return try await body(staged(tab), deadline)
         }
     }
 
-    /// A web view never in the window has no size, so its page would lay out in an empty viewport.
-    func sizedWebView(of tab: Tab) -> WKWebView {
+    /// The tab's web view in a window, for every call that reads, loads or acts in its page: the
+    /// user's own, else the stage. Out of every window a page counts itself hidden
+    /// (`document.visibilityState`), runs no animation frame, and takes no events; many pages
+    /// wait to be seen before they load their data.
+    @discardableResult
+    func staged(_ tab: Tab) -> WKWebView {
         let webView = tab.webView
-        if webView.superview == nil, webView.frame.width < 1 || webView.frame.height < 1 {
-            webView.frame = CGRect(origin: .zero, size: pageAreaSize)
+        if webView.userWindow == nil {
+            stage.host(webView, size: pageAreaSize)
+            fitViewport(of: webView, in: tab)
         }
-        fitViewport(of: webView, in: tab)
         return webView
     }
 
@@ -526,7 +530,7 @@ extension AgentHub {
     func addingDiff(to page: JSONValue, of named: NamedTab, for session: MCPSession, if wanted: Bool, until deadline: ContinuousClock.Instant) async throws -> JSONValue {
         guard wanted, var fields = page.object, named.tab.pdf == nil, !named.tab.isAsleep, named.tab.loadedWebView != nil,
               !AgentURLs.isBlocked(named.tab.url), let state = agentTab(for: named.tab) else { return page }
-        let webView = sizedWebView(of: named.tab)
+        let webView = staged(named.tab)
         var snapshot: PageSnapshot
         do {
             snapshot = try await self.snapshot(of: named, in: webView, scope: "viewport", maxNodes: 300, until: min(deadline, .now + .seconds(3)))
@@ -642,7 +646,7 @@ extension AgentHub {
         let tab = named.tab
         if tab.isAsleep { _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: timeout, landedWithinPage: nil) { tab.wake() } }
         if tab.pdf != nil { throw AgentHub.pdfShown(named, use: "wait_for load or url") }
-        let webView = sizedWebView(of: tab)
+        let webView = staged(tab)
         let remaining = { max(1, Int((deadline - .now) / .milliseconds(1))) }
         switch condition {
         case .element(let ref, let state):

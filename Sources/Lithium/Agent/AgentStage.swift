@@ -15,9 +15,10 @@ extension NSView {
     }
 }
 
-/// Hosts background tabs' web views while an agent acts in them, with occlusion detection off so
-/// pages count as visible and unthrottled. A web view leaves 30 seconds after the last action, or
-/// when the user selects its tab.
+/// Hosts background tabs' web views while an agent uses them, with occlusion detection off so
+/// pages count as visible and unthrottled: out of every window a page counts itself hidden, and
+/// many wait to be seen before they load their data or draw. A web view leaves 30 seconds after
+/// the last call in its tab, or when the user selects its tab.
 @MainActor
 final class AgentStage {
     static let origin = CGPoint(x: -30_000, y: -30_000)
@@ -25,12 +26,13 @@ final class AgentStage {
     /// Whether occlusion detection can be turned off (tests take the fallback placement).
     var hasOcclusionControl: @MainActor (WKWebView) -> Bool = AgentStage.hasOcclusionControl
 
+    /// Whether a call is running in the web view's tab: none is ever swept away mid-way.
+    var isInUse: @MainActor (WKWebView) -> Bool = { _ in false }
+
     private(set) var window: AgentStageWindow?
     private struct Entry {
         weak var webView: WKWebView?
         var lastUse: ContinuousClock.Instant
-        /// Actions running in its tab: none is ever swept away mid-way.
-        var holds = 0
     }
     private var entries: [ObjectIdentifier: Entry] = [:]
     private var sweep: Task<Void, Never>?
@@ -56,14 +58,10 @@ final class AgentStage {
         scheduleSweep()
     }
 
-    /// An action running in `webView`'s tab keeps it staged, however long it waits, until `letGo`.
-    func hold(_ webView: WKWebView) {
-        entries[ObjectIdentifier(webView)]?.holds += 1
-    }
-
-    func letGo(_ webView: WKWebView) {
-        guard let entry = entries[ObjectIdentifier(webView)] else { return }
-        entries[ObjectIdentifier(webView)] = Entry(webView: entry.webView, lastUse: .now, holds: max(0, entry.holds - 1))
+    /// A call in `webView`'s tab ended: the delay before it leaves counts from now.
+    func used(_ webView: WKWebView) {
+        guard entries[ObjectIdentifier(webView)] != nil else { return }
+        entries[ObjectIdentifier(webView)]?.lastUse = .now
         scheduleSweep()
     }
 
@@ -91,14 +89,19 @@ final class AgentStage {
 
     private func scheduleSweep() {
         sweep?.cancel()
-        guard let next = entries.values.filter({ $0.holds == 0 }).map(\.lastUse).min() else { return }
+        guard let next = entries.values.map(\.lastUse).min() else { return }
         let delay = releaseDelay
         sweep = Task { [weak self] in
             try? await Task.sleep(until: next + delay)
             guard !Task.isCancelled, let self else { return }
             let now = ContinuousClock.now
-            for (key, entry) in self.entries where entry.holds == 0 && entry.lastUse + delay <= now {
-                if let webView = entry.webView, webView.window === self.window { self.release(webView) } else { self.entries[key] = nil }
+            for (key, entry) in self.entries where entry.lastUse + delay <= now {
+                guard let webView = entry.webView, webView.window === self.window else {
+                    self.entries[key] = nil
+                    continue
+                }
+                // Looked at again a delay from now; the call's end counts the delay afresh.
+                if self.isInUse(webView) { self.entries[key]?.lastUse = now } else { self.release(webView) }
             }
             self.sweep = nil
             if self.entries.isEmpty { self.window?.orderOut(nil) }

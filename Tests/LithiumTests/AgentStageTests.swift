@@ -10,6 +10,24 @@ import LithiumTestGuard
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct AgentStageTests {
+    /// A web view stays for as long as a call runs in its tab, then for the delay after it ends.
+    @Test func aWebViewInUseStaysUntilItsCallEnds() async throws {
+        let stage = AgentStage()
+        stage.hasOcclusionControl = { _ in true }
+        stage.releaseDelay = .milliseconds(100)
+        defer { stage.releaseAll() }
+        var inUse = true
+        stage.isInUse = { _ in inUse }
+        let webView = WKWebView(frame: .zero)
+        stage.host(webView, size: CGSize(width: 800, height: 600))
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(webView.window === stage.window, "five delays into its call")
+        inUse = false
+        stage.used(webView)
+        #expect(webView.window === stage.window, "the delay counts from the call's end")
+        #expect(await waitUntil(5) { webView.window == nil })
+    }
+
     @Test func theStageShowsNothingAndIsOrderedOutWhenEmpty() async throws {
         let stage = AgentStage()
         stage.hasOcclusionControl = { _ in true }

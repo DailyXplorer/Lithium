@@ -6,7 +6,7 @@ Thanks for helping. These rules keep Lithium light, private and easy to review.
 
 - A Mac with Xcode 27 (Swift 6.4), the toolchain Lithium is developed with. The app runs on macOS 15.4 and later.
 - Python 3, which comes with Xcode's command line tools. The first build runs `scripts/update-filters.py` to download and convert the filter lists.
-- Node, only to refresh the bundled uBlock Origin scriptlets (`scripts/update-ubo-scriptlets.mjs`).
+- Node, only to refresh the bundled uBlock Origin scriptlets (`scripts/update-ubo-scriptlets.mjs`) or to run the page-script check below.
 
 No account, key or paid service is needed to build, run or test Lithium.
 
@@ -55,6 +55,23 @@ The pull requests that merge fastest are small, focused, in sync with `main` and
 6. **Check what your change costs when nobody uses it.** A feature that is off or unused adds no timers, observers, page scripts or web views until it is used, and nothing on the paths every page or tab goes through. For a change on those paths, measure before and after and put the numbers in the description.
 7. **Docs travel with the code.** A change a user can see updates the matching section of the README.
 8. **Read your own diff** as a reviewer would, and check it holds no personal data.
+
+### Checks on a pull request
+
+`CI` runs small jobs, each one only when the pull request touches what it covers. `ci-ok` sums them up: it is green when every job that had to run succeeded.
+
+| Job | What it checks | Run it yourself |
+|---|---|---|
+| `tooling` | The shell, Python and Node scripts parse, and the scripts behind these checks pass their tests. | `python3 -m unittest discover -s .github/tests` |
+| `page-scripts` | Every script Lithium injects in pages, every inline script of its own pages and every bundled JSON file parses. | `node .github/scripts/page_scripts.mjs` |
+| `docs` | Relative links and heading anchors in the Markdown docs lead somewhere. | `python3 .github/scripts/doc_links.py` |
+| `personal-data` | No home-folder path or email address in the files, and no machine name in the address of a commit. | `python3 .github/scripts/personal_data.py --commits origin/main..HEAD` |
+
+`PR size` is separate and never blocks: it comments when a pull request is above the soft budget.
+
+`main` is protected by the ruleset in [`.github/rulesets/main.json`](.github/rulesets/main.json): changes land through a pull request, `ci-ok` must be green, and the branch can be neither force-pushed nor deleted. Maintainers apply a change to that file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`.
+
+CI does not build the app or run the Swift tests yet. Run them on your Mac before you ask for a merge.
 
 ### Contributing with a coding agent
 

@@ -423,7 +423,7 @@ extension PDFReader: FindTarget {
     }
 
     /// `go(to:)` with a selection leaves the view where it is when the match is pages away.
-    private func reveal(_ selection: PDFSelection) {
+    func reveal(_ selection: PDFSelection) {
         guard let page = selection.pages.first, let document = view.documentView,
               let scrollView = document.enclosingScrollView else {
             view.go(to: selection)
@@ -432,6 +432,12 @@ extension PDFReader: FindTarget {
         view.layoutDocumentView()
         let clip = scrollView.contentView
         let match = view.convert(view.convert(selection.bounds(for: page), from: page), to: document)
+        // PDFKit gives a selection it can't place a null box, which converts to NaN, and AppKit
+        // stops the app on a scroll to NaN.
+        guard [match.minX, match.minY, match.maxX, match.maxY].allSatisfy(\.isFinite) else {
+            view.go(to: page)
+            return
+        }
         let visible = clip.documentVisibleRect
         // Clear of the edges, where the find bar floats over the top.
         guard !visible.insetBy(dx: 0, dy: min(Self.revealMargin, visible.height / 4)).contains(match) else { return }

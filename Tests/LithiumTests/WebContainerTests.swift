@@ -9,10 +9,16 @@ struct WebContainerTests {
     /// to AppKit as unhandled. It must stop at the container instead of reaching the window,
     /// which plays the system alert sound.
     @Test func keysThePageLeavesUnhandledDoNotBeep() async throws {
-        let window = BeepCountingWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = BeepCountingWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         let container = WebContainerView(frame: window.contentLayoutRect)
         window.contentView = container
         let webView = WKWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
+        // Off screen, WebKit takes the page for hidden and never returns keys to AppKit.
+        let occlusion = Selector(("_setWindowOcclusionDetectionEnabled:"))
+        if webView.responds(to: occlusion) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(webView.method(for: occlusion), to: Setter.self)(webView, occlusion, false)
+        }
         container.addSubview(webView)
         let loaded = PageLoad()
         webView.navigationDelegate = loaded
@@ -21,7 +27,6 @@ struct WebContainerTests {
             <script>window.seeks = 0; addEventListener('keydown', (event) => { if (event.key === 'ArrowRight') seeks += 1; });</script>
             """, baseURL: URL(string: "https://example.com/")!)
         try await loaded.wait()
-        // Off screen, WebKit never returns keys to AppKit.
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(webView)
 
@@ -40,7 +45,7 @@ struct WebContainerTests {
 
     /// Swapping pages takes the keyboard away with the outgoing one; the incoming page gets it back.
     @Test func switchingPagesHandsTheKeyboardToTheNewPage() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         let container = WebContainerView(frame: window.contentLayoutRect)
         window.contentView = container
         let outgoing = WKWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
@@ -58,7 +63,7 @@ struct WebContainerTests {
 
     /// The address bar focused with ⌘L, or a tab being renamed, keeps the keyboard.
     @Test func aFieldBeingEditedKeepsTheKeyboard() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         let container = WebContainerView(frame: window.contentLayoutRect)
         window.contentView = container
         let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 500), configuration: WKWebViewConfiguration())
@@ -78,7 +83,7 @@ struct WebContainerTests {
     }
 }
 
-private final class BeepCountingWindow: NSWindow {
+private final class BeepCountingWindow: OffscreenWindow {
     var unhandledKeyDowns = 0
 
     override func noResponder(for eventSelector: Selector) {

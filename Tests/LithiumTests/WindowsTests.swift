@@ -673,7 +673,7 @@ struct WindowsTests {
 }
 
 /// Closes as a `BrowserNSWindow` does, through `Browser.windowWillClose`, and stays off screen.
-private final class ClosableWindow: NSWindow, NSWindowDelegate {
+private final class ClosableWindow: OffscreenWindow, NSWindowDelegate {
     private let model: BrowserWindow
     private weak var browser: Browser?
 

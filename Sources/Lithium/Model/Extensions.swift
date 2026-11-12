@@ -425,9 +425,11 @@ final class Extensions: NSObject {
     // MARK: Tabs
 
     /// Private tabs are kept from extensions, as Chrome does incognito windows: in no tab list,
-    /// sending no event, running no extension.
+    /// sending no event, running no extension. Links' pages come last: content scripts run in
+    /// them, and WebKit answers a script only from a tab it knows.
     var tabs: [Tab] {
-        browser?.navigationOrder.filter { !$0.isEphemeral } ?? []
+        guard let browser else { return [] }
+        return (browser.navigationOrder + browser.quickLinks.tabs).filter { !$0.isEphemeral }
     }
 
     func didOpen(_ tab: Tab) {

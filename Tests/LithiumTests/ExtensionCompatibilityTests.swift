@@ -63,14 +63,40 @@ struct ExtensionCompatibilityTests {
         defer { Task { await browser.extensions.remove(id: id) } }
         let tab = browser.newTab()
         tab.webView.loadHTMLString("<!doctype html><title>Page</title>", baseURL: URL(string: "https://example.com/")!)
+        #expect(try await reply(in: tab) == "pong {}")
+    }
 
+    /// A link's window gets the extensions' content scripts, so they reach their background from
+    /// there too. They got no answer: the link's page was no tab WebKit knew ("Tab not found for
+    /// message", in its log).
+    @Test func aContentScriptInALinksWindowReachesItsBackground() async throws {
+        let browser = Browser()
+        browser.quickLinks.showWindow = { _, _ in nil }
+        await browser.extensions.waitUntilLoaded()
+        try await browser.extensions.install(archive: try archive(), id: id)
+        defer { Task { await browser.extensions.remove(id: id) } }
+        let tab = try #require(browser.quickLinks.open())
+        defer { browser.close(tab) }
+        tab.webView.loadHTMLString("<!doctype html><title>Link</title>", baseURL: URL(string: "https://example.com/")!)
+        let inLink = try await reply(in: tab)
+        #expect(inLink == "pong {}")
+
+        // Moved to the browser window, it stays the tab extensions knew, and is still answered.
+        #expect(browser.quickLinks.moveToBrowserWindow(tab))
+        tab.webView.loadHTMLString("<!doctype html><title>Moved</title>", baseURL: URL(string: "https://example.com/moved")!)
+        let moved = try await reply(in: tab)
+        #expect(moved == "pong {}")
+    }
+
+    /// What the content script last heard from its background, once that is an answer, for ten seconds.
+    private func reply(in tab: Tab) async throws -> String? {
         var reply: String?
         for _ in 0..<100 {
             reply = try? await tab.webView.callAsyncJavaScript("return document.documentElement.getAttribute('data-reply')", contentWorld: .page) as? String
             if reply?.hasPrefix("pong") == true { break }
             try await Task.sleep(for: .milliseconds(100))
         }
-        #expect(reply == "pong {}")
+        return reply
     }
 
     /// Its background opens its popup twice, as 1Password's does each time its Unlock button is

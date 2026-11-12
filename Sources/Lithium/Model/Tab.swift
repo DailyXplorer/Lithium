@@ -864,7 +864,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func tellExtensions(_ properties: WKWebExtension.TabChangedProperties) {
-        guard !isAsleep, let browser, browser.tabs.contains(self) else { return }
+        guard !isAsleep, let browser, browser.tabs.contains(self) || browser.quickLinks.contains(self) else { return }
         browser.extensions.didChange(properties, of: self)
     }
 
@@ -1897,7 +1897,9 @@ extension Tab: WKWebExtensionTab {
 
     /// Not the user's pick: their typing in the address bar goes on, and doesn't land in this page.
     func activate(for context: WKWebExtensionContext) async throws {
-        browser?.select(self, picked: false)
+        guard let browser else { return }
+        if browser.quickLinks.contains(self) { return browser.quickLinks.bringForward(self) }
+        browser.select(self, picked: false)
     }
 
     func close(for context: WKWebExtensionContext) async throws {

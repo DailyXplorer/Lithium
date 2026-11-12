@@ -783,10 +783,10 @@ final class Browser {
     }
 
     /// A link's page, into the top of `window`'s tab list.
+    /// A link's page, which extensions already know as a tab (`QuickLinks.moveToBrowserWindow`).
     func adopt(_ tab: Tab, into window: BrowserWindow) {
         tab.move(toWindow: window.id)
         tabs.insert(tab, at: Self.position(inTabList: 0, of: tabs, space: tab.spaceID, window: window.id))
-        extensions.didOpen(tab)
         window.select(tab)
     }
 

@@ -66,12 +66,13 @@ The pull requests that merge fastest are small, focused, in sync with `main` and
 | `page-scripts` | Every script Lithium injects in pages, every inline script of its own pages and every bundled JSON file parses. | `node .github/scripts/page_scripts.mjs` |
 | `docs` | Relative links and heading anchors in the Markdown docs lead somewhere. | `python3 .github/scripts/doc_links.py` |
 | `personal-data` | No home-folder path or email address in the files, and no machine name in the address of a commit. | `python3 .github/scripts/personal_data.py --commits origin/main..HEAD` |
+| `macos` | The app and its tests build with Xcode 27, and the suites of `.github/ci-suites.txt` pass: those that need no web view, screen, network or model. | `./scripts/test --filter <Suite>` |
 
 `PR size` is separate and never blocks: it comments when a pull request is above the soft budget.
 
 `main` is protected by the ruleset in [`.github/rulesets/main.json`](.github/rulesets/main.json): changes land through a pull request, `ci-ok` must be green, and the branch can be neither force-pushed nor deleted. Maintainers apply a change to that file with `gh api --method PUT repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`.
 
-CI does not build the app or run the Swift tests yet. Run them on your Mac before you ask for a merge.
+CI runs only part of the Swift tests: the suites that drive a web view need a Mac with a screen. Run `./scripts/test` (or `./scripts/test-fast`) on yours before you ask for a merge. A new suite that needs none of that joins `.github/ci-suites.txt`.
 
 ### Contributing with a coding agent
 

@@ -113,6 +113,22 @@ struct ShowcaseShots {
         try save("window-dark", try await picture(of: window), isDark: true, badge: true)
     }
 
+    /// A page that never paints anything fails the run: an empty one is a white sheet however long
+    /// it is asked.
+    @Test func aPageLeftBlankFailsTheRun() async throws {
+        let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 320, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = page
+        defer { window.contentView = nil }
+        page.loadHTMLString("<!doctype html><title>Nothing</title>", baseURL: nil)
+        for _ in 0..<300 where page.isLoading { try await Task.sleep(for: .milliseconds(10)) }
+        await #expect(throws: BlankPage.self) { _ = try await painted(page) }
+    }
+
+    private struct BlankPage: Error {
+        let host: String
+    }
+
     /// Framed as the app frames its screenshots, at half the pixels (1632 wide is plenty for a
     /// README) and as a JPEG, a quarter of the PNG's weight with nothing to see of it at that size.
     private func save(_ name: String, _ window: CGImage, isDark: Bool, badge: Bool = false) throws {
@@ -259,7 +275,7 @@ struct ShowcaseShots {
             try await Task.sleep(for: .milliseconds(250))
             image = try await page.takeSnapshot(configuration: nil)
         }
-        try #require(!isBlank(image), "\(page.url?.host() ?? "a page") is still blank after 3 seconds")
+        guard !isBlank(image) else { throw BlankPage(host: page.url?.host() ?? "a page") }
         return image
     }
 

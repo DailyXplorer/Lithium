@@ -10,7 +10,7 @@ doc_links = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(doc_links)
 
 GUIDE = "# Guide\n\n## Before you open a pull request\n\n## Connecting agents (`lithium-mcp`)\n"
-TRACKED = {"README.md", "docs/guide.md", "docs/design/plan.md", "scripts/test", "Sources/App/main.swift"}
+TRACKED = {"README.md", "docs/guide.md", "docs/design/plan.md", "docs/my notes.md", "scripts/test", "Sources/App/main.swift"}
 
 
 def dead(text, path="docs/page.md"):
@@ -21,7 +21,7 @@ def dead(text, path="docs/page.md"):
 class DocLinksTest(unittest.TestCase):
     def test_links_to_tracked_files_and_folders_pass(self):
         text = ("[a](guide.md) [b](../README.md) [c](design/) [d](../scripts/test) [e](/Sources/App/main.swift#L12)\n"
-                "[f](https://example.com/x.md) [g](mailto:x@example.com) [h](#here)\n\n## Here\n")
+                "[f](https://example.com/x.md) [g](mailto:x@example.com) [h](#here) [i](../) [j](my%20notes.md)\n\n## Here\n")
         self.assertEqual(dead(text), [])
 
     def test_a_link_to_a_missing_file_is_reported_with_its_line(self):

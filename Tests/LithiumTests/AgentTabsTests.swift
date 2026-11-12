@@ -9,11 +9,11 @@ import WebKit
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct AgentURLsTests {
-    @Test func opensOnlyTheWeb() {
+    @Test func opensTheWebAndLocalFilesOnly() {
         #expect(AgentURLs.verdict(for: URL(string: "https://example.com/a")!) == .allowed)
         #expect(AgentURLs.verdict(for: URL(string: "http://127.0.0.1:8080/")!) == .allowed)
         #expect(AgentURLs.verdict(for: URL(string: "about:blank")!) == .allowed)
-        #expect(AgentURLs.verdict(for: URL(string: "file:///Users/me/notes.html")!) == .needsConfirmation)
+        #expect(AgentURLs.verdict(for: URL(string: "file:///Users/me/notes.html")!) == .allowed)
         for blocked in ["lithium://settings", "webkit-extension://abc/popup.html", "javascript:alert(1)", "data:text/html,hi", "blob:https://example.com/1", "about:config", "mailto:a@b.c", "https:///nohost"] {
             guard case .blocked = AgentURLs.verdict(for: URL(string: blocked)!) else {
                 Issue.record("\(blocked) should be blocked")
@@ -163,16 +163,6 @@ struct AgentTabsTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
-    }
-
-    /// The user, saying Deny to every prompt as it shows.
-    private func denyEveryConfirmation(_ hub: AgentHub) -> Task<Void, Never> {
-        Task {
-            while !Task.isCancelled {
-                hub.confirmations.pending.forEach { hub.confirmations.answer($0.id, .deny) }
-                try? await Task.sleep(for: .milliseconds(20))
-            }
-        }
     }
 
     // MARK: Tabs
@@ -457,35 +447,43 @@ struct AgentTabsTests {
         try await withAgent { client, base in
             let browser = client.browser
             let one = base.appending(path: "one")
-            let denying = denyEveryConfirmation(client.hub)
-            defer { denying.cancel() }
-            for start in [file, URL(string: "data:text/html,%3Ctitle%3EData%3C/title%3E")!] {
-                let tab = browser.newTab(url: start, selecting: false)
+            let data = URL(string: "data:text/html,%3Ctitle%3EData%3C/title%3E")!
+            do {
+                let tab = browser.newTab(url: data, selecting: false)
                 #expect(await waitUntil(30) { !tab.isLoading && tab.webView.backForwardList.currentItem != nil })
                 tab.load(one)
                 #expect(await waitUntil(30) { !tab.isLoading && tab.title == "One" })
                 let id: JSONValue = .string(client.hub.id(for: tab))
                 let back = await client.call("go_back", ["tab": id])
-                #expect(back.code == (start.isFileURL ? "denied_by_user" : "blocked_page"), "\(start): \(back.content)")
+                #expect(back.code == "blocked_page", "\(back.content)")
                 #expect(tab.url == one)
 
                 tab.webView.goBack()
-                #expect(await waitUntil(30) { !tab.isLoading && tab.url?.scheme == start.scheme })
-                #expect((await client.call("reload", ["tab": id])).code == (start.isFileURL ? "denied_by_user" : "blocked_page"))
+                #expect(await waitUntil(30) { !tab.isLoading && tab.url?.scheme == "data" })
+                #expect((await client.call("reload", ["tab": id])).code == "blocked_page")
                 #expect((await client.call("go_forward", ["tab": id]))["title"] == "One")
+            }
+            // A local file is a page like any other: Back reaches it unasked.
+            do {
+                let tab = browser.newTab(url: file, selecting: false)
+                #expect(await waitUntil(30) { !tab.isLoading && tab.title == "Notes" })
+                tab.load(one)
+                #expect(await waitUntil(30) { !tab.isLoading && tab.title == "One" })
+                let back = await client.call("go_back", ["tab": .string(client.hub.id(for: tab))])
+                #expect(back["title"] == "Notes", "\(back.content)")
             }
 
             let selected = browser.commandWindow.selectedTabID
             let asleep = browser.newTab(selecting: false)
-            asleep.restore(url: file, title: "Notes")
+            asleep.restore(url: data, title: "Data")
             let id: JSONValue = .string(client.hub.id(for: asleep))
-            #expect((await client.call("tab_select", ["tab": id])).code == "denied_by_user")
-            #expect((await client.call("wait_for", ["tab": id, "load": "load"])).code == "denied_by_user")
-            #expect((await client.call("reload", ["tab": id])).code == "denied_by_user")
-            #expect((await client.call("go_back", ["tab": id])).code == "denied_by_user")
+            #expect((await client.call("tab_select", ["tab": id])).code == "blocked_page")
+            #expect((await client.call("wait_for", ["tab": id, "load": "load"])).code == "blocked_page")
+            #expect((await client.call("reload", ["tab": id])).code == "blocked_page")
+            #expect((await client.call("go_back", ["tab": id])).code == "blocked_page")
             #expect(asleep.isAsleep)
             #expect(browser.commandWindow.selectedTabID == selected)
-            // Sent elsewhere, it goes straight there without showing the file on the way.
+            // Sent elsewhere, it goes straight there without showing the old page on the way.
             let two = base.appending(path: "two")
             let navigated = await client.call("navigate", ["tab": id, "url": .string(two.absoluteString)])
             #expect(navigated["title"] == "Two", "\(navigated.content)")
@@ -582,12 +580,6 @@ struct AgentTabsTests {
             }
             let groupSize = browser.commandWindow.agentTabs.count
             #expect((await client.call("tab_open", ["url": "lithium://history"])).code == "blocked_page")
-            let denying = denyEveryConfirmation(client.hub)
-            defer { denying.cancel() }
-            let file = await client.call("tab_open", ["url": "file:///tmp/notes.html"])
-            #expect(file.code == "denied_by_user")
-            #expect(file.message.contains("notes.html"))
-            #expect((await client.call("navigate", ["tab": .string(id), "url": "file:///tmp/notes.html"])).code == "denied_by_user")
             #expect(browser.commandWindow.agentTabs.count == groupSize)
             #expect(client.tab(id)?.url == base.appending(path: "one"))
 
@@ -766,8 +758,7 @@ struct AgentTabsTests {
         }
     }
 
-    /// A load that ends without a page answers at once. Downloads, which ask the user first, are
-    /// in `AgentConfirmationsTests`.
+    /// A load that ends without a page answers at once. Downloads are in `AgentTransfersTests`.
     @Test func aLoadThatShowsNoPageAnswersAtOnce() async throws {
         let (listener, files) = try await LocalHTTP.serve([
             "/mail": ("HTTP/1.1 302 Found\r\nLocation: mailto:x@example.com", ""),

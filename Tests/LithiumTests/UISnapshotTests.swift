@@ -213,51 +213,6 @@ struct UISnapshotTests {
         await browser.setAgentAccess(false)
     }
 
-    /// The confirmation banner for each kind of prompt, over the tab it is about and over another
-    /// one, and the indicator's panel with a prompt waiting and a site grant.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
-    func agentConfirmationSnapshots() async throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        Theme.registerFonts()
-        UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
-        let browser = Browser()
-        await browser.setAgentAccess(true)
-        let client = try await AgentTabsTests.Client(browser: browser)
-        let confirmations = client.hub.confirmations
-        let tab = browser.newTab()
-        tab.customTitle = "Checkout · Shop"
-        let asks: [(kind: ConfirmationKind, action: String, site: String?)] = [
-            (.payment, "click “Pay €42.00” on shop.example", "shop.example"),
-            (.password, "type into the password field on accounts.example.com", "example.com"),
-            (.download, "download “report.csv” (1.2 MB) from files.example.com", "example.com"),
-            (.upload, "upload invoice.pdf (88 KB) from /Users/ann/Documents to forms.example.com", "example.com"),
-            (.file, "open the local file “notes.html” (its folder becomes readable to the page)", nil),
-        ]
-        for ask in asks {
-            let confirmation = AgentConfirmation(kind: ask.kind, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: ask.action, site: ask.site)
-            for isDark in [false, true] {
-                let banner = AgentConfirmationBanner(confirmation: confirmation, confirmations: confirmations).frame(width: 900).environment(browser).environment(browser.windows[0])
-                try render(banner, isDark: isDark).write(to: directory.appending(path: "agent-banner-\(ask.kind.rawValue)-\(isDark ? "dark" : "light").png"))
-            }
-        }
-        let elsewhere = AgentConfirmation(kind: .download, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: asks[2].action, site: "example.com")
-        for isDark in [false, true] {
-            let banner = AgentConfirmationBanner(confirmation: elsewhere, confirmations: confirmations, otherTab: tab, queued: 1).frame(width: 900).environment(browser).environment(browser.windows[0])
-            try render(banner, isDark: isDark).write(to: directory.appending(path: "agent-banner-other-tab-\(isDark ? "dark" : "light").png"))
-        }
-
-        let granted = AgentConfirmation(kind: .download, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: asks[2].action, site: "example.com")
-        confirmations.ask(granted)
-        confirmations.answer(granted.id, .allowOnSite)
-        confirmations.ask(AgentConfirmation(kind: .payment, session: "x", sessionLabel: "s1", client: "claude-code", tabID: tab.id, action: asks[0].action, site: "shop.example"))
-        for isDark in [false, true] {
-            let png = try render(AgentPanel(agent: client.hub).environment(browser).environment(browser.windows[0]), isDark: isDark)
-            try png.write(to: directory.appending(path: "agent-panel-grants-\(isDark ? "dark" : "light").png"))
-        }
-        browser.tabs.forEach(browser.close)
-        await browser.setAgentAccess(false)
-    }
-
     /// What the user sees over the page while an agent acts in it: border, caption and pointer
     /// dot; and the tab's badge with its ring.
     @Test func agentActingSnapshots() throws {

@@ -312,7 +312,7 @@ struct AgentReadTests {
         "/covered": (Self.html, """
             <title>Covered</title><style>body { margin: 0 }</style>
             <button id="under" style="position:absolute;left:20px;top:20px;width:100px;height:40px">Accept</button>
-            <div id="cookie-banner" style="position:fixed;left:0;top:0;width:400px;height:100px;background:white">We use cookies</div>
+            <div id="page-cover" style="position:fixed;left:0;top:0;width:400px;height:100px;background:white">We use cookies</div>
             <a href="/one" style="position:absolute;top:200px">First link</a><a href="https://example.org/two" style="position:absolute;top:240px">Second link</a>
             """),
         "/geometry": (Self.html, """
@@ -985,7 +985,7 @@ struct AgentReadTests {
             let accept = try #require(node(snapshot, role: "button", name: "Accept")?["ref"])
             let info = await client.call("element_info", ["tab": .string(tab), "ref": accept])
             #expect(info["visible"] == true)
-            #expect(info["coveredBy"]?["element"] == "div#cookie-banner")
+            #expect(info["coveredBy"]?["element"] == "div#page-cover")
             #expect(info["coveredBy"]?["text"] == "We use cookies")
             #expect(info["box"]?["css"] == [20, 20, 100, 40])
         }

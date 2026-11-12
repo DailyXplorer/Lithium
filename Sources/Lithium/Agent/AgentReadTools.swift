@@ -328,7 +328,8 @@ extension AgentHub {
                         guard size.height <= AgentScreenshot.maxPDFLength else {
                             throw AgentToolError(code: "unsupported", message: "\(named.id) is too long to save as a PDF with its secret fields masked. Use screenshot instead.")
                         }
-                        let inPoints = masks.map { AgentHub.scaled($0, by: size.width / max(1, layout.main.viewport.pw)) }
+                        let points = layout.main.viewport.points(inPDFOfWidth: size.width, zoom: webView.pageZoom)
+                        let inPoints = masks.map { AgentHub.scaled($0, by: points) }
                         guard let flat = await Task.detached(priority: .userInitiated, operation: { AgentScreenshot.maskedPDF(page, masks: inPoints) }).value else {
                             throw AgentToolError(code: "unsupported", message: "Lithium couldn’t make a PDF of \(named.id).")
                         }
@@ -355,7 +356,7 @@ extension AgentHub {
             try checkDrivable(named)
             let tab = named.tab
             if tab.isAsleep {
-                try await checkWakeable(named, until: deadline)
+                try checkWakeable(named)
                 _ = try await navigation(in: named, wait: .domcontentloaded, deadline: deadline, timeout: AgentHub.readTimeout, landedWithinPage: nil) { tab.wake() }
             }
             return try await body(sizedWebView(of: tab), deadline)
@@ -800,7 +801,7 @@ extension AgentHub {
                 let viewport = layout.main.viewport
                 let masks = try AgentHub.masks(layout, of: named)
                 guard let size = AgentScreenshot.pdfPageSize(page) else { throw AgentToolError(code: "unsupported", message: "Lithium couldn’t picture \(named.id).") }
-                let points = size.width / max(1, viewport.pw)
+                let points = viewport.points(inPDFOfWidth: size.width, zoom: webView.pageZoom)
                 let area = element.map { AgentHub.scaled($0.offsetBy(dx: viewport.sx, dy: viewport.sy), by: points) }
                 if let area, area.intersection(CGRect(origin: .zero, size: size)).isEmpty {
                     throw AgentToolError(code: "unsupported", message: "\(ref ?? named.id) has nothing to picture.")

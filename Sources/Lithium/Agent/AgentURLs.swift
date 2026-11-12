@@ -5,13 +5,12 @@ import Foundation
 enum AgentURLs {
     enum Verdict: Equatable {
         case allowed
-        /// `file:` URLs give a page read access to their folder, so the user allows each one.
-        case needsConfirmation
         case blocked(String)
     }
 
     /// Lithium's pages could turn protections off, extension pages hold their data, and
-    /// `javascript:`, `data:` and `blob:` would run agent-written code. Only the web and about:blank are left.
+    /// `javascript:`, `data:` and `blob:` would run agent-written code. The web, local files and
+    /// about:blank are left.
     static func verdict(for url: URL) -> Verdict {
         switch url.scheme?.lowercased() {
         case "http", "https":
@@ -19,7 +18,7 @@ enum AgentURLs {
         case "about":
             return url.absoluteString.lowercased() == "about:blank" ? .allowed : .blocked("Only about:blank is open to agents.")
         case "file":
-            return .needsConfirmation
+            return .allowed
         case Internal.scheme:
             return .blocked("Lithium’s own pages are out of reach for agents.")
         case Extensions.scheme:

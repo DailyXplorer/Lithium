@@ -4,6 +4,15 @@ import Foundation
 struct PageViewport: Codable, Equatable {
     let w: Double, h: Double, sx: Double, sy: Double, pw: Double, ph: Double
     let dpr: Double, vx: Double, vy: Double, vs: Double
+
+    /// How many points of WebKit's PDF of the page, `width` points wide, make one CSS pixel. The
+    /// PDF is as wide as the page, or as the window when WebKit lays it out with no room taken
+    /// by a scroll bar (shown always, or with a mouse plugged in): of the two, the one that
+    /// agrees with the page's zoom. Scaling by the page alone put masks beside their fields.
+    func points(inPDFOfWidth width: Double, zoom: Double) -> Double {
+        let (byPage, byWindow) = (width / max(1, pw), width / max(1, w))
+        return abs(byPage - zoom) <= abs(byWindow - zoom) ? byPage : byWindow
+    }
 }
 
 /// One frame's answer to `snapshot`, in that frame's own viewport.

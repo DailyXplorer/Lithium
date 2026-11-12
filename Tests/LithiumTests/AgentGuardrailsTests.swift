@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Lithium
 
-/// Which agent actions need the user's Allow, and the prompts and grants that answer them, as
+/// Which elements a snapshot marks as sensitive, and what the log may keep of what is typed, as
 /// table tests. No browser needed.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -53,243 +53,56 @@ struct AgentGuardrailsTests {
         #expect(Page(url: URL(string: "https://www.paypal.com/checkoutnow")).isProviderTab)
     }
 
-    /// The decision table of design section 7.3.
-    @Test func decidesEachAction() {
-        let button = { (name: String) in Element(role: "button", name: name) }
+    /// What is typed is a secret, kept out of the log, in a card or password field, in a
+    /// provider's frame or tab, and in a frame Lithium can't read.
+    @Test func typedTextIsASecretWhereItMayBeOne() {
         let card = Element(role: "textbox", name: "Card number", field: "payment")
         let password = Element(role: "textbox", name: "Password", field: "password")
         let email = Element(role: "textbox", name: "Email")
-        let inFrame = Element(role: "textbox", name: "Postcode", inPaymentFrame: true)
-        let wallet = Element(role: "shadow-closed", name: "apple-pay-button", wallet: true)
-        let cases: [(action: Guardrails.Action, element: Element, page: Page, form: Guardrails.Form?, expected: ConfirmationKind?, why: String)] = [
-            (.type, card, Self.shop, nil, .payment, "typing a card number"),
-            (.select, Element(role: "combobox", name: "Expiry month", field: "payment"), Self.shop, nil, .payment, "picking an expiry month"),
-            (.press(enter: false), card, Self.shop, nil, .payment, "a key in a card field"),
-            (.type, inFrame, Self.shop, nil, .payment, "anything in a provider's frame"),
-            (.press(enter: false), Element(role: "frame", inUnknownFrame: true), Self.shop, nil, .password, "a key in a frame of an origin nobody knows"),
-            (.type, Element(role: "frame", inUnknownFrame: true), Page(url: Self.shop.url, paymentFrame: true), nil, .payment, "typing there on a page with a payment frame"),
-            (.activate, email, Page(url: URL(string: "https://www.paypal.com/signin")), nil, .payment, "anything in a provider's tab"),
-            (.activate, button("Pay €42.00"), Self.shop, nil, .payment, "a commit control with an amount anywhere"),
-            (.activate, button("Place order"), Self.checkout, nil, .payment, "a commit control on a payment page"),
-            (.activate, button("Place order"), Self.shop, nil, nil, "a commit control on an ordinary page"),
-            (.activate, button("Buy"), Self.shop, nil, nil, "a Buy link on a product grid"),
-            (.activate, wallet, Self.shop, nil, .payment, "an Apple Pay button"),
-            (.activate, button("Continue"), Self.shop, Guardrails.Form(cardField: true), .payment, "submitting a form with a card field"),
-            (.press(enter: true), email, Page(url: Self.shop.url, paymentFrame: true), Guardrails.Form(), .payment, "submitting any form on a page with a payment frame"),
-            (.type, password, Self.shop, nil, .password, "typing a password"),
-            (.press(enter: true), password, Self.shop, nil, .password, "Enter in a password field"),
-            (.press(enter: false), password, Self.shop, nil, nil, "Tab out of a password field"),
-            (.check, Element(role: "checkbox", name: "Show password", field: nil), Self.shop, nil, nil, "a show-password toggle"),
-            (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: true), .password, "submitting a filled password"),
-            (.activate, button("Sign in"), Self.shop, Guardrails.Form(filledPassword: false), nil, "submitting an empty password field"),
-            (.activate, button("Pay €42.00"), Self.shop, Guardrails.Form(filledPassword: true), .payment, "a payment wins over a password"),
-            (.activate, Element(role: "button", name: "Sign in", passwordFilled: true), Self.shop, nil, .password, "a plain button beside a filled password, no form"),
-            (.activate, Element(role: "clickable", name: "Continue", passwordFilled: true), Self.shop, nil, .password, "a clickable beside a filled password"),
-            (.activate, Element(role: "text", name: "Next", passwordFilled: true), Self.shop, nil, .password, "a button's label, clicked by point, beside a filled password"),
-            (.activate, Element(role: "checkbox", name: "Remember me", passwordFilled: true), Self.shop, nil, nil, "a checkbox beside a filled password"),
-            (.activate, Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, nil, "a field clicked beside a filled password"),
-            (.press(enter: true), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, .password, "Enter in a field beside a filled password, no form"),
-            (.press(enter: false), Element(role: "textbox", name: "Email", passwordFilled: true), Self.shop, nil, nil, "Tab beside a filled password"),
-            (.type, email, Self.checkout, nil, nil, "an email field on a checkout page"),
+        let cases: [(element: Element, page: Page, expected: GuardKind?, why: String)] = [
+            (card, Self.shop, .payment, "a card number"),
+            (Element(role: "combobox", name: "Expiry month", field: "payment"), Self.shop, .payment, "an expiry month"),
+            (Element(role: "textbox", name: "Postcode", inPaymentFrame: true), Self.shop, .payment, "anything in a provider's frame"),
+            (Element(role: "frame", inUnknownFrame: true), Self.shop, .password, "a frame of an origin nobody knows"),
+            (Element(role: "frame", inUnknownFrame: true), Page(url: Self.shop.url, paymentFrame: true), .payment, "that frame on a page with a payment frame"),
+            (email, Page(url: URL(string: "https://www.paypal.com/signin")), .payment, "anything in a provider's tab"),
+            (password, Self.shop, .password, "a password"),
+            (email, Self.shop, nil, "an email address"),
+            (email, Self.checkout, nil, "an email address on a checkout page"),
+            (Element(role: "checkbox", name: "Show password"), Self.shop, nil, "a show-password toggle"),
         ]
         for test in cases {
-            #expect(Guardrails.confirmation(for: test.action, on: test.element, page: test.page, submitting: test.form) == test.expected, "\(test.why)")
+            #expect(Guardrails.secret(typedInto: test.element, page: test.page) == test.expected, "\(test.why)")
         }
     }
 
-    /// A key that activates or submits asks what a click asks, and one that types a character
-    /// asks what typing does, from the same decision.
-    @Test func keysAskWhatAClickOrTypingAsks() throws {
-        let login = TargetReport.Form(id: 1, cards: false, password: true)
-        let cart = TargetReport.Form(id: 2, cards: true, password: false)
-        let target = { (report: TargetReport) in ActionTarget(report: report, address: nil, frame: .main, ref: nil, css: .zero, page: Self.shop) }
-        let control = { (role: String, name: String, form: TargetReport.Form?, submit: Bool) in
-            target(TargetReport(token: "d", role: role, name: name, tag: role == "checkbox" ? "input" : role == "link" ? "a" : "button", form: form, submit: submit))
-        }
-        let field = { (name: String, field: String?) in
-            target(TargetReport(token: "d", role: "textbox", name: name, tag: "input", field: field, form: login, editable: true))
-        }
-        func asks(_ input: ActionTarget.Input, on target: ActionTarget) -> ConfirmationKind? {
-            let (action, form) = target.guarded(input)
-            return Guardrails.confirmation(for: action, on: target.element, page: target.page, submitting: form.map(Guardrails.Form.init))
-        }
-        func key(_ combo: String) throws -> ActionTarget.Input {
-            let parsed = try #require(NativeKey.parse(combo), "\(combo)")
-            return .key(parsed.key, parsed.modifiers)
-        }
-        let controls: [(target: ActionTarget, click: ConfirmationKind?, enter: ConfirmationKind?, why: String)] = [
-            (control("button", "Sign in", login, true), .password, .password, "the submit of a filled password"),
-            (control("button", "Continue", cart, true), .payment, .payment, "the submit of a form with a card field"),
-            (control("button", "Pay €42.00", nil, false), .payment, .payment, "a commit control"),
-            (control("link", "Pay €42.00", nil, false), .payment, .payment, "a commit link"),
-            (control("link", "Help", nil, false), nil, nil, "a plain link"),
-            (control("button", "Show password", login, false), nil, nil, "a button that submits nothing"),
-            (control("checkbox", "Remember me", login, false), nil, .password, "a checkbox, which Enter submits from"),
-            (control("checkbox", "Save card", cart, false), nil, .payment, "a checkbox in a card form"),
-        ]
-        for test in controls {
-            #expect(asks(.click, on: test.target) == test.click, "click: \(test.why)")
-            for combo in ["Space", "space", "Shift+Space", "Control+Space"] { #expect(try asks(key(combo), on: test.target) == test.click, "\(combo): \(test.why)") }
-            for combo in ["Enter", "return", "Shift+Enter", "Control+M"] { #expect(try asks(key(combo), on: test.target) == test.enter, "\(combo): \(test.why)") }
-        }
-        let password = field("Password", "password")
-        let card = field("Card number", "payment")
-        let who = field("Who", nil)
-        let fields: [(target: ActionTarget, combo: String, expected: ConfirmationKind?, why: String)] = [
-            (password, "q", .password, "a character typed into a password field"),
-            (password, "Shift+Q", .password, "a capital"), (password, "+", .password, "a symbol"), (password, "Space", .password, "a space"),
-            (password, "Alt+e", .password, "an Option character"), (password, "Enter", .password, "Enter in a password field"),
-            (password, "Tab", nil, "Tab out of it"), (password, "ArrowLeft", nil, "an arrow"), (password, "Meta+K", nil, "a shortcut"),
-            (card, "4", .payment, "a digit typed into a card field"), (card, "Tab", .payment, "any key in a card field"),
-            (who, "q", nil, "a character in a plain field"), (who, "Enter", .password, "Enter submitting a filled password"),
-        ]
-        for test in fields {
-            #expect(try asks(key(test.combo), on: test.target) == test.expected, "\(test.combo): \(test.why)")
-        }
-        // A sign-in a script sends, no form: a click on a field's own control beside the filled
-        // password is free, Enter on it is not.
-        let beside = { (role: String, type: String?) in
-            target(TargetReport(token: "d", role: role, name: "Attachment", tag: "input", type: type, passwordFilled: true))
-        }
-        for (control, why) in [(beside("button", "file"), "a file input"), (beside("checkbox", "checkbox"), "a checkbox"), (beside("radio", "radio"), "a radio")] {
-            #expect(asks(.click, on: control) == nil, "click: \(why) beside a filled password")
-            #expect(try asks(key("Space"), on: control) == nil, "Space: \(why) beside a filled password")
-            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .password, "\(combo): \(why) beside a filled password") }
-        }
-        // A payment still wins over the password: Enter on a Pay or wallet button beside it.
-        let pay = target(TargetReport(token: "d", role: "button", name: "Pay €42.00", tag: "button", passwordFilled: true))
-        let wallet = target(TargetReport(token: "d", role: "shadow-closed", name: "apple-pay-button", wallet: true, passwordFilled: true))
-        for (control, why) in [(pay, "a commit control"), (wallet, "an Apple Pay button")] {
-            #expect(asks(.click, on: control) == .payment, "click: \(why) beside a filled password")
-            for combo in ["Enter", "Control+M"] { #expect(try asks(key(combo), on: control) == .payment, "\(combo): \(why) beside a filled password") }
-        }
-    }
-
-    /// The mark is the confirmation the element's usual action meets: typing into a field,
-    /// activating anything else. Text and headings have no action, and no mark.
+    /// A field is marked for what typing into it would hold, anything else for what a click on it
+    /// does. Text and headings have no action, and no mark.
     @Test func marksWhatTheSnapshotShows() {
         let provider = Page(url: URL(string: "https://www.paypal.com/signin"))
         let password = Element(role: "textbox", name: "Password", field: "password")
         var framedPassword = password
         framedPassword.inPaymentFrame = true
-        let cases: [(element: Element, page: Page, expected: ConfirmationKind?, why: String)] = [
+        let cases: [(element: Element, page: Page, expected: GuardKind?, why: String)] = [
             (password, Self.shop, .password, "a password field"),
             (password, provider, .payment, "a password field on a provider's tab"),
             (framedPassword, Self.shop, .payment, "a password field in a provider's frame"),
             (Element(role: "textbox", name: "Card number", field: "payment"), Self.shop, .payment, "a card field"),
             (Element(role: "button", name: "Pay €42.00"), Self.shop, .payment, "a commit control with an amount"),
+            (Element(role: "button", name: "Place order"), Self.checkout, .payment, "a commit control on a payment page"),
+            (Element(role: "button", name: "Place order"), Self.shop, nil, "a commit control on an ordinary page"),
+            (Element(role: "button", name: "Buy"), Self.shop, nil, "a Buy link on a product grid"),
+            (Element(role: "shadow-closed", name: "apple-pay-button", wallet: true), Self.shop, .payment, "an Apple Pay button"),
             (Element(role: "button", name: "Sign in"), provider, .payment, "a button on a provider's tab"),
+            (Element(role: "button", name: "Sign in"), Self.shop, nil, "a sign-in button"),
             (Element(role: "frame", inPaymentFrame: true), Self.shop, .payment, "a provider's frame"),
             (Element(role: "link", name: "Help"), Self.checkout, nil, "a plain link"),
             (Element(role: "heading", name: "Pay now", inPaymentFrame: true), Self.shop, nil, "a heading"),
             (Element(role: "text", name: "Total €42.00"), Self.checkout, nil, "text"),
         ]
         for test in cases {
-            let mark = Guardrails.mark(test.element, page: test.page)
-            #expect(mark == test.expected, "\(test.why)")
-            guard test.expected != nil else { continue }
-            let action: Guardrails.Action = test.element.field == nil ? .activate : .type
-            #expect(mark == Guardrails.confirmation(for: action, on: test.element, page: test.page), "\(test.why)")
+            #expect(Guardrails.mark(test.element, page: test.page) == test.expected, "\(test.why)")
         }
-    }
-
-    // MARK: Prompts and grants
-
-    private func confirmation(_ kind: ConfirmationKind, session: String = "a", tab: Tab.ID? = nil, site: String? = "example.com") -> AgentConfirmation {
-        AgentConfirmation(kind: kind, session: session, sessionLabel: "s1", client: "test", tabID: tab, action: "do it", site: site)
-    }
-
-    @Test func allowOnSiteGrantsOneKindOnOneSiteForOneSession() throws {
-        let confirmations = AgentConfirmations()
-        let download = confirmation(.download)
-        confirmations.ask(download)
-        confirmations.answer(download.id, .allowOnSite)
-        #expect(confirmations.answers[download.id] == .allowOnSite)
-        #expect(confirmations.pending.isEmpty)
-        #expect(confirmations.grant(for: .download, site: "example.com", session: "a") != nil)
-        #expect(confirmations.grant(for: .download, site: "example.com", session: "b") == nil)
-        #expect(confirmations.grant(for: .upload, site: "example.com", session: "a") == nil)
-        #expect(confirmations.grant(for: .download, site: "other.example", session: "a") == nil)
-        // Answered twice, only the first counts.
-        confirmations.answer(download.id, .deny)
-        #expect(confirmations.answers[download.id] == .allowOnSite)
-        confirmations.finish(download.id)
-        #expect(confirmations.answers.isEmpty)
-
-        confirmations.revoke(try #require(confirmations.grants.first))
-        #expect(confirmations.grants.isEmpty)
-    }
-
-    /// The next prompt in the queue takes the place of the one answered, Allow once where it was:
-    /// a click that lands before it stayed in place a moment (a double click's second) answers nothing.
-    @Test func theBannerTakesClicksOnlyOnceItStayedInPlace() {
-        let confirmations = AgentConfirmations()
-        let first = confirmation(.payment, site: "shop.example")
-        let second = confirmation(.payment, site: "shop.example")
-        confirmations.ask(first)
-        confirmations.ask(second)
-        let shown = ContinuousClock.now
-        var protection = ClickProtection(at: shown)
-        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown)
-        #expect(confirmations.pending.map(\.id) == [first.id, second.id])
-        AgentConfirmationBanner.answer(.allowOnce, to: first.id, in: confirmations, protection: protection, at: shown + ClickProtection.delay)
-        #expect(confirmations.answers[first.id] == .allowOnce)
-
-        // The next prompt takes its place: the banner is armed again from there.
-        let replaced = shown + ClickProtection.delay
-        protection.rearm(at: replaced)
-        AgentConfirmationBanner.answer(.allowOnce, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(100))
-        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + .milliseconds(499))
-        #expect(confirmations.pending.map(\.id) == [second.id])
-        #expect(confirmations.answers[second.id] == nil)
-        AgentConfirmationBanner.answer(.deny, to: second.id, in: confirmations, protection: protection, at: replaced + ClickProtection.delay)
-        #expect(confirmations.answers[second.id] == .deny)
-    }
-
-    @Test func paymentsAndFilesAreNeverGranted() {
-        let confirmations = AgentConfirmations()
-        for kind in [ConfirmationKind.payment, .file] {
-            let asked = confirmation(kind, site: kind == .file ? nil : "shop.example")
-            #expect(!asked.offersSiteGrant)
-            confirmations.ask(asked)
-            confirmations.answer(asked.id, .allowOnSite)
-            #expect(confirmations.grant(for: kind, site: "shop.example", session: "a") == nil)
-        }
-        #expect(confirmations.grants.isEmpty)
-        #expect(confirmation(.password).offersSiteGrant)
-    }
-
-    @Test func endingASessionDropsItsGrantsAndCancelsItsPrompts() {
-        let confirmations = AgentConfirmations()
-        for session in ["a", "b"] {
-            let granted = confirmation(.download, session: session)
-            confirmations.ask(granted)
-            confirmations.answer(granted.id, .allowOnSite)
-        }
-        let waiting = confirmation(.upload, session: "a")
-        let other = confirmation(.upload, session: "b")
-        confirmations.ask(waiting)
-        confirmations.ask(other)
-        confirmations.end(session: "a")
-        #expect(confirmations.grants.map(\.session) == ["b"])
-        #expect(confirmations.answers[waiting.id] == .cancelled)
-        #expect(confirmations.pending == [other])
-    }
-
-    @Test func oneBannerAtATimeTheSelectedTabFirst() {
-        let confirmations = AgentConfirmations()
-        let (first, second) = (UUID(), UUID())
-        let older = confirmation(.download, tab: first)
-        let newer = confirmation(.download, tab: second)
-        let later = confirmation(.upload, tab: second)
-        [older, newer, later].forEach(confirmations.ask)
-        #expect(confirmations.front(selected: nil) == older)
-        #expect(confirmations.front(selected: second) == newer)
-        confirmations.cancel(tab: second)
-        #expect(confirmations.pending == [older])
-        #expect(confirmations.answers[later.id] == .cancelled)
-        #expect(confirmations.isAsking(about: first, .download))
-        #expect(!confirmations.isAsking(about: first, .upload))
     }
 
     @Test func dialogsSayWhatTheyAreAndTheirSafeDefault() {

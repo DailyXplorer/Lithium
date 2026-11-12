@@ -136,7 +136,6 @@ extension AgentHub {
                 throw AgentToolError(code: error.code, message: "Field \(index + 1) of \(steps.count) (\(step.ref)): \(error.message)\(before)", tab: error.tab)
             }
             var entry: [String: JSONValue] = ["ref": .string(step.ref), "type": .string(step.kind)]
-            if let grant = last["grant"] { entry["grant"] = grant }
             if let changed = last["changed"] { entry["changed"] = changed }
             filled.append(.object(entry))
             // A new document leaves nothing to fill; a same-page navigation keeps the refs alive.
@@ -199,7 +198,7 @@ extension AgentHub {
         let deadline = ContinuousClock.now + timeout
         return try await hub.exclusive(named, until: deadline, timeout: timeout) {
             try hub.checkDrivable(named)
-            try await hub.checkWakeable(named, until: deadline)
+            try hub.checkWakeable(named)
             let tab = named.tab
             if tab.loadedWebView?.userWindow != nil {
                 throw AgentToolError(code: "unsupported", message: "\(named.id) is shown in Lithium’s window, which agents never resize. Use a tab the user isn’t looking at.")

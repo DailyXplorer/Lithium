@@ -28,29 +28,17 @@ final class AgentTab {
     var dialog: AgentDialog?
     @ObservationIgnored var dialogReply: CheckedContinuation<DialogReply?, Never>?
     /// The agent started the tab's load: a download while it is under way is the agent's, and
-    /// asks the user, until the user's own click or Enter starts another load.
+    /// goes ahead unasked, until the user's own click or Enter starts another load.
     @ObservationIgnored var drive: AgentDrive?
-    var downloadAnswers = 0
-    @ObservationIgnored var downloadAnswer: Result<ConfirmationGrant, AgentToolError>?
-    /// Files the user allowed for an upload, for the next file chooser within 5 seconds.
+    /// The files of an `upload_files` call, for the next file chooser within 5 seconds.
     @ObservationIgnored var armedUpload: (files: [URL], expires: ContinuousClock.Instant)?
     @ObservationIgnored var fileChoosersCancelled = 0
     /// Set by `resize` while the tab is out of the user's window; cleared once shown.
     @ObservationIgnored var viewport: CGSize?
     var acting: AgentActing?
     @ObservationIgnored var opened: [Tab] = []
-    /// Forms the user allowed an agent to fill, for 2 minutes (card number, expiry and CVC ask once).
-    @ObservationIgnored var formCovers: [FormCover] = []
-    @ObservationIgnored var prompts = 0
-    /// Allows got during the running action, so its retry (`AgentHub.action`) doesn't ask twice.
-    /// Downloads and files never come from it: each asks.
-    @ObservationIgnored var answered: [String: ConfirmationGrant] = [:]
     /// Nil until the first agent use, so a tab no agent used costs nothing.
     @ObservationIgnored var capture: TabCapture?
-
-    static func prompt(_ kind: ConfirmationKind, _ action: String, subject: String) -> String {
-        "\(kind.rawValue)\n\(action)\n\(subject)"
-    }
 
     /// Child frames by document token; the main frame needs no `WKFrameInfo`.
     @ObservationIgnored private(set) var frames: [String: WKFrameInfo] = [:]
@@ -248,16 +236,8 @@ struct AgentActing: Equatable {
     var pointer: CGPoint?
 }
 
-struct FormCover {
-    let form: ElementAddress
-    let session: String
-    let kind: ConfirmationKind
-    let until: ContinuousClock.Instant
-}
-
 /// An agent's input in a tab, with how far the tab's loads had got then.
 struct AgentDrive {
-    let session: MCPSession
     var marks: Tab.LoadMarks
     let deadline: ContinuousClock.Instant
     /// The user clicked in the page since, or pressed Enter there.

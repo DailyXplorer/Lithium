@@ -247,6 +247,8 @@ final class Tab: NSObject, Identifiable {
     /// Loads in the page that ended without showing anything; `lastUnshownLoad` tells how.
     private(set) var unshownLoads = 0
     @ObservationIgnored private(set) var lastUnshownLoad: UnshownLoad?
+    /// The download the page last started, for the agent's result to say where its file went.
+    @ObservationIgnored private(set) weak var lastDownload: DownloadItem?
 
     /// The three counts above: any of them moving ends the load under way.
     struct LoadMarks: Equatable {
@@ -952,7 +954,7 @@ final class Tab: NSObject, Identifiable {
     }
 
     private func downloadStarted(_ download: WKDownload, inMainFrame: Bool, fileName: String?) {
-        Downloads.shared.track(download)
+        lastDownload = Downloads.shared.track(download)
         // A tab going on to an extension's address isn't empty, though nothing is shown yet.
         guard !goToAddressAfterWaking() else { return }
         if inMainFrame { endedUnshown(.download(fileName: fileName)) }
@@ -1216,10 +1218,7 @@ extension Tab: WKNavigationDelegate {
             browser?.agent?.userStartedLoad(in: self)
         }
         if action.shouldPerformDownload {
-            let name = url.lastPathComponent
-            if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: ["", "/"].contains(name) ? nil : name, size: nil, from: url) {
-                return (allowed ? .download : .cancel, preferences)
-            }
+            if browser?.agent?.startedDownload(in: self) == true { return (.download, preferences) }
             // A frame's `<a download>` asks first, as its attachments do (see the response policy),
             // whichever frame it names; so does the page's own when no press started it.
             if isMainFrame, (action.sourceFrame as WKFrameInfo?)?.isMainFrame ?? true, pressed { return (.download, preferences) }
@@ -1286,7 +1285,7 @@ extension Tab: WKNavigationDelegate {
         // place, as in WebKit: a new tab of Lithium's would get around the popup blocker.
         if action.navigationType == .linkActivated, action.modifierFlags.contains(.command) || action.buttonNumber == 4 && browser?.agent?.actingSession(in: self) != nil,
            pressed {
-            if await browser?.agent?.open(url, from: self) != true {
+            if browser?.agent?.open(url, from: self) != true {
                 browser?.newTab(url: url, selecting: action.modifierFlags.contains(.shift), privateStore: privateStore, openedFrom: self)
             }
             return (.cancel, preferences)
@@ -1360,10 +1359,8 @@ extension Tab: WKNavigationDelegate {
         let isAttachment = (response.response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         guard !response.canShowMIMEType || isAttachment else { return .allow }
-        // A download the agent started waits for the user's Allow, in place of what follows.
-        if let allowed = await browser?.agent?.confirmDownload(in: self, fileName: response.response.suggestedFilename, size: response.response.expectedContentLength, from: response.response.url) {
-            return allowed ? .download : .cancel
-        }
+        // A download the agent started goes ahead, in place of what follows.
+        if browser?.agent?.startedDownload(in: self) == true { return .download }
         if response.isForMainFrame, loadWasRequested { return .download }
         // A frame (an ad, a hidden download frame) or a page going to a file without a click asks
         // first, as in Safari: the site the user is on is allowed, or not, once.
@@ -1632,13 +1629,9 @@ extension Tab: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         guard let browser else { return nil }
-        // An agent's tab for an address agents can't open as it is (a file: page, which asks the
-        // user) opens through the hub, without its opener.
+        // An agent's action opens no tab on an address agents can't reach (Lithium's own pages).
         let agentSession = browser.agent?.actingSession(in: self)
-        if agentSession != nil, let url = action.request.url, !url.absoluteString.isEmpty, AgentURLs.verdict(for: url) != .allowed {
-            Task { await browser.agent?.open(url, from: self) }
-            return nil
-        }
+        if agentSession != nil, let url = action.request.url, !url.absoluteString.isEmpty, AgentURLs.verdict(for: url) != .allowed { return nil }
         // WebKit hands an extension's page its own configuration for the new one, which a website
         // won't load in. It opens as a plain tab instead, without a way back to its opener.
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()), needsNewWebView(for: url) {
@@ -1796,7 +1789,7 @@ extension Tab: WKUIDelegate {
         runOpenPanelWith parameters: WKOpenPanelParameters,
         initiatedByFrame frame: WKFrameInfo
     ) async -> [URL]? {
-        // An agent never gets the user's panel: only files the user allowed for it.
+        // An agent never gets the user's panel: only the files its call named.
         switch browser?.agent?.openPanel(for: self) {
         case .files(let files): return files
         case .cancelled: return nil

@@ -397,20 +397,16 @@ final class BrowserWindow: Identifiable {
         }
         // The page has the keyboard: its menu or dialog gets the Escape first, the prompts only if it declines.
         guard pageDeclined || !(selectedTab?.contentView.window?.firstResponder is WKWebView) else { return false }
-        // The shown permission prompt, denied this once and not remembered. Not under an agent's
-        // banner, whose Deny Escape triggers.
-        if browser.agent?.confirmations.front(selected: selectedTabID) == nil,
-           let request = shownPermissionRequest {
+        // The shown permission prompt, denied this once and not remembered.
+        if let request = shownPermissionRequest {
             browser.permissions.dismiss(request)
             return true
         }
-        if browser.agent?.confirmations.front(selected: selectedTabID) == nil,
-           let request = shownAppLinkRequest {
+        if let request = shownAppLinkRequest {
             browser.appLinks.answer(request, open: false)
             return true
         }
-        if browser.agent?.confirmations.front(selected: selectedTabID) == nil,
-           let request = shownPasswordSave {
+        if let request = shownPasswordSave {
             browser.passwords.answer(request, .notNow)
             return true
         }

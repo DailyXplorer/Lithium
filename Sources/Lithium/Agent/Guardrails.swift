@@ -1,11 +1,9 @@
 import Foundation
 
-/// What an agent can't do without the user's Allow.
-enum ConfirmationKind: String, CaseIterable {
-    case payment, password, download, upload, file
-
-    /// Payments always ask; a `file:` address has no site to allow.
-    var allowsSiteGrant: Bool { self != .payment && self != .file }
+/// What a snapshot's `guard` says of an element: acting on it pays, or types or sends a password.
+/// Lithium asks the user nothing; the mark tells the agent, whose own rules decide.
+enum GuardKind: String, CaseIterable {
+    case payment, password
 }
 
 /// Payment providers' hosts: a frame or a tab on one of them, or under one, is a payment.
@@ -31,8 +29,8 @@ struct PaymentProviders: Equatable {
     }
 }
 
-/// Which agent actions need the user's Allow, from the facts `agent.js` reports per frame. Pure:
-/// no AppKit, no page.
+/// Which elements are sensitive, from the facts `agent.js` reports per frame. Pure: no AppKit,
+/// no page.
 enum Guardrails {
     struct Element {
         var role: String
@@ -41,10 +39,6 @@ enum Guardrails {
         var field: String?
         /// An Apple Pay or Google Pay button.
         var wallet = false
-        /// A sign-in may send a filled password without a form, from any button or link or on Enter.
-        var passwordFilled = false
-        /// A file input: a click only opens the chooser, which `upload_files` asks about.
-        var setsFiles = false
         var inPaymentFrame = false
         /// In a frame Lithium can't read: keys there may fill a card or a password.
         var inUnknownFrame = false
@@ -65,58 +59,26 @@ enum Guardrails {
         }
     }
 
-    /// The form an action submits.
-    struct Form {
-        var cardField = false
-        var filledPassword = false
-    }
-
-    enum Action: Equatable {
-        case type, select, check
-        case press(enter: Bool)
-        /// A click, or Enter or Space on a button or link.
-        case activate
-    }
-
-    /// The confirmation `action` needs, nil when it is free. A payment wins over a password.
-    static func confirmation(for action: Action, on element: Element, page: Page, submitting form: Form? = nil) -> ConfirmationKind? {
+    /// What text typed into `element` is: a card's, a password's, or nil for neither. Decides
+    /// what the action log keeps of it. A payment wins over a password.
+    static func secret(typedInto element: Element, page: Page) -> GuardKind? {
         if page.isProviderTab || element.inPaymentFrame { return .payment }
         if element.inUnknownFrame { return page.isPaymentPage ? .payment : .password }
-        if let form, form.cardField || page.paymentFrame { return .payment }
-        switch action {
-        case .type, .select, .check:
-            if element.field == "payment" { return .payment }
-            if element.field == "password", action == .type { return .password }
-        case .press(let enter):
-            if element.field == "payment" { return .payment }
-            // Enter on a wallet or commit control asks for the payment a click on it would.
-            if enter, element.wallet || isCommitControl(role: element.role, name: element.name) && (page.isPaymentPage || hasAmount(element.name)) { return .payment }
-            if enter, element.field == "password" || element.passwordFilled { return .password }
-        case .activate:
-            if element.wallet { return .payment }
-            if isCommitControl(role: element.role, name: element.name), page.isPaymentPage || hasAmount(element.name) { return .payment }
-            // A script can send the filled password from any click, and the target's role often
-            // hides it (a span in a button, a div with a listener); only field controls are free.
-            if element.passwordFilled, !element.setsFiles, !Self.fieldRoles.contains(element.role) { return .password }
-        }
-        return form?.filledPassword == true ? .password : nil
+        return element.field.flatMap(GuardKind.init(rawValue:))
     }
 
-    /// The `guard` the snapshot shows: what the element's usual action would need.
-    static func mark(_ element: Element, page: Page) -> ConfirmationKind? {
-        if element.field != nil { return confirmation(for: .type, on: element, page: page) }
+    /// The `guard` the snapshot shows: a card or password field, a wallet button, a control that
+    /// commits a payment, or anything a click reaches in a provider's frame or tab.
+    static func mark(_ element: Element, page: Page) -> GuardKind? {
+        if element.field != nil { return secret(typedInto: element, page: page) }
         guard actionable.contains(element.role) || element.wallet else { return nil }
-        return confirmation(for: .activate, on: element, page: page)
+        if page.isProviderTab || element.inPaymentFrame || element.wallet { return .payment }
+        return isCommitControl(role: element.role, name: element.name) && (page.isPaymentPage || hasAmount(element.name)) ? .payment : nil
     }
 
     private static let actionable: Set<String> = [
         "link", "button", "textbox", "searchbox", "checkbox", "radio", "combobox", "listbox", "option", "slider",
         "spinbutton", "switch", "tab", "menuitem", "clickable", "shadow-closed", "frame",
-    ]
-
-    /// Controls a click sets rather than sends: clicking them beside a filled password is free.
-    private static let fieldRoles: Set<String> = [
-        "textbox", "searchbox", "checkbox", "radio", "switch", "combobox", "listbox", "option", "slider", "spinbutton",
     ]
 
     static let paymentPaths: Set<String> = ["checkout", "payment", "paiement", "pay", "kasse", "zahlung", "pago", "pagamento", "billing", "place-order"]

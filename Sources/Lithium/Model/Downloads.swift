@@ -176,7 +176,8 @@ final class Downloads: NSObject, WKDownloadDelegate {
         return running.reduce(0.0) { $0 + Double(max(0, $1.completedBytes)) } / total
     }
 
-    func track(_ download: WKDownload, askingWhere: Bool = false) {
+    @discardableResult
+    func track(_ download: WKDownload, askingWhere: Bool = false) -> DownloadItem {
         download.delegate = self
         let item = DownloadItem(download: download, filename: download.originalRequest?.url?.lastPathComponent ?? "Download", asksWhere: askingWhere)
         item.list = self
@@ -186,6 +187,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
         partials[ObjectIdentifier(download)] = nil
         items.insert(item, at: 0)
         tidy.prepare()
+        return item
     }
 
     func clearFinished() {

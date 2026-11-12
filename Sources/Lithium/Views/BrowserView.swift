@@ -100,16 +100,6 @@ struct ContentCard: View {
     var body: some View {
         let tab = window.selectedTab
         VStack(spacing: 0) {
-            if let confirmations = browser.agent?.confirmations, let confirmation = confirmations.front(selected: tab?.id) {
-                AgentConfirmationBanner(
-                    confirmation: confirmation,
-                    confirmations: confirmations,
-                    otherTab: confirmation.tabID == tab?.id ? nil : browser.tabs.first { $0.id == confirmation.tabID },
-                    queued: confirmations.pending.count - 1
-                )
-                .id(confirmation.id)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
             if let request = window.shownPermissionRequest {
                 PermissionPrompt(request: request)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -176,7 +166,6 @@ struct ContentCard: View {
         .animation(.snappy(duration: 0.2), value: browser.permissions.pending)
         .animation(.snappy(duration: 0.2), value: browser.appLinks.pending)
         .animation(.snappy(duration: 0.2), value: browser.passwords.pending)
-        .animation(.snappy(duration: 0.2), value: browser.agent?.confirmations.pending)
         .animation(.snappy(duration: 0.2), value: window.find.isVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))

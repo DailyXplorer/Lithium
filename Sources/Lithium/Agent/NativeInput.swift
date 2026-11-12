@@ -12,17 +12,8 @@ final class NativeInput {
         let afterPress: Bool
     }
 
-    /// What `AgentHub.gate` weighed: anything else never reaches the page.
-    struct Sends: OptionSet {
-        let rawValue: Int
-        static let pointer = Sends(rawValue: 1)
-        static let buttons = Sends(rawValue: 2)
-        static let keys = Sends(rawValue: 4)
-    }
-
     let webView: WKWebView
     private let window: NSWindow
-    private let sends: Sends
     /// Runs before every event: the tab closing, the user's own input and Stop end the action there.
     private let check: () throws -> Void
     private let onPointer: (CGPoint) -> Void
@@ -30,31 +21,35 @@ final class NativeInput {
     private var pressed = false
     private(set) var pointer: CGPoint?
 
-    init(webView: WKWebView, sends: Sends, check: @escaping () throws -> Void, onPointer: @escaping (CGPoint) -> Void) throws {
+    init(webView: WKWebView, check: @escaping () throws -> Void, onPointer: @escaping (CGPoint) -> Void) throws {
         guard let window = webView.window else { throw WindowChanged(afterPress: false) }
         self.webView = webView
         self.window = window
-        self.sends = sends
         self.check = check
         self.onPointer = onPointer
-    }
-
-    private func checkGated(_ kind: Sends) throws {
-        guard sends.contains(kind) else {
-            assertionFailure("An action sent input its gate didn't weigh.")
-            throw AgentToolError(code: "unsupported", message: "Lithium refused input its Guardrails hadn’t weighed.")
-        }
     }
 
     // MARK: Pointer
 
     func move(to point: CGPoint, steps: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws {
-        try checkGated(.pointer)
+        try move(to: point, steps: steps, modifiers: modifiers, as: held == nil ? .mouseMoved : .leftMouseDragged)
+    }
+
+    /// A move the page sees wherever its window is. WebKit drops a move with no button held
+    /// unless its window is the key one of the app in front, so anywhere else the move goes as a
+    /// drag of the middle button, never pressed: the page gets a plain `mousemove` (with
+    /// `buttons` 4) and its hover styles and listeners run.
+    func hover(to point: CGPoint, steps: Int) throws {
+        let inFront = NSApp.isActive && (webView.window ?? window).isKeyWindow
+        try move(to: point, steps: steps, modifiers: [], as: inFront ? .mouseMoved : .otherMouseDragged)
+    }
+
+    private func move(to point: CGPoint, steps: Int, modifiers: NSEvent.ModifierFlags, as type: NSEvent.EventType) throws {
         let start = pointer ?? point
         for step in 1...max(1, steps) {
             let fraction = Double(step) / Double(max(1, steps))
             let at = CGPoint(x: start.x + (point.x - start.x) * fraction, y: start.y + (point.y - start.y) * fraction)
-            try send(mouse: held == nil ? .mouseMoved : .leftMouseDragged, at: at, modifiers: modifiers, clickCount: 0)
+            try send(mouse: type, at: at, modifiers: modifiers, clickCount: 0)
         }
     }
 
@@ -67,7 +62,6 @@ final class NativeInput {
     }
 
     func down(at point: CGPoint, button: Button = .left, clickCount: Int = 1, modifiers: NSEvent.ModifierFlags = []) throws {
-        try checkGated(.buttons)
         if button == .right, let page = webView as? PageWebView { page.agentMenuUntil = .now + .seconds(2) }
         try send(mouse: button.down, at: point, modifiers: modifiers, clickCount: clickCount)
         held = (button.down, point, modifiers)
@@ -88,8 +82,8 @@ final class NativeInput {
         post(Self.mouseEvent(Self.upType(for: held.button), at: webView.convert(pointer ?? held.at, to: nil), window: webView.window ?? window, modifiers: held.modifiers, clickCount: 1, pressure: 0))
     }
 
-    /// Phased pixel wheel events of at most 120 px each, at `point`. Returns how many the page will see.
-    func wheel(dx: Double, dy: Double, at point: CGPoint) throws -> Int {
+    /// Phased pixel wheel events of at most 120 px each, at `point`.
+    func wheel(dx: Double, dy: Double, at point: CGPoint) throws {
         try move(to: point)
         let chunks = max(1, Int((max(abs(dx), abs(dy)) / 120).rounded(.up)))
         var events: [(dx: Double, dy: Double, phase: Int64)] = (0..<chunks).map { index in
@@ -110,13 +104,11 @@ final class NativeInput {
             pressed = true
             post(wheel)
         }
-        return events.count
     }
 
     // MARK: Keys
 
     func key(_ key: Key, modifiers: NSEvent.ModifierFlags = []) throws {
-        try checkGated(.keys)
         let flags = modifiers.union(key.flags)
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             try check()
@@ -133,7 +125,6 @@ final class NativeInput {
 
     /// Text no key types (accents, CJK, emoji), as the Character Viewer and input methods insert it.
     func insert(_ text: String) throws {
-        try checkGated(.keys)
         try check()
         pressed = true
         (webView as NSView as? NSTextInputClient)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -188,7 +179,7 @@ final class NativeInput {
         )!
         // AppKit's factory leaves an other button's number at 0, which WebKit takes for the left
         // button: a middle click would follow a link in place.
-        guard [.otherMouseDown, .otherMouseUp].contains(type), let cg = event.cgEvent else { return event }
+        guard [.otherMouseDown, .otherMouseUp, .otherMouseDragged].contains(type), let cg = event.cgEvent else { return event }
         cg.setIntegerValueField(.mouseEventButtonNumber, value: Int64(CGMouseButton.center.rawValue))
         cg.setIntegerValueField(.mouseEventNumber, value: Int64(eventNumber))
         return NSEvent(cgEvent: cg) ?? event
@@ -206,6 +197,7 @@ final class NativeInput {
         case .rightMouseUp: webView.rightMouseUp(with: event)
         case .otherMouseDown: webView.otherMouseDown(with: event)
         case .otherMouseUp: webView.otherMouseUp(with: event)
+        case .otherMouseDragged: webView.otherMouseDragged(with: event)
         case .scrollWheel: webView.scrollWheel(with: event)
         case .keyDown: webView.keyDown(with: event)
         case .keyUp: webView.keyUp(with: event)

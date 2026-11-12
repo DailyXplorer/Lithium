@@ -4,12 +4,12 @@ import Testing
 import WebKit
 @testable import Lithium
 
-/// Confirmations, downloads, file choosers, dialogs and payment marks on a whole Browser, through
+/// Local files, downloads, file choosers, dialogs and payment marks on a whole Browser, through
 /// the hub as an MCP client calls it, on pages served from 127.0.0.1 and, for a second origin,
-/// localhost. The test answers prompts through `AgentConfirmations`, never through the UI.
+/// localhost. Lithium asks the user nothing about any of them.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
-struct AgentConfirmationsTests {
+struct AgentTransfersTests {
     typealias Client = AgentTabsTests.Client
 
     private static let html = "Content-Type: text/html; charset=utf-8"
@@ -37,6 +37,8 @@ struct AgentConfirmationsTests {
     private func withAgent(_ body: (Client, URL) async throws -> Void) async throws {
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         let (listener, base) = try await LocalHTTP.serve(Self.pages)
+        // The throwaway home the tests run in has no Downloads folder, and a transfer into none fails.
+        try FileManager.default.createDirectory(at: .downloadsDirectory, withIntermediateDirectories: true)
         defer { listener.cancel() }
         let browser = Browser()
         await browser.privacy.waitUntilReady()
@@ -58,19 +60,6 @@ struct AgentConfirmationsTests {
         return condition()
     }
 
-    /// Starts a call, waits for the prompt it raises, and answers it as the user would.
-    private func call(_ client: Client, _ tool: String, _ arguments: JSONValue, answering answer: ConfirmationAnswer, expecting kind: ConfirmationKind) async throws -> (AgentTabsTests.ToolResult, AgentConfirmation) {
-        let confirmations = client.hub.confirmations
-        let task = Task { await client.call(tool, arguments) }
-        guard await waitUntil(20, { !confirmations.pending.isEmpty }), let asked = confirmations.pending.first else {
-            Issue.record("\(tool) asked nothing: \(await task.value.content)")
-            throw CancellationError()
-        }
-        #expect(asked.kind == kind)
-        confirmations.answer(asked.id, answer)
-        return (await task.value, asked)
-    }
-
     private func open(_ client: Client, _ url: URL) async throws -> String {
         let opened = await client.call("tab_open", ["url": .string(url.absoluteString), "wait": "load"])
         #expect(!opened.isError, "\(opened.content)")
@@ -79,138 +68,72 @@ struct AgentConfirmationsTests {
 
     // MARK: file: addresses
 
-    @Test func fileAddressesAskEveryTime() async throws {
+    /// A local file opens like any page: Lithium asks the user nothing, and logs no prompt.
+    @Test func fileAddressesOpenUnasked() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "agent-notes-\(UUID().uuidString).html")
         try "<title>Notes</title><p>private</p>".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         try await withAgent { client, base in
-            let browser = client.browser
-            let (opened, asked) = try await call(client, "tab_open", ["url": .string(file.absoluteString), "wait": "load"], answering: .allowOnce, expecting: .file)
+            let opened = await client.call("tab_open", ["url": .string(file.absoluteString), "wait": "load"])
             #expect(!opened.isError, "\(opened.content)")
             #expect(opened["title"] == "Notes")
-            #expect(asked.tabID == nil)
-            #expect(asked.site == nil)
-            #expect(!asked.offersSiteGrant)
-            #expect(asked.action.contains(file.lastPathComponent))
             let id = try #require(opened["tab"]?.string)
 
-            // Allowed once is once: the next visit asks again, and Deny keeps the tab where it was.
             let one = base.appending(path: "one")
             #expect(!(await client.call("navigate", ["tab": .string(id), "url": .string(one.absoluteString)])).isError)
-            let (denied, _) = try await call(client, "navigate", ["tab": .string(id), "url": .string(file.absoluteString)], answering: .deny, expecting: .file)
-            #expect(denied.code == "denied_by_user", "\(denied.content)")
-            #expect(client.tab(id)?.url == one)
-            let (back, _) = try await call(client, "go_back", ["tab": .string(id)], answering: .allowOnSite, expecting: .file)
+            let back = await client.call("go_back", ["tab": .string(id)])
             #expect(back["title"] == "Notes", "\(back.content)")
-            #expect(client.hub.confirmations.grants.isEmpty)
+            let again = await client.call("navigate", ["tab": .string(id), "url": .string(file.absoluteString)])
+            #expect(again["title"] == "Notes", "\(again.content)")
 
-            // Unanswered, a tab_open leaves no tab.
-            let group = browser.commandWindow.agentTabs.count
-            let late = await client.call("tab_open", ["url": .string(file.absoluteString), "timeoutMs": 300])
-            #expect(late.code == "confirmation_timeout", "\(late.content)")
-            #expect(browser.commandWindow.agentTabs.count == group)
-            #expect(client.hub.confirmations.pending.isEmpty)
-
-            let entries = await client.hub.log.entries(limit: 50).filter { $0["event"] == "confirmation" }
-            #expect(entries.compactMap { $0["confirmation"]?["answer"]?.string }.sorted() == ["allow", "allow", "deny", "timeout"])
-            #expect(entries.allSatisfy { $0["confirmation"]?["kind"] == "file" && $0["subject"]?.string?.hasPrefix("file://") == true })
-        }
-    }
-
-    @Test func theUserNavigatingTheTabCancelsItsPrompt() async throws {
-        try await withAgent { client, base in
-            let id = try await open(client, base.appending(path: "one"))
-            let tab = try #require(client.tab(id))
-            let task = Task { await client.call("navigate", ["tab": .string(id), "url": "file:///tmp/agent-elsewhere.html"]) }
-            #expect(await waitUntil(20) { client.hub.confirmations.front(selected: nil)?.tabID == tab.id })
-            client.browser.navigate(tab, .reload)
-            let result = await task.value
-            #expect(result.code == "user_interrupted", "\(result.content)")
-            #expect(client.hub.confirmations.pending.isEmpty)
-        }
-    }
-
-    /// Back or Forward with no page to go to (⌘[ and ⌘] reach it from the menu) does nothing, so
-    /// the agent's prompt stays.
-    @Test func backWithNowhereToGoLeavesThePrompt() async throws {
-        try await withAgent { client, base in
-            let id = try await open(client, base.appending(path: "one"))
-            let tab = try #require(client.tab(id))
-            #expect(!tab.canGoBack && !tab.canGoForward)
-            let task = Task { await client.call("navigate", ["tab": .string(id), "url": "file:///tmp/agent-elsewhere.html"]) }
-            #expect(await waitUntil(20) { client.hub.confirmations.front(selected: nil)?.tabID == tab.id })
-            client.browser.navigate(tab, .back)
-            client.browser.navigate(tab, .forward)
-            let asked = try #require(client.hub.confirmations.pending.first)
-            #expect(asked.tabID == tab.id)
-            client.hub.confirmations.answer(asked.id, .deny)
-            let result = await task.value
-            #expect(result.code == "denied_by_user", "\(result.content)")
+            let entries = await client.hub.log.entries(limit: 50)
+            #expect(entries.allSatisfy { $0["event"] != "confirmation" && $0["confirmation"] == nil })
         }
     }
 
     // MARK: Downloads
 
-    @Test func downloadsTheAgentStartsAsk() async throws {
+    /// A download the agent starts goes ahead unasked, and its result says where the file is.
+    @Test func downloadsTheAgentStartsGoAhead() async throws {
         try await withAgent { client, base in
             let report = base.appending(path: "report.csv").absoluteString
             let id = try await open(client, base.appending(path: "one"))
-            let tab: JSONValue = .string(id)
-
-            let (allowed, asked) = try await call(client, "navigate", ["tab": tab, "url": .string(report)], answering: .allowOnce, expecting: .download)
-            #expect(allowed["download"] == ["file": "report.csv", "grant": "once"], "\(allowed.content)")
-            #expect(allowed["state"] == nil)
-            #expect(asked.action.contains("report.csv"))
-            #expect(asked.offersSiteGrant)
-            #expect(client.tab(id)?.title == "One", "the page before stays")
-
-            let (denied, _) = try await call(client, "navigate", ["tab": tab, "url": .string(report)], answering: .deny, expecting: .download)
-            #expect(denied.code == "denied_by_user", "\(denied.content)")
 
             let started = ContinuousClock.now
-            let late = await client.call("navigate", ["tab": tab, "url": .string(report), "timeoutMs": 500])
-            #expect(late.code == "confirmation_timeout", "\(late.content)")
-            #expect(ContinuousClock.now - started < .seconds(3))
-            #expect(await waitUntil(5) { client.hub.confirmations.pending.isEmpty })
-
-            // On the site until the agent stops, for this session only.
-            let (granted, _) = try await call(client, "navigate", ["tab": tab, "url": .string(report)], answering: .allowOnSite, expecting: .download)
-            #expect(granted["download"]?["grant"] == "site", "\(granted.content)")
-            let again = await client.call("navigate", ["tab": tab, "url": .string(report)])
-            #expect(again["download"]?["grant"] == "site", "\(again.content)")
-            let other = try await Client(browser: client.browser)
-            let (otherDenied, _) = try await call(other, "navigate", ["tab": tab, "url": .string(report)], answering: .deny, expecting: .download)
-            #expect(otherDenied.code == "denied_by_user")
-            #expect(client.hub.confirmations.grants.count == 1)
+            let downloaded = await client.call("navigate", ["tab": .string(id), "url": .string(report)])
+            #expect(!downloaded.isError, "\(downloaded.content)")
+            #expect(ContinuousClock.now - started < .seconds(10), "nothing waited on the user")
+            #expect(downloaded["download"]?["file"] == "report.csv", "\(downloaded.content)")
+            #expect(downloaded["download"]?["done"] == true, "\(downloaded.content)")
+            #expect(downloaded["download"]?["grant"] == nil)
+            #expect(downloaded["state"] == nil)
+            let path = try #require(downloaded["download"]?["path"]?.string)
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            #expect(try String(contentsOfFile: path, encoding: .utf8) == "a,b")
+            #expect(client.tab(id)?.title == "One", "the page before stays")
 
             // A tab opened just for the file closes as its download starts.
-            let (fromNewTab, _) = try await call(other, "tab_open", ["url": .string(report)], answering: .allowOnce, expecting: .download)
+            let fromNewTab = await client.call("tab_open", ["url": .string(report)])
             #expect(fromNewTab["download"]?["file"] == "report.csv", "\(fromNewTab.content)")
             #expect(client.tab(fromNewTab["tab"]?.string ?? "") == nil)
-
-            client.hub.stop()
-            #expect(client.hub.confirmations.grants.isEmpty)
-            client.hub.allowAgain()
+            if let other = fromNewTab["download"]?["path"]?.string { try? FileManager.default.removeItem(atPath: other) }
         }
     }
 
-    /// A private tab saves nothing: its calls and its download's prompt are logged, marked, but
-    /// never with the addresses, host or site it went to.
+    /// A private tab saves nothing: its calls are logged, marked, but never with the addresses or
+    /// host it went to.
     @Test func aPrivateTabsCallsAreLoggedWithoutItsAddresses() async throws {
         try await withAgent { client, base in
             let opened = await client.call("tab_open", ["url": .string(base.appending(path: "one").absoluteString), "ephemeral": true, "wait": "load"])
             #expect(!opened.isError, "\(opened.content)")
             let id = try #require(opened["tab"]?.string)
             let report = base.appending(path: "report.csv").absoluteString
-            let (allowed, _) = try await call(client, "navigate", ["tab": .string(id), "url": .string(report)], answering: .allowOnce, expecting: .download)
-            #expect(allowed["download"]?["file"] == "report.csv", "\(allowed.content)")
+            let downloaded = await client.call("navigate", ["tab": .string(id), "url": .string(report)])
+            #expect(downloaded["download"]?["file"] == "report.csv", "\(downloaded.content)")
+            if let path = downloaded["download"]?["path"]?.string { try? FileManager.default.removeItem(atPath: path) }
 
-            var entries: [JSONValue] = []
-            for _ in 0..<100 where !entries.contains(where: { $0["event"] == "confirmation" }) {
-                entries = await client.hub.log.entries(limit: 3)
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            #expect(Set(entries.compactMap { $0["tool"]?.string ?? $0["event"]?.string }) == ["tab_open", "navigate", "confirmation"])
+            let entries = await client.hub.log.entries(limit: 2)
+            #expect(entries.compactMap { $0["tool"]?.string }.sorted() == ["navigate", "tab_open"])
             for entry in entries {
                 #expect(entry["ephemeral"] == true)
                 #expect(entry["params"] == nil && entry["subject"] == nil && entry["site"] == nil)
@@ -221,28 +144,20 @@ struct AgentConfirmationsTests {
         }
     }
 
-    /// A private tab's `file:` address is asked before the tab exists: its prompt is still
-    /// logged without the path.
     @Test func aPrivateTabOpenOfAFileIsLoggedWithoutItsPath() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "agent-private-\(UUID().uuidString).html")
         try "<title>Notes</title>".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         try await withAgent { client, _ in
-            let (opened, _) = try await call(client, "tab_open", ["url": .string(file.absoluteString), "ephemeral": true, "wait": "load"], answering: .allowOnce, expecting: .file)
+            let opened = await client.call("tab_open", ["url": .string(file.absoluteString), "ephemeral": true, "wait": "load"])
             #expect(!opened.isError, "\(opened.content)")
 
-            var entries: [JSONValue] = []
-            for _ in 0..<100 where !entries.contains(where: { $0["event"] == "confirmation" }) {
-                entries = await client.hub.log.entries(limit: 2)
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            #expect(Set(entries.compactMap { $0["tool"]?.string ?? $0["event"]?.string }) == ["tab_open", "confirmation"])
-            for entry in entries {
-                #expect(entry["ephemeral"] == true)
-                #expect(entry["params"] == nil && entry["subject"] == nil)
-                let text = String(decoding: entry.encoded(), as: UTF8.self)
-                #expect(!text.contains(file.lastPathComponent), "\(text)")
-            }
+            let entry = try #require(await client.hub.log.entries(limit: 1).first)
+            #expect(entry["tool"] == "tab_open")
+            #expect(entry["ephemeral"] == true)
+            #expect(entry["params"] == nil && entry["subject"] == nil)
+            let text = String(decoding: entry.encoded(), as: UTF8.self)
+            #expect(!text.contains(file.lastPathComponent), "\(text)")
         }
     }
 
@@ -263,82 +178,33 @@ struct AgentConfirmationsTests {
         }
     }
 
-    /// Two alike downloads during one action of the agent (a double click on a download link)
-    /// each ask and are each logged: the Allow the first got never answers the second.
-    @Test func eachDownloadDuringAnActionAsks() async throws {
-        try await withAgent { client, base in
-            let id = try await open(client, base.appending(path: "one"))
-            let tab = try #require(client.tab(id))
-            let hub = client.hub
-            let session = try #require(hub.sessions.first)
-            hub.tabs[tab.id]?.acting = AgentActing(session: session.id, caption: "Clicking")
-            defer { hub.tabs[tab.id]?.acting = nil }
-            let report = base.appending(path: "report.csv").absoluteString
-            for (kind, answer) in [(ConfirmationKind.download, ConfirmationAnswer.allowOnce), (.download, .deny), (.file, .allowOnce), (.file, .deny)] {
-                let asking = Task {
-                    try await hub.confirm(kind, "open “report.csv”", subject: report, site: nil, in: NamedTab(tab: tab, id: id), session: session, until: .now + .seconds(20))
-                }
-                #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty }, "\(kind) asked again")
-                hub.confirmations.pending.forEach { hub.confirmations.answer($0.id, answer) }
-                _ = await asking.result
-            }
-            var kinds: [String] = []
-            for _ in 0..<100 where kinds.count < 4 {
-                kinds = await hub.log.entries(limit: 50).filter { $0["event"] == "confirmation" && $0["subject"] == .string(report) }.compactMap { $0["confirmation"]?["kind"]?.string }
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            #expect(kinds.sorted() == ["download", "download", "file", "file"])
-        }
-    }
-
-    @Test func stopDeniesThePromptAndEndsTheCall() async throws {
-        try await withAgent { client, base in
-            let id = try await open(client, base.appending(path: "one"))
-            let task = Task { await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "report.csv").absoluteString)]) }
-            #expect(await waitUntil(20) { !client.hub.confirmations.pending.isEmpty })
-            client.hub.stop()
-            #expect((await task.value).code == "agent_stopped")
-            #expect(client.hub.confirmations.pending.isEmpty)
-            client.hub.allowAgain()
-        }
-    }
-
-    /// A download the user starts in the tab: nil when Lithium takes it as the user's own. A
-    /// prompt raised for it is denied, so a wrong answer fails at once rather than in 2 minutes.
-    private func userDownload(_ client: Client, in tab: Tab, from url: URL) async -> Bool? {
-        let hub = client.hub
-        let asking = Task { await hub.confirmDownload(in: tab, fileName: "report.csv", size: nil, from: url) }
-        if await waitUntil(1, { !hub.confirmations.pending.isEmpty }) {
-            hub.confirmations.pending.forEach { hub.confirmations.answer($0.id, .deny) }
-        }
-        return await asking.value
-    }
-
-    /// Whatever the agent's navigation ends with, the tab is the user's again afterwards.
+    /// Whatever the agent's navigation ends with, a download in the tab afterwards is the user's
+    /// own again, with the prompts Lithium gives a page's download.
     @Test func theAgentsClaimEndsWithItsNavigation() async throws {
         try await withAgent { client, base in
             let one = base.appending(path: "one")
             let report = base.appending(path: "report.csv")
             let id = try await open(client, one)
             let tab = try #require(client.tab(id))
+            let hub = client.hub
 
             let anchor = await client.call("navigate", ["tab": .string(id), "url": .string(one.absoluteString + "#part")])
             #expect(anchor["state"] == "load", "\(anchor.content)")
-            #expect(await userDownload(client, in: tab, from: report) == nil, "after a move within the page")
+            #expect(!hub.startedDownload(in: tab), "after a move within the page")
 
             let refused = await client.call("navigate", ["tab": .string(id), "url": .string(base.appending(path: "mail").absoluteString)])
             #expect(refused.code == "navigation_cancelled", "\(refused.content)")
-            #expect(await userDownload(client, in: tab, from: report) == nil, "after a refused scheme")
+            #expect(!hub.startedDownload(in: tab), "after a refused scheme")
 
-            let (downloaded, _) = try await call(client, "navigate", ["tab": .string(id), "url": .string(report.absoluteString)], answering: .allowOnce, expecting: .download)
+            let downloaded = await client.call("navigate", ["tab": .string(id), "url": .string(report.absoluteString)])
             #expect(downloaded["download"]?["file"] == "report.csv", "\(downloaded.content)")
-            #expect(client.hub.openPanel(for: tab) == nil, "the user's file chooser after the agent's download")
-            #expect(await userDownload(client, in: tab, from: report) == nil, "after the agent's download")
+            if let path = downloaded["download"]?["path"]?.string { try? FileManager.default.removeItem(atPath: path) }
+            #expect(hub.openPanel(for: tab) == nil, "the user's file chooser after the agent's download")
+            #expect(!hub.startedDownload(in: tab), "after the agent's download")
         }
     }
 
-    /// Stop ends the session's load still on its way after `wait: none`: it never becomes a
-    /// download, asked or not.
+    /// Stop ends the load still on its way after `wait: none`: it never becomes a download.
     @Test func stopCancelsTheAgentsLoadOnItsWay() async throws {
         let (slow, slowBase) = try await LocalHTTP.serve(["/report.csv": Self.pages["/report.csv"]!], delay: 1)
         defer { slow.cancel() }
@@ -349,14 +215,31 @@ struct AgentConfirmationsTests {
             let started = await client.call("navigate", ["tab": .string(id), "url": .string(slowBase.appending(path: "report.csv").absoluteString), "wait": "none"])
             #expect(started["state"] == "started", "\(started.content)")
             client.hub.stop()
-            #expect(!(await waitUntil(2.5) { !client.hub.confirmations.pending.isEmpty }), "no prompt for a stopped session")
-            #expect(tab.unshownLoads == unshown, "no download")
+            #expect(!(await waitUntil(2.5) { tab.unshownLoads > unshown }), "no download for a stopped agent")
             #expect(client.hub.tabs[tab.id]?.drive == nil)
             client.hub.allowAgain()
         }
     }
 
-    @Test func uploadsAnswerTheChooserOnlyWithAllowedFiles() async throws {
+    /// A client that ends its own session after a `wait: none` call (a script run for one call)
+    /// leaves its load going: the file still comes, unasked.
+    @Test func aSessionEndingLeavesItsLoadGoing() async throws {
+        let (slow, slowBase) = try await LocalHTTP.serve(["/report.csv": Self.pages["/report.csv"]!], delay: 1)
+        defer { slow.cancel() }
+        try await withAgent { client, base in
+            let id = try await open(client, base.appending(path: "one"))
+            let tab = try #require(client.tab(id))
+            let unshown = tab.unshownLoads
+            let started = await client.call("navigate", ["tab": .string(id), "url": .string(slowBase.appending(path: "report.csv").absoluteString), "wait": "none"])
+            #expect(started["state"] == "started", "\(started.content)")
+            #expect(await client.hub.handle(.endSession(client.session)).status == 200)
+            #expect(await waitUntil(10) { tab.unshownLoads > unshown }, "the download started")
+            #expect(await waitUntil(10) { tab.lastDownload?.state == .finished })
+            if let file = tab.lastDownload?.destination { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
+    @Test func uploadsAnswerTheChooserOnlyWithTheCallsFiles() async throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "agent-upload-\(UUID().uuidString).txt")
         try "hello".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -364,7 +247,6 @@ struct AgentConfirmationsTests {
             let hub = client.hub
             let id = try await open(client, base.appending(path: "one"))
             let named = try hub.tab(named: id)
-            let session = try #require(hub.sessions.first)
             let state = try #require(hub.agentTab(for: named.tab))
             #expect(hub.openPanel(for: named.tab) == nil, "the user's own chooser")
 
@@ -373,18 +255,9 @@ struct AgentConfirmationsTests {
             #expect(state.fileChoosersCancelled == 1)
             state.isBusy = false
 
-            await #expect(throws: AgentToolError.self) {
-                try await hub.confirmUpload([file.appending(path: "missing")], in: named, session: session, until: .now + .seconds(5))
-            }
-            let asking = Task { try await hub.confirmUpload([file], in: named, session: session, until: .now + .seconds(20)) }
-            #expect(await waitUntil(20) { !hub.confirmations.pending.isEmpty })
-            let asked = try #require(hub.confirmations.pending.first)
-            #expect(asked.kind == .upload)
-            #expect(asked.action.contains(file.lastPathComponent))
-            #expect(asked.action.contains(file.deletingLastPathComponent().path(percentEncoded: false)))
-            #expect(asked.action.hasSuffix("to 127.0.0.1"))
-            hub.confirmations.answer(asked.id, .allowOnce)
-            #expect(try await asking.value == .once)
+            #expect(throws: AgentToolError.self) { try hub.armUpload([file.appending(path: "missing")], in: state) }
+            #expect(state.armedUpload == nil)
+            try hub.armUpload([file], in: state)
             #expect(hub.openPanel(for: named.tab) == .files([file]))
             #expect(hub.openPanel(for: named.tab) == nil, "one use")
         }

@@ -889,20 +889,6 @@
 
   const textTypes = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'date', 'datetime-local', 'month', 'time', 'week']);
   const isEditable = (element) => (element.localName === 'input' && textTypes.has(element.type)) || element.localName === 'textarea' || element.isContentEditable;
-  const formOf = (element) => {
-    // closest('form') would also take a form of another namespace.
-    let form = element.form;
-    for (let node = element.parentElement; !form && node; node = node.parentElement) if (tagOf(node) === 'form') form = node;
-    if (!form) return undefined;
-    const fields = [...form.elements];
-    return { id: idOf(form), cards: fields.some((field) => isField(field) && isCard(field)), password: fields.some((field) => isPassword(field) && field.value !== '') };
-  };
-  // A filled password anywhere in the target's document: a script can send it from any button
-  // or link, as a form's submit would (design section 7.3).
-  const passwordFilled = (element) => [...new Set([document, element.getRootNode()])].some((root) => {
-    for (const field of allElements(root)) if (isPassword(field) && field.value !== '') return true;
-    return false;
-  });
   // Whether the document is a payment page (design section 7.3).
   const walletSelector = 'apple-pay-button, gpay-button, .gpay-button, button, [role=button], input[type=button], input[type=submit]';
   const payFacts = () => {
@@ -939,9 +925,6 @@
     const field = isField(element) ? guardOf(element) : null;
     if (field) facts.field = field;
     if (isWallet(element, getComputedStyle(element))) facts.wallet = true;
-    facts.form = formOf(element);
-    if (isSubmit(element)) facts.submit = true;
-    if (passwordFilled(element)) facts.passwordFilled = true;
     if (isEditable(element)) facts.editable = true;
     if (element.localName === 'textarea' || (element.isContentEditable && element.localName !== 'input')) facts.multiline = true;
     if (element.readOnly && ['input', 'textarea'].includes(element.localName)) facts.readonly = true;
@@ -1045,7 +1028,7 @@
   };
 
   // `hold` waits that many milliseconds after the call, so a load the events start has begun.
-  const settle = async ({ type, count, timeoutMs, scrolled, frame: rendered, hold }) => {
+  const settle = async ({ type, count, timeoutMs, scrolledAt, frame: rendered, hold }) => {
     const called = performance.now();
     const seen = await new Promise((resolve) => {
       const check = () => {
@@ -1063,13 +1046,18 @@
       check();
     });
     if (rendered) await nextFrame();
-    if (scrolled) {
+    if (scrolledAt) {
+      // WebKit scrolls over several frames, and hands the page the wheel events it held back
+      // one by one: at rest is two frames with nothing under the point having moved.
+      const chain = [];
+      for (let node = hitAt(scrolledAt[0], scrolledAt[1]); node; node = node.parentElement ?? node.getRootNode()?.host) chain.push(node);
+      const position = () => `${scrollX} ${scrollY} ${chain.map((node) => `${node.scrollLeft},${node.scrollTop}`).join(' ')}`;
       const deadline = Date.now() + 500;
-      let last = `${scrollX} ${scrollY}`;
-      while (Date.now() < deadline) {
+      let last = position();
+      for (let still = 0; still < 2 && Date.now() < deadline;) {
         await nextFrame();
-        const now = `${scrollX} ${scrollY}`;
-        if (now === last) break;
+        const now = position();
+        still = now === last ? still + 1 : 0;
         last = now;
       }
     }
@@ -1128,9 +1116,29 @@
     return { token: frame.token, box: round(element.getBoundingClientRect()), viewport: viewport() };
   };
 
+  const isFileInput = (element) => element?.localName === 'input' && element.type === 'file';
   const files = ({ id }) => {
     const element = elementOf(id);
     return { token: frame.token, names: element?.files ? [...element.files].map((file) => file.name) : undefined };
+  };
+  // Every file input of the document, hidden ones too: most pages hide theirs behind a button.
+  const fileInputs = () => ({
+    token: frame.token,
+    path: framePath(),
+    inputs: [...allElements(document)].filter((element) => isFileInput(element) && !inExtensionUI(element))
+      .map((element) => ({ id: idOf(element), name: cut(nameOf(element, 'button'), 80) })),
+  });
+  // Opens the chooser of a file input, or of the one `id` stands for: its label, or a drop zone
+  // around it. Lithium's call counts as a user's press, so the input needs no visible button.
+  const chooseFiles = ({ id }) => {
+    const element = elementOf(id);
+    if (!element) return { token: frame.token, gone: true };
+    const inside = [...allElements(element)].filter(isFileInput);
+    const input = isFileInput(element) ? element : isFileInput(element.control) ? element.control : inside.length === 1 ? inside[0] : null;
+    if (!input || inExtensionUI(input)) return { token: frame.token, notInput: true };
+    if (input.disabled) return { token: frame.token, disabled: true };
+    input.click();
+    return { token: frame.token, id: idOf(input) };
   };
 
   // Re-checked on mutations, and polled 4 times a second for changes no observer sees. A text
@@ -1281,7 +1289,7 @@
     return { token: frame.token, found: true };
   };
 
-  const operations = { snapshot, masks, readText, links, forms, find, info, wait, cancelWait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, resources, guards, handOver };
+  const operations = { snapshot, masks, readText, links, forms, find, info, wait, cancelWait, challenge, pay, target, frameHit, focused, settle, selectOption, focus, caretEnd, scrollTo, files, fileInputs, chooseFiles, resources, guards, handOver };
   // A document in WebKit's back/forward cache runs no timer, so a pending call would hold
   // Lithium's reply and the web view until WebKit drops the page. It answers as gone.
   const parked = new Set();

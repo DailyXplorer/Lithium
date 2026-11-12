@@ -999,6 +999,40 @@ struct FingerprintingTests {
         #expect(protected["frame1"] == protected["page"])
     }
 
+    /// The observer asks the window for its frames, as a page reaches them, instead of reading what
+    /// the parser added. A page that hides the count of its frames, or takes one out so the next
+    /// leaves the count as it was, still gets each of them protected before its next script. The
+    /// frames are on their way to a `srcdoc`: a blank one is also protected by its `load`, at once.
+    @Test func framesAPageHidesOrSwapsInItsMarkupAreProtected() async throws {
+        let html = """
+            <body><script>
+              length = 0;
+              try { Object.defineProperty(Window.prototype, 'length', { get: () => 0, configurable: true }); } catch (_) {}
+            </script><iframe id="first" srcdoc="<p>first</p>"></iframe><script>
+              const hash = (win) => {
+                const c = win.document.createElement('canvas'); c.width = 200; c.height = 40;
+                const x = c.getContext('2d'); x.fillStyle = '#f60'; x.fillRect(0, 0, 200, 40);
+                let h = 0; const d = c.toDataURL(); for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) | 0;
+                return (h >>> 0).toString(16);
+              };
+              const result = { page: hash(window), first: hash(frames[0]) };
+              document.getElementById('first').remove();
+            </script><iframe srcdoc="<p>second</p>"></iframe><script>
+              result.second = hash(frames[0]);
+              result.count = length;
+              window.result = JSON.stringify(result);
+            </script></body>
+            """
+        let bare: [String: AnyHashable] = try await run("window.result", farbling: nil, html: html)
+        let protected: [String: AnyHashable] = try await run("window.result", farbling: Self.farbling(), html: html)
+
+        #expect(bare["count"] == AnyHashable(0), "the page hid its frame count")
+        #expect(bare["first"] == bare["page"] && bare["second"] == bare["page"])
+        #expect(protected["page"] != bare["page"])
+        #expect(protected["first"] == protected["page"])
+        #expect(protected["second"] == protected["page"])
+    }
+
     /// A page keeps one Trusted Types script, whatever its frames' addresses: a frame that reloads,
     /// several frames of one address, and frames of new addresses once added a script each, which
     /// piled up until the next main-frame navigation. That navigation's page starts afresh.

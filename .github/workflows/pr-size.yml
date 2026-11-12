@@ -1,0 +1,49 @@
+name: PR size
+
+# A nudge, never a gate: one comment when a pull request is above the size budget of
+# CONTRIBUTING.md. It runs on `pull_request_target` so the token can comment on pull
+# requests from forks, which is safe here because the job checks out the base branch only
+# and never builds or runs anything from the pull request: it reads the changed-file list
+# through the API.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+  # By hand, for one pull request: `gh workflow run pr-size.yml -f pr=123`.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: number
+
+permissions: {contents: read}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    # A private repository pays for its Actions minutes: there the nudge runs by hand only,
+    # or on every pull request once the repository variable PRIVATE_CI is set.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || ((!github.event.repository.private || vars.PRIVATE_CI != '')
+          && github.event.pull_request.user.type != 'Bot' && !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {contents: read, pull-requests: write}
+    steps:
+      # No `ref`: pull_request_target checks out the base branch, never the pull request.
+      # `continue-on-error` sits on the steps: set on the job, a failure still shows as a red check.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true  # a nudge: an API hiccup must never show a red check
+        with: {persist-credentials: false}
+      - name: Comment when the pull request is over the size budget
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+        run: python3 .github/scripts/pr_size.py

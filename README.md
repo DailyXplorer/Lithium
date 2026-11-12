@@ -1,4 +1,11 @@
+<p align="center"><img src="Support/AppIcon.png" width="128" height="128" alt="Lithium's icon"></p>
+
 # Lithium
+
+[![CI](https://github.com/DailyXplorer/Lithium/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DailyXplorer/Lithium/actions/workflows/ci.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![macOS 15.4 or later](https://img.shields.io/badge/macOS-15.4%2B-black)
+![Swift 6](https://img.shields.io/badge/Swift-6-orange)
 
 A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView), no Chromium. Arc-style layout: pinned sites as tiles and tabs in a sidebar. Privacy first, with uBlock Origin's filter lists built in.
 

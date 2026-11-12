@@ -120,4 +120,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to open a pull request, the code 
 
 ## License
 
-GPL-3.0 (see `LICENSE`). Lithium bundles GPL-3.0 components: AdGuard SafariConverterLib, Scriptlets and ExtendedCss, and uBlock Origin's filter lists and scriptlets. It also bundles [marked](https://github.com/markedjs/marked) (MIT) and Mozilla's [Readability](https://github.com/mozilla/readability) (Apache-2.0, at the end of `reader.js`). Icons are [Phosphor](https://phosphoricons.com) (MIT). The DM Sans font is under the SIL Open Font License.
+GPL-3.0 (see `LICENSE`). Lithium bundles GPL-3.0 components: AdGuard SafariConverterLib, Scriptlets and ExtendedCss, and uBlock Origin's filter lists and scriptlets. It also bundles [marked](https://github.com/markedjs/marked) (MIT) and Mozilla's [Readability](https://github.com/mozilla/readability) (Apache-2.0, at the end of `reader.js`). Icons are [Phosphor](https://phosphoricons.com) (MIT). The DM Sans font is under the SIL Open Font License. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists each component with its version and its license text.

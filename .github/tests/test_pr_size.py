@@ -16,6 +16,7 @@ class PrSizeTest(unittest.TestCase):
             ("Sources/Lithium/Model/Browser.swift", 100, 20),
             ("Package.resolved", 40, 12),
             ("Tests/LithiumTests/Fixtures/reader/article.html", 900, 0),
+            ("LICENSES/Readability-Apache-2.0.md", 202, 0),
         ]
         self.assertEqual(pr_size.counted(files), 120)
 

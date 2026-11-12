@@ -7,8 +7,9 @@ place on later pushes and never duplicated.
   pr_size.py   reads $GH_TOKEN, $REPO and $PR_NUMBER and calls the GitHub API with `gh`;
                the unit tests import counted() and render()
 
-Excluded from the count: `Package.resolved`, test fixtures, and the resources a script
-vendors or generates (minified libraries, scriptlet bundles, icons, fonts).
+Excluded from the count: `Package.resolved`, test fixtures, the license texts of other
+projects, and the resources a script vendors or generates (minified libraries, scriptlet
+bundles, icons, fonts).
 """
 
 import os
@@ -21,7 +22,7 @@ MARKER = "<!-- pr-size-check -->"
 BOT = "github-actions[bot]"
 EXCLUDED = re.compile(
     r"(^|/)Package\.resolved$"
-    r"|(^|/)Fixtures/"
+    r"|(^|/)Fixtures/|^LICENSES/"
     # written by scripts/update-ubo-scriptlets.mjs, scripts/update-space-icons.py and
     # scripts/make-web-font.py, or copied whole from their upstream
     r"|\.min\.js$|(^|/)Resources/Scripts/scriptlets\.[^/]+\.json$"

@@ -127,8 +127,8 @@ struct SplitViewTests {
         let browser = browser(with: ["a", "b"])
         let a = tab("a", in: browser), b = tab("b", in: browser)
         browser.select(a)
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
-                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                     styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
@@ -433,7 +433,7 @@ struct SplitViewTests {
     /// its own hosting view, ignores that inset like the rest of the window, so its toolbar stays
     /// at its top instead of under a blank strip.
     @Test func aSplitPDFViewerIgnoresTheTitleBarInset() {
-        let window = NSWindow(contentRect: NSRect(x: -5000, y: 0, width: 800, height: 400), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 800, height: 400), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true
         defer { window.contentView = nil }
         let content = NSView(frame: NSRect(origin: .zero, size: window.frame.size))

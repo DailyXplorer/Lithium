@@ -15,8 +15,8 @@ struct StartPageTests {
     @Test func newTabKeepsTheKeyboardInTheAddressBar() async throws {
         let browser = Browser()
         browser.newTab(url: URL(string: "about:blank")!)
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
-                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                     styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }

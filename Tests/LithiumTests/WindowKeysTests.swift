@@ -97,7 +97,7 @@ struct WindowKeysTests {
         browser.commandWindow.find.isFieldFocused = false
         window.makeFirstResponder(nil)
 
-        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        let sheet = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
         window.beginSheet(sheet, completionHandler: nil)
         #expect(await waitUntil(5) { window.attachedSheet != nil })
         #expect(!browser.ownsEscape(in: window), "the sheet's Cancel gets it")
@@ -323,8 +323,8 @@ struct WindowKeysTests {
         if first.isZenMode { first.toggleZenMode() }
         var shown: [NSWindow] = []
         browser.showWindow = { model, browser in
-            let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
-                                  styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+            let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                         styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(model))
             BrowserNSWindow.show(window)
@@ -397,8 +397,8 @@ struct WindowKeysTests {
         if first.isZenMode { first.toggleZenMode() }
         if !first.isSidebarVisible { first.toggleSidebar() }
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
-                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                     styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(first))
         // What `BrowserNSWindow` tells the model as it opens.
@@ -452,7 +452,7 @@ struct WindowKeysTests {
 }
 
 /// Tells whether it was closed, though never shown.
-private final class ClosingWindow: NSWindow {
+private final class ClosingWindow: OffscreenWindow {
     private(set) var didClose = false
 
     override func close() {

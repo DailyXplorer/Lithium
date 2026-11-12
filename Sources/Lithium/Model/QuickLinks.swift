@@ -17,9 +17,13 @@ final class QuickLinks {
     let find = FindInPage()
 
     @ObservationIgnored weak var browser: Browser?
-    /// Tests open no window.
-    @ObservationIgnored var showWindow: @MainActor (Tab, Browser) -> NSWindow? = QuickLinkWindow.open
+    /// Puts a link's window on screen. Tests open none, as with `Browser.showWindow`.
+    @ObservationIgnored var showWindow: @MainActor (Tab, Browser) -> NSWindow? = QuickLinks.openOnScreen
     @ObservationIgnored private var windows: [Tab.ID: NSWindow] = [:]
+
+    private static func openOnScreen(_ tab: Tab, browser: Browser) -> NSWindow? {
+        ExternalApps.runsTests ? nil : QuickLinkWindow.open(tab, browser: browser)
+    }
 
     /// Web addresses only: a file opened from the Finder is a document, for the main window.
     static func takes(_ url: URL) -> Bool {

@@ -12,8 +12,8 @@ struct CapturePointerTests {
     /// left as the crosshair goes back to the arrow.
     @Test func crosshairGoesWithTheCapture() async throws {
         let browser = Browser()
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1024, height: 700),
-                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1024, height: 700),
+                                     styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(browser.windows[0]))
         window.orderFrontRegardless()

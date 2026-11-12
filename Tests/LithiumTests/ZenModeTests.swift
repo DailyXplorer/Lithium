@@ -198,8 +198,8 @@ struct ZenModeTests {
         if first.isZenMode != zen { first.toggleZenMode() }
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
         // Titled with its buttons, so the traffic lights exist.
-        let window = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
+                                     styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: BrowserView().environment(browser).environment(first))
         // What `BrowserNSWindow` tells the model as it opens.

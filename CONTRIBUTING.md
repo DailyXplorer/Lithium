@@ -18,7 +18,7 @@ Every command runs from the repository root.
 |---|---|
 | `./scripts/build-app.sh` | Builds and signs `.build/Lithium.app`, and touches nothing else. |
 | `./scripts/build-app.sh --run` | Also opens it. A running Lithium quits first. |
-| `./scripts/build-app.sh --install` | Also replaces the copy in `/Applications`. A running Lithium quits first. |
+| `./scripts/build-app.sh --install` | Also replaces the copy in `/Applications`. A running Lithium quits first. Refuses to go over a release, which updates itself, unless `--replace-release` is given. |
 | `./scripts/test --filter <Suite>` | Runs one suite, for example `--filter PasswordVaultTests`. A filter that matches no test fails the run. |
 | `./scripts/test-fast` | Runs every suite in shards side by side, in about 75 seconds. For iterating. |
 | `./scripts/test` | The reference run before a merge: one test at a time, in about 5 minutes. |

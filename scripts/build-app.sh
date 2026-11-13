@@ -1,19 +1,31 @@
 #!/bin/sh
-# Builds .build/Lithium.app. Flags: --install copies it to /Applications, --run opens it.
+# Builds .build/Lithium.app. Flags: --install copies it to /Applications, --run opens it,
+# --replace-release lets --install go over a release that updates itself.
 set -eu
 
 install=0
 run=0
+replace_release=0
 for arg in "$@"; do
   case "$arg" in
     --install) install=1 ;;
     --run) run=1 ;;
+    --replace-release) replace_release=1 ;;
     *) printf 'unknown argument: %s\n' "$arg" >&2; exit 2 ;;
   esac
 done
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
+
+# A release in /Applications updates itself. A build from a checkout has no updater: put over
+# it, the copy would stop updating without a word. Said before the build, not after it.
+if [ "$install" -eq 1 ] && [ "$replace_release" -eq 0 ] && [ -z "${LITHIUM_UPDATE_FEED:-}" ] &&
+  /usr/libexec/PlistBuddy -c 'Print :LithiumUpdateFeed' /Applications/Lithium.app/Contents/Info.plist >/dev/null 2>&1; then
+  printf '%s\n' "/Applications/Lithium.app is a release, which updates itself; a build from this checkout would not." \
+    "Publish a release to update it, or pass --replace-release to install over it." >&2
+  exit 1
+fi
 
 # iCloud-synced folders tag build products with xattrs that break codesign; build outside them.
 # One folder per checkout: shared, another checkout's build between this build and the copy

@@ -286,6 +286,4 @@ struct ShowcaseShots {
     private func jpeg(_ image: CGImage) throws -> Data {
         try #require(NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9]))
     }
-
 }
-

@@ -46,6 +46,24 @@ struct AddressSuggestionsTests {
         #expect(suggestions.items.map(\.id) == ["search:git", "history:https://github.com/"])
     }
 
+    /// A query's turn is the order in which it was asked, not the order in which its background
+    /// work starts. On a loaded machine the two differ, and the text typed last lost its history
+    /// to an older query.
+    @Test func theQueryAskedLastIsTheOneAnsweredWhicheverStartsFirst() async {
+        let store = history([("https://swift.org/", "Swift", 1), ("https://github.com/", "GitHub", 1)])
+        // Asked in this order; the newer one gets to the background first.
+        var older = store.topSitesQuery(matching: "swift", limit: 5)
+        var newer = store.topSitesQuery(matching: "git", limit: 5)
+        #expect(await newer()?.map(\.url.absoluteString) == ["https://github.com/"])
+        #expect(await older()?.map(\.url.absoluteString) == nil, "replaced before it ran")
+
+        // Asked in the same order; the older one gets there first.
+        older = store.topSitesQuery(matching: "swift", limit: 5)
+        newer = store.topSitesQuery(matching: "git", limit: 5)
+        #expect(await older()?.map(\.url.absoluteString) == nil, "replaced before it ran")
+        #expect(await newer()?.map(\.url.absoluteString) == ["https://github.com/"])
+    }
+
     /// Rows that come up under a resting pointer (history arriving late) don't change what Return
     /// opens; once the pointer moves, the row under it does.
     @Test func hoverPicksARowOnlyOnceThePointerMoves() async throws {

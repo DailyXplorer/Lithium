@@ -4,43 +4,26 @@ import Testing
 import WebKit
 @testable import Lithium
 
-/// The pictures of the README: Lithium's real window with an invented session, drawn off screen in
-/// a throwaway home folder. Nothing comes from anyone's browsing, and every site, icon and song is
-/// made up here or in `Fixtures/showcase`.
-/// `LITHIUM_SHOWCASE_DIR=docs/images ./scripts/test --filter ShowcaseShots`
+/// The pictures of the README: Lithium's real window, drawn off screen in a throwaway home
+/// folder, with real sites loaded in it. Nothing comes from anyone's browsing: the session is the
+/// list below, and every page, title and icon is fetched from its site as the pictures are drawn.
+/// Needs the network. `LITHIUM_SHOWCASE_DIR=docs/images ./scripts/test --filter ShowcaseShots`
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(3)), .enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SHOWCASE_DIR"] != nil && ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
+@Suite(.serialized, .timeLimit(.minutes(5)), .enabled(if: ProcessInfo.processInfo.environment["LITHIUM_SHOWCASE_DIR"] != nil && ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
 struct ShowcaseShots {
     private let directory = URL(filePath: ProcessInfo.processInfo.environment["LITHIUM_SHOWCASE_DIR"] ?? "/tmp")
 
-    /// An invented site: its host, the Phosphor glyph and colors of its icon.
-    private struct Site {
-        let host: String
-        let title: String
-        let glyph: String
-        let colors: [String]
-
-        var url: URL { URL(string: "https://\(host)/")! }
-
-        static let mail = Site(host: "mail.example", title: "Inbox", glyph: "envelope-simple", colors: ["#4F8DF7", "#2B5FD9"])
-        static let calendar = Site(host: "calendar.example", title: "Calendar", glyph: "calendar-blank", colors: ["#FF6B5E", "#E0423A"])
-        static let tides = Site(host: "tides.example", title: "Harbor Lights · Tides", glyph: "waves", colors: ["#2FB8A6", "#126B78"])
-        static let notes = Site(host: "notes.example", title: "Design notes", glyph: "notebook", colors: ["#FFC94A", "#F09A1A"])
-        static let code = Site(host: "code.example", title: "Pull request 42 · orchard", glyph: "code", colors: ["#3A3F55", "#1E2133"])
-        static let chat = Site(host: "chat.example", title: "Chat", glyph: "chats", colors: ["#48C774", "#1F9E57"])
-        static let maps = Site(host: "maps.example", title: "Maps", glyph: "map-trifold", colors: ["#FF9F45", "#EC6B2D"])
-        static let photos = Site(host: "photos.example", title: "Photos", glyph: "image", colors: ["#C86DD7", "#7A4BD6"])
-        static let meridian = Site(host: "meridian.example", title: "The slow train to the coast", glyph: "compass", colors: ["#E0676A", "#7A3F8F"])
-        static let rail = Site(host: "rail.example", title: "Night train timetable", glyph: "train-simple", colors: ["#5C6BC0", "#34408F"])
-        static let stay = Site(host: "stay.example", title: "Harbor hotel, 2 nights", glyph: "house-line", colors: ["#26A69A", "#1B7F76"])
-        static let weather = Site(host: "weather.example", title: "Weather · Coast", glyph: "cloud", colors: ["#64B5F6", "#3B82D6"])
-        static let bakery = Site(host: "bakery.example", title: "Sourdough, step by step", glyph: "coffee", colors: ["#B9825A", "#7A4E2D"])
-
-        static let reading = Site(host: "reading.example", title: "Reading list", glyph: "book-open", colors: ["#7C83F0", "#4A4FC4"])
-
-        static let favorites = [mail, calendar, tides, notes, code, chat, maps, photos, reading]
-        static let all = favorites + [meridian, rail, stay, weather, bakery]
-    }
+    /// The favorites, by the name their tile answers to.
+    private static let favorites = [
+        ("GitHub", "https://github.com/"), ("YouTube", "https://www.youtube.com/"), ("Spotify", "https://open.spotify.com/"),
+        ("Figma", "https://www.figma.com/"), ("Notion", "https://www.notion.com/"), ("Linear", "https://linear.app/"),
+        ("Discord", "https://discord.com/"), ("Wikipedia", "https://www.wikipedia.org/"), ("Hacker News", "https://news.ycombinator.com/"),
+    ]
+    private static let article = "https://en.wikipedia.org/wiki/Lithium"
+    private static let album = "https://c418.bandcamp.com/album/minecraft-volume-alpha"
+    private static let essay = "https://hacks.mozilla.org/2017/08/inside-a-super-fast-css-engine-quantum-css-aka-stylo/"
+    private static let trip = ["https://en.wikivoyage.org/wiki/Lisbon", "https://www.openstreetmap.org/#map=13/38.7223/-9.1393", "https://www.metrolisboa.pt/en/"]
+    private static let others = ["https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_grid_layout", "https://webkit.org/blog/", "https://www.swift.org/documentation/"]
 
     @Test func pictures() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -48,9 +31,18 @@ struct ShowcaseShots {
         let appIcon = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../Support/AppIcon.png").standardizedFileURL
         NSApplication.shared.applicationIconImage = try #require(NSImage(contentsOf: appIcon))
         Theme.registerFonts()
-        try seedIcons()
+        // Sites answer in the language they are asked in: the pictures are the same from any Mac.
+        UserDefaults.standard.set(["en-US"], forKey: "AppleLanguages")
+        defer { UserDefaults.standard.removeObject(forKey: "AppleLanguages") }
         SessionStore.save(Session())
-        PinStore.save(try Site.favorites.map { Pin(id: UUID(), url: $0.url, title: $0.title, favicon: try icon($0)) })
+        var pins: [Pin] = []
+        for (name, address) in Self.favorites {
+            let url = try #require(URL(string: address))
+            let host = try #require(url.host())
+            let icon = try #require(await Favicons.shared.icon(forHost: host), "no icon for \(name)")
+            pins.append(Pin(id: UUID(), url: url, title: name, favicon: icon))
+        }
+        PinStore.save(pins)
         let browser = Browser()
         defer {
             browser.tabs.forEach { browser.close($0, remembering: false) }
@@ -59,19 +51,19 @@ struct ShowcaseShots {
         }
         browser.commandWindow.regularTabs.forEach(browser.close)
 
-        func sleeping(_ site: Site) -> Lithium.Tab {
-            let tab = browser.newTab(selecting: false)
-            tab.restore(url: site.url, title: site.title)
+        func opened(_ address: String, selecting: Bool = false) throws -> Lithium.Tab {
+            let tab = browser.newTab(selecting: selecting)
+            tab.load(try #require(URL(string: address)))
             return tab
         }
-        let trip = browser.newFolder(with: sleeping(.rail))
-        browser.renameFolder(trip.id, to: "Trip to the coast")
-        browser.moveTab(sleeping(.stay), toFolder: trip.id)
-        browser.moveTab(sleeping(.weather), toFolder: trip.id)
-        let music = browser.newTab(selecting: false)
-        _ = sleeping(.bakery)
-        _ = sleeping(.notes)
-        let article = browser.newTab(selecting: true)
+        let stops = try Self.trip.map { try opened($0) }
+        let folder = browser.newFolder(with: stops[0])
+        browser.renameFolder(folder.id, to: "Lisbon in May")
+        stops.dropFirst().forEach { browser.moveTab($0, toFolder: folder.id) }
+        let music = try opened(Self.album)
+        let others = try Self.others.map { try opened($0) }
+        let essay = try opened(Self.essay)
+        let article = try opened(Self.article, selecting: true)
 
         let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1440, height: 900),
                                      styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -85,27 +77,29 @@ struct ShowcaseShots {
         defer { window.orderOut(nil) }
         #expect(window.screen == nil, "the window must stay off screen")
 
-        try await load("meridian", as: .meridian, in: article)
-        try await load("tides", as: .tides, in: music)
-        browser.nowPlaying.receive(try song(), from: music)
+        for tab in stops + others + [music, essay, article] { try await loaded(tab) }
+        // Pictures, and what pages add once loaded.
+        try await Task.sleep(for: .seconds(2))
+        browser.nowPlaying.receive(try await song(playing: music), from: music)
 
         // An article, with the favorites, a folder of tabs and the player of the music tab.
         let first = try await picture(of: window)
         try save("window-light", first, isDark: false)
         try jpeg(try socialPreview(first)).write(to: directory.appending(path: "social-preview.jpg"))
 
-        // The same article in the reader.
-        #expect(await article.toggleReader())
+        // An essay in the reader.
+        browser.select(essay)
+        #expect(await essay.toggleReader())
         try save("reader", try await picture(of: window), isDark: false)
-        #expect(await article.toggleReader())
+        #expect(await essay.toggleReader())
 
-        // Two tabs side by side.
-        browser.select(article)
-        browser.openInSplit(music)
+        // Two tabs side by side: the essay and the documentation.
+        browser.select(essay)
+        browser.openInSplit(others[0])
         try save("split-view", try await picture(of: window), isDark: false)
-        browser.exitSplit(of: article)
+        browser.exitSplit(of: essay)
 
-        // The music tab at night, on a dark sidebar, with the badge of the app's own screenshots.
+        // At night, on a dark sidebar, with the badge of the app's own screenshots.
         defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarColor) }
         UserDefaults.standard.set("#2B2D42", forKey: Preference.sidebarColor)
         window.appearance = NSAppearance(named: .darkAqua)
@@ -154,58 +148,36 @@ struct ShowcaseShots {
 
     // MARK: Invented content
 
-    /// A site's icon: its glyph in white on a gradient tile, 64 pixels as `Favicons` keeps them.
-    private func icon(_ site: Site) throws -> Data {
-        let glyph = try #require(Resources.bundle.url(forResource: site.glyph, withExtension: "svg").flatMap(NSImage.init(contentsOf:)))
-        glyph.isTemplate = true
-        let tile = ZStack {
-            LinearGradient(colors: site.colors.map { Color(hex: $0) }, startPoint: .top, endPoint: .bottom)
-            Image(nsImage: glyph).resizable().renderingMode(.template).foregroundStyle(.white).frame(width: 20, height: 20)
-        }
-        .frame(width: 32, height: 32)
-        let renderer = ImageRenderer(content: tile)
-        renderer.scale = 2
-        return try png(try #require(renderer.cgImage))
-    }
-
-    /// Where `Favicons` looks for a host's icon, so sleeping tabs show theirs without any request.
-    private func seedIcons() throws {
-        let folder = URL.applicationSupportDirectory.appending(path: "Lithium/Favicons")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for site in Site.all {
-            try icon(site).write(to: folder.appending(path: "\(site.host).png"))
-        }
-    }
-
-    /// What a page's Media Session would report, with a cover drawn here.
-    private func song() throws -> NowPlaying.Media {
-        let cover = ZStack {
-            LinearGradient(colors: ["#0F2A44", "#1D5A73", "#F29E6B", "#FFD9A0"].map { Color(hex: $0) }, startPoint: .top, endPoint: .bottom)
-            Circle().fill(Color(hex: "#FFE9C4")).frame(width: 44, height: 44).offset(y: 10)
-            Rectangle().fill(Color(hex: "#0C2233").opacity(0.85)).frame(height: 44).offset(y: 38)
-        }
-        .frame(width: 120, height: 120)
-        .clipped()
-        let renderer = ImageRenderer(content: cover)
-        renderer.scale = 2
-        let art = try png(try #require(renderer.cgImage))
-        return try #require(NowPlaying.Media(message: [
-            "title": "Harbor Lights", "artist": "Paper Lanterns", "artwork": "data:image/png;base64,\(art.base64EncodedString())",
-            // A rate close to none: the time shown is the same in every run.
-            "paused": false, "audible": true, "time": 96, "duration": 252, "rate": 0.000_001, "previous": true, "next": true,
-        ], at: Date()))
-    }
-
-    /// The fixture, as if `site` had served it: no request leaves, the address bar shows the site.
-    private func load(_ fixture: String, as site: Site, in tab: Lithium.Tab) async throws {
-        let file = try #require(Bundle.module.url(forResource: "Fixtures/showcase/\(fixture)", withExtension: "html"))
-        let icon = "<link rel=\"icon\" href=\"data:image/png;base64,\(try icon(site).base64EncodedString())\">"
-        let html = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "<title>", with: "\(icon)<title>")
-        tab.webView.loadSimulatedRequest(URLRequest(url: site.url), responseHTML: html)
-        for _ in 0..<500 where tab.webView.isLoading || tab.webView.url == nil {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+    /// Waits for the page, its title and its icon: a tab drawn before them shows an address and a globe.
+    private func loaded(_ tab: Lithium.Tab) async throws {
+        for _ in 0..<1500 where tab.webView.isLoading || tab.webView.url == nil { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!tab.webView.isLoading, "\(tab.url?.absoluteString ?? "a page") did not finish loading")
+        for _ in 0..<250 where Favicons.shared.cached(host: tab.url?.host()) == nil { try await Task.sleep(for: .milliseconds(20)) }
         _ = try await tab.webView.evaluateJavaScript("document.body.offsetHeight")
+    }
+
+    /// What the album's page would report while its first track plays, read from the page: the
+    /// track is never started, so nothing sounds while the pictures are drawn.
+    private func song(playing tab: Lithium.Tab) async throws -> NowPlaying.Media {
+        let read = """
+        (() => {
+          const album = JSON.parse(document.querySelector('script[type="application/ld+json"]').textContent);
+          const track = album.track.itemListElement[0].item;
+          const [, hours, minutes, seconds] = /P(\\d+)H(\\d+)M(\\d+)S/.exec(track.duration);
+          return { title: track.name, artist: album.byArtist.name, cover: album.image, duration: hours * 3600 + minutes * 60 + +seconds };
+        })()
+        """
+        let album = try #require(try await tab.webView.evaluateJavaScript(read) as? [String: Any])
+        let cover = try await URLSession.shared.data(from: try #require((album["cover"] as? String).flatMap(URL.init(string:)))).0
+        let duration = try #require(album["duration"] as? Double)
+        let title = try #require(album["title"] as? String)
+        let artist = try #require(album["artist"] as? String)
+        return try #require(NowPlaying.Media(message: [
+            "title": title, "artist": artist,
+            "artwork": "data:image/jpeg;base64,\(cover.base64EncodedString())",
+            // A rate close to none: the time shown is the same in every run.
+            "paused": false, "audible": true, "time": (duration / 3).rounded(), "duration": duration, "rate": 0.000_001, "previous": true, "next": true,
+        ], at: Date()))
     }
 
     // MARK: Drawing
@@ -314,9 +286,4 @@ struct ShowcaseShots {
     private func jpeg(_ image: CGImage) throws -> Data {
         try #require(NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.9]))
     }
-
-    private func png(_ image: CGImage) throws -> Data {
-        try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
-    }
 }
-

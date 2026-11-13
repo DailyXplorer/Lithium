@@ -13,9 +13,9 @@ A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView)
 
 | At night, on a dark sidebar | Two tabs side by side | The reader |
 |---|---|---|
-| ![A music site in Lithium's window, dark, framed by the app's own screenshot tool](docs/images/window-dark.jpg) | ![An article and a music site side by side in one window](docs/images/split-view.jpg) | ![The same article in the reader: its text alone](docs/images/reader.jpg) |
+| ![An album's page in Lithium's window, dark, framed by the app's own screenshot tool](docs/images/window-dark.jpg) | ![An essay and its documentation side by side in one window](docs/images/split-view.jpg) | ![The essay in the reader: its text alone](docs/images/reader.jpg) |
 
-These pictures are generated, not taken from anyone's browsing. `ShowcaseShots` draws Lithium's real window off screen with an invented session: every site, icon and song in them is made up.
+These pictures are generated, not taken from anyone's browsing. `ShowcaseShots` draws Lithium's real window off screen, in an empty profile, and loads real sites in it. The sites, their logos and what they show belong to their owners.
 
 ## Download
 

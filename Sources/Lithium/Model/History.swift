@@ -102,7 +102,7 @@ final class HistoryStore {
     /// Off the main thread (a query few visits match reads them all); nil when a newer query replaced this one.
     func visitsInBackground(matching query: String, before: Int64? = nil, limit: Int = 500) async -> [Visit]? {
         writeTitles()
-        return await search.visits(matching: query, before: before, limit: limit)
+        return await search.visits(matching: query, before: before, limit: limit)()
     }
 
     /// Escapes LIKE wildcards. SQLite folds the case of ASCII letters only, so a query with other
@@ -156,8 +156,16 @@ final class HistoryStore {
 
     /// `topSites` off the main thread; nil when a newer query replaced this one before it ran.
     func topSitesInBackground(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
+        await topSitesQuery(matching: query, limit: limit)()
+    }
+
+    /// The query in two steps: asked now, which gives it its turn among the queries, and answered
+    /// when the result is called. The turn is the order of asking, here on the main actor. Taken
+    /// in the background, where two queries race to start, an older one could come second and
+    /// have the newer one dropped as replaced: the text typed last then showed no history.
+    func topSitesQuery(matching query: String, limit: Int) -> @Sendable () async -> [(url: URL, title: String)]? {
         writeTitles()
-        return await search.topSites(matching: query, limit: limit)
+        return search.topSites(matching: query, limit: limit)
     }
 
     nonisolated fileprivate static func topSites(in db: OpaquePointer?, matching query: String, limit: Int) -> [(url: URL, title: String)] {
@@ -302,28 +310,32 @@ private final class HistorySearch: @unchecked Sendable {
         }
     }
 
-    func topSites(matching query: String, limit: Int) async -> [(url: URL, title: String)]? {
-        await run(.topSites) { HistoryStore.topSites(in: $0, matching: query, limit: limit) }
+    func topSites(matching query: String, limit: Int) -> @Sendable () async -> [(url: URL, title: String)]? {
+        ask(.topSites) { HistoryStore.topSites(in: $0, matching: query, limit: limit) }
     }
 
-    func visits(matching query: String, before: Int64?, limit: Int) async -> [Visit]? {
-        await run(.visits) { HistoryStore.visits(in: $0, matching: query, before: before, limit: limit) }
+    func visits(matching query: String, before: Int64?, limit: Int) -> @Sendable () async -> [Visit]? {
+        ask(.visits) { HistoryStore.visits(in: $0, matching: query, before: before, limit: limit) }
     }
 
-    private func run<Result: Sendable>(_ kind: Kind, _ read: @escaping @Sendable (OpaquePointer?) -> Result) async -> Result? {
+    /// Takes the query's ticket now, in the caller's order, and returns the read to await: nil
+    /// when a query of its kind was asked since.
+    private func ask<Result: Sendable>(_ kind: Kind, _ read: @escaping @Sendable (OpaquePointer?) -> Result) -> @Sendable () async -> Result? {
         let ticket = lock.withLock { newest[kind, default: 0] += 1; return newest[kind, default: 0] }
-        return await withCheckedContinuation { continuation in
-            queue.async { [self] in
-                guard lock.withLock({ ticket == newest[kind] }) else { return continuation.resume(returning: nil) }
-                if db == nil {
-                    if sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
-                        HistoryStore.addUnicodeLower(to: db)
-                    } else {
-                        sqlite3_close(db)
-                        db = nil
+        return { [self] in
+            await withCheckedContinuation { continuation in
+                queue.async { [self] in
+                    guard lock.withLock({ ticket == newest[kind] }) else { return continuation.resume(returning: nil) }
+                    if db == nil {
+                        if sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
+                            HistoryStore.addUnicodeLower(to: db)
+                        } else {
+                            sqlite3_close(db)
+                            db = nil
+                        }
                     }
+                    continuation.resume(returning: read(db))
                 }
-                continuation.resume(returning: read(db))
             }
         }
     }

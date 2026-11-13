@@ -1,0 +1,58 @@
+#!/bin/sh
+# Builds what a release publishes, in .build/dist:
+#   Lithium.dmg   the disk image people download
+#   Lithium.zip   the archive a running Lithium updates from
+#   latest.json   what a running Lithium reads to learn of the release (Model/Updater.swift)
+# The version is Support/Info.plist's. Needs the release certificate in a keychain, and the
+# update key in LITHIUM_UPDATE_PRIVATE_KEY or in the login keychain ("Lithium update key").
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$project_dir"
+
+repository="${GITHUB_REPOSITORY:-DailyXplorer/Lithium}"
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)
+case $(uname -m) in
+  arm64) platform=darwin-aarch64 ;;
+  *) platform=darwin-x86_64 ;;
+esac
+
+: "${LITHIUM_UPDATE_PRIVATE_KEY:=$(security find-generic-password -s 'Lithium update key' -w 2>/dev/null || true)}"
+if [ -z "$LITHIUM_UPDATE_PRIVATE_KEY" ]; then
+  printf 'No update key: set LITHIUM_UPDATE_PRIVATE_KEY, or keep it in the keychain as "Lithium update key".\n' >&2
+  exit 1
+fi
+export LITHIUM_UPDATE_PRIVATE_KEY
+
+LITHIUM_UPDATE_FEED="https://github.com/$repository/releases/latest/download/latest.json" \
+  LITHIUM_SIGN_IDENTITY="${LITHIUM_SIGN_IDENTITY:-Lithium Release}" ./scripts/build-app.sh >/dev/null
+app="$project_dir/.build/Lithium.app"
+
+out="$project_dir/.build/dist"
+rm -rf "$out"
+mkdir -p "$out"
+
+ditto -c -k --keepParent "$app" "$out/Lithium.zip"
+signature=$(swift scripts/update-signature.swift sign "$out/Lithium.zip")
+swift scripts/update-signature.swift verify "$out/Lithium.zip" "$signature" "$(cat Support/UpdateKey.txt)"
+
+image=$(mktemp -d)
+trap 'rm -rf "$image"' EXIT
+ditto "$app" "$image/Lithium.app"
+ln -s /Applications "$image/Applications"
+hdiutil create -quiet -volname Lithium -srcfolder "$image" -format UDZO -ov "$out/Lithium.dmg"
+
+cat > "$out/latest.json" <<JSON
+{
+  "version": "$version",
+  "pub_date": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "platforms": {
+    "$platform": {
+      "url": "https://github.com/$repository/releases/download/v$version/Lithium.zip",
+      "signature": "$signature"
+    }
+  }
+}
+JSON
+
+printf '%s\n' "$out/Lithium.dmg" "$out/Lithium.zip" "$out/latest.json"

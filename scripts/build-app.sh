@@ -47,6 +47,13 @@ cp "$bin_path/Lithium" "$app/Contents/MacOS/Lithium"
 # The stdio bridge agents start, at a path that stays put across updates.
 cp "$bin_path/lithium-mcp" "$app/Contents/MacOS/lithium-mcp"
 cp Support/Info.plist "$app/Contents/Info.plist"
+# Set by scripts/release: a release build asks this feed for its updates, and trusts what the
+# release key signed (Model/Updater.swift). Any other build has neither, and never asks.
+if [ -n "${LITHIUM_UPDATE_FEED:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Add :LithiumUpdateFeed string $LITHIUM_UPDATE_FEED" \
+    -c "Add :LithiumUpdateKey string $(cat Support/UpdateKey.txt)" \
+    -c "Set :CFBundleVersion $(git rev-list --count HEAD)" "$app/Contents/Info.plist"
+fi
 cp Support/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 for bundle in "$bin_path"/*.bundle; do
   # A test target's resources (Lithium_LithiumTests.bundle, left by a test build) aren't the app's.
@@ -89,6 +96,10 @@ EOF
   rm -rf "$certdir"
 fi
 sign_hash=$(security find-identity -p codesigning | grep "\"$identity\"" | awk '{ print $2; exit }')
+if [ -z "$sign_hash" ]; then
+  printf 'No code signing identity named "%s" in your keychains.\n' "$identity" >&2
+  exit 1
+fi
 
 xattr -cr "$app"
 # Nested code first: the app's signature seals the bridge's. Same identity, so neither asks for

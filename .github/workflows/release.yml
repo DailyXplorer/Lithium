@@ -1,0 +1,103 @@
+# Publishes a release: the disk image people download, and what a running Lithium updates
+# from. Run by hand (Actions › Release › Run workflow, or `gh workflow run release.yml`) once a
+# pull request has raised CFBundleShortVersionString in Support/Info.plist.
+name: Release
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The job reads the signing secrets: only the owner runs it, and only from main. The
+    # `release` environment holds them, and refuses any other branch.
+    if: github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: xcode-27
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The build number is the number of commits.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the version
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Support/Info.plist)
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "::error::v$version is already released. Raise CFBundleShortVersionString in Support/Info.plist first."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Import the release certificate
+        env:
+          RELEASE_CERTIFICATE: ${{ secrets.RELEASE_CERTIFICATE }}
+          RELEASE_CERTIFICATE_PASSWORD: ${{ secrets.RELEASE_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password=$(uuidgen)
+          printf '%s' "$RELEASE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/release.p12" -k "$keychain" -P "$RELEASE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/release.p12"
+          # Without it, codesign waits for a click on a dialog no one sees.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build, sign and package
+        env:
+          LITHIUM_UPDATE_PRIVATE_KEY: ${{ secrets.UPDATE_PRIVATE_KEY }}
+        run: ./scripts/release
+
+      - name: Check the disk image
+        run: |
+          mount=$(mktemp -d)
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mount" .build/dist/Lithium.dmg
+          codesign --verify --deep --strict "$mount/Lithium.app"
+          codesign --display --verbose=2 "$mount/Lithium.app" 2>&1 | grep -E '^(Identifier|Authority)='
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$mount/Lithium.app/Contents/Info.plist")" = "$VERSION"
+          test -L "$mount/Applications"
+          hdiutil detach -quiet "$mount"
+
+      - name: Publish
+        run: |
+          notes=""
+          if [ -n "$(gh release list --limit 1 --json tagName --jq '.[0].tagName')" ]; then notes="--generate-notes"; fi
+          # A draft first: the release becomes the latest with all its files, never without.
+          # shellcheck disable=SC2086
+          gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "Lithium $VERSION" \
+            --notes-file .github/release-notes.md $notes \
+            .build/dist/Lithium.dmg .build/dist/Lithium.zip .build/dist/latest.json
+          gh release edit "v$VERSION" --draft=false --latest
+
+      - name: Check what a running Lithium reads
+        run: |
+          feed="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL "$feed" -o "$RUNNER_TEMP/latest.json" &&
+              [ "$(plutil -extract version raw -o - "$RUNNER_TEMP/latest.json")" = "$VERSION" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "::error::$feed does not serve v$VERSION"
+              exit 1
+            fi
+            sleep 10
+          done
+          curl -fsSL "$(plutil -extract platforms.darwin-aarch64.url raw -o - "$RUNNER_TEMP/latest.json")" -o "$RUNNER_TEMP/Lithium.zip"
+          swift scripts/update-signature.swift verify "$RUNNER_TEMP/Lithium.zip" \
+            "$(plutil -extract platforms.darwin-aarch64.signature raw -o - "$RUNNER_TEMP/latest.json")" "$(cat Support/UpdateKey.txt)"

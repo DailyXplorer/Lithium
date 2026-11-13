@@ -67,6 +67,7 @@ jobs:
       - name: Shell scripts parse
         run: |
           sh -n scripts/build-app.sh
+          sh -n scripts/release
           bash -n scripts/test
           bash -n scripts/test-fast
           shellcheck --severity=error scripts/build-app.sh scripts/test scripts/test-fast

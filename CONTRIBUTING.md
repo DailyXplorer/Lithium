@@ -99,6 +99,16 @@ If you used them, list them in the pull request description.
 - Fill in the [template](.github/pull_request_template.md): what and why, the issue it closes, how you tested it, and what a self-review found.
 - The maintainer merges with a merge commit, so your commits land as you wrote them. Keep each one buildable and its message honest.
 
+## Releasing
+
+For maintainers. A release is a version number in `Support/Info.plist` and one run of the `Release` workflow.
+
+1. Raise `CFBundleShortVersionString` in `Support/Info.plist` in a pull request, and merge it.
+2. Run the workflow: Actions › Release › Run workflow, or `gh workflow run release.yml`. It builds `main`, signs the app with the release certificate, and publishes `Lithium.dmg`, `Lithium.zip` and `latest.json` under the tag `v<version>`.
+3. Copies of Lithium installed from a release find it within a day (`Model/Updater.swift`).
+
+The workflow reads three secrets from the `release` environment, which only `main` can use: `RELEASE_CERTIFICATE` and `RELEASE_CERTIFICATE_PASSWORD` (the self-signed "Lithium Release" identity, as a base64 `.p12`), and `UPDATE_PRIVATE_KEY` (the Ed25519 key whose public half is `Support/UpdateKey.txt`). Both stay the same from one release to the next: an installed copy only accepts an update the update key signed, and macOS ties its keychain items and permissions to the certificate. `./scripts/release` builds the same three files on a Mac that holds both.
+
 ## Reporting a bug
 
 Open an issue with:

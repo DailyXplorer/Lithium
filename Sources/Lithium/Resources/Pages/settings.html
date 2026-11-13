@@ -358,6 +358,16 @@
   <section id="about" class="page">
     <h2>About Lithium</h2>
     <div class="about"><img src="lithium://pages/app-icon" alt=""><div><div class="name">Lithium</div><div class="hint" id="version"></div></div></div>
+    <div id="updates" hidden>
+      <div class="row">
+        <div><div class="title" id="update-title"></div><div class="hint" id="update-hint"></div></div>
+        <button class="button" id="update-action"></button>
+      </div>
+      <div class="row">
+        <div><div class="title">Check for updates automatically</div><div class="hint">Once a day, from Lithium's releases on GitHub. An update installs when you quit Lithium.</div></div>
+        <label class="switch" for="auto-update"><input type="checkbox" id="auto-update" role="switch" aria-label="Check for updates automatically"><span></span></label>
+      </div>
+    </div>
     <dl>
       <dt>Engine</dt><dd id="engine"></dd>
       <dt>System</dt><dd id="system"></dd>
@@ -547,14 +557,14 @@
 
   const shellQuote = (text) => /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
 
-  const relative = (ms) => {
-    if (!ms) return 'Not updated yet';
+  const relative = (ms, done = 'Updated', never = 'Not updated yet') => {
+    if (!ms) return never;
     const minutes = Math.round((Date.now() - ms) / 60000);
-    if (minutes < 1) return 'Updated just now';
-    if (minutes < 60) return `Updated ${minutes} min ago`;
+    if (minutes < 1) return `${done} just now`;
+    if (minutes < 60) return `${done} ${minutes} min ago`;
     const hours = Math.round(minutes / 60);
-    if (hours < 24) return `Updated ${hours} h ago`;
-    return `Updated ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
+    if (hours < 24) return `${done} ${hours} h ago`;
+    return `${done} ${new Date(ms).toLocaleDateString('en', { dateStyle: 'medium' })}`;
   };
 
   const DM_SANS = 'DM Sans';
@@ -773,6 +783,29 @@
     document.querySelectorAll('#energy-saving button').forEach((b) => b.classList.toggle('on', b.dataset.value === state.advanced.energySaving));
 
     $('#version').textContent = `Version ${about.version}`;
+    // Null in a build that isn't a release: it has no updater, and the rows stay hidden.
+    const update = about.update;
+    $('#updates').hidden = !update;
+    if (update) {
+      const checked = relative(update.checked, 'Checked', 'Not checked yet');
+      const [title, hint, label, action] = {
+        idle: ['Updates', checked, 'Check now', 'checkUpdate'],
+        checking: ['Checking for updates…', '', 'Check now', 'checkUpdate'],
+        upToDate: ['Lithium is up to date', checked, 'Check now', 'checkUpdate'],
+        failed: ["Couldn't check for updates", 'Check your connection and try again.', 'Try again', 'checkUpdate'],
+        downloading: [`Downloading version ${update.version}…`, '', 'Check now', 'checkUpdate'],
+        ready: [`Version ${update.version} is ready`, 'It installs when you quit Lithium.', 'Relaunch now', 'installUpdate'],
+        manual: [`Version ${update.version} is available`, 'Move Lithium to the Applications folder to update it from here.', 'Download', 'openDownloads'],
+      }[update.state];
+      const busy = update.state === 'checking' || update.state === 'downloading';
+      $('#update-title').textContent = title;
+      $('#update-hint').textContent = hint;
+      $('#update-action').textContent = label;
+      $('#update-action').dataset.action = action;
+      $('#update-action').disabled = busy;
+      $('#auto-update').checked = update.automatic;
+      if (busy && !protections.updating) pollTimer = setTimeout(() => call('state').then(render), 1000);
+    }
     $('#engine').textContent = about.safari ? `WebKit (Safari ${about.safari})` : 'WebKit';
     $('#system').textContent = about.macOS;
   };
@@ -835,6 +868,8 @@
     if (site) call('setSiteFont', { site, keep: true }).then((state) => { $('#site-font-site').value = ''; render(state); });
   };
   $('#update').onclick = () => call('updateFilters').then(render);
+  $('#update-action').onclick = (event) => call(event.currentTarget.dataset.action).then(render);
+  $('#auto-update').onchange = (event) => call('setAutoUpdate', event.target.checked).then(render);
   $('#filter-add-form').onsubmit = (event) => {
     event.preventDefault();
     const address = $('#filter-url').value.trim();

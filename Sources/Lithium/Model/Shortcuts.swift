@@ -8,8 +8,13 @@ import AppKit
 enum Shortcuts {
     private static let editingKeys: Set<Key> = [
         Key("a", .command), Key("x", .command), Key("c", .command), Key("v", .command), Key("v", [.command, .option, .shift]),
+        pastePlainKey,
         Key("z", .command), Key("z", [.command, .shift]), Key(";", .command), Key(":", [.command, .shift]),
     ]
+
+    /// ⇧⌘V, the Paste and Match Style of Chromium's browsers and of most editors. The Edit menu
+    /// keeps macOS's own ⌥⇧⌘V for it.
+    private static let pastePlainKey = Key("v", [.command, .shift])
 
     private struct Key: Hashable {
         static let modifiers: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
@@ -51,6 +56,14 @@ enum Shortcuts {
         return true
     }
 
+    /// ⇧⌘V nothing took pastes without formatting into whatever has the keyboard in `window`: a
+    /// page, which had the key first (an editor with a ⇧⌘V of its own keeps it), or a text field.
+    /// False for any other key, and when nothing there can paste.
+    static func pastePlain(_ event: NSEvent, in window: NSWindow) -> Bool {
+        guard event.type == .keyDown, Key(event) == pastePlainKey else { return false }
+        return window.firstResponder?.tryToPerform(#selector(NSTextView.pasteAsPlainText(_:)), with: nil) ?? false
+    }
+
     /// The item and every submenu it is in (Developer, without the Web Inspector).
     private static func isEnabled(_ item: NSMenuItem) -> Bool {
         guard let menu = item.menu else { return false }
@@ -74,5 +87,13 @@ enum Shortcuts {
             }
         }
         return nil
+    }
+}
+
+/// A window with pages in it. A key equivalent goes to its views, the page's web view among
+/// them, before this: what is left of ⇧⌘V by then is nobody's, and pastes without formatting.
+class PageWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        super.performKeyEquivalent(with: event) || Shortcuts.pastePlain(event, in: self)
     }
 }

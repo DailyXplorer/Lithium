@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The window of a link from another app (`QuickLinks`): the page under a slim bar.
-final class QuickLinkWindow: NSWindow, NSWindowDelegate {
+final class QuickLinkWindow: PageWindow, NSWindowDelegate {
     /// Not `tab`, which NSWindow has for window tabs.
     private let page: Tab
     private weak var browser: Browser?

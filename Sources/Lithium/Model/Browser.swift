@@ -61,6 +61,8 @@ final class Browser {
     var canShowWebInspector: Bool { developerTools && commandTab != nil }
 
     let privacy = Privacy()
+    /// Nil in a build that isn't a release.
+    let updater = Updater.bundled()
     let history = HistoryStore()
     let permissions = SitePermissions()
     let appLinks = AppLinks()
@@ -169,6 +171,7 @@ final class Browser {
         self.favicons = favicons
         pins = PinStore.load()
         privacy.start()
+        updater?.start()
         extensions.browser = self
         nowPlaying.browser = self
         quickLinks.browser = self

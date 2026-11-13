@@ -257,6 +257,9 @@ struct PageMenuItems: View {
             if browser.agent == nil { browser.openSettings(section: "agents", in: window) } else { panel = .agents }
         }
         Divider()
+        if let updater = browser.updater, case .ready(let version) = updater.state {
+            Button("Relaunch to Update to \(version)") { updater.relaunch() }
+        }
         Button("Settings…") { browser.openSettings(in: window) }
     }
 }

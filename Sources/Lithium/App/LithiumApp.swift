@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         LithiumApp.sharedBrowser.saveNow()
         LithiumApp.sharedBrowser.history.close()
+        LithiumApp.sharedBrowser.updater?.installAtQuit()
     }
 
     /// Built at each click on the Dock icon: Stop Agent shows only while an agent listens.
@@ -102,6 +103,18 @@ struct BrowserCommands: Commands {
     let browser: Browser
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            if let updater = browser.updater {
+                if case .ready(let version) = updater.state {
+                    Button("Relaunch to Update to \(version)") { updater.relaunch() }
+                } else {
+                    Button("Check for Updates…") {
+                        updater.checkNow()
+                        browser.inBrowserWindow { browser.openSettings(section: "about", in: $0) }
+                    }
+                }
+            }
+        }
         CommandGroup(replacing: .appSettings) {
             Button("Settings…") { browser.inBrowserWindow { browser.openSettings(in: $0) } }
                 .keyboardShortcut(",")

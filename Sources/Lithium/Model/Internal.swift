@@ -258,6 +258,14 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
             browser.developerTools = value as? Bool ?? true
         case "setQuickLinks":
             browser.quickLinks.isEnabled = value as? Bool ?? false
+        case "checkUpdate":
+            browser.updater?.checkNow()
+        case "setAutoUpdate":
+            browser.updater?.isAutomatic = value as? Bool ?? true
+        case "installUpdate":
+            browser.updater?.relaunch()
+        case "openDownloads":
+            if let page = browser.updater?.downloads { browser.newTab(url: page) }
         case "setEnergySaving":
             if let mode = (value as? String).flatMap(EnergySaving.init(rawValue:)) { browser.energy.mode = mode }
         case "copyAgentSetup":
@@ -450,6 +458,21 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
         return icon
     }
 
+    /// What the About section shows of the updater. A build that isn't a release has none.
+    static func update(_ updater: Updater) -> [String: Any] {
+        let (name, version): (String, String) = switch updater.state {
+        case .idle: ("idle", "")
+        case .checking: ("checking", "")
+        case .upToDate: ("upToDate", "")
+        case .failed: ("failed", "")
+        case .downloading(let version): ("downloading", version)
+        case .ready(let version): ("ready", version)
+        case .manual(let version): ("manual", version)
+        }
+        return ["state": name, "version": version, "automatic": updater.isAutomatic,
+                "checked": updater.checked.map { $0.timeIntervalSince1970 * 1000 } ?? 0]
+    }
+
     private func state(_ browser: Browser) -> [String: Any] {
         let defaults = UserDefaults.standard
         let info = Bundle.main.infoDictionary ?? [:]
@@ -542,6 +565,7 @@ final class InternalBridge: NSObject, WKScriptMessageHandlerWithReply {
                 "version": info["CFBundleShortVersionString"] as? String ?? "dev",
                 "safari": Self.safariVersion,
                 "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
+                "update": browser.updater.map { Self.update($0) as Any } ?? NSNull(),
             ],
         ]
     }

@@ -17,7 +17,18 @@ A light, native macOS browser built on the system's WebKit (SwiftUI + WKWebView)
 
 These pictures are generated, not taken from anyone's browsing. `ShowcaseShots` draws Lithium's real window off screen, in an empty profile, and loads real sites in it. The sites, their logos and what they show belong to their owners.
 
+## Download
+
+[**Download Lithium for Mac**](https://github.com/DailyXplorer/Lithium/releases/latest/download/Lithium.dmg) (Apple silicon, macOS 15.4 or later), then:
+
+1. Open `Lithium.dmg` and drag Lithium to Applications.
+2. Open Lithium. The first time, macOS says it could not verify the app: Lithium is signed, but not notarized by Apple, which takes a paid developer account. Open **System Settings › Privacy & Security**, scroll down to Security, and click **Open Anyway**.
+
+Lithium then updates itself. Once a day it asks GitHub whether a newer release exists, downloads it, checks that Lithium's release key signed it, and installs it when you quit (`Model/Updater.swift`). Settings › About shows where it stands, checks on demand, and turns the daily check off. A copy you built yourself has no updater and never asks.
+
 ## Build and run
+
+Building needs a Mac with Xcode 27 (Swift 6.4); [CONTRIBUTING.md](CONTRIBUTING.md#prerequisites) lists the rest.
 
 ```sh
 ./scripts/build-app.sh --run        # builds .build/Lithium.app and opens it

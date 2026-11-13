@@ -22,7 +22,7 @@ struct ShortcutPriorityTests {
 
         for (characters, flags) in [("c", NSEvent.ModifierFlags.command), ("v", .command), ("x", .command), ("a", .command),
                                     ("z", .command), ("Z", [.command, .shift]), ("V", [.command, .option, .shift]),
-                                    ("C", [.command, .capsLock])] {
+                                    ("V", [.command, .shift]), ("C", [.command, .capsLock])] {
             #expect(!Shortcuts.isMenusFirst(try key(characters, flags)), "editing: \(flags) \(characters)")
         }
         let typing: [(String, NSEvent.ModifierFlags)] = [("b", []), ("B", .shift), ("b", .option), (arrow, [.option, .function, .numericPad]), ("\u{1b}", [])]
@@ -95,6 +95,90 @@ struct ShortcutPriorityTests {
         #expect(actions.ran == ["sidebar"], "Copy and unused keys aren't the menu's")
     }
 
+    /// ⇧⌘V that no view took pastes without formatting into whatever has the keyboard. No other
+    /// key does, ⌘V and the menu's own ⌥⇧⌘V included, and nothing happens where nothing can paste.
+    @Test func shiftCommandVNobodyTookPastesWithoutFormatting() throws {
+        _ = NSApplication.shared
+        let window = OffscreenPageWindow(contentRect: NSRect(x: -30000, y: -30000, width: 200, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let field = Pasting(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        window.contentView = field
+        defer { window.contentView = nil }
+        #expect(window.makeFirstResponder(field))
+
+        #expect(window.performKeyEquivalent(with: try key("V", [.command, .shift])))
+        #expect(field.pastes == 1)
+        #expect(window.performKeyEquivalent(with: try key("V", [.command, .shift, .capsLock])), "Caps Lock changes nothing")
+        #expect(field.pastes == 2)
+        let others: [(String, NSEvent.ModifierFlags)] = [("v", .command), ("V", [.command, .option, .shift]), ("B", [.command, .shift]),
+                                                         ("V", .shift), ("V", [.control, .shift]), ("v", [])]
+        for (characters, flags) in others {
+            #expect(!window.performKeyEquivalent(with: try key(characters, flags)), "\(flags) \(characters)")
+        }
+        #expect(field.pastes == 2)
+
+        // Nothing has the keyboard but the window, which cannot paste.
+        #expect(window.makeFirstResponder(nil))
+        #expect(!window.performKeyEquivalent(with: try key("V", [.command, .shift])))
+        #expect(field.pastes == 2)
+    }
+
+    /// The whole way, in a page. The page has ⇧⌘V first, as a `keydown`. Left alone, WebKit sends
+    /// the key to the app again and the window pastes without formatting: the page gets a `paste`.
+    /// A page that takes the key (an editor with a ⇧⌘V of its own) gets no paste from Lithium.
+    @Test func aPageHasShiftCommandVFirstAndThePasteWhenItLeavesTheKey() async throws {
+        let app = NSApplication.shared
+        let window = OffscreenPageWindow(contentRect: NSRect(x: -30000, y: -30000, width: 400, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = PageWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), configuration: configuration)
+        window.contentView = webView
+        window.orderFrontRegardless()
+        // The app sends a key to its key window. The test process is not the app in front, so this
+        // takes no keyboard from anyone.
+        window.makeKey()
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        #expect(window.screen == nil, "the window must stay off screen")
+        // The paste is prevented: the page hears of it, and the clipboard is never read.
+        webView.loadHTMLString("""
+            <div id="editor" contenteditable>text</div>
+            <script>
+              window.keys = []; window.pastes = 0;
+              addEventListener('keydown', (event) => {
+                keys.push((event.metaKey ? 'meta+' : '') + (event.shiftKey ? 'shift+' : '') + (event.altKey ? 'alt+' : '') + event.key.toLowerCase());
+                if (window.takesTheKey) event.preventDefault();
+              });
+              addEventListener('paste', (event) => { pastes += 1; event.preventDefault(); });
+              document.getElementById('editor').focus();
+              getSelection().selectAllChildren(document.getElementById('editor'));
+            </script>
+            """, baseURL: nil)
+        for _ in 0..<300 where webView.isLoading { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(window.makeFirstResponder(webView))
+
+        func press() async throws -> (keys: [String], pastes: Int) {
+            let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                      windowNumber: window.windowNumber, context: nil, characters: "V", charactersIgnoringModifiers: "V", isARepeat: false, keyCode: 9))
+            app.sendEvent(event)
+            // The page answers in its own process, then WebKit sends the key again.
+            try await Task.sleep(for: .milliseconds(700))
+            let state = try #require(try await webView.evaluateJavaScript("[keys, pastes]") as? [Any])
+            return (state[0] as? [String] ?? [], state[1] as? Int ?? -1)
+        }
+        let left = try await press()
+        #expect(left.keys == ["meta+shift+v"], "the page has the key first")
+        #expect(left.pastes == 1, "left alone, it pastes without formatting")
+
+        _ = try await webView.evaluateJavaScript("window.takesTheKey = true")
+        let taken = try await press()
+        #expect(taken.keys == ["meta+shift+v", "meta+shift+v"])
+        #expect(taken.pastes == 1, "the page took the key: no paste of Lithium's")
+    }
+
     private let arrow = String(UnicodeScalar(NSRightArrowFunctionKey)!)
 
     /// Hide Sidebar (⌘B), Copy (⌘C), a disabled Pin Tab (⌘D), a Tabs submenu and a disabled
@@ -123,6 +207,19 @@ struct ShortcutPriorityTests {
         developer.submenu = menu([item("inspector", "i", [.command, .option])])
         developer.isEnabled = false
         return (menu([item("sidebar", "b"), item("copy", "c"), item("pin", "d", enabled: false), tabs, developer]), actions)
+    }
+
+    /// A `PageWindow` that stays where it is put: borderless, and never moved back on a screen.
+    private final class OffscreenPageWindow: PageWindow {
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+        override var canBecomeKey: Bool { true }
+    }
+
+    /// A view that takes the keyboard and counts the plain pastes sent to it.
+    private final class Pasting: NSView {
+        var pastes = 0
+        override var acceptsFirstResponder: Bool { true }
+        @objc func pasteAsPlainText(_ sender: Any?) { pastes += 1 }
     }
 
     private final class Actions: NSObject {

@@ -3,7 +3,7 @@ import SwiftUI
 /// A browser window: `BrowserView` for one `BrowserWindow`, hosted as `QuickLinkWindow` hosts a
 /// link's page. Lithium opens every browser window itself, so the first and the fifth are made,
 /// shown, keyed, closed and restored the same way.
-final class BrowserNSWindow: NSWindow, NSWindowDelegate {
+final class BrowserNSWindow: PageWindow, NSWindowDelegate {
     private let model: BrowserWindow
     private weak var browser: Browser?
 

@@ -17,12 +17,13 @@ case $(uname -m) in
   *) platform=darwin-x86_64 ;;
 esac
 
-: "${LITHIUM_UPDATE_PRIVATE_KEY:=$(security find-generic-password -s 'Lithium update key' -w 2>/dev/null || true)}"
-if [ -z "$LITHIUM_UPDATE_PRIVATE_KEY" ]; then
+update_key="${LITHIUM_UPDATE_PRIVATE_KEY:-$(security find-generic-password -s 'Lithium update key' -w 2>/dev/null || true)}"
+if [ -z "$update_key" ]; then
   printf 'No update key: set LITHIUM_UPDATE_PRIVATE_KEY, or keep it in the keychain as "Lithium update key".\n' >&2
   exit 1
 fi
-export LITHIUM_UPDATE_PRIVATE_KEY
+# Out of the environment while the app builds: a dependency's build step must not be able to read it.
+unset LITHIUM_UPDATE_PRIVATE_KEY
 
 LITHIUM_UPDATE_FEED="https://github.com/$repository/releases/latest/download/latest.json" \
   LITHIUM_SIGN_IDENTITY="${LITHIUM_SIGN_IDENTITY:-Lithium Release}" ./scripts/build-app.sh >/dev/null
@@ -33,7 +34,7 @@ rm -rf "$out"
 mkdir -p "$out"
 
 ditto -c -k --keepParent "$app" "$out/Lithium.zip"
-signature=$(swift scripts/update-signature.swift sign "$out/Lithium.zip")
+signature=$(LITHIUM_UPDATE_PRIVATE_KEY="$update_key" swift scripts/update-signature.swift sign "$out/Lithium.zip")
 swift scripts/update-signature.swift verify "$out/Lithium.zip" "$signature" "$(cat Support/UpdateKey.txt)"
 
 image=$(mktemp -d)

@@ -101,9 +101,18 @@ struct UpdaterTests {
         try Data("#!/bin/sh\nprintf %s \"$1\" > '\(opened.path)'\n".utf8).write(to: opener)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: opener.path)
 
-        let running = try run("/bin/sleep", ["0.4"])
+        // Stands for the running app, and stays until its input closes: no race with the clock.
+        let running = Process()
+        let hold = Pipe()
+        running.executableURL = URL(fileURLWithPath: "/bin/cat")
+        running.standardInput = hold
+        running.standardOutput = FileHandle.nullDevice
+        try running.run()
         let swap = try staged.install(over: installed, after: running.processIdentifier, opener: opener.path)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(swap.isRunning, "waits for the app to quit")
         #expect(version(of: installed) == "1.0", "still running: untouched")
+        try hold.fileHandleForWriting.close()
         try await finished(swap)
         #expect(swap.terminationStatus == 0)
         #expect(!running.isRunning)

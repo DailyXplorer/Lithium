@@ -212,6 +212,21 @@ struct ZenModeTests {
                 "frame, under the bar, left edge: \(colors(at: [frame, underTheBar, leftEdge], in: window))")
     }
 
+    /// The top bar still out as Zen mode ends is not what Zen mode shows first when it is back.
+    @Test func theTopBarOutAsZenModeEndsIsGoneWhenItIsBack() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
+        let (browser, _, window) = try await shownBrowser(zen: true)
+        defer { window.orderOut(nil) }
+        let content = try #require(window.contentView)
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+
+        browser.commandWindow.toggleZenMode()
+        #expect(await waitUntil(5) { peekTrackers(in: content).isEmpty }, "out of Zen mode, with its sidebar")
+        browser.commandWindow.toggleZenMode()
+        #expect(await waitUntil(5) { addressField(in: window) == nil })
+    }
+
     /// The look is set, not toggled: the session an earlier test's browser saves a moment after
     /// its last change may still be landing as this one reads it.
     private func shownBrowser(zen: Bool) async throws -> (Browser, Lithium.Tab, NSWindow) {
@@ -247,16 +262,17 @@ struct ZenModeTests {
         let location = NSPoint(x: point.x, y: content.bounds.height - point.y)
         let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0,
                                                     windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
-        func trackers(in view: NSView) -> [PeekTracker.TrackerView] {
-            ((view as? PeekTracker.TrackerView).map { [$0] } ?? []) + view.subviews.flatMap(trackers)
-        }
-        for tracker in trackers(in: content) {
+        for tracker in peekTrackers(in: content) {
             if tracker.bounds.contains(tracker.convert(location, from: nil)) {
                 tracker.mouseMoved(with: event)
             } else {
                 tracker.mouseExited(with: event)
             }
         }
+    }
+
+    private func peekTrackers(in view: NSView) -> [PeekTracker.TrackerView] {
+        ((view as? PeekTracker.TrackerView).map { [$0] } ?? []) + view.subviews.flatMap(peekTrackers)
     }
 
     /// What the window draws at points counted from its top left, as red, green, blue and alpha.

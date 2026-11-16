@@ -16,6 +16,7 @@ struct BrowserView: View {
     @AppStorage(Preference.sidebarColor) private var settingsColorHex = Theme.defaultSidebarHex
     @State private var tabHover = TabHover()
     @State private var showsZenLights = false
+    @State private var showsZenTopBar = false
 
     private var colorHex: String { window.currentSpace.color ?? settingsColorHex }
 
@@ -48,9 +49,15 @@ struct BrowserView: View {
                     .padding(.top, zen ? Layout.margin : 0)
                     .padding([.trailing, .bottom], Layout.margin)
             }
+            // Below the sidebar's panel: cast from the bar itself, the shadow fell on the sidebar.
+            .overlay(alignment: .top) {
+                if zen, showsZenTopBar {
+                    ZenTopBarShadow().transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .overlay(alignment: .leading) {
                 if !window.showsSidebar {
-                    SidebarPeek(style: style, colorHex: colorHex, isZen: zen)
+                    SidebarPeek(style: style, colorHex: colorHex, isZen: zen, joinsTopBar: zen && showsZenTopBar)
                 }
             }
         }
@@ -58,7 +65,7 @@ struct BrowserView: View {
         .background { if zen { WindowDragArea() } }
         .overlay(alignment: .top) {
             if zen {
-                ZenTopBarPeek(style: style, colorHex: colorHex, showsLights: $showsZenLights)
+                ZenTopBarPeek(style: style, colorHex: colorHex, isShown: $showsZenTopBar, showsLights: $showsZenLights)
             }
         }
         .overlayPreferenceValue(AddressBarBounds.self) { anchor in
@@ -224,6 +231,9 @@ private struct SidebarPeek: View {
     let style: SidebarStyle
     let colorHex: String
     let isZen: Bool
+    /// Zen mode's top bar is out too. The panel then grows to the window's edges and loses its
+    /// corners, so the two read as one sheet rather than a card slid under a bar.
+    let joinsTopBar: Bool
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
@@ -239,15 +249,20 @@ private struct SidebarPeek: View {
                 .padding(.top, -reveal.margin)
                 .allowsHitTesting(false)
             if isShown {
+                // Taken from around the panel and given back inside it: what it shows stays in place.
+                let gap = joinsTopBar ? 0 : Layout.margin
                 SidebarView()
                     .padding(.top, isZen ? Layout.topBarHeight - Layout.margin : 8)
                     .frame(width: Layout.sidebarWidth)
                     .frame(maxHeight: .infinity)
+                    .padding([.horizontal, .bottom], Layout.margin - gap)
+                    // The tab hover card stands beside the panel, wider than the sidebar it holds.
+                    .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
                     .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: joinsTopBar ? 0 : 9, style: .continuous))
                     .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
                     .padding(.top, isZen ? Layout.margin : 0)
-                    .padding([.leading, .bottom], Layout.margin)
+                    .padding([.leading, .bottom], gap)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
@@ -290,12 +305,13 @@ private struct SidebarPeek: View {
 private struct ZenTopBarPeek: View {
     let style: SidebarStyle
     let colorHex: String
+    /// The window's to know: the sidebar's panel joins a bar that is out.
+    @Binding var isShown: Bool
     @Binding var showsLights: Bool
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
     @State private var zone = PeekZone.outside
-    @State private var isShown = false
     /// ⌘L came while the bar was away: its field takes the keyboard once it is there.
     @State private var focusOnAppear = false
     @State private var pending: Task<Void, Never>?
@@ -332,6 +348,7 @@ private struct ZenTopBarPeek: View {
         .onChange(of: window.isSummaryPresented) { update() }
         .onDisappear {
             pending?.cancel()
+            isShown = false
             showsLights = false
         }
     }
@@ -374,8 +391,20 @@ struct ZenTopBar: View {
         .frame(height: Layout.topBarHeight)
         .background(WindowDragArea())
         .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
-        // Cast by a shape: a visual effect view (the translucent style) casts none.
-        .background { Rectangle().fill(.background).shadow(color: .black.opacity(0.18), radius: 10, y: 2) }
+        // Opaque under the translucent style, whose material would blend with the sidebar's panel
+        // where the bar covers it.
+        .background { Rectangle().fill(.background) }
+    }
+}
+
+/// The shadow Zen mode's top bar casts on the page. Cast by a shape: a visual effect view (the
+/// translucent style) casts none.
+private struct ZenTopBarShadow: View {
+    var body: some View {
+        Rectangle()
+            .fill(.background)
+            .frame(height: Layout.topBarHeight)
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 2)
     }
 }
 
@@ -399,7 +428,7 @@ enum PeekZone {
 
 /// Where the pointer is, for a hidden sidebar or top bar, judged by geometry alone: hover on the
 /// panel itself flickered as it slid in under the pointer. Clicks go through to the page.
-private struct PeekTracker: NSViewRepresentable {
+struct PeekTracker: NSViewRepresentable {
     let locate: (CGPoint) -> PeekZone
     let onChange: (PeekZone) -> Void
 

@@ -189,6 +189,29 @@ struct ZenModeTests {
         browser.tabs.forEach(browser.close)
     }
 
+    /// The pointer brings the sidebar, then the top bar. Out together they are one sheet: the bar
+    /// casts no shadow on the sidebar under it, and the sidebar reaches the window's left edge
+    /// instead of floating beside a strip of the frame.
+    @Test func theSidebarAndTheTopBarJoinWhenBothAreOut() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
+        UserDefaults.standard.removeObject(forKey: Preference.sidebarStyle)
+        let (_, _, window) = try await shownBrowser(zen: true)
+        defer { window.orderOut(nil) }
+        // The frame around the page, far from any shadow: the color both panels are filled with.
+        let frame = CGPoint(x: 1277, y: 400)
+        let sidebarTop = CGPoint(x: 124, y: 24)
+        let underTheBar = CGPoint(x: 124, y: 41)
+        let leftEdge = CGPoint(x: 3, y: 400)
+
+        try rest(pointerAt: CGPoint(x: 4, y: 300), in: window)
+        #expect(await waitUntil(5) { colors(at: [frame, sidebarTop], in: window).areAlike }, "the sidebar slides out")
+        try rest(pointerAt: CGPoint(x: 150, y: 3), in: window)
+        #expect(await waitUntil(5) { addressField(in: window) != nil }, "the top bar slides out")
+
+        #expect(await waitUntil(5) { colors(at: [frame, underTheBar, leftEdge], in: window).areAlike },
+                "frame, under the bar, left edge: \(colors(at: [frame, underTheBar, leftEdge], in: window))")
+    }
+
     /// The look is set, not toggled: the session an earlier test's browser saves a moment after
     /// its last change may still be landing as this one reads it.
     private func shownBrowser(zen: Bool) async throws -> (Browser, Lithium.Tab, NSWindow) {
@@ -217,6 +240,37 @@ struct ZenModeTests {
         return window.contentView.flatMap(find)
     }
 
+    /// Tells the peek trackers where the pointer rests, counted from the window's top left, as
+    /// their tracking areas would: off screen there is no pointer to move.
+    private func rest(pointerAt point: CGPoint, in window: NSWindow) throws {
+        let content = try #require(window.contentView)
+        let location = NSPoint(x: point.x, y: content.bounds.height - point.y)
+        let event = try #require(NSEvent.mouseEvent(with: .mouseMoved, location: location, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        func trackers(in view: NSView) -> [PeekTracker.TrackerView] {
+            ((view as? PeekTracker.TrackerView).map { [$0] } ?? []) + view.subviews.flatMap(trackers)
+        }
+        for tracker in trackers(in: content) {
+            if tracker.bounds.contains(tracker.convert(location, from: nil)) {
+                tracker.mouseMoved(with: event)
+            } else {
+                tracker.mouseExited(with: event)
+            }
+        }
+    }
+
+    /// What the window draws at points counted from its top left, as red, green, blue and alpha.
+    private func colors(at points: [CGPoint], in window: NSWindow) -> [[Int]] {
+        guard let content = window.contentView, let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return [] }
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / content.bounds.width
+        return points.map { point in
+            var pixel = [Int](repeating: 0, count: 4)
+            bitmap.getPixel(&pixel, atX: Int(point.x * scale), y: Int(point.y * scale))
+            return pixel
+        }
+    }
+
     /// The address bar's field editor, once it has the keyboard.
     private func addressEditor(in window: NSWindow) -> NSTextView? {
         (window.firstResponder as? NSTextView).flatMap { $0.isFieldEditor && $0.delegate is URLTextField ? $0 : nil }
@@ -229,5 +283,13 @@ struct ZenModeTests {
             try? await Task.sleep(for: .milliseconds(20))
         }
         return condition()
+    }
+}
+
+private extension [[Int]] {
+    /// The same color everywhere, give or take what rounding leaves.
+    var areAlike: Bool {
+        guard let first else { return false }
+        return allSatisfy { zip($0, first).allSatisfy { abs($0 - $1) <= 2 } }
     }
 }

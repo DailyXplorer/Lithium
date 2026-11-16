@@ -399,7 +399,7 @@ enum PeekZone {
 
 /// Where the pointer is, for a hidden sidebar or top bar, judged by geometry alone: hover on the
 /// panel itself flickered as it slid in under the pointer. Clicks go through to the page.
-private struct PeekTracker: NSViewRepresentable {
+struct PeekTracker: NSViewRepresentable {
     let locate: (CGPoint) -> PeekZone
     let onChange: (PeekZone) -> Void
 

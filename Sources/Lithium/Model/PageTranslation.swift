@@ -133,6 +133,7 @@ final class PageWebView: WKWebView {
     static var mainMenu = { NSApp.mainMenu }
 
     override func scrollWheel(with event: NSEvent) {
+        if event.phase.contains(.began) || event.phase.contains(.mayBegin) { PageBounce.update(self) }
         noteUser(event, pressing: false)
         super.scrollWheel(with: event)
     }

@@ -150,12 +150,14 @@ struct BrowserTests {
         #expect(await waitUntil(30) { tab.title == "Wide" && !tab.isLoading && layout.title == "Layout" && !layout.isLoading })
         let overflow = { (tab: Tab, expected: String) in
             await self.pollValue(10) {
-                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.body).overflowX") as? String
                 return value == expected ? value : nil
             } != nil
         }
         #expect(await overflow(layout, "visible"))
         #expect(await overflow(tab, "clip"))
+        // `html` stays `visible` so `body`'s own overflow still propagates to the viewport.
+        #expect(try await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String == "visible")
         tab.webView.pageZoom = 1.5
         #expect(await overflow(tab, "visible"))
         tab.webView.pageZoom = 1
@@ -179,7 +181,7 @@ struct BrowserTests {
         #expect(await waitUntil(30) { tab.title == "Narrow" && !tab.isLoading })
         let overflow = { (expected: String) in
             await self.pollValue(10) {
-                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+                let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.body).overflowX") as? String
                 return value == expected ? value : nil
             } != nil
         }
@@ -1897,7 +1899,7 @@ struct BrowserTests {
 
     private func sidewaysOverflow(_ tab: Tab, _ expected: String) async -> Bool {
         await pollValue(10) {
-            let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.documentElement).overflowX") as? String
+            let value = try? await tab.webView.evaluateJavaScript("getComputedStyle(document.body).overflowX") as? String
             return value == expected ? value : nil
         } != nil
     }

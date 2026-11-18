@@ -8,11 +8,20 @@ enum PageStyle {
     /// Scrollable regions inside the page (tables, code blocks, carousels) keep working. Only at
     /// desktop widths: a fixed-width layout in a split pane, a narrow window or zoomed in would lose
     /// its right side, with no way to scroll to it (zoom narrows the width in CSS pixels).
-    private static let baseCSS = "@media (min-width: 1024px) { html, body { overflow-x: clip !important; } }"
+    /// Set on `body` alone by default so `html` keeps `overflow: visible`: per CSS Overflow, any
+    /// non-`visible` overflow on `html` stops `body`'s overflow (`hidden`, `clip`, `auto`, modal
+    /// scroll-locks) from propagating to the viewport, unlocking vertical scroll on `body`-locked apps.
+    private static let baseCSS = "@media (min-width: 1024px) { body { overflow-x: clip !important; } }"
+
+    /// Inserted into the same sheet only when `html` itself sets a non-`visible` overflow that still
+    /// allows horizontal scrolling (`overflow-x: auto`/`scroll`, or `overflow-y: scroll`/`auto`/`hidden`/`clip`):
+    /// `body` does not propagate to the viewport then, so `html` must be clipped directly.
+    private static let htmlCSS = "@media (min-width: 1024px) { html { overflow-x: clip !important; } }"
 
     /// Only overflow about a scrollbar wide (a `100vw` banner) is clipped: a layout wider than the
     /// view keeps its sideways scrolling, or its right side couldn't be reached. Measured with the
-    /// clip off, as body's clip hides its content's width, at load and when the view is resized.
+    /// clip off, as body's clip hides its content's width when html doesn't propagate it and
+    /// `htmlNeedsClip` must read the page's own `html` overflow, at load and when the view is resized.
     /// Also when the page changes after load: content that gets wide (an app's table, an SPA's next
     /// route, a panel shown by a class, a late image or style sheet) changes neither html's width
     /// nor, in an app shell, body's height. A burst is measured 200 ms after it ends, a page that
@@ -26,14 +35,25 @@ enum PageStyle {
     /// next change outside one.
     private static let baseScript = script(css: baseCSS, then: """
         const wide = matchMedia('(min-width: 1024px)');
-        let pending = false, settle = 0, first = 0;
+        const htmlRule = \(Self.literal(htmlCSS));
+        let pending = false, settle = 0, first = 0, htmlClipped = false, htmlChanged = false;
         const changed = new Set();
+        const htmlNeedsClip = () => {
+          const css = getComputedStyle(document.documentElement);
+          return css.overflowX === 'auto' || css.overflowX === 'scroll'
+            || (css.overflowX === 'visible' && css.overflowY !== 'visible');
+        };
         const check = () => {
           pending = false;
           const root = document.scrollingElement, sheet = style.sheet;
           if (!wide.matches || !root || !root.clientWidth || !sheet) return;
           sheet.disabled = true;
-          sheet.disabled = root.scrollWidth - root.clientWidth > 32;
+          const tooWide = root.scrollWidth - root.clientWidth > 32;
+          const clipHtml = !tooWide && htmlNeedsClip();
+          if (clipHtml && sheet.cssRules.length < 2) sheet.insertRule(htmlRule, sheet.cssRules.length);
+          else if (!clipHtml && sheet.cssRules.length > 1) sheet.deleteRule(1);
+          htmlClipped = clipHtml;
+          sheet.disabled = tooWide;
         };
         // Fixed boxes don't widen the page, nor do scrolling or clipping ones with what they hide.
         // An element without a box (display: contents, a framework's wrapper) is looked into.
@@ -73,12 +93,21 @@ enum PageStyle {
         };
         const recheck = () => {
           const root = document.scrollingElement, sheet = style.sheet, body = document.body, nodes = [...changed];
+          const checkHtml = htmlChanged;
           settle = first = 0;
+          htmlChanged = false;
           changed.clear();
           if (!wide.matches || !root || !root.clientWidth || !sheet || !body) return;
           const limit = root.clientWidth + 32;
-          if (sheet.disabled) sheet.disabled = root.scrollWidth - root.clientWidth > 32;
-          else if (reaches(body, limit) || nodes.some(node => node.isConnected && right(node) > limit && !clipped(node))) check();
+          if (sheet.disabled) {
+            if (root.scrollWidth - root.clientWidth <= 32) check();
+          } else if (
+            (!htmlClipped ? htmlNeedsClip() : checkHtml)
+            || reaches(body, limit)
+            || nodes.some(node => node.isConnected && right(node) > limit && !clipped(node))
+          ) {
+            check();
+          }
         };
         const schedule = () => {
           const now = performance.now();
@@ -88,12 +117,28 @@ enum PageStyle {
         };
         // Text is measured where it lays out, which may be outside its parent's box (display: contents).
         // Read by index: `for...of` over the records and their nodes takes 2.5 times as long.
+        const isSheet = node => node.localName === 'style' || node.localName === 'link';
         const observer = new MutationObserver(records => {
+          const trackHtml = htmlClipped && !htmlChanged;
           for (let i = 0; i < records.length; i++) {
             const record = records[i];
-            if (record.type === 'attributes') { changed.add(record.target); continue; }
+            if (record.type === 'attributes') {
+              if (trackHtml && record.target === document.documentElement) htmlChanged = true;
+              changed.add(record.target);
+              continue;
+            }
+            if (trackHtml && record.target.localName === 'style') htmlChanged = true;
             const added = record.addedNodes;
-            for (let j = 0; j < added.length; j++) changed.add(added[j]);
+            for (let j = 0; j < added.length; j++) {
+              if (trackHtml && isSheet(added[j])) htmlChanged = true;
+              changed.add(added[j]);
+            }
+            if (trackHtml && !htmlChanged) {
+              const removed = record.removedNodes;
+              for (let j = 0; j < removed.length; j++) {
+                if (isSheet(removed[j])) { htmlChanged = true; break; }
+              }
+            }
           }
           schedule();
         });
@@ -108,7 +153,12 @@ enum PageStyle {
           // An image, style sheet or video that gets its size after it's added: these events don't
           // bubble, nor reach window.
           for (const type of ['load', 'loadedmetadata']) {
-            document.addEventListener(type, event => { if (wide.matches) { changed.add(event.target); schedule(); } }, true);
+            document.addEventListener(type, event => {
+              if (!wide.matches) return;
+              if (htmlClipped && type === 'load' && event.target.localName === 'link') htmlChanged = true;
+              changed.add(event.target);
+              schedule();
+            }, true);
           }
         }, { once: true });
         addEventListener('resize', () => { if (!pending) { pending = true; requestAnimationFrame(check); } });

@@ -80,7 +80,7 @@ private struct FolderNameField: View {
             }
             // Gone with the sidebar (⌘B), the rename would otherwise hold Escape and the peek.
             .onDisappear {
-                if window.renamingFolderID == folder.id, !window.showsSidebar { commit() }
+                if window.renamingFolderID == folder.id, !window.isSidebarVisible { commit() }
             }
     }
 

@@ -320,7 +320,6 @@ struct WindowKeysTests {
         SessionStore.save(Session())
         let browser = Browser()
         let first = browser.commandWindow
-        if first.isZenMode { first.toggleZenMode() }
         var shown: [NSWindow] = []
         browser.showWindow = { model, browser in
             let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),
@@ -388,13 +387,12 @@ struct WindowKeysTests {
         #expect(tab.webView.pageZoom == 1.1)
     }
 
-    /// The whole window, far off screen, showing one loaded tab, with the sidebar and no Zen mode:
+    /// The whole window, far off screen, showing one loaded tab, with the sidebar:
     /// the session an earlier test's browser saves a moment after its last change may still be
     /// landing as this one reads it.
     private func shownBrowser() async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()
         let first = browser.commandWindow
-        if first.isZenMode { first.toggleZenMode() }
         if !first.isSidebarVisible { first.toggleSidebar() }
         let tab = browser.newTab(url: URL(string: "data:text/html,page")!)
         let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),

@@ -5,7 +5,7 @@ import WebKit
 /// Browser commands the address bar offers once the typed words clearly name one (`matches`).
 enum BarAction: Hashable, CaseIterable {
     case copyLink, newPrivateTab, duplicateTab, reopenClosedTab
-    case pinTab, unpinTab, openSplitView, exitSplitView, enterZenMode, exitZenMode
+    case pinTab, unpinTab, openSplitView, exitSplitView
     case translatePage, showOriginal, clearSiteData, turnOnEnergySaving, turnOffEnergySaving, settings
 
     var title: String {
@@ -18,8 +18,6 @@ enum BarAction: Hashable, CaseIterable {
         case .unpinTab: "Unpin tab"
         case .openSplitView: "Open in split view"
         case .exitSplitView: "Exit split view"
-        case .enterZenMode: "Enter zen mode"
-        case .exitZenMode: "Exit zen mode"
         case .translatePage: "Translate page"
         case .showOriginal: "Show original"
         case .clearSiteData: "Clear site data"
@@ -40,7 +38,6 @@ enum BarAction: Hashable, CaseIterable {
         case .unpinTab: ["Remove from favorites"]
         case .openSplitView: ["Split view", "Side by side"]
         case .exitSplitView: ["Close split view"]
-        case .enterZenMode, .exitZenMode: ["Zen", "Zen mode", "Focus mode"]
         case .translatePage: ["Translate"]
         case .showOriginal: ["Original page", "Stop translating"]
         case .clearSiteData: ["Clear cookies", "Delete cookies"]
@@ -156,7 +153,6 @@ extension BrowserWindow {
         if let tab, tab.isInTabList {
             if browser.split(of: tab) != nil { actions.append(.exitSplitView) } else if splitPartner(for: tab) != nil { actions.append(.openSplitView) }
         }
-        actions.append(isZenMode ? .exitZenMode : .enterZenMode)
         if let tab, tab.canTranslate { actions.append(tab.pageTranslation?.isActive == true ? .showOriginal : .translatePage) }
         if let scheme = tab?.url?.scheme?.lowercased(), ["http", "https"].contains(scheme) { actions.append(.clearSiteData) }
         actions.append(browser.energy.isOn ? .turnOffEnergySaving : .turnOnEnergySaving)
@@ -176,9 +172,6 @@ extension BrowserWindow {
         case .unpinTab: if let favorite = browser.pins.first(where: { $0.id == tab?.pinID }) { browser.unpin(favorite) }
         case .openSplitView: if let tab { browser.openInSplit(tab) }
         case .exitSplitView: if let tab { browser.exitSplit(of: tab) }
-        case .enterZenMode, .exitZenMode:
-            guard isZenMode == (action == .exitZenMode) else { return }
-            withAnimation(.snappy(duration: 0.2)) { toggleZenMode() }
         case .translatePage, .showOriginal: browser.toggleTranslation(tab)
         case .clearSiteData: browser.clearSiteData(of: tab)
         case .turnOnEnergySaving, .turnOffEnergySaving: browser.turnEnergySaving(on: action == .turnOnEnergySaving)

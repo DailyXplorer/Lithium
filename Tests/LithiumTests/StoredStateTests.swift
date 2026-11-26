@@ -69,7 +69,7 @@ struct StoredStateTests {
             ],
             selectedIndex: 0,
             windows: [
-                .init(id: UUID(), frame: "0 0 1280 820 0 0 1440 877 ", selectedIndex: 0, isZenMode: true),
+                .init(id: UUID(), frame: "0 0 1280 820 0 0 1440 877 ", selectedIndex: 0),
                 .init(id: second, selectedIndex: 1, spaceID: UUID(), isSidebarVisible: false),
             ]
         )

@@ -28,8 +28,8 @@ struct BarActionMatchTests {
         #expect(named("Settings") == [.settings])
         #expect(named("dupli") == [.duplicateTab])
         #expect(named("private") == [.newPrivateTab])
-        #expect(named("zen", among: [.enterZenMode]) == [.enterZenMode], "through its alias Zen")
-        #expect(BarAction.matches("zen", among: [.enterZenMode]).first?.match.isWhole == true)
+        #expect(named("translate", among: [.translatePage]) == [.translatePage], "through its alias Translate")
+        #expect(BarAction.matches("translate", among: [.translatePage]).first?.match.isWhole == true)
         #expect(named("cookies") == [.clearSiteData])
         #expect(named("incognito") == [.newPrivateTab])
         #expect(named("energy", among: [.turnOffEnergySaving]) == [.turnOffEnergySaving])
@@ -71,13 +71,13 @@ struct BarActionMatchTests {
 
     /// At most two, the best first: a name typed out whole before one only started.
     @Test func atMostTwoBestFirst() {
-        #expect(named("exit") == [.exitSplitView, .exitZenMode])
+        #expect(named("exit") == [.exitSplitView])
         let three: [BarAction] = [.pinTab, .newPrivateTab, .settings]
         #expect(BarAction.matches("p", among: three).isEmpty)
         #expect(named("pin tab") == [.pinTab])
         #expect(named("unpin") == [.unpinTab])
-        #expect(named("zen mode", among: [.enterZenMode]).count == 1)
-        #expect(BarAction.matches("zen mode", among: [.enterZenMode]).first?.match.isWhole == true)
+        #expect(named("split view", among: [.openSplitView]).count == 1)
+        #expect(BarAction.matches("split view", among: [.openSplitView]).first?.match.isWhole == true)
     }
 
     /// Only what can run now shows.
@@ -147,8 +147,6 @@ struct BarActionsTests {
     private func reset(_ browser: Browser) {
         browser.tabs.forEach { browser.close($0, remembering: false) }
         browser.pins.forEach(browser.unpin)
-        if browser.commandWindow.isZenMode { browser.commandWindow.toggleZenMode() }
-        UserDefaults.standard.removeObject(forKey: Preference.zenMode)
         UserDefaults.standard.removeObject(forKey: Preference.energySaving)
     }
 
@@ -173,10 +171,10 @@ struct BarActionsTests {
     @Test func offersOnlyWhatCanRunNow() {
         let browser = browser(with: ["a", "b"])
         defer { reset(browser) }
-        #expect(browser.commandWindow.barActions(for: nil) == [.newPrivateTab, .enterZenMode, .turnOnEnergySaving, .settings])
+        #expect(browser.commandWindow.barActions(for: nil) == [.newPrivateTab, .turnOnEnergySaving, .settings])
 
         let a = tab("a", in: browser)
-        #expect(browser.commandWindow.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .enterZenMode, .turnOnEnergySaving, .settings],
+        #expect(browser.commandWindow.barActions(for: a) == [.copyLink, .newPrivateTab, .duplicateTab, .pinTab, .openSplitView, .turnOnEnergySaving, .settings],
                 "a data: page has no site data to clear")
         browser.close(tab("b", in: browser))
         #expect(browser.commandWindow.barActions(for: a).contains(.reopenClosedTab))
@@ -228,16 +226,10 @@ struct BarActionsTests {
         #expect(browser.commandWindow.addressFocusToken != token)
     }
 
-    /// Zen mode and Settings, from the bar.
-    @Test func zenModeAndSettings() {
+    /// Settings, from the bar.
+    @Test func settingsFromBar() {
         let browser = browser(with: ["a"])
         defer { reset(browser) }
-        type("zen mode", on: tab("a", in: browser), in: browser)
-        #expect(browser.commandWindow.isZenMode)
-        #expect(browser.commandWindow.barActions(for: nil).contains(.exitZenMode))
-        type("exit zen mode", on: tab("a", in: browser), in: browser)
-        #expect(!browser.commandWindow.isZenMode)
-
         type("settings", on: tab("a", in: browser), in: browser)
         #expect(browser.commandWindow.selectedTab?.url?.absoluteString.hasPrefix(Internal.settingsURL.absoluteString) == true)
     }

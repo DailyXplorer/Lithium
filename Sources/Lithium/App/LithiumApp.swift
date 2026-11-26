@@ -172,15 +172,10 @@ struct BrowserCommands: Commands {
             .disabled(browser.commandTab == nil)
         }
         CommandGroup(before: .sidebar) {
-            Button(browser.commandWindow.showsSidebar ? "Hide Sidebar" : "Show Sidebar") {
+            Button(browser.commandWindow.isSidebarVisible ? "Hide Sidebar" : "Show Sidebar") {
                 withAnimation(.snappy(duration: 0.2)) { browser.commandWindow.toggleSidebar() }
             }
             .keyboardShortcut("b")
-            .disabled(!browser.canChangeTabs)
-            Button(browser.commandWindow.isZenMode ? "Exit Zen Mode" : "Enter Zen Mode") {
-                withAnimation(.snappy(duration: 0.2)) { browser.commandWindow.toggleZenMode() }
-            }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
             .disabled(!browser.canChangeTabs)
             Button("Reload Page") { browser.navigate(browser.commandTab, .reload) }
                 .keyboardShortcut("r")

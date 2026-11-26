@@ -1132,7 +1132,7 @@ final class Browser {
         }
         session.windows = windows.map { window in
             Session.Window(id: window.id, frame: window.frame, selectedIndex: selected[window.id], spaceID: Space.saved(window.currentSpaceID),
-                           isSidebarVisible: window.isSidebarVisible, isZenMode: window.isZenMode)
+                           isSidebarVisible: window.isSidebarVisible)
         }
         session.lastActiveWindowID = lastActiveWindowID
         return session
@@ -1146,7 +1146,7 @@ final class Browser {
         let saved = session.windows?.isEmpty == false ? session.windows! : [Session.Window(id: UUID(), selectedIndex: session.selectedIndex, spaceID: session.spaceID)]
         windows = saved.map { window in
             BrowserWindow(browser: self, id: window.id, space: knownSpace(window.spaceID), frame: window.frame,
-                          isSidebarVisible: window.isSidebarVisible, isZenMode: window.isZenMode)
+                          isSidebarVisible: window.isSidebarVisible)
         }
         lastActiveWindowID = session.lastActiveWindowID.flatMap { id in windows.contains { $0.id == id } ? id : nil }
         var restored: [Int: Tab] = [:]

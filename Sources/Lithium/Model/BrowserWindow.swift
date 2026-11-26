@@ -16,7 +16,7 @@ final class BrowserWindow: Identifiable {
         didSet {
             guard oldValue != selectedTabID else { return }
             videoPopout.selectionChanged(from: browser.tabs.first { $0.id == oldValue }, to: selectedTab)
-            // The summary popover is one tab's. Here, not in its button, which a hidden Zen bar lacks.
+            // The summary popover is one tab's. Here, not in its button, which a hidden sidebar lacks.
             if isSummaryPresented { isSummaryPresented = false }
         }
     }
@@ -32,10 +32,6 @@ final class BrowserWindow: Identifiable {
     /// Opens as the user last left it. Only `toggleSidebar()` saves, so a passing change such as
     /// the screenshot taking both looks never outlives the app.
     var isSidebarVisible: Bool
-    /// Zen mode: the page alone, sidebar and top bar peeking from the edges. Kept apart from
-    /// `isSidebarVisible`, so leaving it brings the sidebar back as it was.
-    var isZenMode: Bool
-    var showsSidebar: Bool { isSidebarVisible && !isZenMode }
     /// Set by the address bar as it starts and ends editing: a peeked sidebar stays out meanwhile.
     var isEditingAddress = false
     var renamingTabID: Tab.ID? {
@@ -64,14 +60,13 @@ final class BrowserWindow: Identifiable {
     /// `NSWindow.frameDescriptor` as last seen, saved with the session.
     private(set) var frame: String?
 
-    /// A nil look (sidebar, Zen mode) is the one the user last left in any window.
-    init(browser: Browser, id: ID = UUID(), space: Space.ID, frame: String? = nil, isSidebarVisible: Bool? = nil, isZenMode: Bool? = nil) {
+    /// A nil sidebar visibility is the one the user last left in any window.
+    init(browser: Browser, id: ID = UUID(), space: Space.ID, frame: String? = nil, isSidebarVisible: Bool? = nil) {
         self.browser = browser
         self.id = id
         currentSpaceID = space
         self.frame = frame
         self.isSidebarVisible = isSidebarVisible ?? (UserDefaults.standard.object(forKey: Preference.sidebarVisible) as? Bool ?? true)
-        self.isZenMode = isZenMode ?? UserDefaults.standard.bool(forKey: Preference.zenMode)
         videoPopout.window = self
     }
 
@@ -352,33 +347,15 @@ final class BrowserWindow: Identifiable {
 
     // MARK: Chrome
 
-    /// In Zen mode, asking for the sidebar back takes the window out of Zen mode. Ends an in-progress
-    /// address edit first, so the hidden sidebar's peek isn't left holding an orphaned edit.
+    /// Ends an in-progress address edit first, so the hidden sidebar's peek isn't left holding an orphaned edit.
     func toggleSidebar() {
         if isEditingAddress {
             nsWindow?.makeFirstResponder(nil)
             returnKeyboardToPage(fieldHadKeyboard: true)
         }
-        if isZenMode {
-            toggleZenMode()
-            isSidebarVisible = true
-        } else {
-            isSidebarVisible.toggle()
-        }
+        isSidebarVisible.toggle()
         UserDefaults.standard.set(isSidebarVisible, forKey: Preference.sidebarVisible)
     }
-
-    /// The top bar changes for another, so an edit in the address bar ends first: its field gone
-    /// mid-edit would leave the keyboard nowhere and the new bar held out for it.
-    func toggleZenMode() {
-        if isEditingAddress {
-            nsWindow?.makeFirstResponder(nil)
-            returnKeyboardToPage(fieldHadKeyboard: true)
-        }
-        isZenMode.toggle()
-        UserDefaults.standard.set(isZenMode, forKey: Preference.zenMode)
-    }
-
     func returnKeyboardToPage(fieldHadKeyboard: Bool) {
         browser.returnKeyboardToPage(to: selectedTab, fieldHadKeyboard: fieldHadKeyboard)
     }

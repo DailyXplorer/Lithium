@@ -295,7 +295,7 @@ struct WindowsTests {
         work.name = "Work"
         browser.addSpace(work, in: second)
         browser.newTab(url: page("w"), in: second)
-        first.isZenMode = true
+        first.isSidebarVisible = false
         second.noteFrame("100 100 900 700 0 0 1440 877 ")
         browser.saveNow()
 
@@ -311,11 +311,11 @@ struct WindowsTests {
         #expect(again.windows[0].regularTabs.map(\.url) == [page("a")])
         #expect(again.windows[0].selectedTab?.url == page("a"))
         #expect(again.windows[0].currentSpaceID == Space.mainID)
-        #expect(again.windows[0].isZenMode)
+        #expect(again.windows[0].isSidebarVisible == false)
         #expect(again.windows[1].currentSpaceID == work.id)
         #expect(again.windows[1].regularTabs.map(\.url) == [page("w")])
         #expect(again.windows[1].selectedTab?.url == page("w"))
-        #expect(again.windows[1].isZenMode == false)
+        #expect(again.windows[1].isSidebarVisible)
         #expect(again.windows[1].frame == "100 100 900 700 0 0 1440 877 ")
         again.windows[1].switchToSpace(Space.mainID)
         #expect(again.windows[1].regularTabs.map(\.url) == [page("b")])
@@ -658,7 +658,7 @@ struct WindowsTests {
         browser.tabs.forEach { browser.close($0, remembering: false) }
         browser.pins.forEach(browser.unpin)
         for space in browser.spaces.reversed() { browser.deleteSpace(space.id) }
-        if browser.windows[0].isZenMode { browser.windows[0].isZenMode = false }
+        if !browser.windows[0].isSidebarVisible { browser.windows[0].isSidebarVisible = true }
         SessionStore.save(Session())
     }
 

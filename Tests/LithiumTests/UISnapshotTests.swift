@@ -262,7 +262,7 @@ struct UISnapshotTests {
     @Test func barActionSnapshots() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Theme.registerFonts()
-        let rows: [Suggestion] = [.search("exit"), .action(.exitSplitView), .action(.exitZenMode),
+        let rows: [Suggestion] = [.search("exit"), .action(.exitSplitView), .action(.settings),
                                   .history(title: "Exit polls", url: URL(string: "https://news.example/exit-polls")!)]
         let list = VStack(spacing: 2) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in

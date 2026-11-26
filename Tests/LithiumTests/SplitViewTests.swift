@@ -429,7 +429,7 @@ struct SplitViewTests {
         #expect(browser.commandWindow.selectedTab === a)
     }
 
-    /// In Zen mode the page reaches under the window's title bar: a split side's PDF viewer, in
+    /// With no top bar the page reaches under the window's title bar: a split side's PDF viewer, in
     /// its own hosting view, ignores that inset like the rest of the window, so its toolbar stays
     /// at its top instead of under a blank strip.
     @Test func aSplitPDFViewerIgnoresTheTitleBarInset() {

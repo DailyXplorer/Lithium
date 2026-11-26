@@ -293,49 +293,27 @@ struct UISnapshotTests {
         }
     }
 
-    /// Zen mode's top bar as it peeks over the page, on the start page, solid and translucent.
+    /// The sidebar's tool row with agent access on, without an agent and with one connected (the
+    /// robot shows only then).
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
-    func zenTopBarSnapshots() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        Theme.registerFonts()
-        let browser = Browser()
-        for style in SidebarStyle.allCases {
-            for isDark in [false, true] {
-                let palette = SidebarPalette(style: style, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
-                let bar = ZenTopBar(style: style, colorHex: Theme.defaultSidebarHex)
-                    .foregroundStyle(palette.ink)
-                    .environment(\.sidebarPalette, palette)
-                    .environment(browser).environment(browser.windows[0])
-                    .font(Theme.font(13))
-                    .frame(width: 1100)
-                    .padding(.bottom, 16)
-                try render(bar, isDark: isDark).write(to: directory.appending(path: "zen-top-bar-\(style.rawValue)-\(isDark ? "dark" : "light").png"))
-            }
-        }
-    }
-
-    /// The toolbar with agent access on, without an agent and with one connected (the robot shows
-    /// only then), in a wide window and a narrow one.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"] != nil))
-    func toolbarSnapshots() async throws {
+    func sidebarToolBarSnapshots() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Theme.registerFonts()
         UserDefaults.standard.removeObject(forKey: Preference.agentAccess)
         let browser = Browser()
         await browser.setAgentAccess(true)
         func shoot(_ name: String) throws {
-            for width in [1100, 640] {
-                for isDark in [false, true] {
-                    let palette = SidebarPalette(style: .solid, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
-                    let toolbar = ToolbarView()
-                        .foregroundStyle(palette.ink)
-                        .environment(\.sidebarPalette, palette)
-                        .environment(browser).environment(browser.windows[0])
-                        .font(Theme.font(13))
-                        .frame(width: CGFloat(width))
-                        .padding(.vertical, 8)
-                    try render(toolbar, isDark: isDark).write(to: directory.appending(path: "toolbar-\(name)-\(width)-\(isDark ? "dark" : "light").png"))
-                }
+            for isDark in [false, true] {
+                let palette = SidebarPalette(style: .solid, colorHex: Theme.defaultSidebarHex, scheme: isDark ? .dark : .light)
+                let bar = SidebarToolBar(tab: browser.windows[0].selectedTab)
+                    .foregroundStyle(palette.ink)
+                    .environment(\.sidebarPalette, palette)
+                    .environment(browser).environment(browser.windows[0])
+                    .font(Theme.font(13))
+                    .padding(.horizontal, 10)
+                    .frame(width: Layout.sidebarWidth)
+                    .padding(.vertical, 8)
+                try render(bar, isDark: isDark).write(to: directory.appending(path: "sidebar-tools-\(name)-\(isDark ? "dark" : "light").png"))
             }
         }
         try shoot("no-agent")

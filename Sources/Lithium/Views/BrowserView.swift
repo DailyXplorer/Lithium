@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 enum Layout {
-    static let topBarHeight: CGFloat = 40
+    static let headerHeight: CGFloat = 40
     static let margin: CGFloat = 8
     static let trafficLightsWidth: CGFloat = 78
     static let sidebarWidth: CGFloat = 240
@@ -15,59 +15,29 @@ struct BrowserView: View {
     @AppStorage(Preference.sidebarStyle) private var style = SidebarStyle.solid
     @AppStorage(Preference.sidebarColor) private var settingsColorHex = Theme.defaultSidebarHex
     @State private var tabHover = TabHover()
-    @State private var showsZenLights = false
-    @State private var showsZenTopBar = false
+    @State private var showsSidebarPeek = false
 
     private var colorHex: String { window.currentSpace.color ?? settingsColorHex }
 
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)
-        let zen = window.isZenMode
-        VStack(spacing: 0) {
-            if !zen {
-                HStack(spacing: 0) {
-                    if window.showsSidebar {
-                        SidebarHeader().frame(width: Layout.sidebarWidth)
-                    } else {
-                        Color.clear.frame(width: Layout.trafficLightsWidth)
-                    }
-                    ToolbarView()
-                }
-                .frame(height: Layout.topBarHeight)
-                .background(WindowDragArea())
-                .transition(.move(edge: .top).combined(with: .opacity))
+        HStack(spacing: 0) {
+            if window.showsSidebar {
+                SidebarView()
+                    .frame(width: Layout.sidebarWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
-
-            HStack(spacing: 0) {
-                if window.showsSidebar {
-                    SidebarView()
-                        .frame(width: Layout.sidebarWidth)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                }
-                ContentCard()
-                    .padding(.leading, window.showsSidebar ? 0 : Layout.margin)
-                    .padding(.top, zen ? Layout.margin : 0)
-                    .padding([.trailing, .bottom], Layout.margin)
-            }
-            // Below the sidebar's panel: cast from the bar itself, the shadow fell on the sidebar.
-            .overlay(alignment: .top) {
-                if zen, showsZenTopBar {
-                    ZenTopBarShadow().transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .overlay(alignment: .leading) {
-                if !window.showsSidebar {
-                    SidebarPeek(style: style, colorHex: colorHex, isZen: zen, joinsTopBar: zen && showsZenTopBar)
-                }
+            ContentCard()
+                .padding(.leading, window.showsSidebar ? 0 : Layout.margin)
+                .padding([.top, .trailing, .bottom], Layout.margin)
+        }
+        .overlay(alignment: .leading) {
+            if !window.showsSidebar {
+                SidebarPeek(style: style, colorHex: colorHex, isShown: $showsSidebarPeek)
             }
         }
-        // With the top bar gone, the frame around the page is what moves the window.
-        .background { if zen { WindowDragArea() } }
-        .overlay(alignment: .top) {
-            if zen {
-                ZenTopBarPeek(style: style, colorHex: colorHex, isShown: $showsZenTopBar, showsLights: $showsZenLights)
-            }
-        }
+        // The frame around the page moves the window when the sidebar is hidden.
+        .background { WindowDragArea() }
         .overlayPreferenceValue(AddressBarBounds.self) { anchor in
             GeometryReader { proxy in
                 if let anchor, !window.suggestions.items.isEmpty {
@@ -85,7 +55,7 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator(hidesLights: zen && !showsZenLights))
+        .background(WindowConfigurator(hidesLights: !window.showsSidebar && !showsSidebarPeek))
         .background { TranslationHost(translator: browser.translator, id: window.id) }
         .ignoresSafeArea()
         .overlay {
@@ -226,104 +196,40 @@ final class WebContainerView: NSView {
 }
 
 /// With the sidebar hidden, resting the pointer on the left edge slides it out over the page;
-/// it slides back once the pointer stays away, or a tab is picked.
+/// ⌘L, ⌘T and ⇧⌘S bring it at once and hold it while their field or popover stays open.
 private struct SidebarPeek: View {
     let style: SidebarStyle
     let colorHex: String
-    let isZen: Bool
-    /// Zen mode's top bar is out too. The panel then grows to the window's edges and loses its
-    /// corners, so the two read as one sheet rather than a card slid under a bar.
-    let joinsTopBar: Bool
-    @Environment(Browser.self) private var browser
-    @Environment(BrowserWindow.self) private var window
-    @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
-    @State private var zone = PeekZone.outside
-    @State private var isShown = false
-    @State private var pending: Task<Void, Never>?
-
-    var body: some View {
-        let edgeTop = reveal.margin + (isZen ? Layout.topBarHeight : 0)
-        ZStack(alignment: .leading) {
-            PeekTracker(locate: { PeekZone.left(of: $0, below: edgeTop) }) { zone = $0 }
-                .frame(width: Layout.margin + Layout.sidebarWidth + reveal.margin)
-                .padding(.top, -reveal.margin)
-                .allowsHitTesting(false)
-            if isShown {
-                // Taken from around the panel and given back inside it: what it shows stays in place.
-                let gap = joinsTopBar ? 0 : Layout.margin
-                SidebarView()
-                    .padding(.top, isZen ? Layout.topBarHeight - Layout.margin : 8)
-                    .frame(width: Layout.sidebarWidth)
-                    .frame(maxHeight: .infinity)
-                    .padding([.horizontal, .bottom], Layout.margin - gap)
-                    // The tab hover card stands beside the panel, wider than the sidebar it holds.
-                    .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
-                    .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
-                    .clipShape(RoundedRectangle(cornerRadius: joinsTopBar ? 0 : 9, style: .continuous))
-                    .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
-                    .padding(.top, isZen ? Layout.margin : 0)
-                    .padding([.leading, .bottom], gap)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
-        }
-        .onChange(of: zone) { update() }
-        .onChange(of: window.isRenaming) { update() }
-        .onChange(of: window.tabPickToken) {
-            guard !window.isRenaming else { return }
-            pending?.cancel()
-            setShown(false)
-        }
-        .onDisappear { pending?.cancel() }
-    }
-
-    /// Opening waits for the pointer to rest on the edge, closing for it to stay away. A rename
-    /// selects its tab first, which hides the panel, so renaming brings it back and keeps it.
-    private func update() {
-        pending?.cancel()
-        let renaming = window.isRenaming
-        let wanted = renaming || (isShown ? zone != .outside : zone == .edge)
-        guard wanted != isShown else { return }
-        if renaming {
-            setShown(true)
-            return
-        }
-        let delay = wanted ? reveal.openDelay : reveal.closeDelay
-        pending = Task {
-            try? await Task.sleep(for: delay)
-            while !wanted, !Task.isCancelled, window.holdsPeek { try? await Task.sleep(for: delay) }
-            if !Task.isCancelled { setShown(wanted) }
-        }
-    }
-
-    private func setShown(_ shown: Bool) {
-        withAnimation(.snappy(duration: 0.2)) { isShown = shown }
-    }
-}
-
-/// Zen mode's top bar, slid down over the page by the pointer resting on the top edge.
-/// ⌘L and ⌘T bring it at once and keep it until the address bar is done.
-private struct ZenTopBarPeek: View {
-    let style: SidebarStyle
-    let colorHex: String
-    /// The window's to know: the sidebar's panel joins a bar that is out.
     @Binding var isShown: Bool
-    @Binding var showsLights: Bool
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
     @AppStorage(Preference.sidebarReveal) private var reveal = SidebarReveal.normal
     @State private var zone = PeekZone.outside
-    /// ⌘L came while the bar was away: its field takes the keyboard once it is there.
+    /// ⌘L or ⌘T came while the sidebar was away: its field takes the keyboard once it is there.
     @State private var focusOnAppear = false
     @State private var pending: Task<Void, Never>?
 
     var body: some View {
-        ZStack(alignment: .top) {
-            PeekTracker(locate: PeekZone.top(of:)) { zone = $0 }
-                .frame(height: Layout.topBarHeight + reveal.margin)
+        // Flush to the window's left and top edges so the traffic lights stay aligned with row 1.
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: 0, bottomLeadingRadius: 0,
+            bottomTrailingRadius: 10, topTrailingRadius: 10,
+            style: .continuous
+        )
+        ZStack(alignment: .leading) {
+            PeekTracker(locate: PeekZone.left(of:)) { zone = $0 }
+                .frame(width: Layout.sidebarWidth + reveal.margin)
                 .allowsHitTesting(false)
             if isShown {
-                ZenTopBar(style: style, colorHex: colorHex)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                SidebarView()
+                    .frame(width: Layout.sidebarWidth)
+                    .frame(maxHeight: .infinity)
+                    // The tab hover card stands beside the panel, wider than the sidebar it holds.
+                    .transformAnchorPreference(key: TabHoverAnchors.self, value: .bounds) { $0.sidebar = $1 }
+                    .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
+                    .clipShape(shape)
+                    .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
                     .onAppear {
                         guard focusOnAppear else { return }
                         // On the next turn the field is in the window and sees the request.
@@ -335,39 +241,45 @@ private struct ZenTopBarPeek: View {
             }
         }
         .onChange(of: zone) { update() }
+        .onChange(of: window.isRenaming) { update() }
         .onChange(of: window.addressFocusToken) {
             guard !isShown else { return }
             focusOnAppear = true
             update()
         }
         .onChange(of: window.isEditingAddress) { _, editing in
-            // Return or Escape leaves the keyboard on the window, where keys beep; the bar is going.
+            // Return or Escape leaves the keyboard on the window, where keys beep; the sidebar is going.
             if !editing { window.returnKeyboardToPage(fieldHadKeyboard: false) }
             update()
         }
         .onChange(of: window.isSummaryPresented) { update() }
+        .onChange(of: window.suggestions.items.isEmpty) { update() }
+        .onChange(of: window.tabPickToken) {
+            guard window.selectedTabID != nil, !window.isRenaming, !focusOnAppear else { return }
+            pending?.cancel()
+            setShown(false)
+        }
         .onDisappear {
             pending?.cancel()
             isShown = false
-            showsLights = false
         }
     }
 
+    /// Opening waits for the pointer to rest on the edge, closing for it to stay away. A rename,
+    /// address edit or summary brings the sidebar at once and holds it open.
     private func update() {
         pending?.cancel()
-        showsLights = isShown || zone == .corner
-        // ⇧⌘S too: the summary's popover hangs from the bar's button.
-        let typing = focusOnAppear || window.isEditingAddress || window.isSummaryPresented
-        let wanted = typing || (isShown ? zone != .outside : zone == .edge)
+        let held = window.isRenaming || focusOnAppear || window.isEditingAddress || window.isSummaryPresented || !window.suggestions.items.isEmpty
+        let wanted = held || (isShown ? zone != .outside : zone == .edge)
         guard wanted != isShown else { return }
-        if typing {
+        if held {
             setShown(true)
             return
         }
         let delay = wanted ? reveal.openDelay : reveal.closeDelay
         pending = Task {
             try? await Task.sleep(for: delay)
-            // A popover of the bar's (site information, downloads) would go with it.
+            // A popover of the sidebar's (site information, downloads, summary) would go with it.
             while !wanted, !Task.isCancelled, window.holdsPeek { try? await Task.sleep(for: delay) }
             if !Task.isCancelled { setShown(wanted) }
         }
@@ -375,54 +287,18 @@ private struct ZenTopBarPeek: View {
 
     private func setShown(_ shown: Bool) {
         withAnimation(.snappy(duration: 0.2)) { isShown = shown }
-        showsLights = shown || zone == .corner
-    }
-}
-
-struct ZenTopBar: View {
-    let style: SidebarStyle
-    let colorHex: String
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Color.clear.frame(width: Layout.trafficLightsWidth)
-            ToolbarView()
-        }
-        .frame(height: Layout.topBarHeight)
-        .background(WindowDragArea())
-        .background { SidebarBackground(style: style, color: Color(hex: colorHex), blending: .withinWindow) }
-        // Opaque under the translucent style, whose material would blend with the sidebar's panel
-        // where the bar covers it.
-        .background { Rectangle().fill(.background) }
-    }
-}
-
-/// The shadow Zen mode's top bar casts on the page. Cast by a shape: a visual effect view (the
-/// translucent style) casts none.
-private struct ZenTopBarShadow: View {
-    var body: some View {
-        Rectangle()
-            .fill(.background)
-            .frame(height: Layout.topBarHeight)
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 2)
     }
 }
 
 enum PeekZone {
-    case outside, near, edge, corner
+    case outside, near, edge
 
     /// A little wider than the window margin, so an edge is easy to hit.
     static let edgeSize: CGFloat = 10
 
-    /// For the hidden sidebar: the left edge, from `top` down.
-    static func left(of point: CGPoint, below top: CGFloat) -> PeekZone {
-        point.x < edgeSize && point.y >= top ? .edge : .near
-    }
-
-    /// For Zen mode's top bar: the traffic lights' corner, and the top edge past it.
-    static func top(of point: CGPoint) -> PeekZone {
-        if point.x < Layout.trafficLightsWidth && point.y < Layout.topBarHeight { return .corner }
-        return point.y < edgeSize ? .edge : .near
+    /// For the hidden sidebar: the left edge of the window.
+    static func left(of point: CGPoint) -> PeekZone {
+        point.x < edgeSize ? .edge : .near
     }
 }
 
@@ -507,7 +383,7 @@ struct WindowDragArea: View {
     }
 }
 
-/// Centers the traffic lights in Lithium's taller top bar.
+/// Centers the traffic lights in the sidebar's top row.
 private struct WindowConfigurator: NSViewRepresentable {
     let hidesLights: Bool
 
@@ -578,7 +454,7 @@ private struct WindowConfigurator: NSViewRepresentable {
             guard let window, !window.styleMask.contains(.fullScreen),
                   let close = window.standardWindowButton(.closeButton),
                   let titlebar = close.superview, let container = titlebar.superview else { return }
-            let height = Layout.topBarHeight
+            let height = Layout.headerHeight
             container.frame = NSRect(x: 0, y: window.frame.height - height, width: window.frame.width, height: height)
             let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
             for (index, type) in buttons.enumerated() {

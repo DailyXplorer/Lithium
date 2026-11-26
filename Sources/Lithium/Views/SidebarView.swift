@@ -1,17 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct SidebarHeader: View {
-    var body: some View {
-        HStack {
-            Spacer()
-            SidebarToggle()
-        }
-        .padding(.leading, Layout.trafficLightsWidth)
-        .padding(.trailing, 8)
-    }
-}
-
 struct SidebarToggle: View {
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
@@ -31,20 +20,27 @@ struct SidebarView: View {
     @State private var deletingFolder: TabFolder?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            spaceContent
-                .id(window.currentSpaceID)
-                .transition(.push(from: window.spaceStepsForward ? .trailing : .leading))
-            if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
-                MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+        VStack(alignment: .leading, spacing: 0) {
+            SidebarNavRow(tab: window.selectedTab)
+            VStack(alignment: .leading, spacing: 10) {
+                AddressBar(tab: window.selectedTab)
+                spaceContent
+                    .id(window.currentSpaceID)
+                    .transition(.push(from: window.spaceStepsForward ? .trailing : .leading))
+                if showsMiniPlayer, let tab = playingTab, let media = browser.nowPlaying.media {
+                    MiniPlayer(nowPlaying: browser.nowPlaying, tab: tab, media: media)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                VStack(spacing: 4) {
+                    SidebarToolBar(tab: window.selectedTab)
+                    SpaceBar()
+                }
             }
-            SpaceBar()
+            .animation(.snappy(duration: 0.2), value: playingTab?.id)
+            .padding(.top, 4)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
         }
-        .animation(.snappy(duration: 0.2), value: playingTab?.id)
-        .padding(.top, 2)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 10)
         .background {
             SpaceSwipeArea(isEnabled: browser.hasSpaces) { offset in
                 withAnimation(.snappy(duration: 0.25)) { window.switchSpace(by: offset) }

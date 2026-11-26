@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// In the toolbar while an agent is connected, so one is never connected unseen.
+/// In the sidebar's tool row while an agent is connected, so one is never connected unseen.
 struct AgentButton: View {
     let agent: AgentHub
     @State private var isPresented = false
@@ -11,7 +11,7 @@ struct AgentButton: View {
         }
         .foregroundStyle(agent.isActing ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
         .modifier(ActingPulse(isOn: agent.isActing))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
             AgentPanel(agent: agent)
         }
     }

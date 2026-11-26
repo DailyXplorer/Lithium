@@ -36,7 +36,7 @@ final class BrowserWindow: Identifiable {
     /// `isSidebarVisible`, so leaving it brings the sidebar back as it was.
     var isZenMode: Bool
     var showsSidebar: Bool { isSidebarVisible && !isZenMode }
-    /// Set by the address bar as it starts and ends editing: Zen mode's top bar stays out meanwhile.
+    /// Set by the address bar as it starts and ends editing: a peeked sidebar stays out meanwhile.
     var isEditingAddress = false
     var renamingTabID: Tab.ID? {
         didSet {
@@ -352,8 +352,10 @@ final class BrowserWindow: Identifiable {
 
     // MARK: Chrome
 
-    /// In Zen mode, asking for the sidebar back takes the window out of Zen mode.
+    /// In Zen mode, asking for the sidebar back takes the window out of Zen mode. Ends an in-progress
+    /// address edit first, so the hidden sidebar's peek isn't left holding an orphaned edit.
     func toggleSidebar() {
+        if isEditingAddress { nsWindow?.makeFirstResponder(nil) }
         if isZenMode {
             toggleZenMode()
             isSidebarVisible = true

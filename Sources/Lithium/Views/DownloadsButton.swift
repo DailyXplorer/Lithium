@@ -21,7 +21,7 @@ struct DownloadsButton: View {
                 Circle().fill(Color.accentColor).frame(width: 7, height: 7).offset(x: -3, y: 4)
             }
         }
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
             DownloadsList()
         }
     }

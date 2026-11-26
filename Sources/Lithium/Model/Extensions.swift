@@ -506,7 +506,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
     ) async throws {
         guard let popover = action.popupPopover else { return }
         if let anchor = Self.anchor(popupAnchor, in: browser?.commandWindow.nsWindow) {
-            popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+            popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
         } else if let content = Self.firstOnScreen([NSApp.keyWindow?.contentView, NSApp.mainWindow?.contentView, browser?.commandWindow.nsWindow?.contentView]) {
             popover.show(relativeTo: NSRect(x: content.bounds.maxX - 60, y: content.bounds.maxY - 44, width: 1, height: 1), of: content, preferredEdge: .minY)
         } else {

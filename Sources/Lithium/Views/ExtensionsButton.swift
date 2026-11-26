@@ -15,7 +15,7 @@ struct ExtensionsButton: View {
                     anchor.view = view
                     extensions.popupAnchor = view
                 })
-                .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                .popover(isPresented: $isPresented, arrowEdge: .top) {
                     ExtensionsList(tab: tab) { id in
                         isPresented = false
                         // The extension's own popover opens once this one has closed, under the

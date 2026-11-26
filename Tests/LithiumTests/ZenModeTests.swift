@@ -3,23 +3,13 @@ import SwiftUI
 import Testing
 @testable import Lithium
 
-/// Where the pointer reveals what Zen mode hides, judged in the trackers' top-left coordinates.
+/// Where the pointer reveals the hidden sidebar, judged in the tracker's top-left coordinates.
 struct PeekZoneTests {
-    /// The traffic lights' corner wins over the top edge; past it, the edge peeks the top bar.
-    @Test func topEdgeAndTrafficLightsCorner() {
-        #expect(PeekZone.top(of: CGPoint(x: 20, y: 2)) == .corner)
-        #expect(PeekZone.top(of: CGPoint(x: 77, y: 39)) == .corner)
-        #expect(PeekZone.top(of: CGPoint(x: 78, y: 2)) == .edge)
-        #expect(PeekZone.top(of: CGPoint(x: 600, y: 9)) == .edge)
-        #expect(PeekZone.top(of: CGPoint(x: 600, y: 10)) == .near)
-        #expect(PeekZone.top(of: CGPoint(x: 78, y: 30)) == .near)
-    }
-
-    /// The sidebar's edge starts where it is told: in Zen mode, below the traffic lights' corner.
-    @Test func leftEdgeStartsBelowItsTop() {
-        #expect(PeekZone.left(of: CGPoint(x: 4, y: 100), below: 88) == .edge)
-        #expect(PeekZone.left(of: CGPoint(x: 4, y: 87), below: 88) == .near)
-        #expect(PeekZone.left(of: CGPoint(x: 10, y: 100), below: 88) == .near)
+    @Test func leftEdgeTriggersPeekAcrossWindowHeight() {
+        #expect(PeekZone.left(of: CGPoint(x: 0, y: 10)) == .edge)
+        #expect(PeekZone.left(of: CGPoint(x: 9, y: 400)) == .edge)
+        #expect(PeekZone.left(of: CGPoint(x: 10, y: 100)) == .near)
+        #expect(PeekZone.left(of: CGPoint(x: 120, y: 100)) == .near)
     }
 }
 
@@ -189,31 +179,8 @@ struct ZenModeTests {
         browser.tabs.forEach(browser.close)
     }
 
-    /// The pointer brings the sidebar, then the top bar. Out together they are one sheet: the bar
-    /// casts no shadow on the sidebar under it, and the sidebar reaches the window's left edge
-    /// instead of floating beside a strip of the frame.
-    @Test func theSidebarAndTheTopBarJoinWhenBothAreOut() async throws {
-        defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
-        UserDefaults.standard.removeObject(forKey: Preference.sidebarStyle)
-        let (_, _, window) = try await shownBrowser(zen: true)
-        defer { window.orderOut(nil) }
-        // The frame around the page, far from any shadow: the color both panels are filled with.
-        let frame = CGPoint(x: 1277, y: 400)
-        let sidebarTop = CGPoint(x: 124, y: 24)
-        let underTheBar = CGPoint(x: 124, y: 41)
-        let leftEdge = CGPoint(x: 3, y: 400)
-
-        try rest(pointerAt: CGPoint(x: 4, y: 300), in: window)
-        #expect(await waitUntil(5) { colors(at: [frame, sidebarTop], in: window).areAlike }, "the sidebar slides out")
-        try rest(pointerAt: CGPoint(x: 150, y: 3), in: window)
-        #expect(await waitUntil(5) { addressField(in: window) != nil }, "the top bar slides out")
-
-        #expect(await waitUntil(5) { colors(at: [frame, underTheBar, leftEdge], in: window).areAlike },
-                "frame, under the bar, left edge: \(colors(at: [frame, underTheBar, leftEdge], in: window))")
-    }
-
-    /// The top bar still out as Zen mode ends is not what Zen mode shows first when it is back.
-    @Test func theTopBarOutAsZenModeEndsIsGoneWhenItIsBack() async throws {
+    /// The peek still out as Zen mode ends is not what Zen mode shows first when it is back.
+    @Test func thePeekOutAsZenModeEndsIsGoneWhenItIsBack() async throws {
         defer { UserDefaults.standard.removeObject(forKey: Preference.zenMode) }
         let (browser, _, window) = try await shownBrowser(zen: true)
         defer { window.orderOut(nil) }

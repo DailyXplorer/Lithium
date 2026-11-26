@@ -3,6 +3,16 @@ import SwiftUI
 import Testing
 @testable import Lithium
 
+/// Where the pointer reveals the hidden sidebar, judged in the tracker's top-left coordinates.
+struct PeekZoneTests {
+    @Test func leftEdgeTriggersPeekAcrossWindowHeight() {
+        #expect(PeekZone.left(of: CGPoint(x: 0, y: 10)) == .edge)
+        #expect(PeekZone.left(of: CGPoint(x: 9, y: 400)) == .edge)
+        #expect(PeekZone.left(of: CGPoint(x: 10, y: 100)) == .near)
+        #expect(PeekZone.left(of: CGPoint(x: 120, y: 100)) == .near)
+    }
+}
+
 /// The sidebar chrome (nav row, address bar, tool row, and hidden-sidebar peek) in an off-screen
 /// browser window. Runs a whole Browser, so only in a throwaway home folder.
 @MainActor
@@ -241,14 +251,101 @@ struct SidebarChromeTests {
 
         // Clicking SidebarToggle in row 1 (right after the traffic lights) hides the sidebar.
         try await click(at: CGPoint(x: Layout.trafficLightsWidth + 14, y: Layout.headerHeight / 2), in: window)
-        #expect(await waitUntil(5) { !browser.commandWindow.showsSidebar })
+        #expect(await waitUntil(5) { !browser.commandWindow.isSidebarVisible })
         await browser.setAgentAccess(false)
+    }
+
+    /// With the sidebar shown, Escape, Return, and a click outside the address bar leave the
+    /// keyboard on the page, not on the window where keys beep.
+    @Test func endingAnAddressEditGivesTheKeyboardToThePage() async throws {
+        let (browser, tab, window) = try await shownBrowser(sidebarVisible: true)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        let url = try #require(tab.webView.url)
+
+        for command in [#selector(NSResponder.cancelOperation(_:)), #selector(NSResponder.insertNewline(_:))] {
+            browser.commandWindow.requestAddressFocus()
+            #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+            let editor = try #require(addressEditor(in: window))
+            editor.string = url.absoluteString
+            editor.doCommand(by: command)
+            #expect(window.firstResponder === tab.contentView, "\(command): \(String(describing: window.firstResponder))")
+        }
+
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+        let click = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 640, y: 300), modifierFlags: [],
+                                                    timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                    eventNumber: 0, clickCount: 1, pressure: 1))
+        browser.endEditingIfOutside(click)
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+    }
+
+    /// ⇧⌘S with the sidebar hidden brings the peek, whose footer holds the summary popover, and
+    /// keeps it open; switching tabs or navigating closes it.
+    @Test func theSummaryHoldsTheSidebarPeekAndBelongsToOnePage() async throws {
+        let (listener, base) = try await LocalHTTP.serve(["/a": ("Content-Type: text/html", "a"), "/b": ("Content-Type: text/html", "b")])
+        defer { listener.cancel() }
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: false)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        #expect(addressField(in: window) == nil)
+
+        browser.commandWindow.isSummaryPresented = true
+        #expect(await waitUntil(5) { addressField(in: window) != nil })
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(addressField(in: window) != nil)
+
+        let other = browser.newTab(url: base.appending(path: "a"))
+        #expect(!browser.commandWindow.isSummaryPresented)
+        #expect(await waitUntil(5) { addressField(in: window) == nil })
+
+        #expect(await waitUntil(15) { !other.isLoading && other.webView.url != nil })
+        browser.commandWindow.isSummaryPresented = true
+        other.load(base.appending(path: "b"))
+        #expect(!browser.commandWindow.isSummaryPresented)
+    }
+
+    /// ⌘T with the sidebar hidden opens the start page and keeps the peek and keyboard in the address bar.
+    @Test func commandTOpensPeekAndKeepsKeyboardInAddressBar() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible) }
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: false)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        browser.commandWindow.newTabFocusingAddress()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+        #expect(browser.commandWindow.selectedTab == nil)
+        try await Task.sleep(for: .seconds(1))
+        #expect(addressEditor(in: window) != nil)
+    }
+
+    /// A peek still out when the sidebar is shown again is not already out when the sidebar is hidden next.
+    @Test func thePeekOutAsSidebarShowsIsGoneWhenHiddenAgain() async throws {
+        defer { UserDefaults.standard.removeObject(forKey: Preference.sidebarVisible) }
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: false)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        let content = try #require(window.contentView)
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+
+        browser.commandWindow.toggleSidebar()
+        #expect(await waitUntil(5) { allSubviews(in: content).compactMap { $0 as? PeekTracker.TrackerView }.isEmpty })
+        browser.commandWindow.toggleSidebar()
+        #expect(await waitUntil(5) { addressField(in: window) == nil })
     }
 
     private func shownBrowser(sidebarVisible: Bool, url: URL = URL(string: "data:text/html,page")!) async throws -> (Browser, Lithium.Tab, NSWindow) {
         let browser = Browser()
         let first = browser.commandWindow
-        if first.isZenMode { first.toggleZenMode() }
         if first.isSidebarVisible != sidebarVisible { first.toggleSidebar() }
         let tab = browser.newTab(url: url)
         let window = OffscreenWindow(contentRect: NSRect(x: -30000, y: -30000, width: 1280, height: 820),

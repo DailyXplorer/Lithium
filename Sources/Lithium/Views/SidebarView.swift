@@ -485,7 +485,7 @@ private struct TabNameField: View {
             // Hiding the sidebar (⌘B) would otherwise leave the rename open, holding Escape and the
             // peek. Not when the row only scrolls out of the lazy list.
             .onDisappear {
-                if window.renamingTabID == tab.id, !window.showsSidebar { commit() }
+                if window.renamingTabID == tab.id, !window.isSidebarVisible { commit() }
             }
     }
 

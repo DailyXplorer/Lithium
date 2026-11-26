@@ -178,7 +178,7 @@ struct SplitPDFReader: NSViewRepresentable {
         required init(rootView: PDFReaderView) {
             super.init(rootView: rootView)
             sizingOptions = []
-            // In Zen mode the page runs under the title bar: keeps the toolbar at the top, not below a blank strip.
+            // With no top bar the page runs under the title bar: keeps the toolbar at the top, not below a blank strip.
             safeAreaRegions = []
         }
 

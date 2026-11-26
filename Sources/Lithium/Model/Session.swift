@@ -27,7 +27,6 @@ struct Session: Codable, Equatable {
         var selectedIndex: Int? = nil
         var spaceID: Space.ID? = nil
         var isSidebarVisible: Bool? = nil
-        var isZenMode: Bool? = nil
     }
 
     var tabs: [Tab] = []

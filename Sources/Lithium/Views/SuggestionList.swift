@@ -116,7 +116,6 @@ extension BarAction {
         case .reopenClosedTab: .retry
         case .pinTab, .unpinTab: .location
         case .openSplitView, .exitSplitView: .sidebar
-        case .enterZenMode, .exitZenMode: .fitPage
         case .translatePage, .showOriginal: .translate
         case .clearSiteData: .trash
         case .turnOnEnergySaving, .turnOffEnergySaving: .leaf

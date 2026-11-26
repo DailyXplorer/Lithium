@@ -295,7 +295,7 @@ struct WindowsTests {
         work.name = "Work"
         browser.addSpace(work, in: second)
         browser.newTab(url: page("w"), in: second)
-        first.isZenMode = true
+        first.isSidebarVisible = false
         second.noteFrame("100 100 900 700 0 0 1440 877 ")
         browser.saveNow()
 
@@ -311,14 +311,37 @@ struct WindowsTests {
         #expect(again.windows[0].regularTabs.map(\.url) == [page("a")])
         #expect(again.windows[0].selectedTab?.url == page("a"))
         #expect(again.windows[0].currentSpaceID == Space.mainID)
-        #expect(again.windows[0].isZenMode)
+        #expect(again.windows[0].isSidebarVisible == false)
         #expect(again.windows[1].currentSpaceID == work.id)
         #expect(again.windows[1].regularTabs.map(\.url) == [page("w")])
         #expect(again.windows[1].selectedTab?.url == page("w"))
-        #expect(again.windows[1].isZenMode == false)
+        #expect(again.windows[1].isSidebarVisible)
         #expect(again.windows[1].frame == "100 100 900 700 0 0 1440 877 ")
         again.windows[1].switchToSpace(Space.mainID)
         #expect(again.windows[1].regularTabs.map(\.url) == [page("b")])
+    }
+
+    /// A session saved by an earlier build with `isZenMode: true` restores its windows and tabs
+    /// cleanly with no leftover Zen state.
+    @Test func restoringALegacyZenModeSessionProducesASensibleWindow() throws {
+        defer { UserDefaults.standard.removeObject(forKey: "zenMode") }
+        UserDefaults.standard.set(true, forKey: "zenMode")
+        let id = UUID()
+        let json = """
+            {"tabs": [{"url": "\(page("a").absoluteString)", "title": "A"}],
+             "selectedIndex": 0,
+             "windows": [{"id": "\(id.uuidString)", "selectedIndex": 0, "isSidebarVisible": true, "isZenMode": true}]}
+            """
+        try FileManager.default.createDirectory(at: SessionStore.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: SessionStore.fileURL, options: .atomic)
+
+        let browser = Browser()
+        defer { reset(browser) }
+        #expect(browser.windows.count == 1)
+        #expect(browser.windows[0].id == id)
+        #expect(browser.windows[0].regularTabs.map(\.url) == [page("a")])
+        #expect(browser.windows[0].selectedTab?.url == page("a"))
+        #expect(browser.windows[0].isSidebarVisible)
     }
 
     /// After a relaunch the window the user was last in comes back in front, though opened first.
@@ -658,7 +681,7 @@ struct WindowsTests {
         browser.tabs.forEach { browser.close($0, remembering: false) }
         browser.pins.forEach(browser.unpin)
         for space in browser.spaces.reversed() { browser.deleteSpace(space.id) }
-        if browser.windows[0].isZenMode { browser.windows[0].isZenMode = false }
+        if !browser.windows[0].isSidebarVisible { browser.windows[0].isSidebarVisible = true }
         SessionStore.save(Session())
     }
 

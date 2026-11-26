@@ -119,7 +119,7 @@ final class Tab: NSObject, Identifiable {
         didSet {
             if PageSummaries.page(of: oldValue) != PageSummaries.page(of: url) {
                 browser?.summaries.discard(self)
-                // Its popover too, which a hidden Zen bar's button can't close.
+                // Its popover too, which a hidden sidebar's button can't close.
                 if let window = browser?.window(of: self), window.selectedTabID == id, window.isSummaryPresented { window.isSummaryPresented = false }
                 // The article was the old address's, even when the page moved on by itself (pushState).
                 // A load's address comes before its page: the reader stays until that page commits

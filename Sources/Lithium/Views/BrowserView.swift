@@ -22,17 +22,17 @@ struct BrowserView: View {
     var body: some View {
         let palette = SidebarPalette(style: style, colorHex: colorHex, scheme: colorScheme)
         HStack(spacing: 0) {
-            if window.showsSidebar {
+            if window.isSidebarVisible {
                 SidebarView()
                     .frame(width: Layout.sidebarWidth)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
             ContentCard()
-                .padding(.leading, window.showsSidebar ? 0 : Layout.margin)
+                .padding(.leading, window.isSidebarVisible ? 0 : Layout.margin)
                 .padding([.top, .trailing, .bottom], Layout.margin)
         }
         .overlay(alignment: .leading) {
-            if !window.showsSidebar, window.capture.isIdle {
+            if !window.isSidebarVisible, window.capture.isIdle {
                 SidebarPeek(style: style, colorHex: colorHex, isShown: $showsSidebarPeek)
             }
         }
@@ -55,7 +55,7 @@ struct BrowserView: View {
         .environment(tabHover)
         .font(Theme.font(13))
         .background { SidebarBackground(style: style, color: Color(hex: colorHex)) }
-        .background(WindowConfigurator(hidesLights: !window.showsSidebar && !showsSidebarPeek))
+        .background(WindowConfigurator(hidesLights: !window.isSidebarVisible && !showsSidebarPeek))
         .background { TranslationHost(translator: browser.translator, id: window.id) }
         .ignoresSafeArea()
         .overlay {

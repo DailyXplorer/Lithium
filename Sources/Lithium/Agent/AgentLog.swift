@@ -102,7 +102,7 @@ actor AgentLog {
     static let folder = AgentFiles.folder.appending(path: "log")
 }
 
-/// A call as the toolbar panel lists it.
+/// A call as the sidebar panel lists it.
 struct AgentLogLine: Identifiable, Equatable {
     let id = UUID()
     let date: Date

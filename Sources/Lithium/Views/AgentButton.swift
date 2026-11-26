@@ -21,7 +21,7 @@ struct AgentButton: View {
 
 /// Dims what it wraps to 0.45 and back every 1.2 s while `isOn`. A timeline paused when off, not
 /// a `repeatForever` animation: SwiftUI never ended that one once a call did (the opacity went
-/// back to 1 without an animation to replace it), and the toolbar then redrew at the display's
+/// back to 1 without an animation to replace it), and the sidebar then redrew at the display's
 /// rate for as long as the agent stayed connected, idle page or not.
 struct ActingPulse: ViewModifier {
     let isOn: Bool

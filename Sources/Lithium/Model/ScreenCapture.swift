@@ -27,6 +27,10 @@ final class ScreenCapture {
         if case .previewing(let shot) = phase { shot } else { nil }
     }
 
+    var isIdle: Bool {
+        if case .idle = phase { true } else { false }
+    }
+
     var isSelecting: Bool {
         if case .selecting = phase { true } else { false }
     }

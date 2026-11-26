@@ -416,7 +416,7 @@ final class Extensions: NSObject {
         browser?.newTab(url: url, configuration: configuration(for: url))
     }
 
-    // MARK: Toolbar
+    // MARK: Actions
 
     func performAction(id: String, in tab: Tab?) {
         contexts[id]?.performAction(for: tab?.isEphemeral == true ? nil : tab)
@@ -516,7 +516,7 @@ extension Extensions: WKWebExtensionControllerDelegate {
         }
     }
 
-    /// Every window's toolbar registers its button as the anchor, so the last one drawn may be a
+    /// Every window's sidebar registers its button as the anchor, so the last one drawn may be a
     /// window behind: a popup the extension opens itself goes under the window in front's.
     static func anchor(_ anchor: NSView?, in front: NSWindow?) -> NSView? {
         guard let anchor, let front, anchor.window === front, isOnScreen(anchor) else { return nil }

@@ -65,7 +65,7 @@ final class DownloadItem: Identifiable {
         originalFilename = original
     }
 
-    /// WebKit reports every chunk it receives, and each write redraws the toolbar ring and the
+    /// WebKit reports every chunk it receives, and each write redraws the sidebar ring and the
     /// list: the count shows once it moves by 1%, or a quarter second after it last showed.
     func receive(completed: Int64, total: Int64, at now: Date = Date()) {
         guard state == .downloading else {
@@ -127,7 +127,7 @@ final class Downloads: NSObject, WKDownloadDelegate {
     static let shared = Downloads()
 
     private(set) var items: [DownloadItem] = []
-    /// Set when a download finishes while the list is closed; the toolbar button shows a dot.
+    /// Set when a download finishes while the list is closed; the sidebar button shows a dot.
     var hasUnseen = false
     /// Set by the list while it shows: a download finishing in front of the user is seen.
     @ObservationIgnored var isListShown = false {

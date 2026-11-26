@@ -157,7 +157,7 @@ final class AgentHub {
     private(set) var calls: [CallKey: Call] = [:]
 
     var isActing: Bool { !calls.isEmpty }
-    /// When the toolbar shows the indicator with Stop: an agent that can act is never unseen.
+    /// When the sidebar shows the indicator with Stop: an agent that can act is never unseen.
     var isConnected: Bool { !sessions.isEmpty || isActing }
     private var busySessions: Set<String> { Set(calls.keys.map(\.session)) }
     var url: String? { port.map { "http://127.0.0.1:\($0)/mcp" } }
@@ -175,7 +175,7 @@ final class AgentHub {
     }
 
     private(set) var tabs: [Tab.ID: AgentTab] = [:]
-    /// The last few calls, newest last, for the toolbar panel. Hosts only, never full addresses.
+    /// The last few calls, newest last, for the sidebar panel. Hosts only, never full addresses.
     private(set) var recentLog: [AgentLogLine] = []
     static let recentLogLength = 10
     /// Tests make a local server a payment provider.

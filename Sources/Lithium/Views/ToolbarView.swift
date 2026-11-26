@@ -281,7 +281,7 @@ struct PageMenuItems: View {
             .disabled(tab?.canTranslate != true)
         Button("Pop Out Video") { window.videoPopout.showSelected() }
             .disabled(!window.videoPopout.canShowSelected)
-        // Checked while it is on, whatever the setting: the toolbar shows no indicator for it.
+        // Checked while it is on, whatever the setting: the sidebar shows no indicator for it.
         Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.turnEnergySaving(on: $0) }))
         Divider()
         Button("Show All History") { browser.openHistory(in: window) }

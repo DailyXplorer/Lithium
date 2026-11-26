@@ -94,10 +94,10 @@ struct SidebarChromeTests {
         #expect(!browser.commandWindow.isEditingAddress)
     }
 
-    /// ⌘B while editing the address bar ends the edit rather than leaving the hidden sidebar's peek
-    /// popped open for a field that moved.
+    /// ⌘B while editing the address bar ends the edit and returns keyboard focus to the page
+    /// rather than leaving the hidden sidebar's peek popped open or the window beeping on keys.
     @Test func hidingSidebarEndsAddressEditing() async throws {
-        let (browser, _, window) = try await shownBrowser(sidebarVisible: true)
+        let (browser, tab, window) = try await shownBrowser(sidebarVisible: true)
         defer {
             browser.tabs.forEach(browser.close)
             window.orderOut(nil)
@@ -108,6 +108,99 @@ struct SidebarChromeTests {
         browser.commandWindow.toggleSidebar()
         #expect(!browser.commandWindow.isEditingAddress)
         #expect(await waitUntil(5) { addressField(in: window) == nil })
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+
+        // The reverse too: ⌘B while editing in the peeked sidebar ends editing and focuses the page.
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+        browser.commandWindow.toggleSidebar()
+        #expect(!browser.commandWindow.isEditingAddress)
+        #expect(window.firstResponder === tab.contentView, "\(String(describing: window.firstResponder))")
+    }
+
+    /// Traffic lights stay centered in the sidebar's top row when revealed in a peek or after
+    /// toggling the sidebar back on, instead of snapping to macOS's default titlebar origin.
+    @Test func trafficLightsStayAlignedAfterPeekAndToggle() async throws {
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: true)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        let close = try #require(window.standardWindowButton(.closeButton))
+
+        func closeTopLeft() -> CGRect {
+            let inWindow = close.convert(close.bounds, to: nil)
+            return CGRect(x: inWindow.minX, y: window.frame.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
+        }
+
+        let initial = closeTopLeft()
+        #expect(abs(initial.minX - 14) <= 1 && abs(initial.midY - Layout.headerHeight / 2) <= 1, "initial lights: \(initial)")
+
+        browser.commandWindow.toggleSidebar()
+        #expect(await waitUntil(5) { close.isHidden })
+
+        try rest(pointerAt: CGPoint(x: 4, y: 300), in: window)
+        #expect(await waitUntil(5) { !close.isHidden })
+        try await Task.sleep(for: .milliseconds(150))
+        let inPeek = closeTopLeft()
+        #expect(abs(inPeek.minX - 14) <= 1 && abs(inPeek.midY - Layout.headerHeight / 2) <= 1, "peeked lights: \(inPeek)")
+
+        try rest(pointerAt: CGPoint(x: 600, y: 300), in: window)
+        #expect(await waitUntil(5) { close.isHidden })
+
+        browser.commandWindow.toggleSidebar()
+        #expect(await waitUntil(5) { !close.isHidden })
+        try await Task.sleep(for: .milliseconds(150))
+        let restored = closeTopLeft()
+        #expect(abs(restored.minX - 14) <= 1 && abs(restored.midY - Layout.headerHeight / 2) <= 1, "restored lights: \(restored)")
+    }
+
+    /// Starting capture from the peeked sidebar hides the peek and traffic lights immediately, and
+    /// dragging near the left edge during capture selection does not reveal the peek.
+    @Test func captureFromPeekedSidebarHidesPeekAndBlocksEdgeReveal() async throws {
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: false)
+        defer {
+            browser.commandWindow.capture.finish()
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        let close = try #require(window.standardWindowButton(.closeButton))
+
+        try rest(pointerAt: CGPoint(x: 4, y: 300), in: window)
+        #expect(await waitUntil(5) { addressField(in: window) != nil && !close.isHidden })
+        // Pointer sits over the Capture button in the peeked sidebar's footer.
+        try rest(pointerAt: CGPoint(x: 84, y: 764), in: window)
+
+        browser.commandWindow.capture.begin()
+        #expect(await waitUntil(5) { addressField(in: window) == nil && close.isHidden })
+
+        try rest(pointerAt: CGPoint(x: 4, y: 300), in: window)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(addressField(in: window) == nil && close.isHidden)
+    }
+
+    /// ⌘L pressed while the peek is still sliding out focuses the address bar and lets the peek
+    /// close again once editing ends, rather than sticking open.
+    @Test func commandLDuringPeekCloseAnimationFocusesFieldAndReleasesPeek() async throws {
+        let (browser, _, window) = try await shownBrowser(sidebarVisible: false)
+        defer {
+            browser.tabs.forEach(browser.close)
+            window.orderOut(nil)
+        }
+        let close = try #require(window.standardWindowButton(.closeButton))
+
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+        window.makeFirstResponder(nil)
+        // `close.isHidden` flips as soon as `isShown` becomes false, while the slide-out animation runs.
+        #expect(await waitUntil(5) { close.isHidden })
+        try await Task.sleep(for: .milliseconds(30))
+
+        browser.commandWindow.requestAddressFocus()
+        #expect(await waitUntil(5) { addressEditor(in: window) != nil })
+
+        window.makeFirstResponder(nil)
+        #expect(await waitUntil(5) { addressField(in: window) == nil && close.isHidden })
     }
 
     /// The sidebar's footer tool row orders its buttons as expected, shows the robot only when an

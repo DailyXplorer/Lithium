@@ -32,7 +32,7 @@ struct BrowserView: View {
                 .padding([.top, .trailing, .bottom], Layout.margin)
         }
         .overlay(alignment: .leading) {
-            if !window.showsSidebar {
+            if !window.showsSidebar, window.capture.isIdle {
                 SidebarPeek(style: style, colorHex: colorHex, isShown: $showsSidebarPeek)
             }
         }
@@ -230,14 +230,14 @@ private struct SidebarPeek: View {
                     .clipShape(shape)
                     .shadow(color: .black.opacity(0.22), radius: 12, x: 2)
                     .transition(.move(edge: .leading).combined(with: .opacity))
-                    .onAppear {
-                        guard focusOnAppear else { return }
-                        // On the next turn the field is in the window and sees the request.
-                        DispatchQueue.main.async {
-                            focusOnAppear = false
-                            window.requestAddressFocus()
-                        }
-                    }
+            }
+        }
+        .onChange(of: isShown) { _, shown in
+            guard shown, focusOnAppear else { return }
+            // On the next turn the field is in the window and sees the request.
+            DispatchQueue.main.async {
+                focusOnAppear = false
+                if !window.isEditingAddress { window.requestAddressFocus() }
             }
         }
         .onChange(of: zone) { update() }
@@ -261,6 +261,7 @@ private struct SidebarPeek: View {
         }
         .onDisappear {
             pending?.cancel()
+            focusOnAppear = false
             isShown = false
         }
     }
@@ -302,7 +303,7 @@ enum PeekZone {
     }
 }
 
-/// Where the pointer is, for a hidden sidebar or top bar, judged by geometry alone: hover on the
+/// Where the pointer is, for a hidden sidebar, judged by geometry alone: hover on the
 /// panel itself flickered as it slid in under the pointer. Clicks go through to the page.
 struct PeekTracker: NSViewRepresentable {
     let locate: (CGPoint) -> PeekZone
@@ -448,6 +449,8 @@ private struct WindowConfigurator: NSViewRepresentable {
                 guard let button = window.standardWindowButton(type), button.isHidden != hidden else { continue }
                 button.isHidden = hidden
             }
+            // AppKit resets the titlebar height and button origins while the buttons are hidden.
+            if !hidden { layoutTrafficLights() }
         }
 
         private func layoutTrafficLights() {

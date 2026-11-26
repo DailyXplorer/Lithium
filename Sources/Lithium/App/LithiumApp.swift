@@ -191,7 +191,7 @@ struct BrowserCommands: Commands {
             Button(browser.commandTab?.pageTranslation?.isActive == true ? "Show Original" : "Translate Page") { browser.toggleTranslation(browser.commandTab) }
                 .disabled(browser.commandTab?.canTranslate != true)
             Divider()
-            // The popover is a browser window's toolbar's: a link's window has none.
+            // The popover is a browser window's sidebar's: a link's window has none.
             Button(browser.commandWindow.isSummaryPresented ? "Hide Summary" : "Summarize Page") { browser.commandWindow.toggleSummary() }
             .keyboardShortcut("s", modifiers: [.command, .shift])
             .disabled(!browser.summaries.isEnabled || !browser.canChangeTabs || PageSummaries.page(of: browser.commandWindow.selectedTab?.url) == nil)

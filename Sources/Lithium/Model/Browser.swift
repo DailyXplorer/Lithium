@@ -618,7 +618,7 @@ final class Browser {
             guard event.keyCode == 53, let self else { return event }
             return MainActor.assumeIsolated { self.takesEscape(event) } ? nil : event
         }
-        // Clicking the sidebar or toolbar background would otherwise leave a text field editing.
+        // Clicking the sidebar or window frame would otherwise leave a text field editing.
         let click = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
                 self?.endEditingIfOutside(event)

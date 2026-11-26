@@ -1,47 +1,79 @@
 import SwiftUI
 
-struct ToolbarView: View {
+struct SidebarNavRow: View {
+    let tab: Tab?
     @Environment(Browser.self) private var browser
-    @Environment(BrowserWindow.self) private var window
 
     var body: some View {
-        let tab = window.selectedTab
-        HStack(spacing: 2) {
-            if !window.showsSidebar {
-                SidebarToggle()
+        HStack(spacing: 0) {
+            Color.clear.frame(width: Layout.trafficLightsWidth)
+            SidebarToggle()
+            Spacer(minLength: 0)
+            HStack(spacing: 2) {
+                IconButton(icon: .back, help: "Back (⌘[)", isEnabled: tab?.canGoBack == true) {
+                    browser.navigate(tab, .back)
+                }
+                IconButton(icon: .forward, help: "Forward (⌘])", isEnabled: tab?.canGoForward == true) {
+                    browser.navigate(tab, .forward)
+                }
+                IconButton(
+                    icon: tab?.isLoading == true ? .close : .reload,
+                    help: tab?.isLoading == true ? "Stop" : "Reload (⌘R)",
+                    isEnabled: tab?.url != nil
+                ) {
+                    browser.navigate(tab, tab?.isLoading == true ? .stop : .reload)
+                }
             }
-            IconButton(icon: .back, help: "Back (⌘[)", isEnabled: tab?.canGoBack == true) {
-                browser.navigate(tab, .back)
-            }
-            IconButton(icon: .forward, help: "Forward (⌘])", isEnabled: tab?.canGoForward == true) {
-                browser.navigate(tab, .forward)
-            }
-            IconButton(
-                icon: tab?.isLoading == true ? .close : .reload,
-                help: tab?.isLoading == true ? "Stop" : "Reload (⌘R)",
-                isEnabled: tab?.url != nil
-            ) {
-                browser.navigate(tab, tab?.isLoading == true ? .stop : .reload)
-            }
-            Spacer(minLength: 16)
-            AddressBar(tab: tab)
-                .frame(maxWidth: 560)
-            Spacer(minLength: 16)
-            // Only while an agent is connected, for its Stop; otherwise in the ⋯ menu.
-            if let agent = browser.agent, agent.isConnected {
-                AgentButton(agent: agent)
-            }
-            ExtensionsButton(tab: tab)
-            DownloadsButton()
-            SummaryButton(tab: tab)
-            CaptureButton()
-            PageMenu(tab: tab)
         }
-        .padding(.horizontal, Layout.margin)
+        .padding(.trailing, 10)
+        .frame(height: Layout.headerHeight)
+        .background(WindowDragArea())
     }
 }
 
-private struct AddressBar: View {
+struct SidebarToolBar: View {
+    enum Item: Hashable {
+        case downloads, extensions, summary, capture, agent, pageMenu
+    }
+
+    let tab: Tab?
+    @Environment(Browser.self) private var browser
+
+    static func items(hasExtensions: Bool, showsSummary: Bool, hasConnectedAgent: Bool) -> [Item] {
+        var result: [Item] = [.downloads]
+        if hasExtensions { result.append(.extensions) }
+        if showsSummary { result.append(.summary) }
+        result.append(.capture)
+        if hasConnectedAgent { result.append(.agent) }
+        result.append(.pageMenu)
+        return result
+    }
+
+    var body: some View {
+        let shown = Self.items(
+            hasExtensions: !browser.extensions.contexts.isEmpty,
+            showsSummary: browser.summaries.isEnabled,
+            hasConnectedAgent: browser.agent?.isConnected == true
+        )
+        HStack(spacing: 2) {
+            ForEach(shown, id: \.self) { item in
+                switch item {
+                case .downloads: DownloadsButton()
+                case .extensions: ExtensionsButton(tab: tab)
+                case .summary: SummaryButton(tab: tab)
+                case .capture: CaptureButton()
+                // Only while an agent is connected, for its Stop; otherwise in the ⋯ menu.
+                case .agent: if let agent = browser.agent { AgentButton(agent: agent) }
+                case .pageMenu:
+                    Spacer(minLength: 0)
+                    PageMenu(tab: tab)
+                }
+            }
+        }
+    }
+}
+
+struct AddressBar: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
     @Environment(BrowserWindow.self) private var window
@@ -50,6 +82,7 @@ private struct AddressBar: View {
     @State private var showsZoom = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         HStack(spacing: 4) {
             if !isEditing, let tab, let scheme = tab.url?.scheme, ["http", "https"].contains(scheme) {
                 ConnectionButton(tab: tab, isSecure: tab.connection == .secure)
@@ -76,12 +109,12 @@ private struct AddressBar: View {
                 ZoomPill(tab: tab, isPresented: $showsZoom)
             }
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 10)
-        .frame(height: 28)
+        .padding(.leading, 7)
+        .padding(.trailing, 8)
+        .frame(height: 36)
         .anchorPreference(key: AddressBarBounds.self, value: .bounds) { $0 }
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            shape
                 .fill(isEditing ? Color(nsColor: .textBackgroundColor) : palette.field)
                 .shadow(color: .black.opacity(isEditing ? 0.12 : 0), radius: 2, y: 1)
         )
@@ -89,7 +122,7 @@ private struct AddressBar: View {
             if let tab, !isEditing {
                 LoadingBar(tab: tab)
                     .id(tab.id)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .clipShape(shape)
             }
         }
     }
@@ -194,7 +227,7 @@ enum PageMenuPanel: Hashable, Identifiable {
     var id: Self { self }
 }
 
-private struct PageMenu: View {
+struct PageMenu: View {
     let tab: Tab?
     @Environment(Browser.self) private var browser
     @State private var panel: PageMenuPanel?
@@ -212,7 +245,7 @@ private struct PageMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .opacity(0.85)
-        .popover(item: $panel, arrowEdge: .bottom) { panel in
+        .popover(item: $panel, arrowEdge: .top) { panel in
             switch panel {
             case .qrCode(let url): QRCodeView(url: url)
             case .protections: ShieldPanel(tab: tab)
@@ -248,7 +281,7 @@ struct PageMenuItems: View {
             .disabled(tab?.canTranslate != true)
         Button("Pop Out Video") { window.videoPopout.showSelected() }
             .disabled(!window.videoPopout.canShowSelected)
-        // Checked while it is on, whatever the setting: the toolbar shows no indicator for it.
+        // Checked while it is on, whatever the setting: the sidebar shows no indicator for it.
         Toggle("Energy Saving", isOn: Binding(get: { browser.energy.isOn }, set: { browser.turnEnergySaving(on: $0) }))
         Divider()
         Button("Show All History") { browser.openHistory(in: window) }
@@ -283,7 +316,6 @@ private struct AddressField: NSViewRepresentable {
         field.font = Theme.nsFont(13)
         field.lineBreakMode = .byTruncatingTail
         field.usesSingleLineMode = true
-        field.placeholderString = "Search or enter address"
         field.delegate = context.coordinator
         field.onFocusChange = { editing in
             let coordinator = context.coordinator
@@ -312,8 +344,21 @@ private struct AddressField: NSViewRepresentable {
                 window.returnKeyboardToPage(fieldHadKeyboard: true)
             }
         }
-        field.textColor = onDarkBackground && !isEditing ? .white : .labelColor
-        if let font = Theme.nsFont(13), field.font != font { field.font = font }
+        // Match the sidebar's ink and placeholder contrast at rest, and the window's appearance while editing.
+        let targetAppearance = isEditing ? nil : NSAppearance(named: onDarkBackground ? .darkAqua : .aqua)
+        if field.appearance?.name != targetAppearance?.name { field.appearance = targetAppearance }
+        let targetColor: NSColor = isEditing ? .labelColor : (onDarkBackground ? .white : NSColor(white: 0.1, alpha: 1))
+        if field.textColor != targetColor { field.textColor = targetColor }
+        let font = Theme.nsFont(13) ?? NSFont.systemFont(ofSize: 13)
+        if field.font != font { field.font = font }
+        if !field.isEditing {
+            let placeholderColor = (onDarkBackground ? NSColor.white : NSColor(white: 0.1, alpha: 1)).withAlphaComponent(0.45)
+            let placeholder = NSAttributedString(
+                string: URLTextField.placeholder,
+                attributes: [.font: font, .foregroundColor: placeholderColor]
+            )
+            if field.placeholderAttributedString != placeholder { field.placeholderAttributedString = placeholder }
+        }
         if field.url != url || !field.isEditing {
             field.url = url
             if !field.isEditing { field.showSummary() }
@@ -379,6 +424,7 @@ private struct AddressField: NSViewRepresentable {
 }
 
 final class URLTextField: NSTextField {
+    static let placeholder = "Search or type a URL"
     var url: URL?
     var onFocusChange: ((Bool) -> Void)?
 
@@ -401,7 +447,7 @@ final class URLTextField: NSTextField {
     }
 
     func showSummary() {
-        alignment = .center
+        alignment = .left
         guard let url else {
             stringValue = ""
             return

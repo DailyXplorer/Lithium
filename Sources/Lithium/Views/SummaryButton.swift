@@ -10,7 +10,7 @@ struct SummaryButton: View {
         let page = PageSummaries.page(of: tab?.url)
         if browser.summaries.isEnabled {
             IconButton(icon: .sparkle, help: "Summarize (⇧⌘S)", isEnabled: page != nil) { window.toggleSummary() }
-                .popover(isPresented: $window.isSummaryPresented, arrowEdge: .bottom) {
+                .popover(isPresented: $window.isSummaryPresented, arrowEdge: .top) {
                     if let tab { SummaryPanel(tab: tab) }
                 }
                 // The popover belongs to one tab and one page.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// In the toolbar while an agent is connected, so one is never connected unseen.
+/// In the sidebar's tool row while an agent is connected, so one is never connected unseen.
 struct AgentButton: View {
     let agent: AgentHub
     @State private var isPresented = false
@@ -11,7 +11,7 @@ struct AgentButton: View {
         }
         .foregroundStyle(agent.isActing ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
         .modifier(ActingPulse(isOn: agent.isActing))
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
             AgentPanel(agent: agent)
         }
     }
@@ -21,7 +21,7 @@ struct AgentButton: View {
 
 /// Dims what it wraps to 0.45 and back every 1.2 s while `isOn`. A timeline paused when off, not
 /// a `repeatForever` animation: SwiftUI never ended that one once a call did (the opacity went
-/// back to 1 without an animation to replace it), and the toolbar then redrew at the display's
+/// back to 1 without an animation to replace it), and the sidebar then redrew at the display's
 /// rate for as long as the agent stayed connected, idle page or not.
 struct ActingPulse: ViewModifier {
     let isOn: Bool

@@ -22,7 +22,7 @@ struct SidebarDrag: Transferable {
 }
 
 /// Two tabs of the tab list shown together. The selected tab is the focused side, so the address
-/// bar, the toolbar and the menus act on it as they would on a lone tab.
+/// bar, the sidebar's controls and the menus act on it as they would on a lone tab.
 struct TabSplit: Equatable {
     enum Side { case first, second }
 

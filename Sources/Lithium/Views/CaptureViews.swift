@@ -56,7 +56,7 @@ struct CaptureSelectionOverlay: View {
                         .position(x: selection.midX, y: min(selection.maxY + 14, proxy.size.height - 12))
                         .allowsHitTesting(false)
                 } else {
-                    hint.position(x: proxy.size.width / 2, y: Layout.topBarHeight + 32)
+                    hint.position(x: proxy.size.width / 2, y: Layout.margin + 32)
                 }
             }
         }

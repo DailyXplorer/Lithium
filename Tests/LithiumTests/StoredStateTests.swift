@@ -79,6 +79,25 @@ struct StoredStateTests {
         #expect(decoded.tabs.map(\.windowID) == [nil, second])
     }
 
+    /// A session saved by a build that still had Zen mode (`isZenMode: true`) decodes cleanly
+    /// without being moved aside and preserves its windows, tabs, and sidebar visibility.
+    @Test func aSessionWithLegacyZenModeIsRead() throws {
+        let file = try folder().appending(path: "session.json")
+        let windowID = UUID()
+        let json = """
+            {"tabs": [{"url": "https://example.com/", "title": "Example"}],
+             "selectedIndex": 0,
+             "windows": [{"id": "\(windowID.uuidString)", "selectedIndex": 0, "isSidebarVisible": true, "isZenMode": true}]}
+            """
+        try Data(json.utf8).write(to: file)
+        let session = SessionStore.load(from: file)
+        #expect(try keptAside(file).isEmpty)
+        #expect(session.tabs.map(\.title) == ["Example"])
+        #expect(session.windows?.count == 1)
+        #expect(session.windows?.first?.id == windowID)
+        #expect(session.windows?.first?.isSidebarVisible == true)
+    }
+
     @Test(arguments: ["", #"[{"id": "6E2B"#])
     func unreadableFavoritesAreKeptAside(_ contents: String) throws {
         let file = try folder().appending(path: "pins.json")

@@ -321,6 +321,29 @@ struct WindowsTests {
         #expect(again.windows[1].regularTabs.map(\.url) == [page("b")])
     }
 
+    /// A session saved by an earlier build with `isZenMode: true` restores its windows and tabs
+    /// cleanly with no leftover Zen state.
+    @Test func restoringALegacyZenModeSessionProducesASensibleWindow() throws {
+        defer { UserDefaults.standard.removeObject(forKey: "zenMode") }
+        UserDefaults.standard.set(true, forKey: "zenMode")
+        let id = UUID()
+        let json = """
+            {"tabs": [{"url": "\(page("a").absoluteString)", "title": "A"}],
+             "selectedIndex": 0,
+             "windows": [{"id": "\(id.uuidString)", "selectedIndex": 0, "isSidebarVisible": true, "isZenMode": true}]}
+            """
+        try FileManager.default.createDirectory(at: SessionStore.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: SessionStore.fileURL, options: .atomic)
+
+        let browser = Browser()
+        defer { reset(browser) }
+        #expect(browser.windows.count == 1)
+        #expect(browser.windows[0].id == id)
+        #expect(browser.windows[0].regularTabs.map(\.url) == [page("a")])
+        #expect(browser.windows[0].selectedTab?.url == page("a"))
+        #expect(browser.windows[0].isSidebarVisible)
+    }
+
     /// After a relaunch the window the user was last in comes back in front, though opened first.
     @Test func theWindowLastActiveComesBackInFront() {
         let browser = makeBrowser()

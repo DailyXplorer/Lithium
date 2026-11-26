@@ -71,6 +71,7 @@ struct BarActionMatchTests {
 
     /// At most two, the best first: a name typed out whole before one only started.
     @Test func atMostTwoBestFirst() {
+        #expect(named("split") == [.openSplitView, .exitSplitView])
         #expect(named("exit") == [.exitSplitView])
         let three: [BarAction] = [.pinTab, .newPrivateTab, .settings]
         #expect(BarAction.matches("p", among: three).isEmpty)

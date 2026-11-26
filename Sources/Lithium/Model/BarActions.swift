@@ -93,7 +93,7 @@ enum BarAction: Hashable, CaseIterable {
                 fromStart = index == 0
                 if !fromStart, word.count < 4 { return nil }
                 // "rest" starts restaurant as much as Restore tab: under five letters, a lone word must be
-                // the title's first word typed whole ("copy") or a whole one-word alias ("zen").
+                // the title's first word typed whole ("copy") or a whole one-word alias.
                 if typed.count == 1, word.count < 5,
                    !(isWholeWord && fromStart && (isTitle || name.count == 1)) { return nil }
             }

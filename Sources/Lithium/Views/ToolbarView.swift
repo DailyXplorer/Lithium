@@ -345,16 +345,20 @@ private struct AddressField: NSViewRepresentable {
             }
         }
         // Match the sidebar's ink and placeholder contrast at rest, and the window's appearance while editing.
-        field.appearance = isEditing ? nil : NSAppearance(named: onDarkBackground ? .darkAqua : .aqua)
-        field.textColor = isEditing ? .labelColor : (onDarkBackground ? .white : NSColor(white: 0.1, alpha: 1))
+        let targetAppearance = isEditing ? nil : NSAppearance(named: onDarkBackground ? .darkAqua : .aqua)
+        if field.appearance?.name != targetAppearance?.name { field.appearance = targetAppearance }
+        let targetColor: NSColor = isEditing ? .labelColor : (onDarkBackground ? .white : NSColor(white: 0.1, alpha: 1))
+        if field.textColor != targetColor { field.textColor = targetColor }
         let font = Theme.nsFont(13) ?? NSFont.systemFont(ofSize: 13)
         if field.font != font { field.font = font }
-        let placeholderColor: NSColor = isEditing ? .placeholderTextColor
-            : (onDarkBackground ? NSColor.white : NSColor(white: 0.1, alpha: 1)).withAlphaComponent(0.45)
-        field.placeholderAttributedString = NSAttributedString(
-            string: URLTextField.placeholder,
-            attributes: [.font: font, .foregroundColor: placeholderColor]
-        )
+        if !field.isEditing {
+            let placeholderColor = (onDarkBackground ? NSColor.white : NSColor(white: 0.1, alpha: 1)).withAlphaComponent(0.45)
+            let placeholder = NSAttributedString(
+                string: URLTextField.placeholder,
+                attributes: [.font: font, .foregroundColor: placeholderColor]
+            )
+            if field.placeholderAttributedString != placeholder { field.placeholderAttributedString = placeholder }
+        }
         if field.url != url || !field.isEditing {
             field.url = url
             if !field.isEditing { field.showSummary() }
